@@ -60,40 +60,41 @@
 		} catch {
 			return fallback;
 		}
-  }
-
-  async function loadCollapsed() {
-	return await load(STORAGE.collapsed, []);
-  }
-
-  async function saveCollapsed(ids) {
-	await save(STORAGE.collapsed, ids);
-  }
-
-  async function getSeenTime(storyID) {
-	const seen = await load(STORAGE.seen, {});
-	return seen[storyID] || 0;
-  }
-
-  async function markSeen(storyID) {
-	const seen = await load(STORAGE.seen, {});
-
-	seen[storyID] = Math.floor(Date.now() / 1000);
-
-	await save(STORAGE.seen, seen);
-  }
-
-  async function toggleCollapsed(id, collapsed) {
-	const ids = new Set(await loadCollapsed());
-
-	if (collapsed) {
-		ids.add(id);
-	} else {
-		ids.delete(id);
 	}
 
-	await saveCollapsed([...ids]);
-  }
+	async function loadCollapsed() {
+		const ids = await load(STORAGE.collapsed, []);
+		return new Set(Array.isArray(ids) ? ids : []);
+	}
+
+	async function saveCollapsed(ids) {
+		await save(STORAGE.collapsed, ids);
+	}
+
+	async function getSeenTime(storyID) {
+		const seen = await load(STORAGE.seen, {});
+		return seen[storyID] || 0;
+	}
+
+	async function markSeen(storyID) {
+		const seen = await load(STORAGE.seen, {});
+
+		seen[storyID] = Math.floor(Date.now() / 1000);
+
+		await save(STORAGE.seen, seen);
+	}
+
+	async function toggleCollapsed(id, collapsed) {
+		const ids = new Set(await loadCollapsed());
+
+		if (collapsed) {
+			ids.add(id);
+		} else {
+			ids.delete(id);
+		}
+
+		await saveCollapsed([...ids]);
+	}
 
 	// -------------------------
 	// Network
@@ -238,11 +239,11 @@
 		const days = Math.floor(hours / 24);
 
 		return days === 1 ? "1 day ago" : days + " days ago";
-  }
+	}
 
-  function isNewComment(comment, seenTimestamp) {
-    return comment.time && comment.time > seenTimestamp;
-  }
+	function isNewComment(comment, seenTimestamp) {
+		return comment.time && comment.time > seenTimestamp;
+	}
 
 	function isMobile() {
 		return window.matchMedia("(max-width: 700px)").matches;
@@ -551,6 +552,12 @@
     font-size:13px;
 }
 
+.load-replies {
+	cursor:pointer;
+	color:#828282;
+	font-size:10px;
+}
+
 header {
     background:#ff6600;
     color:black;
@@ -589,18 +596,23 @@ header button {
 }
 
 .comment {
-    margin:12px 0 12px 15px;
+    margin:12px 0 12px 18px;
     max-width:100%;
     overflow-wrap:anywhere;
+}
+
+.top-level-comments > .comment {
+    margin-left:0;
+}
+
+.children > .comment {
+    border-left:1px solid #ddd;
+    padding-left:8px;
 }
 
 .comment.new-comment {
 	border-left:2px solid #ff6600;
 	padding-left:6px;
-}
-
-.top-level-comments > .comment {
-    margin-left:0;
 }
 
 .text {
@@ -722,7 +734,7 @@ Loading...
 		// Stop scroll/touch events moving out of sidebar so sites with
 		// JS scroll hijacking (wheel listeners on window) don't scroll behind
 		for (const type of ["wheel", "touchmove"]) {
-		  host.addEventListener(type, (event) => event.stopPropagation());
+			host.addEventListener(type, (event) => event.stopPropagation());
 		}
 
 		let resizing = false;
@@ -866,11 +878,15 @@ ${story.descendants || 0} comments
 
 </div>
 
-${story.text ? `
+${
+	story.text
+		? `
 <div class="story-text">
 ${sanitizeHTML(story.text)}
 </div>
-` : ""}
+`
+		: ""
+}
 
 <div class="story-actions">
 
@@ -896,65 +912,91 @@ add comment
 	// Comment rendering
 	// -------------------------
 
-	async function renderComment(id, container, storyID, storyAuthor, seenTime = 0) {
+	async function renderChildren(
+		replyIDs,
+		container,
+		storyID,
+		storyAuthor,
+		seenTime,
+		collapsedIds,
+	) {
+		for (const replyID of replyIDs) {
+			await renderComment(
+				replyID,
+				container,
+				storyID,
+				storyAuthor,
+				seenTime,
+				collapsedIds,
+			);
+		}
+	}
+
+	async function renderComment(
+		id,
+		container,
+		storyID,
+		storyAuthor,
+		seenTime = 0,
+		collapsedIds = new Set(),
+	) {
 		const comment = await getItem(id);
 
 		if (!comment || comment.deleted || comment.dead) return;
 		const div = document.createElement("div");
 
-    div.className = "comment";
+		div.className = "comment";
 
-    if (isNewComment(comment, seenTime)) {
-	div.classList.add("new-comment");
-    }
+		if (isNewComment(comment, seenTime)) {
+			div.classList.add("new-comment");
+		}
 
 		const replies = comment.kids || [];
 		const reply = replyURL(comment, storyID);
 
 		div.innerHTML = `
-<div class="meta">
+      <div class="meta">
 
-<a target="_blank"
-href="https://news.ycombinator.com/user?id=${encodeURIComponent(comment.by || "")}">
+      <a target="_blank"
+      href="https://news.ycombinator.com/user?id=${encodeURIComponent(comment.by || "")}">
 
-${escapeHTML(comment.by || "anonymous")}
+      ${escapeHTML(comment.by || "anonymous")}
 
-</a>
+      </a>
 
-${comment.by && comment.by === storyAuthor
-	? `<span class="op-pill">OP</span>`
-	: ""}
+      ${
+				comment.by && comment.by === storyAuthor
+					? `<span class="op-pill">OP</span>`
+					: ""
+			}
 
+      ${timeAgo(comment.time)}
 
-${timeAgo(comment.time)}
+      |
 
-|
+      <a class="reply-link" href="#">
+      reply
+      </a>
 
-<a class="reply-link"
-href="#">
-reply
-</a>
+      <span class="toggle">
+      [–]
+      </span>
 
-<span class="toggle">
-[–]
-</span>
-</div>
+      </div>
 
-<div class="text">
-<div class="children">
-${sanitizeHTML(comment.text) || ""}
-</div>
-</div>
+      <div class="text">
+     	${sanitizeHTML(comment.text) || ""}
+      </div>
 
-`;
+      <div class="children"></div>
+    `;
 
 		container.appendChild(div);
 
 		const children = div.querySelector(".children");
 		const toggle = div.querySelector(".toggle");
-		const collapsed = await loadCollapsed();
 
-		if (collapsed.includes(comment.id)) {
+		if (collapsedIds.has(comment.id)) {
 			children.classList.add("hidden");
 			toggle.textContent = "[+]";
 		}
@@ -962,9 +1004,7 @@ ${sanitizeHTML(comment.text) || ""}
 		toggle.onclick = async () => {
 			const hidden = children.classList.toggle("hidden");
 
-			toggle.textContent = hidden
-				? "[+]"
-				: "[–]";
+			toggle.textContent = hidden ? "[+]" : "[–]";
 
 			await toggleCollapsed(comment.id, hidden);
 		};
@@ -977,12 +1017,15 @@ ${sanitizeHTML(comment.text) || ""}
 			openHNWindow(reply);
 		};
 
-		for (let i = 0; i < replies.length; i++) {
-		  await renderComment(replies[i], children, storyID, storyAuthor);
-
-			if (i > 0 && i % 10 === 0) {
-				await new Promise(requestAnimationFrame);
-			}
+		if (replies.length) {
+			await renderChildren(
+				replies,
+				children,
+				storyID,
+				storyAuthor,
+				seenTime,
+				collapsedIds,
+			);
 		}
 	}
 
@@ -1000,8 +1043,17 @@ ${sanitizeHTML(comment.text) || ""}
 		ui.body.appendChild(comments);
 
 		const seenTime = await getSeenTime(story.id);
+		const collapsedIds = await loadCollapsed();
+
 		for (const child of story.kids || []) {
-			await renderComment(child, comments, story.id, story.by, seenTime);
+			await renderComment(
+				child,
+				comments,
+				story.id,
+				story.by,
+				seenTime,
+				collapsedIds,
+			);
 		}
 		await markSeen(story.id);
 	}
@@ -1026,8 +1078,17 @@ ${sanitizeHTML(comment.text) || ""}
 			section.appendChild(comments);
 
 			const seenTime = await getSeenTime(story.id);
+			const collapsedIds = await loadCollapsed();
+
 			for (const child of story.kids || []) {
-				await renderComment(child, comments, story.id, story.by, seenTime);
+				await renderComment(
+					child,
+					comments,
+					story.id,
+					story.by,
+					seenTime,
+					collapsedIds,
+				);
 			}
 			await markSeen(story.id);
 		}
