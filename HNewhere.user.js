@@ -206,9 +206,7 @@
 			"BR",
 		]);
 
-		const allowedAttributes = new Set([
-			"href",
-		]);
+		const allowedAttributes = new Set(["href"]);
 
 		template.content.querySelectorAll("*").forEach((el) => {
 			if (!allowedTags.has(el.tagName)) {
