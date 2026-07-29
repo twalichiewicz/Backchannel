@@ -44,6 +44,11 @@
 	let sidebar = null;
 	let opening = false;
 
+	const annotations = {
+		comments: new Map(),
+		markers: new Map(),
+	};
+
 	// -------------------------
 	// Storage
 	// -------------------------
@@ -79,7 +84,8 @@
 					}
 				},
 
-				onerror: function () {
+				onerror: function (error) {
+					console.error("HN request failed:", url, error);
 					resolve(null);
 				},
 			});
@@ -227,11 +233,6 @@
 	// -------------------------
 	// Article annotations
 	// -------------------------
-
-	const annotations = {
-		markers: new Map(),
-		comments: new Map(),
-	};
 
 	function normalizeText(text) {
 		return (text || "")
@@ -606,6 +607,8 @@
 
 	async function createSidebar() {
 		if (sidebar) {
+			annotations.comments.clear();
+			annotations.markers.clear();
 			sidebar._cleanup?.();
 			sidebar.remove();
 			sidebar = null;
@@ -616,6 +619,7 @@
 		const width = Math.min(Math.max(savedWidth, 280), window.innerWidth * 0.8);
 
 		const host = document.createElement("div");
+		host.dataset.hnSidebar = "true";
 		document.body.appendChild(host);
 
 		const shadow = host.attachShadow({
@@ -981,7 +985,12 @@ ${sanitizeHTML(comment.text) || ""}
 
 `;
 
-		div._quotes = extractQuotes(comment.text);
+		try {
+			div._quotes = extractQuotes(comment.text);
+		} catch (e) {
+			console.error("Quote extraction failed:", comment.id, e);
+			div._quotes = [];
+		}
 
 		container.appendChild(div);
 
@@ -1020,6 +1029,9 @@ ${sanitizeHTML(comment.text) || ""}
 	// -------------------------
 
 	async function renderSingleDiscussion(story, ui) {
+		annotations.comments.clear();
+		annotations.markers.clear();
+
 		ui.body.innerHTML = "";
 
 		renderStory(story, ui.body);
@@ -1031,10 +1043,19 @@ ${sanitizeHTML(comment.text) || ""}
 		for (const child of story.kids || []) {
 			await renderComment(child, comments, story.id);
 		}
-		annotateArticle();
+		requestAnimationFrame(() => {
+			try {
+				annotateArticle();
+			} catch (e) {
+				console.error("Article annotation failed:", e);
+			}
+		});
 	}
 
 	async function renderBlendedDiscussion(stories, ui) {
+		annotations.comments.clear();
+		annotations.markers.clear();
+
 		ui.body.innerHTML = "";
 
 		for (const story of stories) {
@@ -1057,7 +1078,14 @@ ${sanitizeHTML(comment.text) || ""}
 				await renderComment(child, comments, story.id);
 			}
 		}
-		annotateArticle();
+
+		requestAnimationFrame(() => {
+			try {
+				annotateArticle();
+			} catch (e) {
+				console.error("Article annotation failed:", e);
+			}
+		});
 	}
 
 	function buildArticleIndex() {
@@ -1080,7 +1108,7 @@ ${sanitizeHTML(comment.text) || ""}
 						return NodeFilter.FILTER_REJECT;
 					}
 
-					if (node.parentElement.closest(".hn-annotation")) {
+					if (node.parentElement.closest(".hn-annotation,[data-hn-sidebar]")) {
 						return NodeFilter.FILTER_REJECT;
 					}
 
@@ -1236,7 +1264,10 @@ ${sanitizeHTML(comment.text) || ""}
 
 		range.setStart(startEntry.rawNode, startEntry.rawOffset);
 
-		range.setEnd(endEntry.rawNode, endEntry.rawOffset + 1);
+		range.setEnd(
+			endEntry.rawNode,
+			Math.min(endEntry.rawOffset + 1, endEntry.rawNode.textContent.length),
+		);
 
 		const span = document.createElement("span");
 
@@ -1328,9 +1359,15 @@ ${sanitizeHTML(comment.text) || ""}
 				await renderBlendedDiscussion(loaded, ui);
 			}
 		} catch (e) {
-			console.error(e);
-		} finally {
-			opening = false;
+			console.error("HN sidebar failed:", e);
+
+			const error = sidebar?.shadowRoot?.querySelector("#comments");
+
+			if (error) {
+				error.innerHTML =
+					"<b>Failed loading HN comments</b><br><br>" +
+					escapeHTML(e.message || String(e));
+			}
 		}
 	}
 
