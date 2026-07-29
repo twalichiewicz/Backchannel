@@ -587,6 +587,19 @@ header button {
     text-decoration:underline;
 }
 
+.op-pill {
+    display:inline-block;
+    margin-left:4px;
+    margin-right:4px;
+    padding:1px 4px;
+    border-radius:3px;
+    background:#ff6600;
+    color:white;
+    font-size:9px;
+    font-weight:bold;
+    line-height:1.2;
+}
+
 .toggle {
     cursor:pointer;
 }
@@ -839,7 +852,7 @@ add comment
 	// Comment rendering
 	// -------------------------
 
-	async function renderComment(id, container, storyID) {
+	async function renderComment(id, container, storyID, storyAuthor) {
 		const comment = await getItem(id);
 
 		if (!comment || comment.deleted || comment.dead) return;
@@ -863,6 +876,10 @@ href="https://news.ycombinator.com/user?id=${encodeURIComponent(comment.by || ""
 ${escapeHTML(comment.by || "anonymous")}
 
 </a>
+
+${comment.by && comment.by === storyAuthor
+	? `<span class="op-pill">OP</span>`
+	: ""}
 
 
 ${timeAgo(comment.time)}
@@ -910,7 +927,7 @@ ${sanitizeHTML(comment.text) || ""}
 		};
 
 		for (let i = 0; i < replies.length; i++) {
-			await renderComment(replies[i], children, storyID);
+		  await renderComment(replies[i], children, storyID, storyAuthor);
 
 			if (i > 0 && i % 10 === 0) {
 				await new Promise(requestAnimationFrame);
@@ -932,7 +949,7 @@ ${sanitizeHTML(comment.text) || ""}
 		ui.body.appendChild(comments);
 
 		for (const child of story.kids || []) {
-			await renderComment(child, comments, story.id);
+		  await renderComment(child, comments, story.id, story.by);
 		}
 	}
 
@@ -956,7 +973,7 @@ ${sanitizeHTML(comment.text) || ""}
 			section.appendChild(comments);
 
 			for (const child of story.kids || []) {
-				await renderComment(child, comments, story.id);
+			  await renderComment(child, comments, story.id, story.by);
 			}
 		}
 	}
