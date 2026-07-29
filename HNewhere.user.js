@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         HNewhere
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.5.0
-// @license MIT
+// @version      1.5.1
+// @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @homepageURL  https://github.com/twalichiewicz/HNewhere
@@ -10,8 +10,8 @@
 // @description  Hacker News comments sidebar for any article
 // @include      http://*
 // @include      https://*
-// @exclude http://localhost/*
-// @exclude https://localhost/*
+// @exclude      http://localhost/*
+// @exclude      https://localhost/*
 // @exclude      https://www.google.com/*
 // @exclude      https://www.google.*/*
 // @exclude      https://chatgpt.com/
@@ -31,6 +31,7 @@
 // @grant        GM.xmlHttpRequest
 // @connect      hacker-news.firebaseio.com
 // @connect      hn.algolia.com
+// @connect      news.ycombinator.com
 // @run-at       document-end
 // @noframes
 // ==/UserScript==
@@ -90,6 +91,17 @@
 		annotationsWhenSidebarClosed: false,
 		autoOpenSidebar: false,
 	};
+
+	const HN_ORIGIN = "https://news.ycombinator.com";
+	const TRACKING_PARAMS = new Set([
+		"utm_source",
+		"utm_medium",
+		"utm_campaign",
+		"utm_term",
+		"utm_content",
+		"fbclid",
+		"gclid",
+	]);
 
 	let sidebar = null;
 	let sidebarUI = null;
@@ -264,7 +276,28 @@
 		});
 	}
 
+	function requestText(url) {
+		return new Promise((resolve) => {
+			GM.xmlHttpRequest({
+				method: "GET",
+				url,
+				timeout: 10000,
+				anonymous: false,
+				onload: function (response) {
+					resolve(response.responseText || "");
+				},
+				onerror: function () {
+					resolve("");
+				},
+				ontimeout: function () {
+					resolve("");
+				},
+			});
+		});
+	}
+
 	const itemCache = new Map();
+	const voteLinkCache = new Map();
 
 	async function getItem(id) {
 		if (itemCache.has(id)) {
@@ -335,22 +368,23 @@
 	function normalizeURL(url) {
 		try {
 			const u = new URL(url);
+			const keysToRemove = [];
 
-			[
-				"utm_source",
-				"utm_medium",
-				"utm_campaign",
-				"utm_term",
-				"utm_content",
-				"fbclid",
-				"gclid",
-			].forEach((param) => u.searchParams.delete(param));
+			for (const key of u.searchParams.keys()) {
+				if (TRACKING_PARAMS.has(key.toLowerCase())) {
+					keysToRemove.push(key);
+				}
+			}
+
+			for (const key of keysToRemove) {
+				u.searchParams.delete(key);
+			}
 
 			return (
-				u.hostname +
+				u.hostname.toLowerCase() +
 				u.pathname.replace(/\/$/, "") +
 				u.search
-			).toLowerCase();
+			);
 		} catch {
 			return "";
 		}
@@ -572,7 +606,242 @@
 	}
 
 	function commentURL(storyID) {
-		return "https://news.ycombinator.com/item?id=" + storyID;
+		return HN_ORIGIN + "/item?id=" + storyID;
+	}
+
+	function normalizeVoteURL(href) {
+		if (!href) {
+			return null;
+		}
+
+		try {
+			const url = new URL(href, HN_ORIGIN + "/");
+
+			if (url.origin !== HN_ORIGIN || url.pathname !== "/vote") {
+				return null;
+			}
+
+			return url.href;
+		} catch {
+			return null;
+		}
+	}
+
+	function invalidateVoteLinks(storyID) {
+		voteLinkCache.delete(String(storyID));
+	}
+
+	async function loadVoteLinks(storyID, options = {}) {
+		const cacheKey = String(storyID);
+		const cached = voteLinkCache.get(cacheKey);
+
+		if (!options.force && cached) {
+			return await cached;
+		}
+
+		const promise = (async () => {
+			const html = await requestText(commentURL(storyID));
+
+			if (!html) {
+				return new Map();
+			}
+
+			const doc = new DOMParser().parseFromString(html, "text/html");
+			const voteLinks = new Map();
+
+			doc.querySelectorAll("a[id]").forEach((anchor) => {
+				const match = /^(up|down|un)_(\d+)$/.exec(anchor.id || "");
+
+				if (!match) {
+					return;
+				}
+
+				const [, action, itemId] = match;
+				const voteURL = normalizeVoteURL(anchor.getAttribute("href"));
+
+				if (!voteURL) {
+					return;
+				}
+
+				const entry = voteLinks.get(itemId) || {
+					upUrl: null,
+					downUrl: null,
+					unUrl: null,
+					state: "none",
+				};
+
+				if (action === "up") {
+					entry.upUrl = voteURL;
+				} else if (action === "down") {
+					entry.downUrl = voteURL;
+				} else {
+					entry.unUrl = voteURL;
+
+					const label = (anchor.textContent || "").trim().toLowerCase();
+
+					if (label.includes("undown")) {
+						entry.state = "down";
+					} else if (label.includes("unvote")) {
+						entry.state = "up";
+					} else {
+						entry.state = "unknown";
+					}
+				}
+
+				voteLinks.set(itemId, entry);
+			});
+
+			return voteLinks;
+		})();
+
+		voteLinkCache.set(cacheKey, promise);
+
+		try {
+			const voteLinks = await promise;
+			voteLinkCache.set(cacheKey, voteLinks);
+			return voteLinks;
+		} catch {
+			voteLinkCache.delete(cacheKey);
+			return new Map();
+		}
+	}
+
+	function getVoteDescriptors(voteInfo) {
+		if (!voteInfo) {
+			return [];
+		}
+
+		const descriptors = [];
+
+		if (voteInfo.state === "up" && voteInfo.unUrl) {
+			descriptors.push({
+				label: "▲",
+				title: "Remove upvote on Hacker News",
+				url: voteInfo.unUrl,
+				active: true,
+				variant: "up",
+			});
+		} else if (voteInfo.upUrl) {
+			descriptors.push({
+				label: "▲",
+				title: "Upvote on Hacker News",
+				url: voteInfo.upUrl,
+				active: false,
+				variant: "up",
+			});
+		}
+
+		if (voteInfo.state === "down" && voteInfo.unUrl) {
+			descriptors.push({
+				label: "▼",
+				title: "Remove downvote on Hacker News",
+				url: voteInfo.unUrl,
+				active: true,
+				variant: "down",
+			});
+		} else if (voteInfo.downUrl) {
+			descriptors.push({
+				label: "▼",
+				title: "Downvote on Hacker News",
+				url: voteInfo.downUrl,
+				active: false,
+				variant: "down",
+			});
+		}
+
+		if (!descriptors.length && voteInfo.unUrl) {
+			descriptors.push({
+				label: "↺",
+				title: "Remove vote on Hacker News",
+				url: voteInfo.unUrl,
+				active: true,
+				variant: "neutral",
+			});
+		}
+
+		return descriptors;
+	}
+
+	async function submitVote(storyID, voteURL, container) {
+		if (!container || container.dataset.votePending === "1") {
+			return;
+		}
+
+		container.dataset.votePending = "1";
+		container.classList.add("vote-controls-pending");
+		container.querySelectorAll(".vote-button").forEach((button) => {
+			button.disabled = true;
+		});
+
+		try {
+			await requestText(voteURL);
+			invalidateVoteLinks(storyID);
+			const voteLinks = await loadVoteLinks(storyID, { force: true });
+			hydrateVoteControlsForStory(storyID, voteLinks);
+		} finally {
+			delete container.dataset.votePending;
+			container.classList.remove("vote-controls-pending");
+			container.querySelectorAll(".vote-button").forEach((button) => {
+				button.disabled = false;
+			});
+		}
+	}
+
+	function renderVoteControls(container, storyID, itemId, voteInfo) {
+		if (!container) {
+			return;
+		}
+
+		container.replaceChildren();
+
+		const descriptors = getVoteDescriptors(voteInfo);
+
+		if (!descriptors.length) {
+			container.classList.add("hidden");
+			return;
+		}
+
+		container.classList.remove("hidden");
+
+		for (const descriptor of descriptors) {
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = "vote-button";
+			button.textContent = descriptor.label;
+			button.title = descriptor.title;
+			button.setAttribute("aria-label", descriptor.title);
+
+			if (descriptor.active) {
+				button.classList.add("vote-button-active");
+			}
+
+			if (descriptor.variant) {
+				button.classList.add("vote-button-" + descriptor.variant);
+			}
+
+			button.onclick = async (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				await submitVote(storyID, descriptor.url, container);
+			};
+
+			container.appendChild(button);
+		}
+	}
+
+	function hydrateVoteControlsForStory(storyID, voteLinks = new Map()) {
+		const containers = sidebarUI?.body?.querySelectorAll(
+			`[data-hn-vote-story-id="${String(storyID)}"]`,
+		);
+
+		if (!containers?.length) {
+			return;
+		}
+
+		for (const container of containers) {
+			const itemId = container.dataset.hnVoteItemId;
+			renderVoteControls(container, storyID, itemId, voteLinks.get(String(itemId)));
+		}
 	}
 
 	// -------------------------
@@ -712,6 +981,8 @@
 		if (restoreButton) {
 			destroyFloatingButton(restoreButton);
 		}
+
+		ensureVoteControlsLoaded().catch(console.error);
 
 		return wasHidden;
 	}
@@ -1124,6 +1395,51 @@ header button:hover {
     text-decoration:underline;
 }
 
+.vote-controls {
+    display:inline-flex;
+    align-items:center;
+    gap:3px;
+    vertical-align:middle;
+}
+
+.story-actions .vote-controls {
+    gap:4px;
+}
+
+.comment-vote-controls {
+    margin:0 4px 0 2px;
+}
+
+.vote-button {
+    border:none;
+    background:none;
+    padding:0;
+    color:#828282;
+    cursor:pointer;
+    font:600 11px/1 Verdana, Geneva, sans-serif;
+}
+
+.vote-button:hover {
+    color:#ff6600;
+}
+
+.vote-button:disabled {
+    opacity:.55;
+    cursor:default;
+}
+
+.vote-button-active {
+    color:#ff6600;
+}
+
+.vote-button-down.vote-button-active {
+    color:#666;
+}
+
+.vote-controls-pending {
+    opacity:.7;
+}
+
 .comment-quote-link {
     color:inherit;
     cursor:pointer;
@@ -1225,6 +1541,10 @@ blockquote.comment-quote-redundant {
 
 .story-actions {
     margin-top:8px;
+    display:flex;
+    align-items:center;
+    gap:8px;
+    flex-wrap:wrap;
 }
 
 .story-actions button {
@@ -1514,6 +1834,7 @@ blockquote.comment-quote-redundant {
 			return null;
 		}
 
+		const storyID = String(story.id);
 		const hnURL = commentURL(story.id);
 
 		const wrapper = document.createElement("div");
@@ -1558,19 +1879,24 @@ ${sanitizeHTML(story.text)}
 		: ""
 }
 
-<div class="story-actions">
-
-<button type="submit" class="add-comment">
-add comment
-</button>
-
-</div>
-</div>
+	<div class="story-actions">
+	
+	<button type="button" class="add-comment">
+	add comment
+	</button>
+	
+	<span class="story-vote-controls vote-controls hidden"
+	data-hn-vote-story-id="${escapeHTML(storyID)}"
+	data-hn-vote-item-id="${escapeHTML(storyID)}"></span>
+	
+	</div>
+	</div>
 
 <br>
 
 `;
 		const storyElement = wrapper.firstElementChild;
+		storyElement.dataset.storyId = storyID;
 		container.appendChild(storyElement);
 
 		storyElement.querySelector(".add-comment").onclick = () => {
@@ -1673,6 +1999,7 @@ add comment
 
 		const replies = comment.kids || [];
 		const reply = replyURL(comment, storyID);
+		const commentID = String(comment.id);
 
 		div.innerHTML = `
       <div class="meta">
@@ -1685,10 +2012,10 @@ add comment
       </a>
 
       ${
-				comment.by && comment.by === storyAuthor
-					? `<span class="op-pill">OP</span>`
-					: ""
-			}
+					comment.by && comment.by === storyAuthor
+						? `<span class="op-pill">OP</span>`
+						: ""
+				}
 
       ${timeAgo(comment.time)}
 
@@ -1697,6 +2024,10 @@ add comment
       <a class="reply-link" href="#">
       reply
       </a>
+
+      <span class="comment-vote-controls vote-controls hidden"
+      data-hn-vote-story-id="${escapeHTML(String(storyID))}"
+      data-hn-vote-item-id="${escapeHTML(commentID)}"></span>
 
       <span class="toggle">
       [–]
@@ -1797,6 +2128,8 @@ add comment
 		ui.body.innerHTML = "";
 		ui.headerSubtitle.textContent = "";
 
+		const generation = sidebarGeneration;
+		const votePromise = isSidebarVisible() ? loadVoteLinks(story.id) : null;
 		const storyElement = renderStory(story, ui.body);
 		mountFilterBanner(storyElement, ui);
 
@@ -1817,6 +2150,10 @@ add comment
 		);
 
 		await markSeen(story.id);
+
+		if (votePromise && generation === sidebarGeneration) {
+			hydrateVoteControlsForStory(story.id, await votePromise);
+		}
 	}
 
 	async function renderBlendedDiscussion(stories, ui) {
@@ -1826,7 +2163,10 @@ add comment
 		ui.body.innerHTML = "";
 		ui.headerSubtitle.textContent = pluralize(stories.length, "submission") + " on HN";
 
+		const generation = sidebarGeneration;
+
 		for (const [index, story] of stories.entries()) {
+			const votePromise = isSidebarVisible() ? loadVoteLinks(story.id) : null;
 			const section = document.createElement("div");
 			section.className = "submission";
 			section.dataset.storyId = String(story.id);
@@ -1860,6 +2200,10 @@ add comment
 			);
 
 			await markSeen(story.id);
+
+			if (votePromise && generation === sidebarGeneration) {
+				hydrateVoteControlsForStory(story.id, await votePromise);
+			}
 		}
 	}
 
@@ -2000,16 +2344,36 @@ add comment
 		);
 	}
 
+	function isSidebarVisible() {
+		return Boolean(sidebar && sidebar.style.display !== "none");
+	}
+
 	function shouldShowArticleAnnotations(settings) {
 		if (!settings.annotations) {
 			return false;
 		}
 
-		const sidebarVisible = Boolean(sidebar && sidebar.style.display !== "none");
-
-		return sidebarVisible
+		return isSidebarVisible()
 			? Boolean(settings.annotationsWhenSidebarOpen)
 			: Boolean(settings.annotationsWhenSidebarClosed);
+	}
+
+	async function ensureVoteControlsLoaded() {
+		if (!isSidebarVisible() || !sidebarUI?.body) {
+			return;
+		}
+
+		const storyIDs = [
+			...new Set(
+				[...sidebarUI.body.querySelectorAll("[data-hn-vote-story-id]")]
+					.map((element) => element.dataset.hnVoteStoryId)
+					.filter(Boolean),
+			),
+		];
+
+		for (const storyID of storyIDs) {
+			hydrateVoteControlsForStory(storyID, await loadVoteLinks(storyID));
+		}
 	}
 
 	// -------------------------
