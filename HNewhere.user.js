@@ -70,6 +70,19 @@
 	await save(STORAGE.collapsed, ids);
   }
 
+  async function getSeenTime(storyID) {
+	const seen = await load(STORAGE.seen, {});
+	return seen[storyID] || 0;
+  }
+
+  async function markSeen(storyID) {
+	const seen = await load(STORAGE.seen, {});
+
+	seen[storyID] = Math.floor(Date.now() / 1000);
+
+	await save(STORAGE.seen, seen);
+  }
+
   async function toggleCollapsed(id, collapsed) {
 	const ids = new Set(await loadCollapsed());
 
@@ -225,7 +238,11 @@
 		const days = Math.floor(hours / 24);
 
 		return days === 1 ? "1 day ago" : days + " days ago";
-	}
+  }
+
+  function isNewComment(comment, seenTimestamp) {
+    return comment.time && comment.time > seenTimestamp;
+  }
 
 	function isMobile() {
 		return window.matchMedia("(max-width: 700px)").matches;
@@ -577,6 +594,11 @@ header button {
     overflow-wrap:anywhere;
 }
 
+.comment.new-comment {
+	border-left:2px solid #ff6600;
+	padding-left:6px;
+}
+
 .top-level-comments > .comment {
     margin-left:0;
 }
@@ -874,23 +896,23 @@ add comment
 	// Comment rendering
 	// -------------------------
 
-	async function renderComment(id, container, storyID, storyAuthor) {
+	async function renderComment(id, container, storyID, storyAuthor, seenTime = 0) {
 		const comment = await getItem(id);
 
 		if (!comment || comment.deleted || comment.dead) return;
-
 		const div = document.createElement("div");
 
-		div.className = "comment";
+    div.className = "comment";
+
+    if (isNewComment(comment, seenTime)) {
+	div.classList.add("new-comment");
+    }
 
 		const replies = comment.kids || [];
-
 		const reply = replyURL(comment, storyID);
 
 		div.innerHTML = `
-
 <div class="meta">
-
 
 <a target="_blank"
 href="https://news.ycombinator.com/user?id=${encodeURIComponent(comment.by || "")}">
@@ -977,9 +999,11 @@ ${sanitizeHTML(comment.text) || ""}
 		comments.className = "top-level-comments";
 		ui.body.appendChild(comments);
 
+		const seenTime = await getSeenTime(story.id);
 		for (const child of story.kids || []) {
-		  await renderComment(child, comments, story.id, story.by);
+			await renderComment(child, comments, story.id, story.by, seenTime);
 		}
+		await markSeen(story.id);
 	}
 
 	async function renderBlendedDiscussion(stories, ui) {
@@ -1001,9 +1025,11 @@ ${sanitizeHTML(comment.text) || ""}
 
 			section.appendChild(comments);
 
+			const seenTime = await getSeenTime(story.id);
 			for (const child of story.kids || []) {
-			  await renderComment(child, comments, story.id, story.by);
+				await renderComment(child, comments, story.id, story.by, seenTime);
 			}
+			await markSeen(story.id);
 		}
 	}
 
