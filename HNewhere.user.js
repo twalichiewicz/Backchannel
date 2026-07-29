@@ -1127,25 +1127,26 @@ add comment
 
       </div>
 
-      <div class="text">
-     	${sanitizeHTML(comment.text) || ""}
+      <div class="comment-content">
+       	<div class="text">
+        		${sanitizeHTML(comment.text) || ""}
+       	</div>
+       	<div class="children"></div>
       </div>
-
-      <div class="children"></div>
     `;
 
 		container.appendChild(div);
 
-		const children = div.querySelector(".children");
+		const content = div.querySelector(".comment-content");
 		const toggle = div.querySelector(".toggle");
 
 		if (collapsedIds.has(comment.id)) {
-			children.classList.add("hidden");
+			content.classList.add("hidden");
 			toggle.textContent = "[+]";
 		}
 
 		toggle.onclick = async () => {
-			const hidden = children.classList.toggle("hidden");
+			const hidden = content.classList.toggle("hidden");
 
 			toggle.textContent = hidden ? "[+]" : "[–]";
 
