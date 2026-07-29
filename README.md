@@ -4,6 +4,8 @@
 
 A lightweight userscript that adds Hacker News discussions to any article.
 
+Current release: `v1.5.0`
+
 HNewhere detects matching Hacker News stories, loads comments into a sidebar, and lets you browse discussions without leaving the page.
 
 ## Install
@@ -23,11 +25,13 @@ HNewhere detects matching Hacker News stories, loads comments into a sidebar, an
 - Displays HN comments in a sidebar without leaving the page
 - Tracks stories opened from Hacker News
 - Resizable sidebar with saved width
+- Draggable floating HN button with remembered desktop position
 - Collapsible comment threads with saved state
 - Highlights new comments since your last visit
 - Shows story text when available
 - Marks original poster comments
 - Reply links open directly to Hacker News
+- Blended view when multiple matching HN submissions exist
 
 ## Requirements
 
