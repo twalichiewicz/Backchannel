@@ -101,11 +101,13 @@
 	// -------------------------
 
 	function request(url) {
-		return new Promise((resolve, reject) => {
+		return new Promise((resolve) => {
 			GM.xmlHttpRequest({
 				method: "GET",
 
 				url: url,
+
+				timeout: 10000,
 
 				onload: function (response) {
 					try {
@@ -116,6 +118,10 @@
 				},
 
 				onerror: function () {
+					resolve(null);
+				},
+
+				ontimeout: function () {
 					resolve(null);
 				},
 			});
