@@ -187,27 +187,44 @@
 		const template = document.createElement("template");
 		template.innerHTML = html || "";
 
-		template.content
-			.querySelectorAll(
-				"script, iframe, object, embed, form, input, button, textarea, select, svg, math",
-			)
-			.forEach((el) => el.remove());
+		const allowedTags = new Set([
+			"A",
+			"P",
+			"PRE",
+			"CODE",
+			"B",
+			"STRONG",
+			"I",
+			"EM",
+			"BLOCKQUOTE",
+			"BR",
+		]);
+
+		const allowedAttributes = new Set([
+			"href",
+		]);
 
 		template.content.querySelectorAll("*").forEach((el) => {
+			if (!allowedTags.has(el.tagName)) {
+				el.replaceWith(...el.childNodes);
+				return;
+			}
+
 			for (const attr of [...el.attributes]) {
-				if (attr.name.startsWith("on")) {
+				if (!allowedAttributes.has(attr.name.toLowerCase())) {
 					el.removeAttribute(attr.name);
 				}
 			}
 
-			el.removeAttribute("style");
+			if (el.tagName === "A") {
+				const href = el.getAttribute("href");
 
-			for (const attr of ["href", "src"]) {
-				const value = el.getAttribute(attr);
-
-				if (value && /^(javascript|data):/i.test(value)) {
-					el.removeAttribute(attr);
+				if (!href || !/^(https?:\/\/|\/)/i.test(href)) {
+					el.removeAttribute("href");
 				}
+
+				el.setAttribute("target", "_blank");
+				el.setAttribute("rel", "noopener noreferrer");
 			}
 		});
 
@@ -1126,13 +1143,13 @@ add comment
 		opening = true;
 
 		try {
-		const loaded = await loadStories(stories);
+			const loaded = await loadStories(stories);
 
-		if (!loaded.length) {
-			throw new Error("No HN stories could be loaded");
-		}
+			if (!loaded.length) {
+				throw new Error("No HN stories could be loaded");
+			}
 
-		const ui = await createSidebar();
+			const ui = await createSidebar();
 
 			if (!loaded.length) {
 				throw new Error("No HN stories could be loaded");
