@@ -945,6 +945,8 @@ add comment
 		seenTime,
 		collapsedIds,
 	) {
+		let rendered = 0;
+
 		for (const replyID of replyIDs) {
 			await renderComment(
 				replyID,
@@ -954,6 +956,12 @@ add comment
 				seenTime,
 				collapsedIds,
 			);
+
+			rendered++;
+
+			if (rendered % 10 === 0) {
+				await new Promise(requestAnimationFrame);
+			}
 		}
 	}
 
