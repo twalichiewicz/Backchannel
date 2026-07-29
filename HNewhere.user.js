@@ -1138,6 +1138,7 @@ add comment
 		container.appendChild(div);
 
 		const content = div.querySelector(".comment-content");
+		const children = div.querySelector(".children");
 		const toggle = div.querySelector(".toggle");
 
 		if (collapsedIds.has(comment.id)) {
