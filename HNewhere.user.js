@@ -39,6 +39,8 @@
 		width: "hn_width",
 		position: "hn_button_position",
 		last: "hn_last",
+		collapsed: "hn_collapsed_comments",
+		seen: "hn_seen_comments",
 	};
 
 	let sidebar = null;
@@ -58,7 +60,27 @@
 		} catch {
 			return fallback;
 		}
+  }
+
+  async function loadCollapsed() {
+	return await load(STORAGE.collapsed, []);
+  }
+
+  async function saveCollapsed(ids) {
+	await save(STORAGE.collapsed, ids);
+  }
+
+  async function toggleCollapsed(id, collapsed) {
+	const ids = new Set(await loadCollapsed());
+
+	if (collapsed) {
+		ids.add(id);
+	} else {
+		ids.delete(id);
 	}
+
+	await saveCollapsed([...ids]);
+  }
 
 	// -------------------------
 	// Network
@@ -907,15 +929,22 @@ ${sanitizeHTML(comment.text) || ""}
 		container.appendChild(div);
 
 		const children = div.querySelector(".children");
-
 		const toggle = div.querySelector(".toggle");
+		const collapsed = await loadCollapsed();
 
-		toggle.onclick = () => {
-			children.classList.toggle("hidden");
+		if (collapsed.includes(comment.id)) {
+			children.classList.add("hidden");
+			toggle.textContent = "[+]";
+		}
 
-			toggle.textContent = children.classList.contains("hidden")
+		toggle.onclick = async () => {
+			const hidden = children.classList.toggle("hidden");
+
+			toggle.textContent = hidden
 				? "[+]"
 				: "[–]";
+
+			await toggleCollapsed(comment.id, hidden);
 		};
 
 		const replyButton = div.querySelector(".reply-link");
