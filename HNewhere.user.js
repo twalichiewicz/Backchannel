@@ -36,11 +36,11 @@
 	"use strict";
 
 	const STORAGE = {
-		width: "hn_width",
-		position: "hn_button_position",
-		last: "hn_last",
-		collapsed: "hn_collapsed_comments",
-		seen: "hn_seen_comments",
+		width: "HNewhere:width",
+		position: "HNewhere:button_position",
+		last: "HNewhere:last",
+		collapsed: "HNewhere:collapsed_comments",
+		seen: "HNewhere:seen_comments",
 	};
 
 	let sidebar = null;
