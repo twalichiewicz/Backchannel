@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HNewhere
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.4.8
+// @version      1.5.0
 // @license MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
@@ -339,6 +339,10 @@
 			.replace(/'/g, "&#039;");
 	}
 
+	function pluralize(value, singular, plural = singular + "s") {
+		return value + " " + (value === 1 ? singular : plural);
+	}
+
 	function timeAgo(timestamp) {
 		if (!timestamp) return "";
 
@@ -348,15 +352,15 @@
 
 		const minutes = Math.floor(seconds / 60);
 
-		if (minutes < 60) return minutes + " minutes ago";
+		if (minutes < 60) return pluralize(minutes, "minute") + " ago";
 
 		const hours = Math.floor(minutes / 60);
 
-		if (hours < 24) return hours + " hours ago";
+		if (hours < 24) return pluralize(hours, "hour") + " ago";
 
 		const days = Math.floor(hours / 24);
 
-		return days === 1 ? "1 day ago" : days + " days ago";
+		return pluralize(days, "day") + " ago";
 	}
 
 	function isNewComment(comment, seenTimestamp) {
@@ -371,36 +375,80 @@
 		);
 	}
 
-  function applyButtonMobileStyle(button) {
-	if (isMobile()) {
-		Object.assign(button.style, {
-		  boxSizing: "border-box",
-      width: "44px",
-			height: "44px",
-			padding: "0",
-			borderRadius: "50%",
-			display: "flex",
-			alignItems: "center",
-			justifyContent: "center",
-			fontSize: "13px",
-			top: "16px",
-			right: "16px",
-		});
-	} else {
-		Object.assign(button.style, {
-			width: "",
-			height: "",
-			padding: "4px 8px",
-			borderRadius: "3px",
-			display: "",
-			alignItems: "",
-			justifyContent: "",
-			fontSize: "11px",
-			top: "12px",
-			right: "12px",
-		});
-	}
-  }
+		function applyButtonMobileStyle(button) {
+			if (isMobile()) {
+				Object.assign(button.style, {
+					boxSizing: "border-box",
+					width: "44px",
+					height: "44px",
+					padding: "0",
+					borderRadius: "50%",
+					display: "flex",
+					alignItems: "center",
+					justifyContent: "center",
+					fontSize: "13px",
+					top: "16px",
+					right: "16px",
+				});
+			} else {
+				Object.assign(button.style, {
+					width: "",
+					height: "",
+					padding: "4px 8px",
+					borderRadius: "3px",
+					display: "",
+					alignItems: "",
+					justifyContent: "",
+					fontSize: "11px",
+					top: "12px",
+					right: "12px",
+				});
+			}
+		}
+
+		function createFloatingHNButton(id) {
+			let button = document.getElementById(id);
+
+			if (button) return button;
+
+			button = document.createElement("button");
+			button.id = id;
+			button.textContent = "HN";
+
+			button.style.cssText = `
+				position:fixed;
+				top:12px;
+				right:12px;
+				z-index:2147483647;
+				background:#ff6600;
+				color:white;
+				border:none;
+				border-radius:3px;
+				padding:4px 8px;
+				font-family:Verdana,sans-serif;
+				font-size:11px;
+				font-weight:bold;
+				cursor:pointer;
+				box-shadow:0 1px 4px rgba(0,0,0,.25);
+				user-select:none;
+				touch-action:none;
+				-webkit-tap-highlight-color:transparent;
+			`;
+
+			const updateButtonStyle = () => {
+				applyButtonMobileStyle(button);
+			};
+
+			updateButtonStyle();
+			window.addEventListener("resize", updateButtonStyle);
+			document.body.appendChild(button);
+
+			button._cleanup = () => {
+				window.removeEventListener("resize", updateButtonStyle);
+			};
+
+			return button;
+		}
 
 	// -------------------------
 	// Popup helpers
@@ -543,45 +591,7 @@
 	}
 
 	async function createRestoreButton() {
-		let button = document.getElementById("hn-restore-button");
-
-		if (button) return button;
-
-		button = document.createElement("button");
-		button.id = "hn-restore-button";
-		button.textContent = "HN";
-
-		button.style.cssText = `
-			position:fixed;
-			top:12px;
-			right:12px;
-			z-index:2147483647;
-			background:#ff6600;
-			color:white;
-			border:none;
-			border-radius:3px;
-			padding:4px 8px;
-			font-family:Verdana,sans-serif;
-			font-size:11px;
-			font-weight:bold;
-			cursor:pointer;
-			box-shadow:0 1px 4px rgba(0,0,0,.25);
-			user-select:none;
-			touch-action:none;
-			-webkit-tap-highlight-color:transparent;
-		`;
-
-		const updateButtonStyle = () => {
-			applyButtonMobileStyle(button);
-		};
-
-		updateButtonStyle();
-
-		window.addEventListener("resize", updateButtonStyle);
-
-		document.body.appendChild(button);
-
-		applyButtonMobileStyle(button);
+		const button = createFloatingHNButton("hn-restore-button");
 
 		if (!isMobile()) {
 			await applyButtonPosition(button);
@@ -596,6 +606,7 @@
 				sidebar.style.display = "";
 			}
 
+			button._cleanup?.();
 			button.remove();
 		};
 
@@ -603,44 +614,7 @@
 	}
 
 	async function createCollapsedButton(stories) {
-		let button = document.getElementById("hn-collapse-button");
-		if (button) return button;
-
-		button = document.createElement("button");
-		button.id = "hn-collapse-button";
-		button.textContent = "HN";
-
-		button.style.cssText = `
-			position:fixed;
-			top:12px;
-			right:12px;
-			z-index:2147483647;
-			background:#ff6600;
-			color:white;
-			border:none;
-			border-radius:3px;
-			padding:4px 8px;
-			font-family:Verdana,sans-serif;
-			font-size:11px;
-			font-weight:bold;
-			cursor:pointer;
-			box-shadow:0 1px 4px rgba(0,0,0,.25);
-			user-select:none;
-			touch-action:none;
-			-webkit-tap-highlight-color: transparent;
-		`;
-
-		const updateButtonStyle = () => {
-			applyButtonMobileStyle(button);
-		};
-
-		updateButtonStyle();
-
-		window.addEventListener("resize", updateButtonStyle);
-
-		document.body.appendChild(button);
-
-		applyButtonMobileStyle(button);
+		const button = createFloatingHNButton("hn-collapse-button");
 
 		if (!isMobile()) {
 			await applyButtonPosition(button);
@@ -651,6 +625,7 @@
 		button.onclick = () => {
 			if (wasMoved()) return;
 
+			button._cleanup?.();
 			button.remove();
 			openSidebar(stories).catch(console.error);
 		};
@@ -709,6 +684,7 @@ header {
     display:flex;
     justify-content:space-between;
     align-items:center;
+    gap:8px;
     font-weight:bold;
 }
 
@@ -726,6 +702,19 @@ header button {
     border-radius:4px;
     padding:0;
     touch-action:manipulation;
+}
+
+.header-title {
+    display:flex;
+    flex-direction:column;
+    min-width:0;
+}
+
+.header-subtitle {
+    font-size:11px;
+    font-weight:normal;
+    line-height:1.2;
+    opacity:.85;
 }
 
 .submission {
@@ -864,8 +853,9 @@ header button {
 
 <header>
 
-<span>
-<b>HN</b>ewhere
+<span class="header-title">
+<span><b>HN</b>ewhere</span>
+<span id="header-subtitle" class="header-subtitle"></span>
 </span>
 
 <button id="minimize">
@@ -998,6 +988,7 @@ Loading...
 		return {
 			shadow,
 			body: shadow.querySelector("#comments"),
+			headerSubtitle: shadow.querySelector("#header-subtitle"),
 		};
 	}
 
@@ -1221,6 +1212,7 @@ add comment
 
 	async function renderSingleDiscussion(story, ui) {
 		ui.body.innerHTML = "";
+		ui.headerSubtitle.textContent = "";
 
 		renderStory(story, ui.body);
 
@@ -1245,6 +1237,7 @@ add comment
 
 	async function renderBlendedDiscussion(stories, ui) {
 		ui.body.innerHTML = "";
+		ui.headerSubtitle.textContent = pluralize(stories.length, "discussion");
 
 		for (const story of stories) {
 			const section = document.createElement("div");
