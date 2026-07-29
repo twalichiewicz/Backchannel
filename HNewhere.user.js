@@ -610,6 +610,23 @@ header button {
     line-height:1.4;
 }
 
+.story-text {
+    margin:10px 0;
+    line-height:1.45;
+}
+
+.story-text p:first-child {
+    margin-top:0;
+}
+
+.story-text p:last-child {
+    margin-bottom:0;
+}
+
+.story-text a {
+    color:#0000aa;
+}
+
 .story-actions {
     margin-top:8px;
 }
@@ -784,7 +801,18 @@ ${escapeHTML(story.by || "")}
 |
 
 ${timeAgo(story.time)}
+
+|
+
+${story.descendants || 0} comments
+
 </div>
+
+${story.text ? `
+<div class="story-text">
+${sanitizeHTML(story.text)}
+</div>
+` : ""}
 
 <div class="story-actions">
 
