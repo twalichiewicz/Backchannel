@@ -1126,9 +1126,13 @@ add comment
 		opening = true;
 
 		try {
-			const ui = await createSidebar();
+		const loaded = await loadStories(stories);
 
-			const loaded = await loadStories(stories);
+		if (!loaded.length) {
+			throw new Error("No HN stories could be loaded");
+		}
+
+		const ui = await createSidebar();
 
 			if (!loaded.length) {
 				throw new Error("No HN stories could be loaded");
