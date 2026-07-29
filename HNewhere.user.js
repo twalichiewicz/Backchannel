@@ -52,6 +52,8 @@
 
 		try {
 			for (const key of Object.keys(STORAGE)) {
+				if (!OLD_STORAGE[key]) continue;
+
 				const oldValue = await load(OLD_STORAGE[key], null);
 
 				if (oldValue !== null) {
@@ -71,6 +73,8 @@
 		last: "HNewhere:last",
 		collapsed: "HNewhere:collapsed_comments",
 		seen: "HNewhere:seen_comments",
+		widths: "HNewhere:width_by_site",
+		state: "HNewhere:sidebar_state",
 	};
 
 	let sidebar = null;
@@ -125,6 +129,33 @@
 		}
 
 		await saveCollapsed([...ids]);
+	}
+
+	function siteKey() {
+		return location.hostname;
+	}
+
+	async function loadSiteWidth() {
+		const widths = await load(STORAGE.widths, {});
+		const width = widths[siteKey()];
+		return typeof width === "number" ? width : await load(STORAGE.width, 420);
+	}
+
+	async function saveSiteWidth(width) {
+		const widths = await load(STORAGE.widths, {});
+		widths[siteKey()] = width;
+		await save(STORAGE.widths, widths);
+	}
+
+	async function loadSidebarState() {
+		const states = await load(STORAGE.state, {});
+		return states[siteKey()] || null;
+	}
+
+	async function saveSidebarState(state) {
+		const states = await load(STORAGE.state, {});
+		states[siteKey()] = state;
+		await save(STORAGE.state, states);
 	}
 
 	// -------------------------
@@ -402,6 +433,50 @@
 	}
   }
 
+	function makeButtonDot(button) {
+		if (isMobile()) return;
+
+		let hovered = false;
+
+		const shrink = () => {
+			button.textContent = "";
+			Object.assign(button.style, {
+				boxSizing: "border-box",
+				width: "14px",
+				height: "14px",
+				padding: "0",
+				borderRadius: "50%",
+			});
+		};
+
+		const grow = () => {
+			button.textContent = "HN";
+			Object.assign(button.style, {
+				width: "",
+				height: "",
+				padding: "4px 8px",
+				borderRadius: "3px",
+			});
+		};
+
+		shrink();
+
+		button.addEventListener("mouseenter", () => {
+			hovered = true;
+			grow();
+		});
+
+		button.addEventListener("mouseleave", () => {
+			hovered = false;
+			shrink();
+		});
+
+		// applyButtonMobileStyle resets styles on window resize
+		window.addEventListener("resize", () => {
+			if (!isMobile() && !hovered) shrink();
+		});
+	}
+
 	// -------------------------
 	// Popup helpers
 	// -------------------------
@@ -587,10 +662,14 @@
 			await applyButtonPosition(button);
 		}
 
+		makeButtonDot(button);
+
 		const wasMoved = makeButtonDraggable(button);
 
 		button.onclick = () => {
 			if (wasMoved()) return;
+
+			saveSidebarState("open");
 
 			if (sidebar) {
 				sidebar.style.display = "";
@@ -646,10 +725,14 @@
 			await applyButtonPosition(button);
 		}
 
+		makeButtonDot(button);
+
 		const wasMoved = makeButtonDraggable(button);
 
 		button.onclick = () => {
 			if (wasMoved()) return;
+
+			saveSidebarState("open");
 
 			button.remove();
 			openSidebar(stories).catch(console.error);
@@ -669,7 +752,7 @@
 			sidebar = null;
 		}
 
-		const savedWidth = await load(STORAGE.width, 420);
+		const savedWidth = await loadSiteWidth();
 
 		const width = Math.min(Math.max(savedWidth, 280), window.innerWidth * 0.8);
 
@@ -938,7 +1021,7 @@ Loading...
 
 			resizeTimer = setTimeout(() => {
 				if (!destroyed) {
-					save(STORAGE.width, newWidth);
+					saveSiteWidth(newWidth);
 				}
 			}, 250);
 		};
@@ -964,7 +1047,7 @@ Loading...
 
 			if (panel.offsetWidth > maxWidth) {
 				panel.style.width = maxWidth + "px";
-				save(STORAGE.width, maxWidth);
+				saveSiteWidth(maxWidth);
 			}
 		};
 
@@ -979,11 +1062,13 @@ Loading...
 		};
 
 		shadow.querySelector("#minimize").onclick = async () => {
+			saveSidebarState("collapsed");
 			host.style.display = "none";
 
 			const restore = await createRestoreButton();
 
 			restore.onclick = () => {
+				saveSidebarState("open");
 				host.style.display = "";
 				restore.remove();
 			};
@@ -1401,7 +1486,7 @@ add comment
 		) {
 			await save(STORAGE.last, null);
 
-			if (isMobile()) {
+			if (isMobile() || (await loadSidebarState()) === "collapsed") {
 				await createCollapsedButton(
 					last.ids.map((id) => ({
 						objectID: id,
@@ -1423,7 +1508,7 @@ add comment
 		const stories = await findHN(location.href);
 
 		if (stories.length) {
-			if (isMobile()) {
+			if (isMobile() || (await loadSidebarState()) === "collapsed") {
 				await createCollapsedButton(stories);
 			} else {
 				await openSidebar(
