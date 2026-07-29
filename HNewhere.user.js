@@ -390,6 +390,19 @@
         -webkit-tap-highlight-color: transparent;
     `;
 
+		if (isMobile()) {
+			button.style.width = "44px";
+			button.style.height = "44px";
+			button.style.padding = "0";
+			button.style.borderRadius = "50%";
+			button.style.display = "flex";
+			button.style.alignItems = "center";
+			button.style.justifyContent = "center";
+			button.style.fontSize = "13px";
+			button.style.top = "16px";
+			button.style.right = "16px";
+		}
+
 		document.body.appendChild(button);
 
 		await applyButtonPosition(button);
@@ -425,6 +438,19 @@
 			touch-action:none;
 			-webkit-tap-highlight-color: transparent;
 		`;
+
+		if (isMobile()) {
+			button.style.width = "44px";
+			button.style.height = "44px";
+			button.style.padding = "0";
+			button.style.borderRadius = "50%";
+			button.style.display = "flex";
+			button.style.alignItems = "center";
+			button.style.justifyContent = "center";
+			button.style.fontSize = "13px";
+			button.style.top = "16px";
+			button.style.right = "16px";
+		}
 
 		document.body.appendChild(button);
 
