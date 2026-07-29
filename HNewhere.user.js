@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HNewhere
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.4.6
+// @version      1.5
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @homepageURL  https://github.com/twalichiewicz/HNewhere
@@ -222,6 +222,164 @@
 		button.style.left = x + "px";
 		button.style.top = y + "px";
 		button.style.right = "auto";
+	}
+
+	// -------------------------
+	// Article annotations
+	// -------------------------
+
+	const annotations = {
+		markers: new Map(),
+		comments: new Map(),
+	};
+
+	function normalizeText(text) {
+		return (text || "")
+			.replace(/<[^>]+>/g, " ")
+			.replace(/[“”‘’"]/g, '"')
+			.replace(/\s+/g, " ")
+			.trim()
+			.toLowerCase();
+	}
+
+	function extractQuotes(html) {
+		if (!html) return [];
+
+		const div = document.createElement("div");
+		div.innerHTML = html;
+
+		const quotes = [];
+
+		function addQuote(text, priority = 0) {
+			const normalized = normalizeText(text);
+
+			if (normalized.length < 30) {
+				return;
+			}
+
+			// Avoid common non-article conversational text
+			if (
+				/^(thanks|interesting|i agree|good point|nice|lol|haha)/i.test(
+					normalized,
+				)
+			) {
+				return;
+			}
+
+			// Long quotes are fragile. Break into searchable chunks.
+			if (normalized.length > 300) {
+				const sentences = normalized.match(/[^.!?]+[.!?]+/g);
+
+				if (sentences) {
+					sentences.forEach((sentence) => {
+						const s = normalizeText(sentence);
+
+						if (s.length >= 50) {
+							quotes.push({
+								text: s,
+								priority,
+							});
+						}
+					});
+				}
+
+				return;
+			}
+
+			quotes.push({
+				text: normalized,
+				priority,
+			});
+		}
+
+		//
+		// 1. Real HTML blockquotes
+		//
+		div.querySelectorAll("blockquote").forEach((el) => {
+			addQuote(el.textContent, 3);
+		});
+
+		//
+		// Preserve original line structure before normalization.
+		// HN renders quoted text as:
+		// > something someone said
+		//
+		const rawText = div.textContent || "";
+
+		const lines = rawText
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter(Boolean);
+
+		//
+		// 2. Markdown/HN quote blocks
+		//
+		let quoteBuffer = [];
+
+		for (const line of lines) {
+			if (line.startsWith(">")) {
+				quoteBuffer.push(line.replace(/^>\s*/, ""));
+			} else if (quoteBuffer.length) {
+				addQuote(quoteBuffer.join(" "), 3);
+
+				quoteBuffer = [];
+			}
+		}
+
+		if (quoteBuffer.length) {
+			addQuote(quoteBuffer.join(" "), 3);
+		}
+
+		//
+		// 3. Explicit quoted strings
+		//
+		for (const match of rawText.matchAll(/["“](.{30,}?)["”]/gs)) {
+			addQuote(match[1], 2);
+		}
+
+		//
+		// 4. Single quotes
+		//
+		for (const match of rawText.matchAll(/['‘](.{40,}?)['’]/gs)) {
+			addQuote(match[1], 1);
+		}
+
+		//
+		// 5. Long standalone comment lines
+		// Catch comments like:
+		// "The article says..."
+		//
+		lines.forEach((line) => {
+			const cleaned = line.replace(/^>\s*/, "");
+
+			if (cleaned.length >= 100 && !/^https?:\/\//i.test(cleaned)) {
+				addQuote(cleaned, 0);
+			}
+		});
+
+		//
+		// Rank longer/more explicit quotes first.
+		// Deduplicate after ranking.
+		//
+		const seen = new Set();
+
+		return quotes
+			.sort((a, b) => {
+				if (b.priority !== a.priority) {
+					return b.priority - a.priority;
+				}
+
+				return b.text.length - a.text.length;
+			})
+			.map((q) => q.text)
+			.filter((q) => {
+				if (seen.has(q)) {
+					return false;
+				}
+
+				seen.add(q);
+				return true;
+			});
 	}
 
 	// -------------------------
@@ -823,15 +981,18 @@ ${sanitizeHTML(comment.text) || ""}
 
 `;
 
+		div._quotes = extractQuotes(comment.text);
+
 		container.appendChild(div);
 
-		const children = div.querySelector(".children");
+		annotations.comments.set(comment.id, div);
+		div.dataset.commentId = comment.id;
 
+		const children = div.querySelector(".children");
 		const toggle = div.querySelector(".toggle");
 
 		toggle.onclick = () => {
 			children.classList.toggle("hidden");
-
 			toggle.textContent = children.classList.contains("hidden")
 				? "[+]"
 				: "[–]";
@@ -870,6 +1031,7 @@ ${sanitizeHTML(comment.text) || ""}
 		for (const child of story.kids || []) {
 			await renderComment(child, comments, story.id);
 		}
+		annotateArticle();
 	}
 
 	async function renderBlendedDiscussion(stories, ui) {
@@ -894,6 +1056,232 @@ ${sanitizeHTML(comment.text) || ""}
 			for (const child of story.kids || []) {
 				await renderComment(child, comments, story.id);
 			}
+		}
+		annotateArticle();
+	}
+
+	function buildArticleIndex() {
+		const walker = document.createTreeWalker(
+			document.body,
+			NodeFilter.SHOW_TEXT,
+			{
+				acceptNode(node) {
+					if (!node.textContent.trim()) {
+						return NodeFilter.FILTER_REJECT;
+					}
+
+					if (
+						node.parentElement.closest("#hn-collapse-button,#hn-restore-button")
+					) {
+						return NodeFilter.FILTER_REJECT;
+					}
+
+					if (node.parentElement.closest("script,style,noscript")) {
+						return NodeFilter.FILTER_REJECT;
+					}
+
+					if (node.parentElement.closest(".hn-annotation")) {
+						return NodeFilter.FILTER_REJECT;
+					}
+
+					return NodeFilter.FILTER_ACCEPT;
+				},
+			},
+		);
+
+		const map = [];
+		let normalized = "";
+
+		function normalizeWithMap(text, node) {
+			const localMap = [];
+			let localNormalized = "";
+
+			for (let i = 0; i < text.length; i++) {
+				const char = text[i].toLowerCase();
+
+				if (/\s/.test(char)) {
+					if (
+						localNormalized.length &&
+						localNormalized[localNormalized.length - 1] !== " "
+					) {
+						localMap.push({
+							rawNode: node,
+							rawOffset: i,
+						});
+
+						localNormalized += " ";
+					}
+				} else {
+					localMap.push({
+						rawNode: node,
+						rawOffset: i,
+					});
+
+					localNormalized += char;
+				}
+			}
+
+			return {
+				normalized: localNormalized,
+				map: localMap,
+			};
+		}
+
+		let node;
+
+		while ((node = walker.nextNode())) {
+			const result = normalizeWithMap(node.textContent, node);
+
+			const start = normalized.length;
+
+			normalized += result.normalized;
+
+			result.map.forEach((entry, i) => {
+				map[start + i] = entry;
+			});
+		}
+
+		return {
+			normalized,
+			map,
+		};
+	}
+
+	function annotateArticle() {
+		const article = buildArticleIndex();
+
+		if (!article.normalized.length) {
+			return;
+		}
+
+		const usedRanges = [];
+
+		for (const comment of annotations.comments.values()) {
+			const quotes = comment._quotes || [];
+
+			for (const quote of quotes) {
+				const normalizedQuote = normalizeText(quote);
+
+				if (normalizedQuote.length < 60) {
+					continue;
+				}
+
+				// Try longer matches first, then progressively relax.
+				const candidates = [
+					normalizedQuote.substring(0, 160),
+					normalizedQuote.substring(0, 120),
+					normalizedQuote.substring(0, 80),
+				];
+
+				let index = -1;
+
+				for (const candidate of candidates) {
+					if (candidate.length < 60) {
+						continue;
+					}
+
+					index = article.normalized.indexOf(candidate);
+
+					if (index !== -1) {
+						break;
+					}
+				}
+
+				if (index === -1) {
+					continue;
+				}
+
+				const start = index;
+				const end = index + normalizedQuote.length;
+
+				// Avoid stacking multiple annotations over the same text.
+				const overlaps = usedRanges.some((range) => {
+					return start < range.end && end > range.start;
+				});
+
+				if (overlaps) {
+					continue;
+				}
+
+				usedRanges.push({
+					start,
+					end,
+				});
+
+				highlightApproximateMatch(
+					article,
+					index,
+					Math.min(normalizedQuote.length, article.normalized.length - index),
+					comment,
+				);
+
+				break;
+			}
+		}
+	}
+
+	function highlightApproximateMatch(article, index, length, comment) {
+		const startEntry = article.map[index];
+		const endEntry = article.map[index + length - 1];
+
+		if (!startEntry || !endEntry) {
+			return;
+		}
+
+		highlightRange(article.map, startEntry, endEntry, comment);
+	}
+
+	function highlightRange(map, startEntry, endEntry, comment) {
+		const range = document.createRange();
+
+		range.setStart(startEntry.rawNode, startEntry.rawOffset);
+
+		range.setEnd(endEntry.rawNode, endEntry.rawOffset + 1);
+
+		const span = document.createElement("span");
+
+		span.className = "hn-annotation";
+
+		span.style.background = "rgba(255,102,0,.18)";
+		span.style.borderBottom = "2px solid #ff6600";
+		span.style.cursor = "pointer";
+
+		try {
+			const fragment = range.extractContents();
+
+			span.appendChild(fragment);
+			range.insertNode(span);
+
+			span.onclick = () => {
+				comment.scrollIntoView({
+					behavior: "smooth",
+					block: "center",
+				});
+			};
+
+			const meta = comment.querySelector(".meta");
+
+			if (meta && !meta.querySelector(".article-jump")) {
+				const jump = document.createElement("a");
+
+				jump.className = "article-jump";
+				jump.href = "#";
+				jump.textContent = "article";
+				jump.style.marginLeft = "6px";
+
+				jump.onclick = (e) => {
+					e.preventDefault();
+
+					span.scrollIntoView({
+						behavior: "smooth",
+						block: "center",
+					});
+				};
+
+				meta.appendChild(jump);
+			}
+		} catch (e) {
+			console.error("HN annotation failed", e);
 		}
 	}
 
