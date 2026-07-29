@@ -775,7 +775,7 @@ Loading...
 	function renderStory(story, container, options = {}) {
 		const { multiple = false, stories = [] } = options;
 
-		const url = story.url || "https://news.ycombinator.com/item?id=" + story.id;
+		const hnURL = commentURL(story.id);
 
 		const wrapper = document.createElement("div");
 		wrapper.innerHTML = `
@@ -785,7 +785,8 @@ Loading...
 <div class="story-title">
 
 <a target="_blank"
-href="${escapeHTML(url)}">
+href="${escapeHTML(hnURL)}"
+title="Open discussion on Hacker News">
 
 ${escapeHTML(story.title)}
 
