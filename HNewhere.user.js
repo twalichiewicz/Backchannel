@@ -364,8 +364,43 @@
 	}
 
 	function isMobile() {
-		return window.matchMedia("(max-width: 700px)").matches;
+		return (
+			window.matchMedia("(max-width: 700px)").matches ||
+			"ontouchstart" in window ||
+			navigator.maxTouchPoints > 0
+		);
 	}
+
+  function applyButtonMobileStyle(button) {
+	if (isMobile()) {
+		Object.assign(button.style, {
+		  boxSizing: "border-box",
+      width: "44px",
+			height: "44px",
+			padding: "0",
+			borderRadius: "50%",
+			display: "flex",
+			alignItems: "center",
+			justifyContent: "center",
+			fontSize: "13px",
+			top: "16px",
+			right: "16px",
+		});
+	} else {
+		Object.assign(button.style, {
+			width: "",
+			height: "",
+			padding: "4px 8px",
+			borderRadius: "3px",
+			display: "",
+			alignItems: "",
+			justifyContent: "",
+			fontSize: "11px",
+			top: "12px",
+			right: "12px",
+		});
+	}
+  }
 
 	// -------------------------
 	// Popup helpers
@@ -536,24 +571,21 @@
 			-webkit-tap-highlight-color:transparent;
 		`;
 
-		if (isMobile()) {
-			Object.assign(button.style, {
-				width: "44px",
-				height: "44px",
-				padding: "0",
-				borderRadius: "50%",
-				display: "flex",
-				alignItems: "center",
-				justifyContent: "center",
-				fontSize: "13px",
-				top: "16px",
-				right: "16px",
-			});
-		}
+		const updateButtonStyle = () => {
+			applyButtonMobileStyle(button);
+		};
+
+		updateButtonStyle();
+
+		window.addEventListener("resize", updateButtonStyle);
 
 		document.body.appendChild(button);
 
-		await applyButtonPosition(button);
+		applyButtonMobileStyle(button);
+
+		if (!isMobile()) {
+			await applyButtonPosition(button);
+		}
 
 		const wasMoved = makeButtonDraggable(button);
 
@@ -598,22 +630,21 @@
 			-webkit-tap-highlight-color: transparent;
 		`;
 
-		if (isMobile()) {
-			button.style.width = "44px";
-			button.style.height = "44px";
-			button.style.padding = "0";
-			button.style.borderRadius = "50%";
-			button.style.display = "flex";
-			button.style.alignItems = "center";
-			button.style.justifyContent = "center";
-			button.style.fontSize = "13px";
-			button.style.top = "16px";
-			button.style.right = "16px";
-		}
+		const updateButtonStyle = () => {
+			applyButtonMobileStyle(button);
+		};
+
+		updateButtonStyle();
+
+		window.addEventListener("resize", updateButtonStyle);
 
 		document.body.appendChild(button);
 
-		await applyButtonPosition(button);
+		applyButtonMobileStyle(button);
+
+		if (!isMobile()) {
+			await applyButtonPosition(button);
+		}
 
 		const wasMoved = makeButtonDraggable(button);
 
@@ -686,7 +717,15 @@ header button {
     border:0;
     color:black;
     cursor:pointer;
-    font-size:16px;
+    font-size:20px;
+    width:36px;
+    height:36px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:4px;
+    padding:0;
+    touch-action:manipulation;
 }
 
 .submission {
@@ -1362,11 +1401,19 @@ add comment
 		) {
 			await save(STORAGE.last, null);
 
-			await openSidebar(
-				last.ids.map((id) => ({
-					objectID: id,
-				})),
-			);
+			if (isMobile()) {
+				await createCollapsedButton(
+					last.ids.map((id) => ({
+						objectID: id,
+					})),
+				);
+			} else {
+				await openSidebar(
+					last.ids.map((id) => ({
+						objectID: id,
+					})),
+				);
+			}
 
 			return;
 		}
