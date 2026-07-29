@@ -514,8 +514,11 @@ header button {
 }
 
 #comments {
+	flex:1 1 auto;
+	min-height:0;
     overflow:auto;
     overflow-x:hidden;
+	overscroll-behavior:contain;
     padding:8px 12px;
     word-wrap:break-word;
 }
@@ -615,6 +618,12 @@ Loading...
 `;
 
 		const panel = shadow.querySelector("#panel");
+
+		// Stop scroll/touch events moving out of sidebar so sites with
+		// JS scroll hijacking (wheel listeners on window) don't scroll behind
+		for (const type of ["wheel", "touchmove"]) {
+		  host.addEventListener(type, (event) => event.stopPropagation());
+		}
 
 		let resizing = false;
 		let startX = 0;
