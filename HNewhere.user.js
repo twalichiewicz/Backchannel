@@ -188,7 +188,9 @@
 		template.innerHTML = html || "";
 
 		template.content
-			.querySelectorAll("script, iframe, object, embed")
+			.querySelectorAll(
+				"script, iframe, object, embed, form, input, button, textarea, select, svg, math",
+			)
 			.forEach((el) => el.remove());
 
 		template.content.querySelectorAll("*").forEach((el) => {
