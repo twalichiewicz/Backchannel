@@ -13,7 +13,7 @@ HNewhere detects matching Hacker News stories, loads comments into a sidebar, an
    - [Violentmonkey](https://violentmonkey.github.io/)
    - [Userscripts (Safari)](https://apps.apple.com/us/app/userscripts/id1463298887)
 
-2. [Install HNewhere](https://raw.githubusercontent.com/twalichiewicz/HNewhere/refs/heads/main/HNewhere.user.js) Current release: `v1.5.1`
+2. [Install HNewhere](https://raw.githubusercontent.com/twalichiewicz/HNewhere/refs/heads/main/HNewhere.user.js) Current release: `v1.5.2`
 
 3. Visit an article with a Hacker News discussion.
 

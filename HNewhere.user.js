@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HNewhere
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.5.1
+// @version      1.5.2
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
@@ -226,8 +226,13 @@
 			return savedWidth;
 		}
 
-		// Dragging the resize handle on a touch screen is fiddly, so open at three
-		// quarters of the viewport rather than leaving that to be corrected by hand.
+		// Dragging the resize handle on a touch screen is fiddly, so pick something
+		// usable rather than leaving it to be corrected by hand. A portrait phone
+		// takes the full width; three quarters still left the comments squeezed.
+		if (isPortraitPhone()) {
+			return window.innerWidth - PORTRAIT_SIDEBAR_GUTTER;
+		}
+
 		return isMobile() ? Math.round(window.innerWidth * 0.75) : 420;
 	}
 
@@ -398,6 +403,7 @@
 
 	const itemCache = new Map();
 	const voteLinkCache = new Map();
+	const displayAgeCache = new Map();
 	const voteBridgeRequests = new Map();
 
 	async function getItem(id) {
@@ -414,6 +420,32 @@
 		return item;
 	}
 
+	// Stories reach the sort in two shapes: Algolia hits from findHN and Firebase
+	// items from loadStories. Reading both here keeps one ordering rule instead of
+	// two that can disagree.
+	function discussionRank(story) {
+		return {
+			comments: story.descendants ?? story.num_comments ?? 0,
+			points: story.score ?? story.points ?? 0,
+			time: story.time ?? story.created_at_i ?? 0,
+		};
+	}
+
+	// Ordered by how much discussion there is to read, not by recency. The same
+	// article gets resubmitted, and the newest submission is routinely a 0-comment
+	// repost while the thread worth reading is days old -- putting the empty one
+	// first buries the only discussion there is. Recency is only the tie-break.
+	function compareStoriesByDiscussion(a, b) {
+		const left = discussionRank(a);
+		const right = discussionRank(b);
+
+		return (
+			right.comments - left.comments ||
+			right.points - left.points ||
+			right.time - left.time
+		);
+	}
+
 	async function findHN(url) {
 		const target = normalizeURL(url);
 
@@ -426,7 +458,9 @@
 		const cached = await load(cacheKey, null);
 
 		if (cached && Date.now() - cached.timestamp < 3600000) {
-			return cached.results;
+			// Re-sorted on read rather than trusted as stored, so an ordering change
+			// applies immediately instead of waiting out an hour of cached results.
+			return [...cached.results].sort(compareStoriesByDiscussion);
 		}
 
 		const queries = [url, target];
@@ -450,9 +484,7 @@
 			}
 		}
 
-		const sorted = [...matches.values()].sort(
-			(a, b) => b.created_at_i - a.created_at_i,
-		);
+		const sorted = [...matches.values()].sort(compareStoriesByDiscussion);
 
 		await save(cacheKey, {
 			timestamp: Date.now(),
@@ -605,6 +637,27 @@
 
 	function isNewComment(comment, seenTimestamp) {
 		return comment.time && comment.time > seenTimestamp;
+	}
+
+	// Sliver of the page left showing down the left edge on a portrait phone, so it
+	// still reads as a panel over the article rather than a new page.
+	const PORTRAIT_SIDEBAR_GUTTER = 28;
+
+	// The case where a partial-width sidebar leaves the comment column too narrow to
+	// read. Keyed on viewport size rather than isMobile(), which counts any touch
+	// device: a portrait iPad has plenty of room and should keep the 80% cap, as
+	// should landscape phones.
+	function isPortraitPhone() {
+		return (
+			window.matchMedia("(max-width: 700px)").matches &&
+			window.innerHeight >= window.innerWidth
+		);
+	}
+
+	function maxSidebarWidth() {
+		return isPortraitPhone()
+			? window.innerWidth - PORTRAIT_SIDEBAR_GUTTER
+			: window.innerWidth * 0.8;
 	}
 
 	function isMobile() {
@@ -843,6 +896,51 @@
 		return match ? Number(match[0]) : null;
 	}
 
+	// HN re-dates threads it resurfaces onto the front page. The age element keeps
+	// the true timestamp in its title while displaying a shifted one:
+	//
+	//   <span class="age" title="2026-07-25T14:08:57 1784988537">3 hours ago</span>
+	//
+	// Both APIs report the title value, so the displayed string exists nowhere but
+	// the rendered page and cannot be derived (two comments 3d and 2d16h old both
+	// render as "1 hour ago"). Reading the text is the only way to agree with HN.
+	function extractDisplayAgesFromRoot(root) {
+		const ages = new Map();
+
+		root.querySelectorAll("span.age").forEach((span) => {
+			const link = span.querySelector('a[href*="item?id="]');
+
+			if (!link) {
+				return;
+			}
+
+			const id = /item\?id=(\d+)/.exec(link.getAttribute("href") || "")?.[1];
+			const text = (link.textContent || "").trim();
+
+			if (id && text) {
+				ages.set(id, text);
+			}
+		});
+
+		return ages;
+	}
+
+	function hydrateDisplayAges(storyID) {
+		const ages = displayAgeCache.get(String(storyID));
+
+		if (!ages || !sidebarUI?.body) {
+			return;
+		}
+
+		sidebarUI.body.querySelectorAll("[data-age-id]").forEach((element) => {
+			const text = ages.get(String(element.dataset.ageId));
+
+			if (text) {
+				element.textContent = text;
+			}
+		});
+	}
+
 	function deriveUnvoteURL(voteURL) {
 		if (!voteURL) {
 			return null;
@@ -1068,6 +1166,9 @@
 				updateCachedStoryScore(storyID, trueScore);
 				updateStoryScoreDisplay(storyID, trueScore);
 			}
+
+			// Same fetch, so HN's own displayed ages come along at no extra cost.
+			displayAgeCache.set(cacheKey, extractDisplayAgesFromRoot(doc));
 
 			return applyRememberedVotes(extractVoteLinksFromRoot(doc));
 		})();
@@ -1598,7 +1699,7 @@
 
 		const savedWidth = await loadSiteWidth();
 
-		const width = Math.min(Math.max(savedWidth, 280), window.innerWidth * 0.8);
+		const width = Math.min(Math.max(savedWidth, 280), maxSidebarWidth());
 
 		const host = document.createElement("div");
 		host.setAttribute("data-hnewhere-sidebar", "1");
@@ -1617,8 +1718,11 @@
     top:0;
     height:100vh;
     width:${width}px;
-    min-width:280px;
-    max-width:80vw;
+    min-width:${isPortraitPhone() ? "0" : "280px"};
+    max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "80vw"};
+    /* Without this the 1px border-left is added to the width, so a panel sized to
+       the viewport renders a pixel past its left edge. */
+    box-sizing:border-box;
     background:#f6f6ef;
     color:#000;
     z-index:2147483646;
@@ -1658,8 +1762,50 @@ header button {
     touch-action:manipulation;
 }
 
-header button:hover {
-    background:rgba(0,0,0,.08);
+/* #panel is position:fixed, which is already a containing block for this. */
+#resize-handle {
+    position:absolute;
+    left:0;
+    top:0;
+    bottom:0;
+    width:8px;
+    cursor:col-resize;
+    z-index:3;
+    /* Keeps the browser from turning the drag into a scroll or a page-back swipe
+       before the resize handlers see it. */
+    touch-action:none;
+}
+
+/* A finger needs a far bigger target than a cursor, and an invisible edge strip is
+   undiscoverable, so coarse pointers get a wider strip with a visible grip. */
+@media (pointer: coarse) {
+    #resize-handle {
+        width:20px;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+    }
+
+    #resize-handle::before {
+        content:"";
+        width:4px;
+        height:40px;
+        border-radius:2px;
+        background:rgba(0,0,0,.2);
+    }
+
+    #resize-handle.resize-handle-active::before {
+        background:#ff6600;
+    }
+}
+
+/* Touch devices latch :hover on after a tap and hold it until something else is
+   tapped, so the settings and minimize buttons stayed highlighted. Only apply it
+   where a real pointer can hover. */
+@media (hover: hover) {
+    header button:hover {
+        background:rgba(0,0,0,.08);
+    }
 }
 
 
@@ -1696,7 +1842,10 @@ header button:hover {
     border:1px solid #d6d6d6;
     border-radius:8px;
     box-shadow:0 8px 24px rgba(0,0,0,.16);
-    padding:10px;
+    /* Slightly more at the bottom than the top: the title's line-height adds its
+       own leading up top, so a literal 10px all round reads as short underneath
+       the last option. */
+    padding:10px 10px 13px;
     z-index:3;
 }
 
@@ -1729,6 +1878,13 @@ header button:hover {
 #settings-toggle {
     font-family: system-ui, sans-serif;
     font-variant-emoji: text;
+}
+
+/* Held while the dropdown is open so the gear reads as a toggle rather than a
+   button that fired once. Darker than the hover tint so the two stay distinct on
+   a pointer device, and outside the hover media query so touch gets it too. */
+#settings-toggle.is-open {
+    background:rgba(0,0,0,.16);
 }
 
 .settings-option {
@@ -1836,8 +1992,10 @@ header button:hover {
     font:500 11px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-.filter-match-chip:hover {
-    background:rgba(255,102,0,.05);
+@media (hover: hover) {
+    .filter-match-chip:hover {
+        background:rgba(255,102,0,.05);
+    }
 }
 
 .filter-match-chip-active {
@@ -1861,8 +2019,10 @@ header button:hover {
     padding:0;
 }
 
-.filter-banner-close:hover {
-    background:rgba(255,102,0,.05);
+@media (hover: hover) {
+    .filter-banner-close:hover {
+        background:rgba(255,102,0,.05);
+    }
 }
 
 .comment {
@@ -1927,8 +2087,10 @@ header button:hover {
     text-decoration:none;
 }
 
-.meta a:hover {
-    text-decoration:underline;
+@media (hover: hover) {
+    .meta a:hover {
+        text-decoration:underline;
+    }
 }
 
 .vote-controls {
@@ -2019,13 +2181,20 @@ header button:hover {
     top:2px;
 }
 
-.vote-button:hover::before,
+/* Split deliberately: the -active colour marks a recorded vote and must apply on
+   touch, so only the :hover half is gated. */
 .vote-button-active::before {
     border-bottom-color:#ff6600;
 }
 
-.vote-button-down:hover::before {
-    border-top-color:#ff6600;
+@media (hover: hover) {
+    .vote-button:hover::before {
+        border-bottom-color:#ff6600;
+    }
+
+    .vote-button-down:hover::before {
+        border-top-color:#ff6600;
+    }
 }
 
 .vote-button-down.vote-button-active::before {
@@ -2044,9 +2213,14 @@ header button:hover {
     content:none;
 }
 
-.vote-button-neutral:hover,
 .vote-button-neutral.vote-button-active {
     color:#ff6600;
+}
+
+@media (hover: hover) {
+    .vote-button-neutral:hover {
+        color:#ff6600;
+    }
 }
 
 .vote-button + .vote-button {
@@ -2074,8 +2248,10 @@ header button:hover {
     cursor:pointer;
 }
 
-.vote-unvote-link:hover {
-    text-decoration:underline;
+@media (hover: hover) {
+    .vote-unvote-link:hover {
+        text-decoration:underline;
+    }
 }
 
 .vote-controls-pending {
@@ -2104,14 +2280,24 @@ blockquote.comment-quote-link {
     text-underline-offset:2px;
 }
 
-.comment-quote-link:hover,
+/* Split deliberately: :focus-visible is keyboard navigation and must keep working
+   regardless of pointer type, so only the :hover half is gated. */
 .comment-quote-link:focus-visible {
     background:rgba(255,102,0,.06);
 }
 
-blockquote.comment-quote-link:hover,
 blockquote.comment-quote-link:focus-visible {
     background:rgba(255,102,0,.04);
+}
+
+@media (hover: hover) {
+    .comment-quote-link:hover {
+        background:rgba(255,102,0,.06);
+    }
+
+    blockquote.comment-quote-link:hover {
+        background:rgba(255,102,0,.04);
+    }
 }
 
 .comment-quote-redundant.comment-quote-link-inline {
@@ -2202,6 +2388,8 @@ blockquote.comment-quote-redundant {
 
 <div id="panel">
 
+<div id="resize-handle" aria-hidden="true"></div>
+
 <header>
 
 <span class="header-title">
@@ -2210,7 +2398,7 @@ blockquote.comment-quote-redundant {
 </span>
 
 <div class="header-actions">
-<button id="settings-toggle" aria-label="Open HNewhere settings" title="HNewhere settings">
+<button id="settings-toggle" aria-label="Open HNewhere settings" title="HNewhere settings" aria-expanded="false" aria-controls="settings-panel">
 &#9881;&#65038;
 </button>
 
@@ -2300,10 +2488,20 @@ blockquote.comment-quote-redundant {
 
 		applySettingsPanelState(await loadSettings());
 
+		// Single place the open state changes, so the button's pressed styling and
+		// aria-expanded cannot drift out of sync with the panel.
+		const setSettingsOpen = (open) => {
+			settingsPanel.classList.toggle("hidden", !open);
+			settingsToggle.classList.toggle("is-open", open);
+			settingsToggle.setAttribute("aria-expanded", open ? "true" : "false");
+		};
+
+		setSettingsOpen(false);
+
 		settingsToggle.onclick = (event) => {
 			event.preventDefault();
 			event.stopPropagation();
-			settingsPanel.classList.toggle("hidden");
+			setSettingsOpen(settingsPanel.classList.contains("hidden"));
 		};
 
 		settingsPanel.addEventListener("click", (event) => {
@@ -2317,7 +2515,7 @@ blockquote.comment-quote-redundant {
 				return;
 			}
 
-			settingsPanel.classList.add("hidden");
+			setSettingsOpen(false);
 		});
 
 		settingsPanel.addEventListener("change", async (event) => {
@@ -2353,6 +2551,9 @@ blockquote.comment-quote-redundant {
 		let resizing = false;
 		let startX = 0;
 		let startWidth = 0;
+		// Set once a width has been dragged, so the orientation handling below knows
+		// to leave a deliberately chosen width alone.
+		let userResized = false;
 
 		panel.addEventListener("mousemove", (e) => {
 			if (e.offsetX < 8) {
@@ -2390,10 +2591,11 @@ blockquote.comment-quote-redundant {
 
 			const newWidth = Math.min(
 				Math.max(startWidth + delta, 280),
-				window.innerWidth * 0.8,
+				maxSidebarWidth(),
 			);
 
 			panel.style.width = newWidth + "px";
+			userResized = true;
 
 			clearTimeout(resizeTimer);
 
@@ -2420,12 +2622,93 @@ blockquote.comment-quote-redundant {
 
 		let destroyed = false;
 
+		// Touch never fires the mouse drag above, so resizing is wired separately
+		// here. Listeners sit on the handle rather than the panel so a drag starting
+		// anywhere else still scrolls the comments normally, and are non-passive so
+		// preventDefault can stop the page scrolling mid-drag.
+		const resizeHandle = shadow.querySelector("#resize-handle");
+
+		const onTouchStart = (e) => {
+			const touch = e.touches[0];
+
+			if (!touch) {
+				return;
+			}
+
+			resizing = true;
+			startX = touch.clientX;
+			startWidth = panel.offsetWidth;
+			resizeHandle.classList.add("resize-handle-active");
+			e.preventDefault();
+		};
+
+		const onTouchMove = (e) => {
+			const touch = e.touches[0];
+
+			if (!resizing || !touch) {
+				return;
+			}
+
+			const newWidth = Math.min(
+				Math.max(startWidth + (startX - touch.clientX), 280),
+				maxSidebarWidth(),
+			);
+
+			panel.style.width = newWidth + "px";
+			userResized = true;
+			e.preventDefault();
+
+			clearTimeout(resizeTimer);
+
+			resizeTimer = setTimeout(() => {
+				if (!destroyed) {
+					saveSiteWidth(newWidth);
+				}
+			}, 250);
+		};
+
+		const onTouchEnd = () => {
+			resizing = false;
+			resizeHandle.classList.remove("resize-handle-active");
+		};
+
+		if (resizeHandle) {
+			resizeHandle.addEventListener("touchstart", onTouchStart, {
+				passive: false,
+			});
+			resizeHandle.addEventListener("touchmove", onTouchMove, {
+				passive: false,
+			});
+			resizeHandle.addEventListener("touchend", onTouchEnd);
+			resizeHandle.addEventListener("touchcancel", onTouchEnd);
+		}
+
+		// Deliberately does not persist the clamped value. This fires on rotation,
+		// where portrait allows the full width and landscape only 80%, so saving
+		// here would let one rotation overwrite the chosen width for good. The
+		// clamp is reapplied on open anyway, so display-only is enough.
+		let wasPortrait = isPortraitPhone();
+
 		const clampSidebarWidth = () => {
-			const maxWidth = window.innerWidth * 0.8;
+			const maxWidth = maxSidebarWidth();
+			const portrait = isPortraitPhone();
+
+			// Rotating back to portrait restores the full width, since a shrink-only
+			// clamp would strand the panel at the narrower landscape size. Gated on an
+			// actual orientation change rather than every resize, because iOS fires
+			// resize when the URL bar collapses mid-scroll, and on the width not
+			// having been chosen by hand, so this never fights a manual resize.
+			if (portrait !== wasPortrait) {
+				wasPortrait = portrait;
+
+				if (portrait && !userResized) {
+					panel.style.width = maxWidth + "px";
+					return;
+				}
+			}
 
 			if (panel.offsetWidth > maxWidth) {
 				panel.style.width = maxWidth + "px";
-				saveSiteWidth(maxWidth);
 			}
 		};
 
@@ -2448,7 +2731,7 @@ blockquote.comment-quote-redundant {
 			host.style.display = "none";
 			await saveSidebarState("collapsed");
 			clearArticleAnnotations();
-			settingsPanel.classList.add("hidden");
+			setSettingsOpen(false);
 			await createRestoreButton();
 			await refreshArticleAnnotations();
 		};
@@ -2511,7 +2794,7 @@ blockquote.comment-quote-redundant {
 	<span class="story-score" data-story-score-id="${escapeHTML(storyID)}" data-story-score="${escapeHTML(String(story.score || 0))}">${story.score || 0}</span> points by
 	${escapeHTML(story.by || "")}
 	|
-	${timeAgo(story.time)}<span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
+	<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(story.time)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
 	|
 	${story.descendants || 0} comments
 	</div>
@@ -2668,7 +2951,7 @@ blockquote.comment-quote-redundant {
 						: ""
 				}
 
-      ${timeAgo(comment.time)}<span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
+      <span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.time)}</span><span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
 
       |
 
@@ -2802,6 +3085,7 @@ blockquote.comment-quote-redundant {
 
 		if (votePromise && generation === sidebarGeneration) {
 			hydrateVoteControlsForStory(story.id, await votePromise);
+			hydrateDisplayAges(story.id);
 		}
 	}
 
@@ -2852,6 +3136,7 @@ blockquote.comment-quote-redundant {
 
 			if (votePromise && generation === sidebarGeneration) {
 				hydrateVoteControlsForStory(story.id, await votePromise);
+				hydrateDisplayAges(story.id);
 			}
 		}
 	}
@@ -2867,9 +3152,12 @@ blockquote.comment-quote-redundant {
 
 		const items = await Promise.all(ids.map((id) => getItem(id)));
 
+		// This is the order the sidebar actually renders in: it runs after findHN and
+		// overrides whatever order that produced, so the rule has to be applied here
+		// too rather than only at lookup time.
 		return items
 			.filter((item) => item && item.type === "story")
-			.sort((a, b) => b.time - a.time);
+			.sort(compareStoriesByDiscussion);
 	}
 
 	// -------------------------
@@ -3210,6 +3498,7 @@ blockquote.comment-quote-redundant {
 
 		for (const storyID of storyIDs) {
 			hydrateVoteControlsForStory(storyID, await loadVoteLinks(storyID));
+			hydrateDisplayAges(storyID);
 		}
 	}
 
