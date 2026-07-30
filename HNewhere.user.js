@@ -830,6 +830,78 @@
 			: window.innerWidth * 0.8;
 	}
 
+	// -------------------------
+	// Theme detection
+	// -------------------------
+	//
+	// Matching the page rather than the OS is deliberate: a reader running Dark
+	// Reader or a site's own dark theme has a dark page under a light OS, and a
+	// sidebar that follows the OS would be the one bright rectangle on screen.
+	// Originally contributed by @bennetthanke in #21.
+
+	// Returns null when the colour says nothing about the page -- fully transparent,
+	// or a format this cannot read -- so the caller can look somewhere else.
+	function isDarkColor(color) {
+		const match = /rgba?\(([^)]+)\)/.exec(color || "");
+
+		if (!match) {
+			return null;
+		}
+
+		const [r, g, b, a = 1] = match[1].split(",").map(parseFloat);
+
+		if (![r, g, b].every(Number.isFinite)) {
+			return null;
+		}
+
+		// Mostly transparent is treated the same as transparent: what shows through is
+		// whatever is behind, so this element is not the one to judge by.
+		if (!Number.isFinite(a) || a < 0.5) {
+			return null;
+		}
+
+		// Rec. 709 coefficients over gamma-encoded sRGB. Not true relative luminance,
+		// but the error is far smaller than the light/dark margin being tested.
+		return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
+	}
+
+	function detectDarkMode() {
+		for (const element of [document.body, document.documentElement]) {
+			if (!element) {
+				continue;
+			}
+
+			const dark = isDarkColor(getComputedStyle(element).backgroundColor);
+
+			if (dark !== null) {
+				return dark;
+			}
+		}
+
+		return window.matchMedia("(prefers-color-scheme: dark)").matches;
+	}
+
+	const DARK_CLASS = "hnewhere-dark";
+
+	// The class goes on the host element rather than anything inside the shadow root,
+	// because that is what both the sidebar and the submit popover have in common --
+	// and custom properties set on a host inherit into its shadow tree.
+	function applyThemeToHost(host) {
+		host.classList.toggle(DARK_CLASS, detectDarkMode());
+	}
+
+	// Returns a cleanup function. The OS setting can change while a surface is open,
+	// and it is the fallback whenever the page background is transparent.
+	function watchTheme(host) {
+		const apply = () => applyThemeToHost(host);
+		const query = window.matchMedia("(prefers-color-scheme: dark)");
+
+		apply();
+		query.addEventListener("change", apply);
+
+		return () => query.removeEventListener("change", apply);
+	}
+
 	function isMobile() {
 		return (
 			window.matchMedia("(max-width: 700px)").matches ||
@@ -846,11 +918,15 @@
 	const BUTTON_VARIANTS = {
 		active: {
 			background: "#ff6600",
+			// HN orange carries itself on either background, so only the inactive grey
+			// needs a dark counterpart -- #b8b8b8 glares on a dark page.
+			darkBackground: "#ff6600",
 			boxShadow: "0 1px 4px rgba(0,0,0,.25)",
 			title: "Hacker News discussion",
 		},
 		inactive: {
 			background: "#b8b8b8",
+			darkBackground: "#4a4a4a",
 			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
 			title: "No Hacker News discussion yet — click to submit this page",
 		},
@@ -859,8 +935,12 @@
 	function setFloatingButtonVariant(button, variant) {
 		const style = BUTTON_VARIANTS[variant] || BUTTON_VARIANTS.active;
 
+		// The button sits in the page, not in a shadow root, so it cannot inherit the
+		// custom properties and resolves its own colour instead.
 		button.dataset.hnewhereVariant = variant;
-		button.style.background = style.background;
+		button.style.background = detectDarkMode()
+			? style.darkBackground
+			: style.background;
 		button.style.boxShadow = style.boxShadow;
 		button.title = style.title;
 	}
@@ -2207,14 +2287,15 @@
 
 		shadow.innerHTML = `
 <style>
+${THEME_CSS}
 ${CHROME_CSS}
 
 #popover {
     width:320px;
     box-sizing:border-box;
-    background:#f6f6ef;
-    color:#000;
-    border:1px solid #ccc;
+    background:var(--bg);
+    color:var(--text);
+    border:1px solid var(--border);
     border-radius:8px;
     box-shadow:0 8px 24px rgba(0,0,0,.18);
     /* No padding of its own: the header runs edge to edge like the sidebar's, and
@@ -2257,7 +2338,7 @@ ${CHROME_CSS}
    are genuinely non-obvious: a blank url turns the whole thing into an Ask HN. */
 .popover-note {
     margin-top:8px;
-    color:#666;
+    color:var(--muted);
     font-size:11px;
 }
 
@@ -2271,7 +2352,7 @@ ${CHROME_CSS}
    field's border. */
 .popover-field label {
     display:block;
-    color:#666;
+    color:var(--muted);
     font-size:10px;
     font-weight:700;
     letter-spacing:.04em;
@@ -2300,10 +2381,10 @@ ${CHROME_CSS}
     box-sizing:border-box;
     font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     padding:5px 6px;
-    border:1px solid #ccc;
+    border:1px solid var(--field-border);
     border-radius:4px;
-    background:white;
-    color:#000;
+    background:var(--field-bg);
+    color:var(--field-text);
 }
 
 .popover-field textarea {
@@ -2320,7 +2401,7 @@ ${CHROME_CSS}
 }
 
 .popover-count {
-    color:#828282;
+    color:var(--meta);
     font-size:10px;
     /* Fixed digits would be better, but the count is short enough that reflow is
        imperceptible; what matters is that it never pushes the label around. */
@@ -2329,7 +2410,7 @@ ${CHROME_CSS}
 }
 
 .popover-count.over {
-    color:#c00;
+    color:var(--error);
 }
 
 .popover-actions {
@@ -2346,9 +2427,9 @@ ${CHROME_CSS}
     padding:5px 10px;
     border-radius:4px;
     cursor:pointer;
-    border:1px solid #ccc;
-    background:white;
-    color:#333;
+    border:1px solid var(--button-border);
+    background:var(--button-bg);
+    color:var(--button-text);
 }
 
 .popover-actions button.primary {
@@ -2369,11 +2450,11 @@ ${CHROME_CSS}
 }
 
 .popover-status.error {
-    color:#c00;
+    color:var(--error);
 }
 
 .popover-status a {
-    color:#0000aa;
+    color:var(--link);
 }
 
 .hidden {
@@ -2421,6 +2502,10 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 `;
 
 		document.body.appendChild(host);
+
+		// Same palette as the sidebar, resolved independently because this is its own
+		// shadow root -- the two can be open at different times on different pages.
+		const stopWatchingTheme = watchTheme(host);
 
 		// The gear needs somewhere to open into, so the popover carries the same
 		// dropdown the sidebar does. No annotation refresh is passed: there is no
@@ -2499,6 +2584,7 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 			window.removeEventListener("resize", position);
 			window.removeEventListener("scroll", position, true);
 			button.removeEventListener(BUTTON_MOVE_EVENT, position);
+			stopWatchingTheme();
 			document.removeEventListener("pointerdown", onOutsidePointerDown, true);
 			document.removeEventListener("keydown", onKeyDown, true);
 			host.remove();
@@ -2733,14 +2819,112 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 	// Shared chrome
 	// -------------------------
 
+	// Palette for both themes. Defined on :host rather than on #panel -- which is
+	// where #21 put it -- because the submit popover is a separate shadow root with
+	// no #panel in it, and custom properties set on a host element inherit into its
+	// shadow tree. One definition therefore reaches every surface.
+	//
+	// Light values are the originals; the dark set comes from #21, extended for the
+	// composer, popover and status surfaces added in 1.5.3.
+	const THEME_CSS = `
+:host {
+    --bg:#f6f6ef;
+    --text:#000;
+    --header-bg:#ff6600;
+    --header-text:#000;
+    --border:#ccc;
+    --border-soft:#ddd;
+    --link:#0000aa;
+    --meta:#828282;
+    --muted:#666;
+    --surface:#fff;
+    --surface-text:#222;
+    --surface-border:#d6d6d6;
+    --surface-divider:#eee;
+    --hover-tint:rgba(0,0,0,.08);
+    --active-tint:rgba(0,0,0,.16);
+    --grip:rgba(0,0,0,.2);
+    --quote-text:#5f5f5f;
+    --faded-underline:rgba(0,0,0,.14);
+    --banner-text:#4a3a26;
+    --banner-quote:#3b3022;
+    --chip-text:#7b4f24;
+    --chip-active-text:#5e2e00;
+    --banner-close:#8d5c2d;
+
+    /* 1.5.3 surfaces */
+    --field-bg:#fff;
+    --field-text:#000;
+    --field-border:#ccc;
+    --field-disabled-bg:#f0f0ea;
+    --help-bg:#fbfbf5;
+    --help-border:#e2e2d9;
+    --help-text:#555;
+    --code-bg:#efefe6;
+    --status-text:#555;
+    --error:#c00;
+    --button-bg:#fff;
+    --button-text:#333;
+    --button-border:#ccc;
+    --inactive-button:#b8b8b8;
+    --underline-soft:rgba(0,0,0,.2);
+
+    color-scheme:light;
+}
+
+:host(.${DARK_CLASS}) {
+    --bg:#1e1e1e;
+    --text:#dcdcdc;
+    --header-bg:#cc5200;
+    --header-text:#000;
+    --border:#3d3d3d;
+    --border-soft:#383838;
+    --link:#8ab4f8;
+    --meta:#9a9a9a;
+    --muted:#a3a3a3;
+    --surface:#2a2a2a;
+    --surface-text:#dcdcdc;
+    --surface-border:#454545;
+    --surface-divider:#3a3a3a;
+    --hover-tint:rgba(255,255,255,.10);
+    --active-tint:rgba(255,255,255,.18);
+    --grip:rgba(255,255,255,.25);
+    --quote-text:#a8a8a8;
+    --faded-underline:rgba(255,255,255,.18);
+    --banner-text:#cfc3b2;
+    --banner-quote:#ddd2c2;
+    --chip-text:#d8a26a;
+    --chip-active-text:#e8b784;
+    --banner-close:#c99b66;
+
+    --field-bg:#262626;
+    --field-text:#dcdcdc;
+    --field-border:#4a4a4a;
+    --field-disabled-bg:#222;
+    --help-bg:#252525;
+    --help-border:#3a3a3a;
+    --help-text:#b0b0b0;
+    --code-bg:#333;
+    --status-text:#b0b0b0;
+    --error:#ff8080;
+    --button-bg:#333;
+    --button-text:#dcdcdc;
+    --button-border:#4a4a4a;
+    --inactive-button:#4a4a4a;
+    --underline-soft:rgba(255,255,255,.28);
+
+    color-scheme:dark;
+}
+`;
+
 	// The header and settings dropdown are used by both the sidebar and the submit
 	// popover, which live in separate shadow roots and so cannot share a stylesheet
 	// by cascade. Kept as one string rather than copied into each, so the two can
 	// never drift apart.
 	const CHROME_CSS = `
 header {
-    background:#ff6600;
-    color:black;
+    background:var(--header-bg);
+    color:var(--header-text);
     padding:6px 8px;
     display:flex;
     justify-content:space-between;
@@ -2752,7 +2936,7 @@ header {
 header button {
     background:none;
     border:0;
-    color:black;
+    color:var(--header-text);
     cursor:pointer;
     font-size:20px;
     width:36px;
@@ -2770,7 +2954,7 @@ header button {
    where a real pointer can hover. */
 @media (hover: hover) {
     header button:hover {
-        background:rgba(0,0,0,.08);
+        background:var(--hover-tint);
     }
 }
 
@@ -2802,9 +2986,9 @@ header button {
     top:46px;
     right:8px;
     width:240px;
-    background:white;
-    color:#222;
-    border:1px solid #d6d6d6;
+    background:var(--surface);
+    color:var(--surface-text);
+    border:1px solid var(--surface-border);
     border-radius:8px;
     box-shadow:0 8px 24px rgba(0,0,0,.16);
     /* Slightly more at the bottom than the top: the title's line-height adds its
@@ -2823,7 +3007,7 @@ header button {
 .settings-group + .settings-group {
     margin-top:10px;
     padding-top:10px;
-    border-top:1px solid #eee;
+    border-top:1px solid var(--surface-divider);
 }
 
 /* U+2699 defaults to its emoji presentation on iOS. font-variant-emoji is the
@@ -2840,7 +3024,7 @@ header button {
    button that fired once. Darker than the hover tint so the two stay distinct on
    a pointer device, and outside the hover media query so touch gets it too. */
 #settings-toggle.is-open {
-    background:rgba(0,0,0,.16);
+    background:var(--active-tint);
 }
 
 .settings-option {
@@ -2889,15 +3073,15 @@ header button {
     align-items:baseline;
     justify-content:space-between;
     gap:10px;
-    color:#666;
+    color:var(--muted);
     font-size:11px;
     line-height:1.45;
 }
 
 .settings-credits a {
-    color:#666;
+    color:var(--muted);
     text-decoration:underline;
-    text-decoration-color:rgba(0,0,0,.2);
+    text-decoration-color:var(--underline-soft);
     text-underline-offset:2px;
 }
 
@@ -2912,7 +3096,7 @@ header button {
    than under its box. 13px is the native checkbox width, plus the flex gap. */
 .settings-option-hint {
     margin:3px 0 0 21px;
-    color:#666;
+    color:var(--muted);
     font-size:11px;
     line-height:1.35;
 }
@@ -3162,18 +3346,19 @@ Highlights the passages commenters quote, so you can jump between the article an
     /* Without this the 1px border-left is added to the width, so a panel sized to
        the viewport renders a pixel past its left edge. */
     box-sizing:border-box;
-    background:#f6f6ef;
-    color:#000;
+    background:var(--bg);
+    color:var(--text);
     z-index:2147483646;
     display:flex;
     flex-direction:column;
-    border-left:1px solid #ccc;
+    border-left:1px solid var(--border);
     box-shadow:-3px 0 12px rgba(0,0,0,.15);
     font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     font-size:13px;
     overflow:visible;
 }
 
+${THEME_CSS}
 ${CHROME_CSS}
 
 /* Sidebar-only, so deliberately not part of CHROME_CSS: the submit popover has no
@@ -3206,7 +3391,7 @@ ${CHROME_CSS}
         width:4px;
         height:40px;
         border-radius:2px;
-        background:rgba(0,0,0,.2);
+        background:var(--grip);
     }
 
     #resize-handle.resize-handle-active::before {
@@ -3223,7 +3408,7 @@ ${CHROME_CSS}
 .submission + .submission {
     margin-top:16px;
     padding-top:12px;
-    border-top:1px solid #ccc;
+    border-top:1px solid var(--border);
 }
 
 #comments {
@@ -3250,7 +3435,7 @@ ${CHROME_CSS}
     position:relative;
     margin:12px 0 16px;
     padding:6px 34px 4px;
-    color:#4a3a26;
+    color:var(--banner-text);
     text-align:center;
 }
 
@@ -3264,7 +3449,7 @@ ${CHROME_CSS}
 
 .filter-banner-quote {
     margin-top:8px;
-    color:#3b3022;
+    color:var(--banner-quote);
     font-size:16px;
     font-style:italic;
     line-height:1.55;
@@ -3286,7 +3471,7 @@ ${CHROME_CSS}
     border:1px solid rgba(255,102,0,.18);
     border-radius:999px;
     background:transparent;
-    color:#7b4f24;
+    color:var(--chip-text);
     cursor:pointer;
     padding:3px 8px;
     font:500 11px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -3301,7 +3486,7 @@ ${CHROME_CSS}
 .filter-match-chip-active {
     border-color:rgba(255,102,0,.34);
     background:rgba(255,102,0,.09);
-    color:#5e2e00;
+    color:var(--chip-active-text);
 }
 
 .filter-banner-close {
@@ -3313,7 +3498,7 @@ ${CHROME_CSS}
     border:none;
     border-radius:999px;
     background:none;
-    color:#8d5c2d;
+    color:var(--banner-close);
     cursor:pointer;
     font:500 18px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     padding:0;
@@ -3346,7 +3531,7 @@ ${CHROME_CSS}
 }
 
 .children > .comment {
-    border-left:1px solid #ddd;
+    border-left:1px solid var(--border-soft);
     padding-left:6px;
 }
 
@@ -3366,7 +3551,7 @@ ${CHROME_CSS}
 /* A child does have one. Fading the accent all the way out erased the nesting line
    with it, so it settles on the divider colour instead of disappearing. */
 .children > .comment.new-comment.comment-new-seen {
-    border-left-color:#ddd;
+    border-left-color:var(--border-soft);
 }
 
 .comment.comment-target {
@@ -3399,16 +3584,16 @@ ${CHROME_CSS}
 }
 
 .text a {
-    color:#0000aa;
+    color:var(--link);
 }
 
 .meta {
-    color:#828282;
+    color:var(--meta);
     font-size:10px;
 }
 
 .meta a {
-    color:#828282;
+    color:var(--meta);
     text-decoration:none;
 }
 
@@ -3497,12 +3682,12 @@ ${CHROME_CSS}
     height:0;
     border-left:4px solid transparent;
     border-right:4px solid transparent;
-    border-bottom:7px solid #828282;
+    border-bottom:7px solid var(--meta);
 }
 
 .vote-button-down::before {
     border-bottom:none;
-    border-top:7px solid #828282;
+    border-top:7px solid var(--meta);
     top:2px;
 }
 
@@ -3523,14 +3708,14 @@ ${CHROME_CSS}
 }
 
 .vote-button-down.vote-button-active::before {
-    border-top-color:#666;
+    border-top-color:var(--muted);
 }
 
 .vote-button-neutral {
     width:auto;
     min-width:10px;
     height:auto;
-    color:#828282;
+    color:var(--meta);
     font:600 10px/1 Verdana, Geneva, sans-serif;
 }
 
@@ -3559,7 +3744,7 @@ ${CHROME_CSS}
 
 .story-vote-status,
 .comment-vote-status {
-    color:#828282;
+    color:var(--meta);
 }
 
 /* Sits in the byline as plain text, the way HN's own unvote link does. */
@@ -3595,7 +3780,7 @@ blockquote.comment-quote-link {
     margin:6px 0;
     padding:2px 0 2px 10px;
     border-left:2px solid rgba(255,102,0,.32);
-    color:#5f5f5f;
+    color:var(--quote-text);
 }
 
 .comment-quote-link-inline {
@@ -3627,7 +3812,7 @@ blockquote.comment-quote-link:focus-visible {
 
 .comment-quote-redundant.comment-quote-link-inline {
     opacity:.28;
-    text-decoration-color:rgba(0,0,0,.14);
+    text-decoration-color:var(--faded-underline);
 }
 
 blockquote.comment-quote-redundant {
@@ -3649,13 +3834,13 @@ blockquote.comment-quote-redundant {
 }
 
 .story-title a {
-    color:#000;
+    color:var(--text);
     text-decoration:none;
     word-break:break-word;
 }
 
 .story-meta {
-    color:#828282;
+    color:var(--meta);
     font-size:10px;
     line-height:1.4;
     padding-top:2px;
@@ -3663,7 +3848,7 @@ blockquote.comment-quote-redundant {
 
 /* Matches .meta a, so the submitter reads the same as any commenter's name. */
 .story-meta a {
-    color:#828282;
+    color:var(--meta);
     text-decoration:none;
 }
 
@@ -3688,7 +3873,7 @@ blockquote.comment-quote-redundant {
 }
 
 .story-text a {
-    color:#0000aa;
+    color:var(--link);
 }
 
 /* The cap lives on the wrapper rather than the textarea so the actions row below
@@ -3736,10 +3921,10 @@ blockquote.comment-quote-redundant {
     max-width:100%;
     resize:both;
     padding:6px 7px;
-    border:1px solid #ccc;
+    border:1px solid var(--field-border);
     border-radius:4px;
-    background:white;
-    color:#000;
+    background:var(--field-bg);
+    color:var(--field-text);
     font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     /* Whitespace is significant to HN's formatter, so never collapse it visually. */
     white-space:pre-wrap;
@@ -3753,8 +3938,8 @@ blockquote.comment-quote-redundant {
 }
 
 .composer-text:disabled {
-    background:#f0f0ea;
-    color:#666;
+    background:var(--field-disabled-bg);
+    color:var(--muted);
 }
 
 /* space-between rather than a margin on the link, so the button stays left and the
@@ -3780,7 +3965,7 @@ blockquote.comment-quote-redundant {
     background:none;
     border:0;
     padding:0;
-    color:#828282;
+    color:var(--meta);
     font-family:Verdana, Geneva, sans-serif;
     font-size:11px;
     cursor:pointer;
@@ -3802,10 +3987,10 @@ blockquote.comment-quote-redundant {
 .composer-help {
     margin-top:6px;
     padding:7px 8px;
-    border:1px solid #e2e2d9;
+    border:1px solid var(--help-border);
     border-radius:4px;
-    background:#fbfbf5;
-    color:#555;
+    background:var(--help-bg);
+    color:var(--help-text);
     font-size:11px;
     line-height:1.5;
 }
@@ -3819,7 +4004,7 @@ blockquote.comment-quote-redundant {
 }
 
 .composer-help code {
-    background:#efefe6;
+    background:var(--code-bg);
     border-radius:2px;
     padding:0 3px;
     font-family:Menlo, Consolas, monospace;
@@ -3836,7 +4021,7 @@ blockquote.comment-quote-redundant {
     min-width:0;
     font-size:11px;
     line-height:1.4;
-    color:#555;
+    color:var(--status-text);
     transition:opacity .14s ease;
 }
 
@@ -3847,7 +4032,7 @@ blockquote.comment-quote-redundant {
 }
 
 .composer-status.error {
-    color:#c00;
+    color:var(--error);
 }
 
 /* Braille frames rather than a spinning glyph: they animate in place without the
@@ -3856,11 +4041,11 @@ blockquote.comment-quote-redundant {
     display:inline-block;
     width:1em;
     font-family:Menlo, Consolas, monospace;
-    color:#828282;
+    color:var(--meta);
 }
 
 .composer-status a {
-    color:#0000aa;
+    color:var(--link);
 }
 
 </style>
@@ -3888,6 +4073,10 @@ ${settingsPanelHTML()}
 `;
 
 		const panel = shadow.querySelector("#panel");
+
+		// Applied to the host, not the panel, so the custom properties inherit into
+		// everything in this shadow tree.
+		const stopWatchingTheme = watchTheme(host);
 		const filterBanner = shadow.querySelector("#filter-banner");
 		const filterBannerQuote = shadow.querySelector("#filter-banner-quote");
 		const filterBannerMeta = shadow.querySelector("#filter-banner-meta");
@@ -4083,6 +4272,7 @@ ${settingsPanelHTML()}
 			document.removeEventListener("mousemove", onMouseMove);
 			document.removeEventListener("mouseup", onMouseUp);
 			window.removeEventListener("resize", clampSidebarWidth);
+			stopWatchingTheme();
 
 			if (sidebar === host) {
 				clearArticleAnnotations();
