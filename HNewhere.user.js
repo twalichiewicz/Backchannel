@@ -660,6 +660,31 @@
 			: window.innerWidth * 0.8;
 	}
 
+	function isDarkColor(color) {
+		const match = /rgba?\(([^)]+)\)/.exec(color || "");
+
+		if (!match) return null;
+
+		const [r, g, b, a = 1] = match[1].split(",").map(parseFloat);
+
+		if (a === 0) return null;
+
+		// Perceived luminance, 0 (black) to 255 (white)
+		return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
+	}
+
+	function detectDarkMode() {
+		for (const el of [document.body, document.documentElement]) {
+			if (!el) continue;
+
+			const dark = isDarkColor(getComputedStyle(el).backgroundColor);
+
+			if (dark !== null) return dark;
+		}
+
+		return window.matchMedia("(prefers-color-scheme: dark)").matches;
+	}
+
 	function isMobile() {
 		return (
 			window.matchMedia("(max-width: 700px)").matches ||
@@ -1713,6 +1738,29 @@
 <style>
 
 #panel {
+    --bg:#f6f6ef;
+    --text:#000;
+    --header-bg:#ff6600;
+    --border:#ccc;
+    --border-soft:#ddd;
+    --link:#0000aa;
+    --meta:#828282;
+    --muted:#666;
+    --surface:white;
+    --surface-text:#222;
+    --surface-border:#d6d6d6;
+    --surface-divider:#eee;
+    --hover-tint:rgba(0,0,0,.08);
+    --active-tint:rgba(0,0,0,.16);
+    --grip:rgba(0,0,0,.2);
+    --quote-text:#5f5f5f;
+    --faded-underline:rgba(0,0,0,.14);
+    --banner-text:#4a3a26;
+    --banner-quote:#3b3022;
+    --chip-text:#7b4f24;
+    --chip-active-text:#5e2e00;
+    --banner-close:#8d5c2d;
+    color-scheme:light;
     position:fixed;
     right:0;
     top:0;
@@ -1723,20 +1771,46 @@
     /* Without this the 1px border-left is added to the width, so a panel sized to
        the viewport renders a pixel past its left edge. */
     box-sizing:border-box;
-    background:#f6f6ef;
-    color:#000;
+    background:var(--bg);
+    color:var(--text);
     z-index:2147483646;
     display:flex;
     flex-direction:column;
-    border-left:1px solid #ccc;
+    border-left:1px solid var(--border);
     box-shadow:-3px 0 12px rgba(0,0,0,.15);
     font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     font-size:13px;
     overflow:visible;
 }
 
+#panel.dark {
+    --bg:#1e1e1e;
+    --text:#dcdcdc;
+    --header-bg:#cc5200;
+    --border:#3d3d3d;
+    --border-soft:#383838;
+    --link:#8ab4f8;
+    --meta:#9a9a9a;
+    --muted:#a3a3a3;
+    --surface:#2a2a2a;
+    --surface-text:#dcdcdc;
+    --surface-border:#454545;
+    --surface-divider:#3a3a3a;
+    --hover-tint:rgba(255,255,255,.10);
+    --active-tint:rgba(255,255,255,.18);
+    --grip:rgba(255,255,255,.25);
+    --quote-text:#a8a8a8;
+    --faded-underline:rgba(255,255,255,.18);
+    --banner-text:#cfc3b2;
+    --banner-quote:#ddd2c2;
+    --chip-text:#d8a26a;
+    --chip-active-text:#e8b784;
+    --banner-close:#c99b66;
+    color-scheme:dark;
+}
+
 header {
-    background:#ff6600;
+    background:var(--header-bg);
     color:black;
     padding:6px 8px;
     display:flex;
@@ -1791,7 +1865,7 @@ header button {
         width:4px;
         height:40px;
         border-radius:2px;
-        background:rgba(0,0,0,.2);
+        background:var(--grip);
     }
 
     #resize-handle.resize-handle-active::before {
@@ -1804,7 +1878,7 @@ header button {
    where a real pointer can hover. */
 @media (hover: hover) {
     header button:hover {
-        background:rgba(0,0,0,.08);
+        background:var(--hover-tint);
     }
 }
 
@@ -1837,9 +1911,9 @@ header button {
     top:46px;
     right:8px;
     width:240px;
-    background:white;
-    color:#222;
-    border:1px solid #d6d6d6;
+    background:var(--surface);
+    color:var(--surface-text);
+    border:1px solid var(--surface-border);
     border-radius:8px;
     box-shadow:0 8px 24px rgba(0,0,0,.16);
     /* Slightly more at the bottom than the top: the title's line-height adds its
@@ -1858,12 +1932,12 @@ header button {
 .settings-group + .settings-group {
     margin-top:10px;
     padding-top:10px;
-    border-top:1px solid #eee;
+    border-top:1px solid var(--surface-divider);
 }
 
 .settings-group-label {
     margin-bottom:6px;
-    color:#666;
+    color:var(--muted);
     font-size:10px;
     font-weight:700;
     letter-spacing:.04em;
@@ -1884,7 +1958,7 @@ header button {
    button that fired once. Darker than the hover tint so the two stay distinct on
    a pointer device, and outside the hover media query so touch gets it too. */
 #settings-toggle.is-open {
-    background:rgba(0,0,0,.16);
+    background:var(--active-tint);
 }
 
 .settings-option {
@@ -1910,7 +1984,7 @@ header button {
 
 .settings-hint {
     margin-top:8px;
-    color:#666;
+    color:var(--muted);
     font-size:11px;
     line-height:1.35;
 }
@@ -1923,7 +1997,7 @@ header button {
 .submission + .submission {
     margin-top:16px;
     padding-top:12px;
-    border-top:1px solid #ccc;
+    border-top:1px solid var(--border);
 }
 
 #comments {
@@ -1950,7 +2024,7 @@ header button {
     position:relative;
     margin:12px 0 16px;
     padding:6px 34px 4px;
-    color:#4a3a26;
+    color:var(--banner-text);
     text-align:center;
 }
 
@@ -1964,7 +2038,7 @@ header button {
 
 .filter-banner-quote {
     margin-top:8px;
-    color:#3b3022;
+    color:var(--banner-quote);
     font-size:16px;
     font-style:italic;
     line-height:1.55;
@@ -1986,7 +2060,7 @@ header button {
     border:1px solid rgba(255,102,0,.18);
     border-radius:999px;
     background:transparent;
-    color:#7b4f24;
+    color:var(--chip-text);
     cursor:pointer;
     padding:3px 8px;
     font:500 11px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -2001,7 +2075,7 @@ header button {
 .filter-match-chip-active {
     border-color:rgba(255,102,0,.34);
     background:rgba(255,102,0,.09);
-    color:#5e2e00;
+    color:var(--chip-active-text);
 }
 
 .filter-banner-close {
@@ -2013,7 +2087,7 @@ header button {
     border:none;
     border-radius:999px;
     background:none;
-    color:#8d5c2d;
+    color:var(--banner-close);
     cursor:pointer;
     font:500 18px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     padding:0;
@@ -2036,7 +2110,7 @@ header button {
 }
 
 .children > .comment {
-    border-left:1px solid #ddd;
+    border-left:1px solid var(--border-soft);
     padding-left:8px;
 }
 
@@ -2074,16 +2148,16 @@ header button {
 }
 
 .text a {
-    color:#0000aa;
+    color:var(--link);
 }
 
 .meta {
-    color:#828282;
+    color:var(--meta);
     font-size:10px;
 }
 
 .meta a {
-    color:#828282;
+    color:var(--meta);
     text-decoration:none;
 }
 
@@ -2172,12 +2246,12 @@ header button {
     height:0;
     border-left:4px solid transparent;
     border-right:4px solid transparent;
-    border-bottom:7px solid #828282;
+    border-bottom:7px solid var(--meta);
 }
 
 .vote-button-down::before {
     border-bottom:none;
-    border-top:7px solid #828282;
+    border-top:7px solid var(--meta);
     top:2px;
 }
 
@@ -2198,14 +2272,14 @@ header button {
 }
 
 .vote-button-down.vote-button-active::before {
-    border-top-color:#666;
+    border-top-color:var(--muted);
 }
 
 .vote-button-neutral {
     width:auto;
     min-width:10px;
     height:auto;
-    color:#828282;
+    color:var(--meta);
     font:600 10px/1 Verdana, Geneva, sans-serif;
 }
 
@@ -2234,7 +2308,7 @@ header button {
 
 .story-vote-status,
 .comment-vote-status {
-    color:#828282;
+    color:var(--meta);
 }
 
 /* Sits in the byline as plain text, the way HN's own unvote link does. */
@@ -2270,7 +2344,7 @@ blockquote.comment-quote-link {
     margin:6px 0;
     padding:2px 0 2px 10px;
     border-left:2px solid rgba(255,102,0,.32);
-    color:#5f5f5f;
+    color:var(--quote-text);
 }
 
 .comment-quote-link-inline {
@@ -2302,7 +2376,7 @@ blockquote.comment-quote-link:focus-visible {
 
 .comment-quote-redundant.comment-quote-link-inline {
     opacity:.28;
-    text-decoration-color:rgba(0,0,0,.14);
+    text-decoration-color:var(--faded-underline);
 }
 
 blockquote.comment-quote-redundant {
@@ -2341,13 +2415,13 @@ blockquote.comment-quote-redundant {
 }
 
 .story-title a {
-    color:#000;
+    color:var(--text);
     text-decoration:none;
     word-break:break-word;
 }
 
 .story-meta {
-    color:#828282;
+    color:var(--meta);
     font-size:10px;
     line-height:1.4;
     padding-top:2px;
@@ -2367,7 +2441,7 @@ blockquote.comment-quote-redundant {
 }
 
 .story-text a {
-    color:#0000aa;
+    color:var(--link);
 }
 
 .story-actions {
@@ -2454,6 +2528,15 @@ blockquote.comment-quote-redundant {
 `;
 
 		const panel = shadow.querySelector("#panel");
+
+		const applyColorScheme = () => {
+			panel.classList.toggle("dark", detectDarkMode());
+		};
+
+		applyColorScheme();
+
+		const schemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+		schemeQuery.addEventListener("change", applyColorScheme);
 		const settingsPanel = shadow.querySelector("#settings-panel");
 		const settingsToggle = shadow.querySelector("#settings-toggle");
 		const filterBanner = shadow.querySelector("#filter-banner");
@@ -2720,6 +2803,7 @@ blockquote.comment-quote-redundant {
 			document.removeEventListener("mousemove", onMouseMove);
 			document.removeEventListener("mouseup", onMouseUp);
 			window.removeEventListener("resize", clampSidebarWidth);
+			schemeQuery.removeEventListener("change", applyColorScheme);
 
 			if (sidebar === host) {
 				clearArticleAnnotations();
