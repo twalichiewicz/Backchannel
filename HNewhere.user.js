@@ -93,6 +93,7 @@
 	};
 
 	const HN_ORIGIN = "https://news.ycombinator.com";
+	const VOTE_BRIDGE_MESSAGE_SOURCE = "HNewhereVoteBridge";
 	const TRACKING_PARAMS = new Set([
 		"utm_source",
 		"utm_medium",
@@ -298,6 +299,7 @@
 
 	const itemCache = new Map();
 	const voteLinkCache = new Map();
+	const voteBridgeRequests = new Map();
 
 	async function getItem(id) {
 		if (itemCache.has(id)) {
@@ -627,8 +629,190 @@
 		}
 	}
 
+	function cloneVoteInfo(voteInfo) {
+		if (!voteInfo) {
+			return null;
+		}
+
+		return {
+			upUrl: voteInfo.upUrl || null,
+			downUrl: voteInfo.downUrl || null,
+			unUrl: voteInfo.unUrl || null,
+			state: voteInfo.state || "none",
+			hasAuth: Boolean(voteInfo.hasAuth),
+		};
+	}
+
+	function sameVoteInfo(a, b) {
+		const left = cloneVoteInfo(a);
+		const right = cloneVoteInfo(b);
+		return JSON.stringify(left) === JSON.stringify(right);
+	}
+
+	function extractVoteLinksFromRoot(root) {
+		const voteLinks = new Map();
+
+		root.querySelectorAll("a[id]").forEach((anchor) => {
+			const match = /^(up|down|un)_(\d+)$/.exec(anchor.id || "");
+
+			if (!match) {
+				return;
+			}
+
+			const [, action, itemId] = match;
+			const voteURL = normalizeVoteURL(anchor.getAttribute("href"));
+
+			if (!voteURL) {
+				return;
+			}
+
+			const entry = voteLinks.get(itemId) || {
+				upUrl: null,
+				downUrl: null,
+				unUrl: null,
+				state: "none",
+				hasAuth: false,
+			};
+
+			const hasAuth = new URL(voteURL).searchParams.has("auth");
+			entry.hasAuth = entry.hasAuth || hasAuth;
+
+			if (action === "up") {
+				entry.upUrl = voteURL;
+			} else if (action === "down") {
+				entry.downUrl = voteURL;
+			} else {
+				entry.unUrl = voteURL;
+
+				const label = (anchor.textContent || "").trim().toLowerCase();
+
+				if (label.includes("undown")) {
+					entry.state = "down";
+				} else if (label.includes("unvote")) {
+					entry.state = "up";
+				} else {
+					entry.state = "unknown";
+				}
+			}
+
+			voteLinks.set(itemId, entry);
+		});
+
+		return voteLinks;
+	}
+
 	function invalidateVoteLinks(storyID) {
 		voteLinkCache.delete(String(storyID));
+	}
+
+	function getVoteStateValue(voteInfo) {
+		if (!voteInfo) {
+			return 0;
+		}
+
+		if (voteInfo.state === "up") {
+			return 1;
+		}
+
+		if (voteInfo.state === "down") {
+			return -1;
+		}
+
+		if (voteInfo.state === "none") {
+			return 0;
+		}
+
+		return null;
+	}
+
+	function updateCachedStoryScore(storyID, score) {
+		const numericScore = Number(score);
+
+		if (!Number.isFinite(numericScore)) {
+			return;
+		}
+
+		for (const key of [String(storyID), Number(storyID)]) {
+			if (!itemCache.has(key)) {
+				continue;
+			}
+
+			const item = itemCache.get(key);
+
+			if (item && typeof item === "object") {
+				item.score = numericScore;
+			}
+		}
+	}
+
+	function updateStoryScoreDisplay(storyID, score) {
+		const numericScore = Math.max(0, Math.round(Number(score)));
+
+		if (!Number.isFinite(numericScore)) {
+			return;
+		}
+
+		sidebarUI?.body
+			?.querySelectorAll(`[data-story-score-id="${String(storyID)}"]`)
+			.forEach((element) => {
+				element.dataset.storyScore = String(numericScore);
+				element.textContent = String(numericScore);
+			});
+	}
+
+	function maybeUpdateStoryScoreFromVoteChange(storyID, itemId, previousVoteInfo, nextVoteInfo) {
+		if (String(storyID) !== String(itemId)) {
+			return;
+		}
+
+		const previousValue = getVoteStateValue(previousVoteInfo);
+		const nextValue = getVoteStateValue(nextVoteInfo);
+
+		if (previousValue == null || nextValue == null || previousValue === nextValue) {
+			return;
+		}
+
+		const scoreElement = sidebarUI?.body?.querySelector(
+			`[data-story-score-id="${String(storyID)}"]`,
+		);
+		const displayedScore = Number(
+			scoreElement?.dataset.storyScore || scoreElement?.textContent,
+		);
+		const cachedItem = itemCache.get(String(storyID)) || itemCache.get(Number(storyID));
+		const cachedScore = Number(cachedItem?.score);
+		const currentScore = Number.isFinite(displayedScore)
+			? displayedScore
+			: cachedScore;
+
+		if (!Number.isFinite(currentScore)) {
+			return;
+		}
+
+		const nextScore = Math.max(0, currentScore + (nextValue - previousValue));
+		updateCachedStoryScore(storyID, nextScore);
+		updateStoryScoreDisplay(storyID, nextScore);
+	}
+
+	function setVoteInfoForStoryItem(storyID, itemId, voteInfo) {
+		const cacheKey = String(storyID);
+		const cached = voteLinkCache.get(cacheKey);
+		const nextVoteLinks = cached instanceof Map ? new Map(cached) : new Map();
+		const previousVoteInfo = nextVoteLinks.get(String(itemId)) || null;
+
+		if (voteInfo) {
+			nextVoteLinks.set(String(itemId), cloneVoteInfo(voteInfo));
+		} else {
+			nextVoteLinks.delete(String(itemId));
+		}
+
+		voteLinkCache.set(cacheKey, nextVoteLinks);
+		maybeUpdateStoryScoreFromVoteChange(
+			storyID,
+			itemId,
+			previousVoteInfo,
+			voteInfo || null,
+		);
+		hydrateVoteControlsForStory(storyID, nextVoteLinks);
 	}
 
 	async function loadVoteLinks(storyID, options = {}) {
@@ -647,51 +831,7 @@
 			}
 
 			const doc = new DOMParser().parseFromString(html, "text/html");
-			const voteLinks = new Map();
-
-			doc.querySelectorAll("a[id]").forEach((anchor) => {
-				const match = /^(up|down|un)_(\d+)$/.exec(anchor.id || "");
-
-				if (!match) {
-					return;
-				}
-
-				const [, action, itemId] = match;
-				const voteURL = normalizeVoteURL(anchor.getAttribute("href"));
-
-				if (!voteURL) {
-					return;
-				}
-
-				const entry = voteLinks.get(itemId) || {
-					upUrl: null,
-					downUrl: null,
-					unUrl: null,
-					state: "none",
-				};
-
-				if (action === "up") {
-					entry.upUrl = voteURL;
-				} else if (action === "down") {
-					entry.downUrl = voteURL;
-				} else {
-					entry.unUrl = voteURL;
-
-					const label = (anchor.textContent || "").trim().toLowerCase();
-
-					if (label.includes("undown")) {
-						entry.state = "down";
-					} else if (label.includes("unvote")) {
-						entry.state = "up";
-					} else {
-						entry.state = "unknown";
-					}
-				}
-
-				voteLinks.set(itemId, entry);
-			});
-
-			return voteLinks;
+			return extractVoteLinksFromRoot(doc);
 		})();
 
 		voteLinkCache.set(cacheKey, promise);
@@ -717,6 +857,7 @@
 			descriptors.push({
 				label: "▲",
 				title: "Remove upvote on Hacker News",
+				action: "un",
 				url: voteInfo.unUrl,
 				active: true,
 				variant: "up",
@@ -725,6 +866,7 @@
 			descriptors.push({
 				label: "▲",
 				title: "Upvote on Hacker News",
+				action: "up",
 				url: voteInfo.upUrl,
 				active: false,
 				variant: "up",
@@ -735,6 +877,7 @@
 			descriptors.push({
 				label: "▼",
 				title: "Remove downvote on Hacker News",
+				action: "un",
 				url: voteInfo.unUrl,
 				active: true,
 				variant: "down",
@@ -743,6 +886,7 @@
 			descriptors.push({
 				label: "▼",
 				title: "Downvote on Hacker News",
+				action: "down",
 				url: voteInfo.downUrl,
 				active: false,
 				variant: "down",
@@ -753,6 +897,7 @@
 			descriptors.push({
 				label: "↺",
 				title: "Remove vote on Hacker News",
+				action: "un",
 				url: voteInfo.unUrl,
 				active: true,
 				variant: "neutral",
@@ -762,7 +907,94 @@
 		return descriptors;
 	}
 
-	async function submitVote(storyID, voteURL, container) {
+	function voteBridgePageURL(storyID, itemId, action, nonce) {
+		const url = new URL(commentURL(itemId));
+		const hash = new URLSearchParams();
+		hash.set("hnewhere-vote", "1");
+		hash.set("story", String(storyID));
+		hash.set("item", String(itemId));
+		hash.set("action", action);
+		hash.set("origin", location.origin);
+		hash.set("nonce", nonce);
+		url.hash = hash.toString();
+		return url.href;
+	}
+
+	function setupVoteBridgeListener() {
+		if (window.__hnewhereVoteBridgeListenerInstalled) {
+			return;
+		}
+
+		window.__hnewhereVoteBridgeListenerInstalled = true;
+		window.addEventListener("message", (event) => {
+			if (event.origin !== HN_ORIGIN) {
+				return;
+			}
+
+			const data = event.data;
+
+			if (!data || data.source !== VOTE_BRIDGE_MESSAGE_SOURCE || !data.nonce) {
+				return;
+			}
+
+			if (data.storyID && data.itemId && data.voteInfo) {
+				setVoteInfoForStoryItem(data.storyID, data.itemId, data.voteInfo);
+			}
+
+			const pending = voteBridgeRequests.get(data.nonce);
+
+			if (!pending) {
+				return;
+			}
+
+			clearTimeout(pending.timeoutId);
+			voteBridgeRequests.delete(data.nonce);
+
+			try {
+				pending.popup?.close();
+			} catch {}
+
+			pending.resolve(data);
+		});
+	}
+
+	function openVoteBridgePopup(storyID, itemId, action) {
+		setupVoteBridgeListener();
+
+		return new Promise((resolve) => {
+			const nonce =
+				String(Date.now()) + Math.random().toString(36).slice(2, 10);
+			const voteURL = voteBridgePageURL(storyID, itemId, action, nonce);
+			const popup = window.open(
+				voteURL,
+				"hnewhere_vote_bridge_" + nonce,
+				"width=420,height=320,resizable=yes,scrollbars=yes",
+			);
+
+			if (!popup) {
+				resolve({ ok: false, reason: "popup-blocked" });
+				return;
+			}
+
+			const timeoutId = window.setTimeout(() => {
+				voteBridgeRequests.delete(nonce);
+
+				try {
+					popup.close();
+				} catch {}
+
+				resolve({ ok: false, reason: "timeout" });
+			}, 5000);
+
+			voteBridgeRequests.set(nonce, {
+				resolve,
+				timeoutId,
+				popup,
+			});
+		});
+	}
+
+	async function submitVote(storyID, itemId, descriptor, container) {
 		if (!container || container.dataset.votePending === "1") {
 			return;
 		}
@@ -774,10 +1006,11 @@
 		});
 
 		try {
-			await requestText(voteURL);
-			invalidateVoteLinks(storyID);
-			const voteLinks = await loadVoteLinks(storyID, { force: true });
-			hydrateVoteControlsForStory(storyID, voteLinks);
+			const result = await openVoteBridgePopup(storyID, itemId, descriptor.action);
+
+			if (result?.storyID && result?.itemId && result?.voteInfo) {
+				setVoteInfoForStoryItem(result.storyID, result.itemId, result.voteInfo);
+			}
 		} finally {
 			delete container.dataset.votePending;
 			container.classList.remove("vote-controls-pending");
@@ -807,9 +1040,15 @@
 			const button = document.createElement("button");
 			button.type = "button";
 			button.className = "vote-button";
-			button.textContent = descriptor.label;
 			button.title = descriptor.title;
 			button.setAttribute("aria-label", descriptor.title);
+
+			if (descriptor.variant === "neutral") {
+				button.classList.add("vote-button-neutral");
+				button.textContent = descriptor.label;
+			} else {
+				button.textContent = "";
+			}
 
 			if (descriptor.active) {
 				button.classList.add("vote-button-active");
@@ -822,7 +1061,7 @@
 			button.onclick = async (event) => {
 				event.preventDefault();
 				event.stopPropagation();
-				await submitVote(storyID, descriptor.url, container);
+				await submitVote(storyID, itemId, descriptor, container);
 			};
 
 			container.appendChild(button);
@@ -1195,6 +1434,11 @@ header button:hover {
     text-transform:uppercase;
 }
 
+#settings-toggle {
+    font-family: system-ui, sans-serif;
+    font-variant-emoji: text;
+}
+
 .settings-option {
     display:flex;
     gap:8px;
@@ -1396,44 +1640,130 @@ header button:hover {
 }
 
 .vote-controls {
-    display:inline-flex;
+    display:flex;
+    flex-direction:column;
     align-items:center;
-    gap:3px;
-    vertical-align:middle;
+    width:17px;
 }
 
-.story-actions .vote-controls {
-    gap:4px;
+.story-table {
+    width:100%;
+    border-collapse:collapse;
+    table-layout:fixed;
 }
 
-.comment-vote-controls {
-    margin:0 4px 0 2px;
+.story-table td {
+    padding:0;
+    vertical-align:top;
+}
+
+.story-votelinks,
+.story-votespacer {
+    width:14px;
+}
+
+.story-votelinks {
+    text-align:center;
+}
+
+.story-votelinks .vote-controls {
+    margin-top:3px;
+}
+
+.story-title-cell,
+.story-body-cell {
+    padding-left:2px;
+}
+
+.comment-layout {
+    display:flex;
+    align-items:flex-start;
+}
+
+.comment-vote-slot {
+    flex:0 0 17px;
+    width:17px;
+    display:flex;
+    justify-content:center;
+    align-items:flex-start;
+    padding-top:1px;
+}
+
+.comment-main {
+    flex:1 1 auto;
+    min-width:0;
 }
 
 .vote-button {
+    position:relative;
+    width:10px;
+    height:10px;
+    min-width:10px;
     border:none;
     background:none;
     padding:0;
-    color:#828282;
+    margin:0;
+    color:transparent;
     cursor:pointer;
-    font:600 11px/1 Verdana, Geneva, sans-serif;
+    font-size:0;
+    line-height:1;
 }
 
-.vote-button:hover {
+.vote-button::before {
+    content:"";
+    position:absolute;
+    left:1px;
+    top:1px;
+    width:0;
+    height:0;
+    border-left:4px solid transparent;
+    border-right:4px solid transparent;
+    border-bottom:7px solid #828282;
+}
+
+.vote-button-down::before {
+    border-bottom:none;
+    border-top:7px solid #828282;
+    top:2px;
+}
+
+.vote-button:hover::before,
+.vote-button-active::before {
+    border-bottom-color:#ff6600;
+}
+
+.vote-button-down:hover::before {
+    border-top-color:#ff6600;
+}
+
+.vote-button-down.vote-button-active::before {
+    border-top-color:#666;
+}
+
+.vote-button-neutral {
+    width:auto;
+    min-width:10px;
+    height:auto;
+    color:#828282;
+    font:600 10px/1 Verdana, Geneva, sans-serif;
+}
+
+.vote-button-neutral::before {
+    content:none;
+}
+
+.vote-button-neutral:hover,
+.vote-button-neutral.vote-button-active {
     color:#ff6600;
+}
+
+.vote-button + .vote-button {
+    margin-top:2px;
 }
 
 .vote-button:disabled {
     opacity:.55;
     cursor:default;
-}
-
-.vote-button-active {
-    color:#ff6600;
-}
-
-.vote-button-down.vote-button-active {
-    color:#666;
 }
 
 .vote-controls-pending {
@@ -1509,17 +1839,20 @@ blockquote.comment-quote-redundant {
 
 .story-title {
     font-size:15px;
+    line-height:1.25;
 }
 
 .story-title a {
     color:#000;
     text-decoration:none;
+    word-break:break-word;
 }
 
 .story-meta {
     color:#828282;
     font-size:10px;
     line-height:1.4;
+    padding-top:2px;
 }
 
 .story-text {
@@ -1840,56 +2173,54 @@ blockquote.comment-quote-redundant {
 		const wrapper = document.createElement("div");
 		wrapper.innerHTML = `
 
-<div class="story">
-
-<div class="story-title">
-
-<a target="_blank"
-href="${escapeHTML(hnURL)}"
-title="Open discussion on Hacker News">
-
-${escapeHTML(story.title)}
-
-</a>
-</div>
-
-<div class="story-meta">
-
-${story.score || 0} points by
-
-${escapeHTML(story.by || "")}
-
-|
-
-${timeAgo(story.time)}
-
-|
-
-${story.descendants || 0} comments
-
-</div>
-
-${
-	story.text
-		? `
-<div class="story-text">
-${sanitizeHTML(story.text)}
-</div>
-`
-		: ""
-}
-
-	<div class="story-actions">
-	
-	<button type="button" class="add-comment">
-	add comment
-	</button>
-	
+	<div class="story">
+	<table class="story-table" role="presentation">
+	<tbody>
+	<tr>
+	<td class="story-votelinks">
 	<span class="story-vote-controls vote-controls hidden"
 	data-hn-vote-story-id="${escapeHTML(storyID)}"
 	data-hn-vote-item-id="${escapeHTML(storyID)}"></span>
-	
+	</td>
+	<td class="story-title-cell">
+	<div class="story-title">
+	<a target="_blank"
+	href="${escapeHTML(hnURL)}"
+	title="Open discussion on Hacker News">
+	${escapeHTML(story.title)}
+	</a>
 	</div>
+	</td>
+	</tr>
+	<tr>
+	<td class="story-votespacer"></td>
+	<td class="story-body-cell">
+	<div class="story-meta">
+	<span class="story-score" data-story-score-id="${escapeHTML(storyID)}" data-story-score="${escapeHTML(String(story.score || 0))}">${story.score || 0}</span> points by
+	${escapeHTML(story.by || "")}
+	|
+	${timeAgo(story.time)}
+	|
+	${story.descendants || 0} comments
+	</div>
+	${
+		story.text
+			? `
+	<div class="story-text">
+	${sanitizeHTML(story.text)}
+	</div>
+	`
+			: ""
+	}
+	<div class="story-actions">
+	<button type="button" class="add-comment">
+	add comment
+	</button>
+	</div>
+	</td>
+	</tr>
+	</tbody>
+	</table>
 	</div>
 
 <br>
@@ -2002,6 +2333,14 @@ ${sanitizeHTML(story.text)}
 		const commentID = String(comment.id);
 
 		div.innerHTML = `
+      <div class="comment-layout">
+      <span class="comment-vote-slot">
+      <span class="comment-vote-controls vote-controls hidden"
+      data-hn-vote-story-id="${escapeHTML(String(storyID))}"
+      data-hn-vote-item-id="${escapeHTML(commentID)}"></span>
+      </span>
+
+      <div class="comment-main">
       <div class="meta">
 
       <a target="_blank"
@@ -2025,10 +2364,6 @@ ${sanitizeHTML(story.text)}
       reply
       </a>
 
-      <span class="comment-vote-controls vote-controls hidden"
-      data-hn-vote-story-id="${escapeHTML(String(storyID))}"
-      data-hn-vote-item-id="${escapeHTML(commentID)}"></span>
-
       <span class="toggle">
       [–]
       </span>
@@ -2040,6 +2375,8 @@ ${sanitizeHTML(story.text)}
         		${sanitizeHTML(comment.text) || ""}
        	</div>
        	<div class="children"></div>
+      </div>
+      </div>
       </div>
     `;
 
@@ -2280,8 +2617,116 @@ ${sanitizeHTML(story.text)}
 	}
 
 	// -------------------------
-	// Hacker News click tracking
+	// Hacker News click tracking / vote bridge
 	// -------------------------
+
+	function parseVoteBridgePayload() {
+		const hash = location.hash.replace(/^#/, "");
+
+		if (!hash) {
+			return null;
+		}
+
+		const params = new URLSearchParams(hash);
+
+		if (params.get("hnewhere-vote") !== "1") {
+			return null;
+		}
+
+		const storyID = params.get("story");
+		const itemId = params.get("item");
+		const action = params.get("action");
+		const origin = params.get("origin");
+		const nonce = params.get("nonce");
+
+		if (!storyID || !itemId || !nonce) {
+			return null;
+		}
+
+		if (!["up", "down", "un"].includes(action)) {
+			return null;
+		}
+
+		return {
+			storyID,
+			itemId,
+			action,
+			origin,
+			nonce,
+		};
+	}
+
+	function postVoteBridgeResult(payload, result) {
+		if (!window.opener) {
+			return;
+		}
+
+		try {
+			window.opener.postMessage(
+				{
+					source: VOTE_BRIDGE_MESSAGE_SOURCE,
+					storyID: payload.storyID,
+					itemId: payload.itemId,
+					action: payload.action,
+					nonce: payload.nonce,
+					...result,
+				},
+				payload.origin || "*",
+			);
+		} catch (error) {
+			console.error("Failed posting vote bridge result:", error);
+		}
+	}
+
+	async function maybeHandleHNVoteBridge() {
+		const payload = parseVoteBridgePayload();
+
+		if (!payload) {
+			return false;
+		}
+
+		const getCurrentVoteInfo = () =>
+			cloneVoteInfo(
+				extractVoteLinksFromRoot(document).get(String(payload.itemId)) || null,
+			);
+
+		const before = getCurrentVoteInfo();
+		const voteAnchor = document.getElementById(
+			payload.action + "_" + payload.itemId,
+		);
+
+		if (!(voteAnchor instanceof HTMLAnchorElement)) {
+			postVoteBridgeResult(payload, {
+				ok: false,
+				reason: "anchor-missing",
+				voteInfo: before,
+			});
+			window.setTimeout(() => window.close(), 80);
+			return true;
+		}
+
+		voteAnchor.click();
+
+		let after = before;
+		const deadline = Date.now() + 1800;
+
+		while (Date.now() < deadline) {
+			await new Promise((resolve) => window.setTimeout(resolve, 150));
+			after = getCurrentVoteInfo();
+
+			if (!sameVoteInfo(before, after)) {
+				break;
+			}
+		}
+
+		postVoteBridgeResult(payload, {
+			ok: !sameVoteInfo(before, after),
+			reason: sameVoteInfo(before, after) ? "unchanged" : "updated",
+			voteInfo: after,
+		});
+		window.setTimeout(() => window.close(), 120);
+		return true;
+	}
 
 	function setupHNListener() {
 		document.addEventListener(
@@ -3714,9 +4159,10 @@ ${sanitizeHTML(story.text)}
 	async function init() {
 		await migrateStorage();
 
-		// On HN, only record clicked stories.
+		// On HN, only record clicked stories and service popup vote actions.
 		if (location.hostname === "news.ycombinator.com") {
 			setupHNListener();
+			await maybeHandleHNVoteBridge();
 			return;
 		}
 
