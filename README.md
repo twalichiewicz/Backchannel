@@ -4,11 +4,7 @@
 
 A lightweight userscript that adds Hacker News discussions to any article.
 
-Current release: `v1.5.0`
-
 HNewhere detects matching Hacker News stories, loads comments into a sidebar, and lets you browse discussions without leaving the page.
-
-In `v1.5.0`, the sidebar can also project matched discussion context back into the article with quote-linked annotations that disappear when the sidebar is closed.
 
 ## Install
 
@@ -17,7 +13,7 @@ In `v1.5.0`, the sidebar can also project matched discussion context back into t
    - [Violentmonkey](https://violentmonkey.github.io/)
    - [Userscripts (Safari)](https://apps.apple.com/us/app/userscripts/id1463298887)
 
-2. [Install HNewhere](https://raw.githubusercontent.com/twalichiewicz/HNewhere/refs/heads/main/HNewhere.user.js)
+2. [Install HNewhere](https://raw.githubusercontent.com/twalichiewicz/HNewhere/refs/heads/main/HNewhere.user.js) Current release: `v1.5.1`
 
 3. Visit an article with a Hacker News discussion.
 
