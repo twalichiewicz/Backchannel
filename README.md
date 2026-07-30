@@ -13,7 +13,7 @@ HNewhere detects matching Hacker News stories, loads comments into a sidebar, an
    - [Violentmonkey](https://violentmonkey.github.io/)
    - [Userscripts (Safari)](https://apps.apple.com/us/app/userscripts/id1463298887)
 
-2. [Install HNewhere](https://raw.githubusercontent.com/twalichiewicz/HNewhere/refs/heads/main/HNewhere.user.js) Current release: `v1.5.2`
+2. [Install HNewhere](https://raw.githubusercontent.com/twalichiewicz/HNewhere/refs/heads/main/HNewhere.user.js) Current release: `v1.5.3`
 
 3. Visit an article with a Hacker News discussion.
 
@@ -28,6 +28,12 @@ HNewhere detects matching Hacker News stories, loads comments into a sidebar, an
 - Clicking an article annotation can filter the sidebar to the matching comment thread
 - Filtered discussion view with a pull-quote summary, direct-match navigator, and quick return to the full thread
 - In blended views, filtered mode hides HN submissions that do not contain a matching quote
+- Comment and reply straight from the sidebar, with Hacker News' own formatting rules to hand
+- Submit the current page to Hacker News when no discussion exists yet
+- Dark mode that matches the page, so it works with Dark Reader and site themes
+- Greyed-out button on pages with no discussion, or hidden entirely if you prefer
+- Stays out of the way on webmail, banking, auth flows, consoles, and local addresses
+- Vote on stories and comments without leaving the article
 - Tracks stories opened from Hacker News
 - Resizable sidebar with saved width
 - Draggable floating HN button with remembered desktop position
@@ -35,7 +41,6 @@ HNewhere detects matching Hacker News stories, loads comments into a sidebar, an
 - Highlights new comments since your last visit
 - Shows story text when available
 - Marks original poster comments
-- Reply links open directly to Hacker News
 - Blended view when multiple matching HN submissions exist
 - Sidebar settings for annotation layers and automatic opening behavior
 

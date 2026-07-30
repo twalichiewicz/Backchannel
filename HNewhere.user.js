@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HNewhere
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.5.2
+// @version      1.5.3
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
@@ -26,6 +26,24 @@
 // @exclude      https://*.doubleclick.net/*
 // @exclude      https://*.facebook.com/*
 // @exclude      https://*.twitter.com/*
+// @exclude      https://*.linkedin.com/*
+// @exclude      https://*.youtube.com/
+// @include      https://*.youtube.com/watch?v=*
+// @exclude      https://outlook.*/*
+// @exclude      https://*.slack.com/*
+// @exclude      https://*.notion.so/*
+// @exclude      https://*.figma.com/*
+// @exclude      https://*.atlassian.net/*
+// @exclude      https://*.paypal.com/*
+// @exclude      https://*.stripe.com/*
+// @exclude      https://console.aws.amazon.com/*
+// @exclude      https://portal.azure.com/*
+// @exclude      https://console.cloud.google.com/*
+// @exclude      https://*.netflix.com/*
+// @exclude      https://web.whatsapp.com/*
+// @exclude      https://*.instagram.com/*
+// @exclude      *://127.0.0.1/*
+// @exclude      *://*/*.pdf
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
@@ -98,15 +116,50 @@
 		annotationsWhenSidebarOpen: true,
 		annotationsWhenSidebarClosed: false,
 		autoOpenSidebar: false,
+		// Off by default, so the button now appears greyed out on pages with no
+		// discussion rather than not appearing at all. Turning it on restores the
+		// pre-1.5.3 behaviour of staying hidden unless there is something to read.
+		hideWithoutDiscussion: false,
 	};
 
 	const HN_ORIGIN = "https://news.ycombinator.com";
+	const REPO_URL = "https://github.com/twalichiewicz/HNewhere";
+
+	// Read back from the manager rather than written out a second time, so the
+	// version in settings cannot drift from the @version header. Wrapped because
+	// GM may not exist at all under a manager that only injects the GM_* globals,
+	// and a bare reference would throw rather than yield undefined.
+	const SCRIPT_VERSION = (() => {
+		try {
+			return GM?.info?.script?.version || "";
+		} catch {
+			return "";
+		}
+	})();
+
 	const VOTE_BRIDGE_MESSAGE_SOURCE = "HNewhereVoteBridge";
+	const SUBMIT_BRIDGE_MESSAGE_SOURCE = "HNewhereSubmitBridge";
+	const COMMENT_BRIDGE_MESSAGE_SOURCE = "HNewhereCommentBridge";
+
+	// HN truncates submission titles at 80 characters.
+	const HN_TITLE_LIMIT = 80;
 
 	// The popup votes by navigating to the vote URL, and HN's goto redirect drops
 	// the URL fragment, so the bridge payload cannot ride the hash across it.
 	// sessionStorage is per-tab and per-origin, which is exactly the popup's life.
 	const VOTE_BRIDGE_STORAGE_KEY = "hnewhere-vote-bridge";
+	const SUBMIT_BRIDGE_STORAGE_KEY = "hnewhere-submit-bridge";
+	const COMMENT_BRIDGE_STORAGE_KEY = "hnewhere-comment-bridge";
+
+	// Submissions and comments carry a title or a body, which is too much to put in a
+	// URL fragment. GM storage is scoped to the script rather than the origin, so the
+	// popup running on news.ycombinator.com can read what the sidebar wrote from the
+	// article's origin -- the hash only has to carry a nonce to look it up by.
+	const BRIDGE_PAYLOAD_PREFIX = "HNewhere:bridge_payload:";
+
+	// Long enough to survive a slow HN, short enough that an abandoned popup's
+	// payload does not sit in storage indefinitely.
+	const BRIDGE_PAYLOAD_TTL = 10 * 60 * 1000;
 	const TRACKING_PARAMS = new Set([
 		"utm_source",
 		"utm_medium",
@@ -523,6 +576,123 @@
 		}
 	}
 
+	// -------------------------
+	// Site suppression
+	// -------------------------
+
+	// Pages that could never be a Hacker News submission: someone's mail, their
+	// money, an auth flow, a document they are editing, or something only reachable
+	// from inside a network. The @exclude header catches the worst of these before
+	// the script loads at all, but a header pattern cannot look at a URL path, so
+	// anything path-shaped has to be caught here.
+	//
+	// Deliberately conservative. A missed site shows a button that does nothing
+	// useful, which is a far cheaper mistake than suppressing a site people
+	// genuinely read articles on, and adding an entry is a one-line change.
+	const HIDDEN_HOST_PATTERNS = [
+		// Mail
+		/^(mail|inbox|webmail|email)\./,
+		/(^|\.)(gmail|outlook|hotmail|fastmail|zoho|superhuman|hey)\.com$/,
+		/(^|\.)proton\.(me|mail)$/,
+		/(^|\.)mail\.(ru|yahoo)\.com$/,
+
+		// Auth and identity
+		/^(accounts?|login|signin|auth|sso|idp|id|oauth)\./,
+		/(^|\.)(okta|onelogin|duosecurity|auth0|clerk|workos)\.com$/,
+
+		// Money
+		/(^|\.)bank(ing)?\./,
+		/(^|\.)(chase|bankofamerica|wellsfargo|citibank|capitalone|usbank)\.com$/,
+		/(^|\.)(hsbc|barclays|lloydsbank|natwest|santander|monzo|revolut)\.(com|co\.uk)$/,
+		/(^|\.)(americanexpress|amex|discover)\.com$/,
+		/(^|\.)(schwab|fidelity|vanguard|etrade|robinhood|coinbase)\.com$/,
+		/(^|\.)(paypal|venmo|wise|stripe|squareup|plaid)\.com$/,
+
+		// Consoles and dashboards. "portal." is deliberately not in the generic list:
+		// portal.acm.org and friends host papers that get submitted all the time.
+		/^(console|dashboard|admin|manage)\./,
+		/(^|\.)console\.(aws\.amazon|cloud\.google)\.com$/,
+		/(^|\.)portal\.azure\.com$/,
+
+		// Documents being edited, not read
+		/(^|\.)(docs|drive|sheets|slides|calendar|keep)\.google\.com$/,
+		/(^|\.)(notion|coda|airtable|figma|miro|canva)\.(so|io|com)$/,
+		/(^|\.)(linear|asana|monday|clickup|trello|basecamp)\.(app|com)$/,
+		/(^|\.)atlassian\.net$/,
+
+		// Chat and meetings
+		/(^|\.)(slack|discord|zoom)\.(com|us)$/,
+		/(^|\.)(teams|outlook)\.(microsoft|office|live)\.com$/,
+		/(^|\.)meet\.google\.com$/,
+		/(^|\.)web\.(whatsapp|telegram)\.(com|org)$/,
+		/(^|\.)messenger\.com$/,
+
+		// Feeds with nothing stable to link to
+		/(^|\.)(instagram|tiktok|snapchat|threads)\.(com|net)$/,
+
+		// Streaming
+		/(^|\.)(netflix|hulu|disneyplus|max|primevideo|spotify|tidal)\.com$/,
+		/(^|\.)music\.(apple|youtube)\.com$/,
+
+		// Search result pages
+		/(^|\.)(duckduckgo|bing|baidu|yandex|ecosia|startpage|qwant)\.com$/,
+		/^search\./,
+	];
+
+	const HIDDEN_PATH_PATTERNS = [
+		/^\/(login|log-in|signin|sign-in|signup|sign-up|register|logout|log-out|sign-out)(\/|$)/,
+		/^\/(auth|oauth|oauth2|sso|saml|password|reset-password|forgot|forgot-password|verify|2fa|mfa)(\/|$)/,
+		/^\/(checkout|cart|basket|payment|payments|billing|invoice|invoices|subscribe|upgrade)(\/|$)/,
+		/^\/(admin|wp-admin|dashboard|settings|preferences|account|accounts|my-account|profile\/edit)(\/|$)/,
+		/^\/(search|results)(\/|$)/,
+		/^\/(compose|inbox|messages|dm|chat)(\/|$)/,
+	];
+
+	// Whole classes of host for one rule each: anything not reachable from the
+	// public internet cannot be submitted, whatever it is serving.
+	function isPrivateHostname(hostname) {
+		return (
+			hostname === "localhost" ||
+			// IPv4 literal, or an IPv6 literal (which arrives bracketed, so testing for
+			// a colon is enough to tell it from a name).
+			/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) ||
+			hostname.includes(":") ||
+			// No dot at all means a single-label intranet name.
+			!hostname.includes(".") ||
+			/\.(local|internal|test|localhost|lan|invalid|example)$/.test(hostname) ||
+			hostname.endsWith(".home.arpa")
+		);
+	}
+
+	function isHiddenSite(url = location.href) {
+		let parsed;
+
+		try {
+			parsed = new URL(url);
+		} catch {
+			// Unparseable means there is nothing to submit either.
+			return true;
+		}
+
+		if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+			return true;
+		}
+
+		const hostname = parsed.hostname.toLowerCase();
+
+		if (isPrivateHostname(hostname)) {
+			return true;
+		}
+
+		if (HIDDEN_HOST_PATTERNS.some((pattern) => pattern.test(hostname))) {
+			return true;
+		}
+
+		const pathname = parsed.pathname.toLowerCase();
+
+		return HIDDEN_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
+	}
+
 	function sanitizeHTML(html) {
 		const template = document.createElement("template");
 		template.innerHTML = html || "";
@@ -660,12 +830,119 @@
 			: window.innerWidth * 0.8;
 	}
 
+	// -------------------------
+	// Theme detection
+	// -------------------------
+	//
+	// Matching the page rather than the OS is deliberate: a reader running Dark
+	// Reader or a site's own dark theme has a dark page under a light OS, and a
+	// sidebar that follows the OS would be the one bright rectangle on screen.
+	// Originally contributed by @bennetthanke in #21.
+
+	// Returns null when the colour says nothing about the page -- fully transparent,
+	// or a format this cannot read -- so the caller can look somewhere else.
+	function isDarkColor(color) {
+		const match = /rgba?\(([^)]+)\)/.exec(color || "");
+
+		if (!match) {
+			return null;
+		}
+
+		const [r, g, b, a = 1] = match[1].split(",").map(parseFloat);
+
+		if (![r, g, b].every(Number.isFinite)) {
+			return null;
+		}
+
+		// Mostly transparent is treated the same as transparent: what shows through is
+		// whatever is behind, so this element is not the one to judge by.
+		if (!Number.isFinite(a) || a < 0.5) {
+			return null;
+		}
+
+		// Rec. 709 coefficients over gamma-encoded sRGB. Not true relative luminance,
+		// but the error is far smaller than the light/dark margin being tested.
+		return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
+	}
+
+	function detectDarkMode() {
+		for (const element of [document.body, document.documentElement]) {
+			if (!element) {
+				continue;
+			}
+
+			const dark = isDarkColor(getComputedStyle(element).backgroundColor);
+
+			if (dark !== null) {
+				return dark;
+			}
+		}
+
+		return window.matchMedia("(prefers-color-scheme: dark)").matches;
+	}
+
+	const DARK_CLASS = "hnewhere-dark";
+
+	// The class goes on the host element rather than anything inside the shadow root,
+	// because that is what both the sidebar and the submit popover have in common --
+	// and custom properties set on a host inherit into its shadow tree.
+	function applyThemeToHost(host) {
+		host.classList.toggle(DARK_CLASS, detectDarkMode());
+	}
+
+	// Returns a cleanup function. The OS setting can change while a surface is open,
+	// and it is the fallback whenever the page background is transparent.
+	function watchTheme(host) {
+		const apply = () => applyThemeToHost(host);
+		const query = window.matchMedia("(prefers-color-scheme: dark)");
+
+		apply();
+		query.addEventListener("change", apply);
+
+		return () => query.removeEventListener("change", apply);
+	}
+
 	function isMobile() {
 		return (
 			window.matchMedia("(max-width: 700px)").matches ||
 			"ontouchstart" in window ||
 			navigator.maxTouchPoints > 0
 		);
+	}
+
+	// The two states the floating button can be in. "active" means a discussion is
+	// known to exist; "inactive" means the lookup came back empty and clicking offers
+	// to submit the page instead. Kept in one table because both the initial cssText
+	// and applyButtonMobileStyle used to hardcode the orange separately, which is
+	// exactly how the two would drift.
+	const BUTTON_VARIANTS = {
+		active: {
+			background: "#ff6600",
+			// HN orange carries itself on either background, so only the inactive grey
+			// needs a dark counterpart -- #b8b8b8 glares on a dark page.
+			darkBackground: "#ff6600",
+			boxShadow: "0 1px 4px rgba(0,0,0,.25)",
+			title: "Hacker News discussion",
+		},
+		inactive: {
+			background: "#b8b8b8",
+			darkBackground: "#4a4a4a",
+			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
+			title: "No Hacker News discussion yet — click to submit this page",
+		},
+	};
+
+	function setFloatingButtonVariant(button, variant) {
+		const style = BUTTON_VARIANTS[variant] || BUTTON_VARIANTS.active;
+
+		// The button sits in the page, not in a shadow root, so it cannot inherit the
+		// custom properties and resolves its own colour instead.
+		button.dataset.hnewhereVariant = variant;
+		button.style.background = detectDarkMode()
+			? style.darkBackground
+			: style.background;
+		button.style.boxShadow = style.boxShadow;
+		button.title = style.title;
 	}
 
 	function applyButtonMobileStyle(button) {
@@ -684,9 +961,16 @@
 			right: "16px",
 			opacity: "1",
 		});
+
+		// Re-asserted because this runs on every resize and would otherwise reset a
+		// button that is deliberately showing the inactive colour.
+		setFloatingButtonVariant(
+			button,
+			button.dataset.hnewhereVariant || "active",
+		);
 	}
 
-		function createFloatingHNButton(id) {
+		function createFloatingHNButton(id, variant = "active") {
 			let button = document.getElementById(id);
 
 			if (button) return button;
@@ -694,14 +978,12 @@
 			button = document.createElement("button");
 			button.id = id;
 			button.textContent = "HN";
-			button.title = "Hacker News discussion";
 
 			button.style.cssText = `
 					position:fixed;
 					top:16px;
 					right:16px;
 					z-index:2147483647;
-					background:#ff6600;
 					color:white;
 					border:none;
 					border-radius:50%;
@@ -712,14 +994,19 @@
 					font-size:13px;
 					font-weight:bold;
 					cursor:pointer;
-					box-shadow:0 1px 4px rgba(0,0,0,.25);
 					user-select:none;
 					touch-action:none;
 					display:flex;
 					align-items:center;
 					justify-content:center;
 					-webkit-tap-highlight-color:transparent;
+					transition:background .2s ease;
+					/* So the fill overlay can be clipped to the circle. */
+					overflow:hidden;
+					isolation:isolate;
 				`;
+
+			setFloatingButtonVariant(button, variant);
 
 			const updateButtonStyle = () => {
 				applyButtonMobileStyle(button);
@@ -737,16 +1024,85 @@
 		}
 
 	// -------------------------
-	// Popup helpers
+	// Submission helpers
 	// -------------------------
 
-	function openHNWindow(url) {
-		window.open(
-			url,
-			"hn_popup",
-			"width=760,height=700,resizable=yes,scrollbars=yes",
-		);
+	// og:title first because it is what the author wrote for sharing, whereas
+	// document.title routinely carries a " | Site Name" tail that only wastes
+	// characters against HN's limit.
+	function suggestedSubmissionTitle() {
+		const candidates = [
+			document.querySelector('meta[property="og:title"]')?.content,
+			document.querySelector('meta[name="twitter:title"]')?.content,
+			document.title,
+			location.hostname,
+		];
+
+		for (const candidate of candidates) {
+			const trimmed = (candidate || "").trim().replace(/\s+/g, " ");
+
+			if (trimmed) {
+				return trimmed.slice(0, HN_TITLE_LIMIT);
+			}
+		}
+
+		return "";
 	}
+
+	// Fills the circle bottom-to-top, then leaves a plain orange button behind. Uses
+	// element.animate() rather than a keyframe rule so nothing has to be injected into
+	// the host page's stylesheet, and animates clip-path rather than a gradient
+	// because clip-path actually interpolates.
+	function animateButtonFill(button) {
+		const overlay = document.createElement("span");
+
+		overlay.textContent = "HN";
+		overlay.style.cssText = `
+			position:absolute;
+			inset:0;
+			display:flex;
+			align-items:center;
+			justify-content:center;
+			background:${BUTTON_VARIANTS.active.background};
+			color:white;
+			font:bold 13px Verdana,sans-serif;
+			border-radius:50%;
+			clip-path:inset(100% 0 0 0);
+			pointer-events:none;
+		`;
+
+		button.appendChild(overlay);
+
+		const fill = overlay.animate(
+			[{ clipPath: "inset(100% 0 0 0)" }, { clipPath: "inset(0 0 0 0)" }],
+			{
+				duration: 620,
+				easing: "cubic-bezier(.22,.61,.36,1)",
+				fill: "forwards",
+			},
+		);
+
+		// A short settle so the fill reads as landing rather than stopping.
+		button.animate(
+			[
+				{ transform: "scale(1)" },
+				{ transform: "scale(1.12)" },
+				{ transform: "scale(1)" },
+			],
+			{ duration: 420, delay: 480, easing: "ease-out" },
+		);
+
+		return fill.finished
+			.catch(() => {})
+			.then(() => {
+				setFloatingButtonVariant(button, "active");
+				overlay.remove();
+			});
+	}
+
+	// -------------------------
+	// Popup helpers
+	// -------------------------
 
 	function replyURL(comment, storyID) {
 		return (
@@ -761,6 +1117,232 @@
 
 	function commentURL(storyID) {
 		return HN_ORIGIN + "/item?id=" + storyID;
+	}
+
+	function submitURL(url, title) {
+		return (
+			HN_ORIGIN +
+			"/submitlink?u=" +
+			encodeURIComponent(url) +
+			"&t=" +
+			encodeURIComponent(title)
+		);
+	}
+
+	function editURL(storyID) {
+		return HN_ORIGIN + "/edit?id=" + storyID;
+	}
+
+	// -------------------------
+	// Bridge payloads
+	// -------------------------
+
+	function bridgeNonce() {
+		return String(Date.now()) + Math.random().toString(36).slice(2, 10);
+	}
+
+	async function stageBridgePayload(nonce, payload) {
+		await save(BRIDGE_PAYLOAD_PREFIX + nonce, {
+			...payload,
+			ts: Date.now(),
+		});
+	}
+
+	async function readBridgePayload(nonce) {
+		const stored = await load(BRIDGE_PAYLOAD_PREFIX + nonce, null);
+
+		if (!stored || typeof stored !== "object") {
+			return null;
+		}
+
+		if (Number.isFinite(stored.ts) && Date.now() - stored.ts > BRIDGE_PAYLOAD_TTL) {
+			await save(BRIDGE_PAYLOAD_PREFIX + nonce, null);
+			return null;
+		}
+
+		return stored;
+	}
+
+	async function clearBridgePayload(nonce) {
+		await save(BRIDGE_PAYLOAD_PREFIX + nonce, null);
+	}
+
+	// A popup that is closed before it finishes leaves its payload behind, so the
+	// keys are swept rather than only deleted on the happy path. GM.listValues is not
+	// granted, so this piggybacks on an index kept alongside the payloads.
+	async function sweepBridgePayloads() {
+		const index = await load(BRIDGE_PAYLOAD_PREFIX + "index", []);
+
+		if (!Array.isArray(index) || !index.length) {
+			return;
+		}
+
+		const now = Date.now();
+		const kept = [];
+
+		for (const entry of index) {
+			if (!entry?.nonce) {
+				continue;
+			}
+
+			if (Number.isFinite(entry.ts) && now - entry.ts > BRIDGE_PAYLOAD_TTL) {
+				await save(BRIDGE_PAYLOAD_PREFIX + entry.nonce, null);
+				continue;
+			}
+
+			kept.push(entry);
+		}
+
+		if (kept.length !== index.length) {
+			await save(BRIDGE_PAYLOAD_PREFIX + "index", kept);
+		}
+	}
+
+	async function indexBridgePayload(nonce) {
+		const index = await load(BRIDGE_PAYLOAD_PREFIX + "index", []);
+		const next = Array.isArray(index) ? [...index] : [];
+
+		next.push({ nonce, ts: Date.now() });
+		await save(BRIDGE_PAYLOAD_PREFIX + "index", next);
+	}
+
+	// Parses the fragment the sidebar attaches when it opens a bridge popup. Shared
+	// by the submit and comment bridges, which differ only in their marker key.
+	function parseBridgeHash(marker) {
+		const hash = location.hash.replace(/^#/, "");
+
+		if (!hash) {
+			return null;
+		}
+
+		const params = new URLSearchParams(hash);
+
+		if (params.get(marker) !== "1") {
+			return null;
+		}
+
+		const nonce = params.get("nonce");
+
+		if (!nonce) {
+			return null;
+		}
+
+		return {
+			nonce,
+			origin: params.get("origin"),
+			storyID: params.get("story"),
+		};
+	}
+
+	function postBridgeResult(source, payload, result) {
+		if (!window.opener) {
+			return;
+		}
+
+		try {
+			window.opener.postMessage(
+				{
+					source,
+					nonce: payload.nonce,
+					...result,
+				},
+				payload.origin || "*",
+			);
+		} catch (error) {
+			console.error("Failed posting bridge result:", error);
+		}
+	}
+
+	// One-shot listener per bridge kind, resolving whichever request matches the
+	// nonce the popup reports back. Modelled on setupVoteBridgeListener.
+	function createBridgeChannel(source) {
+		const pending = new Map();
+		let installed = false;
+
+		const install = () => {
+			if (installed) {
+				return;
+			}
+
+			installed = true;
+			window.addEventListener("message", (event) => {
+				if (event.origin !== HN_ORIGIN) {
+					return;
+				}
+
+				const data = event.data;
+
+				if (!data || data.source !== source || !data.nonce) {
+					return;
+				}
+
+				const request = pending.get(data.nonce);
+
+				if (!request) {
+					return;
+				}
+
+				clearTimeout(request.timeoutId);
+				pending.delete(data.nonce);
+
+				try {
+					request.popup?.close();
+				} catch {}
+
+				request.resolve(data);
+			});
+		};
+
+		// MUST be called synchronously from the click that triggered it. Browsers only
+		// honour window.open while the user gesture is still on the stack, and these
+		// bridges have to stage a payload in GM storage first -- awaiting that before
+		// opening is exactly what got the popup blocked while voting, which stages
+		// nothing, sailed through. So the window is opened blank while the gesture is
+		// still live and navigated once the payload is in place.
+		return function openBridge(nonce, { timeout = 60000, features } = {}) {
+			install();
+
+			const popup = window.open(
+				"about:blank",
+				source + "_" + nonce,
+				features || "width=760,height=680,resizable=yes,scrollbars=yes",
+			);
+
+			if (!popup) {
+				return {
+					blocked: true,
+					result: Promise.resolve({ ok: false, reason: "popup-blocked" }),
+					navigate() {},
+				};
+			}
+
+			const result = new Promise((resolve) => {
+				// Deliberately does not close the popup on timeout. Like the vote bridge,
+				// the action is a form navigation, and closing mid-flight aborts it. The
+				// window is generous because a submission or comment spans two page loads
+				// and the reader may have to log in first.
+				const timeoutId = window.setTimeout(() => {
+					pending.delete(nonce);
+					resolve({ ok: false, reason: "timeout" });
+				}, timeout);
+
+				pending.set(nonce, { resolve, timeoutId, popup });
+			});
+
+			return {
+				blocked: false,
+				result,
+				navigate(url) {
+					// about:blank inherits this origin, so assigning location is allowed
+					// even though the destination is cross-origin.
+					try {
+						popup.location = url;
+					} catch (error) {
+						console.error("HNewhere: could not navigate bridge popup", error);
+					}
+				},
+			};
+		};
 	}
 
 	function normalizeVoteURL(href) {
@@ -1483,6 +2065,10 @@
 		button.style.right = "auto";
 	}
 
+	// Anything anchored to the button -- currently the submit popover -- listens for
+	// this rather than reaching into the drag state, so the two stay independent.
+	const BUTTON_MOVE_EVENT = "hnewhere:buttonmove";
+
 	function makeButtonDraggable(button) {
 		let dragging = false;
 		let moved = false;
@@ -1492,6 +2078,10 @@
 		let startLeft = 0;
 		let startTop = 0;
 
+		const notifyMoved = () => {
+			button.dispatchEvent(new CustomEvent(BUTTON_MOVE_EVENT));
+		};
+
 		const clampPosition = () => {
 			const maxX = window.innerWidth - button.offsetWidth;
 			const maxY = window.innerHeight - button.offsetHeight;
@@ -1499,6 +2089,7 @@
 			button.style.left = Math.max(0, Math.min(button.offsetLeft, maxX)) + "px";
 			button.style.top = Math.max(0, Math.min(button.offsetTop, maxY)) + "px";
 			button.style.right = "auto";
+			notifyMoved();
 		};
 
 		window.addEventListener("resize", clampPosition);
@@ -1541,6 +2132,7 @@
 				) + "px";
 
 			button.style.right = "auto";
+			notifyMoved();
 		});
 
 		button.addEventListener("pointerup", (event) => {
@@ -1630,11 +2222,6 @@
 		return button;
 	}
 
-	function setFloatingButtonBusy(button, busy) {
-		button.disabled = busy;
-		button.textContent = busy ? "…" : "HN";
-	}
-
 	function pulseFloatingButtonFeedback(button, text) {
 		button.textContent = text;
 		button.style.fontSize = "11px";
@@ -1646,7 +2233,10 @@
 		}, 900);
 	}
 
-	async function createCollapsedButton(storiesOrResolver) {
+	// Takes a resolved array now rather than the resolver it used to accept: the
+	// discussion lookup moved ahead of the first paint in 1.5.3 so the button's
+	// colour can mean something, which leaves nothing left to resolve on click.
+	async function createCollapsedButton(stories) {
 		const button = createFloatingHNButton("hn-collapse-button");
 
 		if (!button._dragController) {
@@ -1660,20 +2250,6 @@
 		button.onclick = async () => {
 			if (button._dragController.wasMoved()) return;
 
-			let stories = storiesOrResolver;
-
-			if (typeof storiesOrResolver === "function") {
-				setFloatingButtonBusy(button, true);
-				try {
-					stories = await storiesOrResolver();
-				} catch (error) {
-					console.error(error);
-					stories = [];
-				} finally {
-					setFloatingButtonBusy(button, false);
-				}
-			}
-
 			if (!stories?.length) {
 				pulseFloatingButtonFeedback(button, "×");
 				return;
@@ -1684,6 +2260,1053 @@
 		};
 
 		return button;
+	}
+
+	// -------------------------
+	// Submit-to-HN button
+	// -------------------------
+
+	const openSubmitBridgePopup = createBridgeChannel(
+		SUBMIT_BRIDGE_MESSAGE_SOURCE,
+	);
+
+	// Its own shadow root for the same reason the sidebar has one: this renders over
+	// an arbitrary page whose CSS would otherwise reach in and restyle it.
+	function createSubmitPopover(button, onSubmit, onClose) {
+		const host = document.createElement("div");
+
+		host.setAttribute("data-hnewhere-submit-popover", "1");
+		host.style.cssText = `
+			position:fixed;
+			z-index:2147483647;
+			top:0;
+			left:0;
+		`;
+
+		const shadow = host.attachShadow({ mode: "open" });
+
+		shadow.innerHTML = `
+<style>
+${THEME_CSS}
+${CHROME_CSS}
+
+#popover {
+    width:320px;
+    box-sizing:border-box;
+    background:var(--bg);
+    color:var(--text);
+    border:1px solid var(--border);
+    border-radius:8px;
+    box-shadow:0 8px 24px rgba(0,0,0,.18);
+    /* No padding of its own: the header runs edge to edge like the sidebar's, and
+       overflow:hidden is what makes the border radius actually clip it. The body
+       below carries the inset instead. */
+    padding:0;
+    overflow:hidden;
+    /* Containing block for the absolutely positioned settings dropdown. */
+    position:relative;
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size:12px;
+    line-height:1.4;
+}
+
+/* Same inset the sidebar's #comments uses, so the two read as one product. */
+.popover-body {
+    padding:12px 12px 8px;
+    /* The form is tall enough to run off a short viewport, so it scrolls itself
+       rather than being clipped by the edge of the screen. Sized against the header
+       and the popover's own vertical margins. */
+    max-height:calc(100vh - 120px);
+    overflow-y:auto;
+}
+
+/* Narrower host than the sidebar, so the dropdown spans the width rather than
+   sitting in a 240px column that would overhang the left edge. */
+.settings-panel {
+    top:44px;
+    right:8px;
+    left:8px;
+    width:auto;
+}
+
+.popover-title {
+    font-weight:600;
+    margin-bottom:8px;
+}
+
+/* HN's own explanation of how url and text interact. Kept because the two fields
+   are genuinely non-obvious: a blank url turns the whole thing into an Ask HN. */
+.popover-note {
+    margin-top:8px;
+    color:var(--muted);
+    font-size:11px;
+}
+
+.popover-field + .popover-field {
+    margin-top:8px;
+}
+
+/* All of the following are scoped to .popover-field rather than bare element
+   selectors. The settings dropdown shares this shadow root now, and a bare
+   "input" rule would stretch its checkboxes to full width and give them a text
+   field's border. */
+.popover-field label {
+    display:block;
+    color:var(--muted);
+    font-size:10px;
+    font-weight:700;
+    letter-spacing:.04em;
+    text-transform:uppercase;
+    margin-bottom:3px;
+}
+
+/* Label left, character count hard right, sharing one line above the field. Baseline
+   alignment rather than centre so the count sits on the label's baseline despite
+   being the smaller of the two. */
+.popover-field-head {
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    gap:8px;
+    margin-bottom:3px;
+}
+
+.popover-field-head label {
+    margin-bottom:0;
+}
+
+.popover-field input,
+.popover-field textarea {
+    width:100%;
+    box-sizing:border-box;
+    font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding:5px 6px;
+    border:1px solid var(--field-border);
+    border-radius:4px;
+    background:var(--field-bg);
+    color:var(--field-text);
+}
+
+.popover-field textarea {
+    min-height:56px;
+    resize:vertical;
+    /* Same reasoning as the sidebar composer: HN reads leading spaces as code. */
+    white-space:pre-wrap;
+}
+
+.popover-field input:focus,
+.popover-field textarea:focus {
+    outline:2px solid rgba(255,102,0,.4);
+    outline-offset:-1px;
+}
+
+.popover-count {
+    color:var(--meta);
+    font-size:10px;
+    /* Fixed digits would be better, but the count is short enough that reflow is
+       imperceptible; what matters is that it never pushes the label around. */
+    flex:0 0 auto;
+    white-space:nowrap;
+}
+
+.popover-count.over {
+    color:var(--error);
+}
+
+.popover-actions {
+    display:flex;
+    justify-content:flex-end;
+    gap:6px;
+    margin-top:10px;
+}
+
+/* Scoped for the same reason as the fields above: the header's gear button lives
+   in this shadow root and must keep its own borderless styling. */
+.popover-actions button {
+    font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding:5px 10px;
+    border-radius:4px;
+    cursor:pointer;
+    border:1px solid var(--button-border);
+    background:var(--button-bg);
+    color:var(--button-text);
+}
+
+.popover-actions button.primary {
+    background:#ff6600;
+    border-color:#ff6600;
+    color:white;
+}
+
+.popover-actions button:disabled {
+    opacity:.6;
+    cursor:default;
+}
+
+.popover-status {
+    margin-top:8px;
+    font-size:11px;
+    line-height:1.4;
+}
+
+.popover-status.error {
+    color:var(--error);
+}
+
+.popover-status a {
+    color:var(--link);
+}
+
+.hidden {
+    display:none;
+}
+</style>
+
+<div id="popover" role="dialog" aria-label="Submit to Hacker News">
+${headerHTML()}
+${settingsPanelHTML()}
+
+<div class="popover-body">
+<div class="popover-title">Submit</div>
+
+<div class="popover-field">
+<div class="popover-field-head">
+<label for="submit-title">title</label>
+<span id="submit-count" class="popover-count"></span>
+</div>
+<input id="submit-title" type="text" maxlength="${HN_TITLE_LIMIT}" spellcheck="true">
+</div>
+
+<div class="popover-field">
+<label for="submit-url">url</label>
+<input id="submit-url" type="text" spellcheck="false">
+</div>
+
+<div class="popover-field">
+<label for="submit-text">text</label>
+<textarea id="submit-text" rows="3" spellcheck="true"></textarea>
+</div>
+
+<div class="popover-note">
+Leave url blank to submit a question for discussion. If there is no url, text will appear at the top of the thread. If there is a url, text is optional.
+</div>
+
+<div class="popover-actions">
+<button id="submit-cancel" type="button">Cancel</button>
+<button id="submit-go" type="button" class="primary">Submit</button>
+</div>
+
+<div id="submit-status" class="popover-status hidden" role="status"></div>
+</div>
+</div>
+`;
+
+		document.body.appendChild(host);
+
+		// Same palette as the sidebar, resolved independently because this is its own
+		// shadow root -- the two can be open at different times on different pages.
+		const stopWatchingTheme = watchTheme(host);
+
+		// The gear needs somewhere to open into, so the popover carries the same
+		// dropdown the sidebar does. No annotation refresh is passed: there is no
+		// sidebar to refresh when this is on screen.
+		wireSettingsPanel(shadow).catch(console.error);
+
+		const titleInput = shadow.querySelector("#submit-title");
+		const countLabel = shadow.querySelector("#submit-count");
+		const urlInput = shadow.querySelector("#submit-url");
+		const textInput = shadow.querySelector("#submit-text");
+		const goButton = shadow.querySelector("#submit-go");
+		const cancelButton = shadow.querySelector("#submit-cancel");
+		const statusLine = shadow.querySelector("#submit-status");
+
+		// Same two values HN's own bookmarklet passes to /submitlink, both editable
+		// here because the bookmarklet's weakness is that they are not.
+		titleInput.value = suggestedSubmissionTitle();
+		urlInput.value = location.href;
+
+		const updateCount = () => {
+			const remaining = HN_TITLE_LIMIT - titleInput.value.length;
+
+			countLabel.textContent = remaining + " left";
+			countLabel.classList.toggle("over", remaining < 0);
+
+			// HN requires a title, and requires at least one of url or text -- a
+			// submission with neither has nothing in it.
+			goButton.disabled =
+				!titleInput.value.trim() ||
+				(!urlInput.value.trim() && !textInput.value.trim());
+		};
+
+		updateCount();
+		titleInput.addEventListener("input", updateCount);
+		urlInput.addEventListener("input", updateCount);
+		textInput.addEventListener("input", updateCount);
+
+		// Anchored to the button rather than a fixed corner, because the button is
+		// draggable and may be sitting anywhere along the edge.
+		const position = () => {
+			const rect = button.getBoundingClientRect();
+			const popover = shadow.querySelector("#popover");
+			const width = popover.offsetWidth || 264;
+			const height = popover.offsetHeight || 180;
+			const gap = 8;
+
+			let left = rect.right - width;
+			let top = rect.bottom + gap;
+
+			// Flip above when there is no room below, and keep it on screen either way.
+			if (top + height > window.innerHeight - gap) {
+				top = Math.max(gap, rect.top - height - gap);
+			}
+
+			left = Math.min(Math.max(gap, left), window.innerWidth - width - gap);
+
+			host.style.left = left + "px";
+			host.style.top = top + "px";
+		};
+
+		position();
+		window.addEventListener("resize", position);
+		window.addEventListener("scroll", position, true);
+		// The button is draggable, and dragging it while this is open would otherwise
+		// leave the panel stranded where the button used to be.
+		button.addEventListener(BUTTON_MOVE_EVENT, position);
+
+		let closed = false;
+
+		const close = () => {
+			if (closed) {
+				return;
+			}
+
+			closed = true;
+			window.removeEventListener("resize", position);
+			window.removeEventListener("scroll", position, true);
+			button.removeEventListener(BUTTON_MOVE_EVENT, position);
+			stopWatchingTheme();
+			document.removeEventListener("pointerdown", onOutsidePointerDown, true);
+			document.removeEventListener("keydown", onKeyDown, true);
+			host.remove();
+			// Reported back so the button's toggle state cannot get out of step when the
+			// popover is dismissed by an outside click or Escape rather than by the
+			// button itself -- otherwise reopening it would take two clicks.
+			onClose?.();
+		};
+
+		function onOutsidePointerDown(event) {
+			const path = event.composedPath();
+
+			if (path.includes(host) || path.includes(button)) {
+				return;
+			}
+
+			close();
+		}
+
+		function onKeyDown(event) {
+			if (event.key === "Escape") {
+				event.stopPropagation();
+				close();
+			}
+		}
+
+		document.addEventListener("pointerdown", onOutsidePointerDown, true);
+		document.addEventListener("keydown", onKeyDown, true);
+
+		cancelButton.onclick = close;
+
+		const setStatus = (message, { error = false, html = false } = {}) => {
+			statusLine.classList.remove("hidden");
+			statusLine.classList.toggle("error", error);
+
+			if (html) {
+				statusLine.innerHTML = message;
+			} else {
+				statusLine.textContent = message;
+			}
+		};
+
+		goButton.onclick = async () => {
+			const title = titleInput.value.trim();
+			const url = urlInput.value.trim();
+			// Not trimmed: HN reads two leading spaces as a code block, so the body has
+			// to reach it exactly as typed.
+			const text = textInput.value;
+
+			if (!title || (!url && !text.trim())) {
+				return;
+			}
+
+			goButton.disabled = true;
+			cancelButton.disabled = true;
+			titleInput.disabled = true;
+			urlInput.disabled = true;
+			textInput.disabled = true;
+			setStatus("Opening Hacker News…");
+
+			try {
+				await onSubmit({ title, url, text }, { setStatus, close });
+			} finally {
+				cancelButton.disabled = false;
+			}
+		};
+
+		// Enter submits from the single-line fields only. In the text area it has to
+		// stay a newline, since blank lines are how HN separates paragraphs.
+		for (const field of [titleInput, urlInput]) {
+			field.addEventListener("keydown", (event) => {
+				if (event.key === "Enter") {
+					event.preventDefault();
+					goButton.click();
+				}
+			});
+		}
+
+		titleInput.focus();
+		titleInput.select();
+
+		return { close, host };
+	}
+
+	// Not async, for the same reason as submitCommentToHN: window.open has to happen
+	// before the first await or the browser blocks it.
+	function submitPageToHN({ title, url, text }) {
+		const nonce = bridgeNonce();
+		const session = openSubmitBridgePopup(nonce);
+
+		if (session.blocked) {
+			return session.result;
+		}
+
+		return (async () => {
+			try {
+				await stageBridgePayload(nonce, {
+					kind: "submit",
+					url,
+					title,
+					text,
+					// Blank for a text-only submission, which is what tells the reporter
+					// there is no URL to match against /newest.
+					normalized: url ? normalizeURL(url) : "",
+					origin: location.origin,
+				});
+				await indexBridgePayload(nonce);
+
+				const hash = new URLSearchParams();
+
+				hash.set("hnewhere-submit", "1");
+				hash.set("nonce", nonce);
+				hash.set("origin", location.origin);
+
+				session.navigate(submitURL(url, title) + "#" + hash.toString());
+
+				return await session.result;
+			} finally {
+				await clearBridgePayload(nonce);
+			}
+		})();
+	}
+
+	async function createSubmitButton() {
+		const button = createFloatingHNButton("hn-submit-button", "inactive");
+
+		if (!button._dragController) {
+			button._dragController = makeButtonDraggable(button);
+		}
+
+		if (!isMobile()) {
+			await applyButtonPosition(button);
+		}
+
+		let popover = null;
+
+		// The popover lives outside the button, so destroying the button -- which
+		// happens the moment a sidebar opens -- would otherwise leave it orphaned on
+		// the page with nothing to anchor to.
+		const baseCleanup = button._cleanup;
+
+		button._cleanup = () => {
+			popover?.close();
+			popover = null;
+			baseCleanup?.();
+		};
+
+		button.onclick = () => {
+			if (button._dragController.wasMoved()) return;
+
+			if (popover) {
+				popover.close();
+				popover = null;
+				return;
+			}
+
+			popover = createSubmitPopover(
+				button,
+				async (fields, ui) => {
+					const result = await submitPageToHN(fields);
+
+					if (!result?.ok) {
+						ui.setStatus(submitFailureMessage(result), { error: true });
+						return;
+					}
+
+					await animateButtonFill(button);
+
+					// The story id is not always recoverable -- see the /newest branch in
+					// reportSubmitResultAfterReload -- so the confirmation degrades to a
+					// plain success rather than linking somewhere that may not be right.
+					if (result.storyID) {
+						ui.setStatus(
+							`Submitted. <a href="${escapeHTML(commentURL(result.storyID))}" target="_blank" rel="noopener noreferrer">View</a> &middot; <a href="${escapeHTML(editURL(result.storyID))}" target="_blank" rel="noopener noreferrer">Edit title</a>`,
+							{ html: true },
+						);
+
+						rebindSubmittedButton(button, result.storyID);
+					} else {
+						// No id came back -- either /newest could not be matched, or this
+						// was a text-only submission with no URL to match on. Point at
+						// /newest rather than claiming something about this page.
+						ui.setStatus(
+							`Submitted. <a href="${escapeHTML(HN_ORIGIN)}/newest" target="_blank" rel="noopener noreferrer">See it on HN</a>`,
+							{ html: true },
+						);
+						setFloatingButtonVariant(button, "active");
+					}
+				},
+				() => {
+					popover = null;
+				},
+			);
+		};
+
+		return button;
+	}
+
+	function submitFailureMessage(result) {
+		switch (result?.reason) {
+			case "popup-blocked":
+				return "Your browser blocked the popup. Allow popups for this site and try again.";
+			case "timeout":
+				return "Hacker News did not respond in time. Check the popup window.";
+			case "not-logged-in":
+				return "Log in to Hacker News in the popup, then try again.";
+			case "dupe":
+				return "Hacker News already has this URL. Reload the page to see the discussion.";
+			case "no-form":
+				return "Could not find the submission form on Hacker News.";
+			default:
+				return result?.message || "Submission did not go through.";
+		}
+	}
+
+	// Turns the grey submit button into an ordinary discussion button, so the click
+	// after a submission opens the thread instead of offering to submit again.
+	function rebindSubmittedButton(button, storyID) {
+		setFloatingButtonVariant(button, "active");
+
+		const stories = [{ objectID: String(storyID) }];
+
+		button.onclick = () => {
+			if (button._dragController?.wasMoved()) return;
+
+			destroyFloatingButton(button);
+			openSidebar(stories).catch(console.error);
+		};
+	}
+
+	// -------------------------
+	// Shared chrome
+	// -------------------------
+
+	// Palette for both themes. Defined on :host rather than on #panel -- which is
+	// where #21 put it -- because the submit popover is a separate shadow root with
+	// no #panel in it, and custom properties set on a host element inherit into its
+	// shadow tree. One definition therefore reaches every surface.
+	//
+	// Light values are the originals; the dark set comes from #21, extended for the
+	// composer, popover and status surfaces added in 1.5.3.
+	const THEME_CSS = `
+:host {
+    --bg:#f6f6ef;
+    --text:#000;
+    --header-bg:#ff6600;
+    --header-text:#000;
+    --border:#ccc;
+    --border-soft:#ddd;
+    --link:#0000aa;
+    --meta:#828282;
+    --muted:#666;
+    --surface:#fff;
+    --surface-text:#222;
+    --surface-border:#d6d6d6;
+    --surface-divider:#eee;
+    --hover-tint:rgba(0,0,0,.08);
+    --active-tint:rgba(0,0,0,.16);
+    --grip:rgba(0,0,0,.2);
+    --quote-text:#5f5f5f;
+    --faded-underline:rgba(0,0,0,.14);
+    --banner-text:#4a3a26;
+    --banner-quote:#3b3022;
+    --chip-text:#7b4f24;
+    --chip-active-text:#5e2e00;
+    --banner-close:#8d5c2d;
+
+    /* 1.5.3 surfaces */
+    --field-bg:#fff;
+    --field-text:#000;
+    --field-border:#ccc;
+    --field-disabled-bg:#f0f0ea;
+    --help-bg:#fbfbf5;
+    --help-border:#e2e2d9;
+    --help-text:#555;
+    --code-bg:#efefe6;
+    --status-text:#555;
+    --error:#c00;
+    --button-bg:#fff;
+    --button-text:#333;
+    --button-border:#ccc;
+    --inactive-button:#b8b8b8;
+    --underline-soft:rgba(0,0,0,.2);
+
+    color-scheme:light;
+}
+
+:host(.${DARK_CLASS}) {
+    --bg:#1e1e1e;
+    --text:#dcdcdc;
+    --header-bg:#cc5200;
+    --header-text:#000;
+    --border:#3d3d3d;
+    --border-soft:#383838;
+    --link:#8ab4f8;
+    --meta:#9a9a9a;
+    --muted:#a3a3a3;
+    --surface:#2a2a2a;
+    --surface-text:#dcdcdc;
+    --surface-border:#454545;
+    --surface-divider:#3a3a3a;
+    --hover-tint:rgba(255,255,255,.10);
+    --active-tint:rgba(255,255,255,.18);
+    --grip:rgba(255,255,255,.25);
+    --quote-text:#a8a8a8;
+    --faded-underline:rgba(255,255,255,.18);
+    --banner-text:#cfc3b2;
+    --banner-quote:#ddd2c2;
+    --chip-text:#d8a26a;
+    --chip-active-text:#e8b784;
+    --banner-close:#c99b66;
+
+    --field-bg:#262626;
+    --field-text:#dcdcdc;
+    --field-border:#4a4a4a;
+    --field-disabled-bg:#222;
+    --help-bg:#252525;
+    --help-border:#3a3a3a;
+    --help-text:#b0b0b0;
+    --code-bg:#333;
+    --status-text:#b0b0b0;
+    --error:#ff8080;
+    --button-bg:#333;
+    --button-text:#dcdcdc;
+    --button-border:#4a4a4a;
+    --inactive-button:#4a4a4a;
+    --underline-soft:rgba(255,255,255,.28);
+
+    color-scheme:dark;
+}
+`;
+
+	// The header and settings dropdown are used by both the sidebar and the submit
+	// popover, which live in separate shadow roots and so cannot share a stylesheet
+	// by cascade. Kept as one string rather than copied into each, so the two can
+	// never drift apart.
+	const CHROME_CSS = `
+header {
+    background:var(--header-bg);
+    color:var(--header-text);
+    padding:6px 8px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    gap:8px;
+    font-weight:bold;
+}
+
+header button {
+    background:none;
+    border:0;
+    color:var(--header-text);
+    cursor:pointer;
+    font-size:20px;
+    width:36px;
+    height:36px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:4px;
+    padding:0;
+    touch-action:manipulation;
+}
+
+/* Touch devices latch :hover on after a tap and hold it until something else is
+   tapped, so the settings and minimize buttons stayed highlighted. Only apply it
+   where a real pointer can hover. */
+@media (hover: hover) {
+    header button:hover {
+        background:var(--hover-tint);
+    }
+}
+
+.header-actions {
+    display:flex;
+    align-items:center;
+    gap:0;
+}
+
+/* The 36px buttons already centre their glyphs, so the visual inset on the right
+   is the 8px header padding plus roughly half the leftover button width. This
+   mirrors that on the left rather than letting the title hug the edge. */
+.header-title {
+    display:flex;
+    flex-direction:column;
+    min-width:0;
+    padding-left:12px;
+}
+
+.header-subtitle {
+    font-size:11px;
+    font-weight:normal;
+    line-height:1.2;
+    opacity:.85;
+}
+
+.settings-panel {
+    position:absolute;
+    top:46px;
+    right:8px;
+    width:240px;
+    background:var(--surface);
+    color:var(--surface-text);
+    border:1px solid var(--surface-border);
+    border-radius:8px;
+    box-shadow:0 8px 24px rgba(0,0,0,.16);
+    /* Slightly more at the bottom than the top: the title's line-height adds its
+       own leading up top, so a literal 10px all round reads as short underneath
+       the last option. */
+    padding:10px 10px 13px;
+    z-index:3;
+}
+
+.settings-title {
+    margin:0 0 8px;
+    font-size:12px;
+    font-weight:600;
+}
+
+.settings-group + .settings-group {
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px solid var(--surface-divider);
+}
+
+/* U+2699 defaults to its emoji presentation on iOS. font-variant-emoji is the
+   stated way to ask for the text glyph but only lands in Safari 17+, and
+   system-ui alone does not help because iOS still resolves the codepoint through
+   Apple Color Emoji. The U+FE0E variation selector in the markup is what actually
+   forces it; these remain as support for browsers that honour them. */
+#settings-toggle {
+    font-family: system-ui, sans-serif;
+    font-variant-emoji: text;
+}
+
+/* Held while the dropdown is open so the gear reads as a toggle rather than a
+   button that fired once. Darker than the hover tint so the two stay distinct on
+   a pointer device, and outside the hover media query so touch gets it too. */
+#settings-toggle.is-open {
+    background:var(--active-tint);
+}
+
+.settings-option {
+    display:flex;
+    gap:8px;
+    align-items:flex-start;
+    font-size:12px;
+    line-height:1.35;
+}
+
+.settings-option + .settings-option {
+    margin-top:8px;
+}
+
+.settings-option input {
+    margin:2px 0 0;
+}
+
+.settings-option.sub-option {
+    margin-left:20px;
+    font-size:11px;
+}
+
+/* Collapsed rather than merely disabled when annotations are off: two dead
+   checkboxes read as broken, where nothing reads as "not applicable yet". The
+   max-height ceiling is generous because the real height is not knowable in CSS --
+   it only has to exceed the content for the transition to run to completion. */
+.settings-suboptions {
+    overflow:hidden;
+    max-height:0;
+    opacity:0;
+    margin-top:0;
+    transition:max-height .22s ease, opacity .18s ease, margin-top .22s ease;
+}
+
+.settings-suboptions.is-visible {
+    max-height:140px;
+    opacity:1;
+    /* Separates the first sub-option from the hint text above it. */
+    margin-top:8px;
+}
+
+/* Version on the left, issues link on the right, one row. */
+.settings-credits {
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    gap:10px;
+    color:var(--muted);
+    font-size:11px;
+    line-height:1.45;
+}
+
+.settings-credits a {
+    color:var(--muted);
+    text-decoration:underline;
+    text-decoration-color:var(--underline-soft);
+    text-underline-offset:2px;
+}
+
+@media (hover: hover) {
+    .settings-credits a:hover {
+        color:#ff6600;
+        text-decoration-color:rgba(255,102,0,.5);
+    }
+}
+
+/* Indented to clear the checkbox so the text starts under the option's label rather
+   than under its box. 13px is the native checkbox width, plus the flex gap. */
+.settings-option-hint {
+    margin:3px 0 0 21px;
+    color:var(--muted);
+    font-size:11px;
+    line-height:1.35;
+}
+
+.settings-option.sub-option + .settings-option-hint {
+    margin-left:41px;
+}
+
+/* Shared: the settings panel's BETA pill needs this in the popover, and comment
+   rendering needs it in the sidebar. */
+.op-pill {
+    display:inline-block;
+    margin-left:4px;
+    margin-right:4px;
+    padding:1px 4px;
+    border-radius:3px;
+    background:#ff6600;
+    color:white;
+    font-size:9px;
+    font-weight:bold;
+    line-height:1.2;
+}
+
+.hidden {
+    display:none;
+}
+`;
+
+	function headerHTML({ subtitle = false, minimize = false } = {}) {
+		return `
+<header>
+
+<span class="header-title">
+<span><b>HN</b>ewhere</span>
+${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
+</span>
+
+<div class="header-actions">
+<button id="settings-toggle" aria-label="Open HNewhere settings" title="HNewhere settings" aria-expanded="false" aria-controls="settings-panel">
+&#9881;&#65038;
+</button>
+${
+	minimize
+		? `<button id="minimize" aria-label="Minimize HNewhere" title="Minimize">
+&#8722;
+</button>`
+		: ""
+}
+</div>
+
+</header>
+`;
+	}
+
+	function settingsPanelHTML() {
+		return `
+<div id="settings-panel" class="settings-panel hidden">
+<div class="settings-title">Settings</div>
+
+<div class="settings-group">
+<label class="settings-option">
+<input id="setting-auto-open-sidebar" data-setting="autoOpenSidebar" type="checkbox">
+<span>Automatically open the sidebar when a discussion exists</span>
+</label>
+<label class="settings-option">
+<input id="setting-hide-without-discussion" data-setting="hideWithoutDiscussion" type="checkbox">
+<span>Only show the HN button when a discussion exists</span>
+</label>
+<div class="settings-option-hint">
+When off, pages with no discussion get a greyed-out button that offers to submit them.
+</div>
+</div>
+
+<div class="settings-group">
+<label class="settings-option">
+<input id="setting-annotations" data-setting="annotations" type="checkbox">
+<span>Enable article annotations <span class="op-pill">BETA</span></span>
+</label>
+<div class="settings-option-hint">
+Highlights the passages commenters quote, so you can jump between the article and what was said about it.
+</div>
+<div id="settings-annotation-suboptions" class="settings-suboptions">
+<label class="settings-option sub-option">
+<input id="setting-annotations-open" data-setting="annotationsWhenSidebarOpen" type="checkbox">
+<span>When sidebar open</span>
+</label>
+<label class="settings-option sub-option">
+<input id="setting-annotations-closed" data-setting="annotationsWhenSidebarClosed" type="checkbox">
+<span>When sidebar closed</span>
+</label>
+</div>
+</div>
+
+<div class="settings-group settings-credits">
+<a href="${escapeHTML(REPO_URL)}" target="_blank" rel="noopener noreferrer">HNewhere${SCRIPT_VERSION ? " v" + escapeHTML(SCRIPT_VERSION) : ""}</a>
+<a href="${escapeHTML(REPO_URL)}/issues" target="_blank" rel="noopener noreferrer">Report an issue</a>
+</div>
+</div>
+`;
+	}
+
+	// Wires the dropdown inside whichever shadow root it was rendered into. Returns
+	// setSettingsOpen so the host can close it on its own events -- minimizing the
+	// sidebar, for instance.
+	async function wireSettingsPanel(shadow, { onAnnotationChange } = {}) {
+		const settingsPanel = shadow.querySelector("#settings-panel");
+		const settingsToggle = shadow.querySelector("#settings-toggle");
+
+		if (!settingsPanel || !settingsToggle) {
+			return { setSettingsOpen: () => {} };
+		}
+
+		const settingsInputs = {
+			autoOpenSidebar: shadow.querySelector("#setting-auto-open-sidebar"),
+			hideWithoutDiscussion: shadow.querySelector(
+				"#setting-hide-without-discussion",
+			),
+			annotations: shadow.querySelector("#setting-annotations"),
+			annotationsWhenSidebarOpen: shadow.querySelector(
+				"#setting-annotations-open",
+			),
+			annotationsWhenSidebarClosed: shadow.querySelector(
+				"#setting-annotations-closed",
+			),
+		};
+
+		const annotationSuboptions = shadow.querySelector(
+			"#settings-annotation-suboptions",
+		);
+
+		const applySettingsPanelState = (settings) => {
+			for (const [key, input] of Object.entries(settingsInputs)) {
+				if (input) {
+					input.checked = Boolean(settings[key]);
+				}
+			}
+
+			const annotationsEnabled = Boolean(settings.annotations);
+
+			annotationSuboptions?.classList.toggle("is-visible", annotationsEnabled);
+
+			// Still disabled as well as collapsed. max-height:0 hides them visually but
+			// leaves them in the tab order, so keyboard focus could land on a control
+			// nobody can see.
+			if (settingsInputs.annotationsWhenSidebarOpen) {
+				settingsInputs.annotationsWhenSidebarOpen.disabled = !annotationsEnabled;
+			}
+
+			if (settingsInputs.annotationsWhenSidebarClosed) {
+				settingsInputs.annotationsWhenSidebarClosed.disabled = !annotationsEnabled;
+			}
+		};
+
+		applySettingsPanelState(await loadSettings());
+
+		// Single place the open state changes, so the button's pressed styling and
+		// aria-expanded cannot drift out of sync with the panel.
+		const setSettingsOpen = (open) => {
+			settingsPanel.classList.toggle("hidden", !open);
+			settingsToggle.classList.toggle("is-open", open);
+			settingsToggle.setAttribute("aria-expanded", open ? "true" : "false");
+		};
+
+		setSettingsOpen(false);
+
+		settingsToggle.onclick = (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			setSettingsOpen(settingsPanel.classList.contains("hidden"));
+		};
+
+		settingsPanel.addEventListener("click", (event) => {
+			event.stopPropagation();
+		});
+
+		shadow.addEventListener("click", (event) => {
+			const path = event.composedPath();
+
+			if (path.includes(settingsToggle) || path.includes(settingsPanel)) {
+				return;
+			}
+
+			setSettingsOpen(false);
+		});
+
+		settingsPanel.addEventListener("change", async (event) => {
+			const input = event.target.closest("input[data-setting]");
+
+			if (!input) {
+				return;
+			}
+
+			const settings = await saveSettings({
+				[input.dataset.setting]: input.checked,
+			});
+
+			applySettingsPanelState(settings);
+
+			if (
+				[
+					"annotations",
+					"annotationsWhenSidebarOpen",
+					"annotationsWhenSidebarClosed",
+				].includes(input.dataset.setting)
+			) {
+				await onAnnotationChange?.();
+			}
+		});
+
+		return { setSettingsOpen };
 	}
 
 	// -------------------------
@@ -1723,46 +3346,23 @@
     /* Without this the 1px border-left is added to the width, so a panel sized to
        the viewport renders a pixel past its left edge. */
     box-sizing:border-box;
-    background:#f6f6ef;
-    color:#000;
+    background:var(--bg);
+    color:var(--text);
     z-index:2147483646;
     display:flex;
     flex-direction:column;
-    border-left:1px solid #ccc;
+    border-left:1px solid var(--border);
     box-shadow:-3px 0 12px rgba(0,0,0,.15);
     font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     font-size:13px;
     overflow:visible;
 }
 
-header {
-    background:#ff6600;
-    color:black;
-    padding:6px 8px;
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    gap:8px;
-    font-weight:bold;
-}
+${THEME_CSS}
+${CHROME_CSS}
 
-header button {
-    background:none;
-    border:0;
-    color:black;
-    cursor:pointer;
-    font-size:20px;
-    width:36px;
-    height:36px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    border-radius:4px;
-    padding:0;
-    touch-action:manipulation;
-}
-
-/* #panel is position:fixed, which is already a containing block for this. */
+/* Sidebar-only, so deliberately not part of CHROME_CSS: the submit popover has no
+   resize handle. #panel is position:fixed, which is already a containing block. */
 #resize-handle {
     position:absolute;
     left:0;
@@ -1791,7 +3391,7 @@ header button {
         width:4px;
         height:40px;
         border-radius:2px;
-        background:rgba(0,0,0,.2);
+        background:var(--grip);
     }
 
     #resize-handle.resize-handle-active::before {
@@ -1799,121 +3399,6 @@ header button {
     }
 }
 
-/* Touch devices latch :hover on after a tap and hold it until something else is
-   tapped, so the settings and minimize buttons stayed highlighted. Only apply it
-   where a real pointer can hover. */
-@media (hover: hover) {
-    header button:hover {
-        background:rgba(0,0,0,.08);
-    }
-}
-
-
-.header-actions {
-    display:flex;
-    align-items:center;
-    gap:0;
-}
-
-/* The 36px buttons already centre their glyphs, so the visual inset on the right
-   is the 8px header padding plus roughly half the leftover button width. This
-   mirrors that on the left rather than letting the title hug the edge. */
-.header-title {
-    display:flex;
-    flex-direction:column;
-    min-width:0;
-    padding-left:12px;
-}
-
-.header-subtitle {
-    font-size:11px;
-    font-weight:normal;
-    line-height:1.2;
-    opacity:.85;
-}
-
-.settings-panel {
-    position:absolute;
-    top:46px;
-    right:8px;
-    width:240px;
-    background:white;
-    color:#222;
-    border:1px solid #d6d6d6;
-    border-radius:8px;
-    box-shadow:0 8px 24px rgba(0,0,0,.16);
-    /* Slightly more at the bottom than the top: the title's line-height adds its
-       own leading up top, so a literal 10px all round reads as short underneath
-       the last option. */
-    padding:10px 10px 13px;
-    z-index:3;
-}
-
-.settings-title {
-    margin:0 0 8px;
-    font-size:12px;
-    font-weight:600;
-}
-
-.settings-group + .settings-group {
-    margin-top:10px;
-    padding-top:10px;
-    border-top:1px solid #eee;
-}
-
-.settings-group-label {
-    margin-bottom:6px;
-    color:#666;
-    font-size:10px;
-    font-weight:700;
-    letter-spacing:.04em;
-    text-transform:uppercase;
-}
-
-/* U+2699 defaults to its emoji presentation on iOS. font-variant-emoji is the
-   stated way to ask for the text glyph but only lands in Safari 17+, and
-   system-ui alone does not help because iOS still resolves the codepoint through
-   Apple Color Emoji. The U+FE0E variation selector in the markup is what actually
-   forces it; these remain as support for browsers that honour them. */
-#settings-toggle {
-    font-family: system-ui, sans-serif;
-    font-variant-emoji: text;
-}
-
-/* Held while the dropdown is open so the gear reads as a toggle rather than a
-   button that fired once. Darker than the hover tint so the two stay distinct on
-   a pointer device, and outside the hover media query so touch gets it too. */
-#settings-toggle.is-open {
-    background:rgba(0,0,0,.16);
-}
-
-.settings-option {
-    display:flex;
-    gap:8px;
-    align-items:flex-start;
-    font-size:12px;
-    line-height:1.35;
-}
-
-.settings-option + .settings-option {
-    margin-top:8px;
-}
-
-.settings-option input {
-    margin:2px 0 0;
-}
-
-.settings-option.sub-option {
-    margin-left:20px;
-    font-size:11px;
-}
-
-.settings-hint {
-    margin-top:8px;
-    color:#666;
-    font-size:11px;
-    line-height:1.35;
-}
 
 .submission {
     margin:0;
@@ -1923,7 +3408,7 @@ header button {
 .submission + .submission {
     margin-top:16px;
     padding-top:12px;
-    border-top:1px solid #ccc;
+    border-top:1px solid var(--border);
 }
 
 #comments {
@@ -1950,7 +3435,7 @@ header button {
     position:relative;
     margin:12px 0 16px;
     padding:6px 34px 4px;
-    color:#4a3a26;
+    color:var(--banner-text);
     text-align:center;
 }
 
@@ -1964,7 +3449,7 @@ header button {
 
 .filter-banner-quote {
     margin-top:8px;
-    color:#3b3022;
+    color:var(--banner-quote);
     font-size:16px;
     font-style:italic;
     line-height:1.55;
@@ -1986,7 +3471,7 @@ header button {
     border:1px solid rgba(255,102,0,.18);
     border-radius:999px;
     background:transparent;
-    color:#7b4f24;
+    color:var(--chip-text);
     cursor:pointer;
     padding:3px 8px;
     font:500 11px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -2001,7 +3486,7 @@ header button {
 .filter-match-chip-active {
     border-color:rgba(255,102,0,.34);
     background:rgba(255,102,0,.09);
-    color:#5e2e00;
+    color:var(--chip-active-text);
 }
 
 .filter-banner-close {
@@ -2013,7 +3498,7 @@ header button {
     border:none;
     border-radius:999px;
     background:none;
-    color:#8d5c2d;
+    color:var(--banner-close);
     cursor:pointer;
     font:500 18px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     padding:0;
@@ -2025,8 +3510,18 @@ header button {
     }
 }
 
+/* Indent is deliberately small. Every level costs horizontal space the comment
+   text needs, and the border-left already marks the nesting, so the margin only
+   has to separate the border from the parent's text rather than carry the
+   hierarchy on its own. */
+/* Vertical spacing is on the top edge only, never the bottom. .comment-layout is a
+   flex container, and margins of flex items do not collapse through it -- so a
+   bottom margin on a nested comment stays trapped inside its parent instead of
+   collapsing with it, and every level of nesting added another 12px under the
+   deepest reply. A top-only margin cannot accumulate: it still separates siblings,
+   and still separates the first reply from its parent's text. */
 .comment {
-    margin:12px 0 12px 18px;
+    margin:12px 0 0 8px;
     max-width:100%;
     overflow-wrap:anywhere;
 }
@@ -2036,18 +3531,27 @@ header button {
 }
 
 .children > .comment {
-    border-left:1px solid #ddd;
-    padding-left:8px;
+    border-left:1px solid var(--border-soft);
+    padding-left:6px;
 }
 
+/* 2px border + 5px padding lines this up with the 1px + 6px of an ordinary
+   child, so gaining or losing the "new" accent never shifts the text. */
 .comment.new-comment {
 			border-left:2px solid rgba(255,102,0,.95);
-			padding-left:6px;
+			padding-left:5px;
 			transition:border-left-color .9s ease;
 }
 
+/* A top-level comment has no divider under the accent, so it does fade to nothing. */
 .comment.new-comment.comment-new-seen {
     border-left-color:transparent;
+}
+
+/* A child does have one. Fading the accent all the way out erased the nesting line
+   with it, so it settles on the divider colour instead of disappearing. */
+.children > .comment.new-comment.comment-new-seen {
+    border-left-color:var(--border-soft);
 }
 
 .comment.comment-target {
@@ -2063,10 +3567,16 @@ header button {
     display:none !important;
 }
 
+/* Stated rather than left to cursor:auto. The panel used to write an inline
+   cursor:default on itself while hit-testing for the resize edge, and because
+   cursor inherits, that suppressed the I-beam over every comment. The inline
+   write is gone, but saying it here means no future ancestor rule can take the
+   I-beam away again without being noticed. */
 .text {
     margin-top:4px;
     line-height:132%;
     font-weight:normal;
+    cursor:text;
 }
 
 .text p {
@@ -2074,16 +3584,16 @@ header button {
 }
 
 .text a {
-    color:#0000aa;
+    color:var(--link);
 }
 
 .meta {
-    color:#828282;
+    color:var(--meta);
     font-size:10px;
 }
 
 .meta a {
-    color:#828282;
+    color:var(--meta);
     text-decoration:none;
 }
 
@@ -2172,12 +3682,12 @@ header button {
     height:0;
     border-left:4px solid transparent;
     border-right:4px solid transparent;
-    border-bottom:7px solid #828282;
+    border-bottom:7px solid var(--meta);
 }
 
 .vote-button-down::before {
     border-bottom:none;
-    border-top:7px solid #828282;
+    border-top:7px solid var(--meta);
     top:2px;
 }
 
@@ -2198,14 +3708,14 @@ header button {
 }
 
 .vote-button-down.vote-button-active::before {
-    border-top-color:#666;
+    border-top-color:var(--muted);
 }
 
 .vote-button-neutral {
     width:auto;
     min-width:10px;
     height:auto;
-    color:#828282;
+    color:var(--meta);
     font:600 10px/1 Verdana, Geneva, sans-serif;
 }
 
@@ -2234,7 +3744,7 @@ header button {
 
 .story-vote-status,
 .comment-vote-status {
-    color:#828282;
+    color:var(--meta);
 }
 
 /* Sits in the byline as plain text, the way HN's own unvote link does. */
@@ -2270,7 +3780,7 @@ blockquote.comment-quote-link {
     margin:6px 0;
     padding:2px 0 2px 10px;
     border-left:2px solid rgba(255,102,0,.32);
-    color:#5f5f5f;
+    color:var(--quote-text);
 }
 
 .comment-quote-link-inline {
@@ -2302,7 +3812,7 @@ blockquote.comment-quote-link:focus-visible {
 
 .comment-quote-redundant.comment-quote-link-inline {
     opacity:.28;
-    text-decoration-color:rgba(0,0,0,.14);
+    text-decoration-color:var(--faded-underline);
 }
 
 blockquote.comment-quote-redundant {
@@ -2314,25 +3824,8 @@ blockquote.comment-quote-redundant {
     opacity:.08;
 }
 
-.op-pill {
-    display:inline-block;
-    margin-left:4px;
-    margin-right:4px;
-    padding:1px 4px;
-    border-radius:3px;
-    background:#ff6600;
-    color:white;
-    font-size:9px;
-    font-weight:bold;
-    line-height:1.2;
-}
-
 .toggle {
     cursor:pointer;
-}
-
-.hidden {
-    display:none;
 }
 
 .story-title {
@@ -2341,21 +3834,34 @@ blockquote.comment-quote-redundant {
 }
 
 .story-title a {
-    color:#000;
+    color:var(--text);
     text-decoration:none;
     word-break:break-word;
 }
 
 .story-meta {
-    color:#828282;
+    color:var(--meta);
     font-size:10px;
     line-height:1.4;
     padding-top:2px;
 }
 
+/* Matches .meta a, so the submitter reads the same as any commenter's name. */
+.story-meta a {
+    color:var(--meta);
+    text-decoration:none;
+}
+
+@media (hover: hover) {
+    .story-meta a:hover {
+        text-decoration:underline;
+    }
+}
+
 .story-text {
     margin:10px 0;
     line-height:1.45;
+    cursor:text;
 }
 
 .story-text p:first-child {
@@ -2367,21 +3873,179 @@ blockquote.comment-quote-redundant {
 }
 
 .story-text a {
-    color:#0000aa;
+    color:var(--link);
 }
 
-.story-actions {
-    margin-top:8px;
+/* The cap lives on the wrapper rather than the textarea so the actions row below
+   inherits the same width, which is what lets the formatting link sit flush with
+   the textarea's right edge instead of the panel's. */
+.comment-composer {
+    margin-top:10px;
+    max-width:720px;
+}
+
+/* Reply boxes are collapsed until their comment's "reply" link is used. Same
+   max-height technique as the settings sub-options: the real height is unknowable
+   in CSS, so the ceiling only has to clear the content for the transition to
+   finish. Generous because the formatting pane can be open inside it. */
+.reply-composer {
+    overflow:hidden;
+    max-height:600px;
+    opacity:1;
+    transition:max-height .24s ease, opacity .18s ease;
+}
+
+.reply-composer.collapsed {
+    max-height:0;
+    opacity:0;
+    /* Nothing inside a collapsed box should be reachable by keyboard. */
+    visibility:hidden;
+}
+
+/* Matches .composer-help-toggle: a text link that keeps its underline while the
+   thing it toggles is open. */
+.reply-link.is-open {
+    text-decoration:underline;
+}
+
+/* Deliberately monospace-free and plain. HN treats two leading spaces as a code
+   block, so a proportional font that hides whitespace would make the one piece of
+   formatting that depends on exact spacing impossible to see. */
+.composer-text {
+    display:block;
+    width:100%;
+    box-sizing:border-box;
+    min-height:72px;
+    /* Both axes, but bounded by the wrapper: a textarea dragged wider than the
+       sidebar would just be clipped by #comments' overflow-x:hidden. */
+    max-width:100%;
+    resize:both;
+    padding:6px 7px;
+    border:1px solid var(--field-border);
+    border-radius:4px;
+    background:var(--field-bg);
+    color:var(--field-text);
+    font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    /* Whitespace is significant to HN's formatter, so never collapse it visually. */
+    white-space:pre-wrap;
+    tab-size:4;
+    cursor:text;
+}
+
+.composer-text:focus {
+    outline:2px solid rgba(255,102,0,.4);
+    outline-offset:-1px;
+}
+
+.composer-text:disabled {
+    background:var(--field-disabled-bg);
+    color:var(--muted);
+}
+
+/* space-between rather than a margin on the link, so the button stays left and the
+   formatting link stays flush right however either one is relabelled. */
+.composer-actions {
     display:flex;
     align-items:center;
+    justify-content:space-between;
     gap:8px;
-    flex-wrap:wrap;
+    margin-top:6px;
 }
 
-.story-actions button {
+/* HN renders "add comment" as a real submit input, so it inherits the platform's
+   default button chrome. Deliberately left unstyled to match. */
+.composer-submit {
+    cursor:pointer;
+}
+
+/* Reads as a text link, so it follows the same rule as .meta a: no underline until
+   hover. Being a toggle, it also keeps the underline while the pane is open, which
+   is the one place it differs from a plain link. */
+.composer-help-toggle {
+    background:none;
+    border:0;
+    padding:0;
+    color:var(--meta);
     font-family:Verdana, Geneva, sans-serif;
     font-size:11px;
     cursor:pointer;
+    text-decoration:none;
+    text-underline-offset:2px;
+}
+
+.composer-help-toggle.is-open {
+    text-decoration:underline;
+}
+
+/* Underline only, no colour shift -- exactly what .meta a does for usernames. */
+@media (hover: hover) {
+    .composer-help-toggle:hover {
+        text-decoration:underline;
+    }
+}
+
+.composer-help {
+    margin-top:6px;
+    padding:7px 8px;
+    border:1px solid var(--help-border);
+    border-radius:4px;
+    background:var(--help-bg);
+    color:var(--help-text);
+    font-size:11px;
+    line-height:1.5;
+}
+
+.composer-help p {
+    margin:0;
+}
+
+.composer-help p + p {
+    margin-top:5px;
+}
+
+.composer-help code {
+    background:var(--code-bg);
+    border-radius:2px;
+    padding:0 3px;
+    font-family:Menlo, Consolas, monospace;
+    font-size:10px;
+}
+
+/* Sits between the button and the formatting link, taking up the slack so the link
+   stays flush right. When it is hidden the row's space-between keeps the link there
+   anyway, so the layout does not shift as messages come and go. Long errors wrap
+   rather than truncate -- the row grows, which is preferable to hiding half of why
+   something failed. */
+.composer-status {
+    flex:1 1 auto;
+    min-width:0;
+    font-size:11px;
+    line-height:1.4;
+    color:var(--status-text);
+    transition:opacity .14s ease;
+}
+
+/* Held while the message is being swapped, so one state fades out before the next
+   fades in rather than the text changing under the reader. */
+.composer-status.is-fading {
+    opacity:0;
+}
+
+.composer-status.error {
+    color:var(--error);
+}
+
+/* Braille frames rather than a spinning glyph: they animate in place without the
+   baseline wobble a rotating character gives you, and need no image or keyframes. */
+.composer-spinner {
+    display:inline-block;
+    width:1em;
+    font-family:Menlo, Consolas, monospace;
+    color:var(--meta);
+}
+
+.composer-status a {
+    color:var(--link);
 }
 
 </style>
@@ -2390,53 +4054,8 @@ blockquote.comment-quote-redundant {
 
 <div id="resize-handle" aria-hidden="true"></div>
 
-<header>
-
-<span class="header-title">
-<span><b>HN</b>ewhere</span>
-<span id="header-subtitle" class="header-subtitle"></span>
-</span>
-
-<div class="header-actions">
-<button id="settings-toggle" aria-label="Open HNewhere settings" title="HNewhere settings" aria-expanded="false" aria-controls="settings-panel">
-&#9881;&#65038;
-</button>
-
-<button id="minimize" aria-label="Minimize HNewhere" title="Minimize">
-−
-</button>
-</div>
-
-</header>
-
-<div id="settings-panel" class="settings-panel hidden">
-<div class="settings-title">Settings</div>
-
-<div class="settings-group">
-<div class="settings-group-label">Sidebar</div>
-<label class="settings-option">
-<input id="setting-auto-open-sidebar" data-setting="autoOpenSidebar" type="checkbox">
-<span>Automatically open the sidebar when a discussion exists</span>
-</label>
-</div>
-
-<div class="settings-group">
-<div class="settings-group-label">Annotations <span class="op-pill">BETA</span></div>
-<label class="settings-option">
-<input id="setting-annotations" data-setting="annotations" type="checkbox">
-<span>Enable article annotations</span>
-</label>
-<label class="settings-option sub-option">
-<input id="setting-annotations-open" data-setting="annotationsWhenSidebarOpen" type="checkbox">
-<span>When sidebar open</span>
-</label>
-<label class="settings-option sub-option">
-<input id="setting-annotations-closed" data-setting="annotationsWhenSidebarClosed" type="checkbox">
-<span>When sidebar closed</span>
-</label>
-</div>
-</div>
-
+${headerHTML({ subtitle: true, minimize: true })}
+${settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
 <button id="clear-filter" class="filter-banner-close" type="button" aria-label="Close filtered discussion" title="Show all comments">
@@ -2454,8 +4073,10 @@ blockquote.comment-quote-redundant {
 `;
 
 		const panel = shadow.querySelector("#panel");
-		const settingsPanel = shadow.querySelector("#settings-panel");
-		const settingsToggle = shadow.querySelector("#settings-toggle");
+
+		// Applied to the host, not the panel, so the custom properties inherit into
+		// everything in this shadow tree.
+		const stopWatchingTheme = watchTheme(host);
 		const filterBanner = shadow.querySelector("#filter-banner");
 		const filterBannerQuote = shadow.querySelector("#filter-banner-quote");
 		const filterBannerMeta = shadow.querySelector("#filter-banner-meta");
@@ -2468,78 +4089,10 @@ blockquote.comment-quote-redundant {
 			host.addEventListener(type, (event) => event.stopPropagation());
 		}
 
-		const settingsInputs = {
-			autoOpenSidebar: shadow.querySelector("#setting-auto-open-sidebar"),
-			annotations: shadow.querySelector("#setting-annotations"),
-			annotationsWhenSidebarOpen: shadow.querySelector("#setting-annotations-open"),
-			annotationsWhenSidebarClosed: shadow.querySelector("#setting-annotations-closed"),
-		};
-
-		const applySettingsPanelState = (settings) => {
-			for (const [key, input] of Object.entries(settingsInputs)) {
-				input.checked = Boolean(settings[key]);
-			}
-
-			const annotationsEnabled = Boolean(settings.annotations);
-
-			settingsInputs.annotationsWhenSidebarOpen.disabled = !annotationsEnabled;
-			settingsInputs.annotationsWhenSidebarClosed.disabled = !annotationsEnabled;
-		};
-
-		applySettingsPanelState(await loadSettings());
-
-		// Single place the open state changes, so the button's pressed styling and
-		// aria-expanded cannot drift out of sync with the panel.
-		const setSettingsOpen = (open) => {
-			settingsPanel.classList.toggle("hidden", !open);
-			settingsToggle.classList.toggle("is-open", open);
-			settingsToggle.setAttribute("aria-expanded", open ? "true" : "false");
-		};
-
-		setSettingsOpen(false);
-
-		settingsToggle.onclick = (event) => {
-			event.preventDefault();
-			event.stopPropagation();
-			setSettingsOpen(settingsPanel.classList.contains("hidden"));
-		};
-
-		settingsPanel.addEventListener("click", (event) => {
-			event.stopPropagation();
-		});
-
-		shadow.addEventListener("click", (event) => {
-			const path = event.composedPath();
-
-			if (path.includes(settingsToggle) || path.includes(settingsPanel)) {
-				return;
-			}
-
-			setSettingsOpen(false);
-		});
-
-		settingsPanel.addEventListener("change", async (event) => {
-			const input = event.target.closest("input[data-setting]");
-
-			if (!input) {
-				return;
-			}
-
-			const settings = await saveSettings({
-				[input.dataset.setting]: input.checked,
-			});
-
-			applySettingsPanelState(settings);
-
-			if (
-				[
-					"annotations",
-					"annotationsWhenSidebarOpen",
-					"annotationsWhenSidebarClosed",
-				].includes(input.dataset.setting)
-			) {
-				await refreshArticleAnnotations();
-			}
+		// Shared with the submit popover; the annotation refresh is the one piece
+		// that only makes sense here, so it is passed in rather than assumed.
+		const { setSettingsOpen } = await wireSettingsPanel(shadow, {
+			onAnnotationChange: refreshArticleAnnotations,
 		});
 
 		clearFilterButton.onclick = (event) => {
@@ -2555,22 +4108,25 @@ blockquote.comment-quote-redundant {
 		// to leave a deliberately chosen width alone.
 		let userResized = false;
 
-		panel.addEventListener("mousemove", (e) => {
-			if (e.offsetX < 8) {
-				panel.style.cursor = "col-resize";
-			} else if (!resizing) {
-				panel.style.cursor = "default";
-			}
-		});
+		// #resize-handle is an 8px strip pinned to the panel's left edge, already used
+		// by the touch handlers below and already carrying cursor:col-resize in CSS.
+		// Hanging the mouse drag off it too removes the hit-test entirely.
+		//
+		// It previously lived on the panel and tested e.offsetX < 8, which is measured
+		// from the *event target's* padding box rather than the panel's -- so hovering
+		// near the left edge of any nested child (a .comment at its indent, a .children
+		// wrapper) reported a small offsetX and armed a resize nowhere near the edge.
+		// The paired mousemove also wrote an inline cursor:default on the panel, and
+		// since cursor inherits, that was what suppressed the I-beam over comment text.
+		// Letting CSS own every cursor fixes both.
+		const resizeHandle = shadow.querySelector("#resize-handle");
 
-		panel.addEventListener("mouseleave", () => {
-			if (!resizing) {
-				panel.style.cursor = "default";
+		const onResizeMouseDown = (e) => {
+			// Ignore anything but a primary-button drag, so a right-click on the edge
+			// cannot leave the panel stuck in a resize that never gets a mouseup.
+			if (e.button !== 0) {
+				return;
 			}
-		});
-
-		panel.addEventListener("mousedown", (e) => {
-			if (e.offsetX >= 8) return;
 
 			resizing = true;
 			startX = e.clientX;
@@ -2580,7 +4136,7 @@ blockquote.comment-quote-redundant {
 			document.body.style.cursor = "col-resize";
 
 			e.preventDefault();
-		});
+		};
 
 		let resizeTimer;
 
@@ -2613,21 +4169,16 @@ blockquote.comment-quote-redundant {
 
 			document.body.style.userSelect = "";
 			document.body.style.cursor = "";
-
-			panel.style.cursor = "default";
 		};
 
+		resizeHandle?.addEventListener("mousedown", onResizeMouseDown);
 		document.addEventListener("mousemove", onMouseMove);
 		document.addEventListener("mouseup", onMouseUp);
 
 		let destroyed = false;
 
 		// Touch never fires the mouse drag above, so resizing is wired separately
-		// here. Listeners sit on the handle rather than the panel so a drag starting
-		// anywhere else still scrolls the comments normally, and are non-passive so
-		// preventDefault can stop the page scrolling mid-drag.
-		const resizeHandle = shadow.querySelector("#resize-handle");
-
+		// here. Non-passive so preventDefault can stop the page scrolling mid-drag.
 		const onTouchStart = (e) => {
 			const touch = e.touches[0];
 
@@ -2717,9 +4268,11 @@ blockquote.comment-quote-redundant {
 		host._cleanup = () => {
 			destroyed = true;
 			clearTimeout(resizeTimer);
+			resizeHandle?.removeEventListener("mousedown", onResizeMouseDown);
 			document.removeEventListener("mousemove", onMouseMove);
 			document.removeEventListener("mouseup", onMouseUp);
 			window.removeEventListener("resize", clampSidebarWidth);
+			stopWatchingTheme();
 
 			if (sidebar === host) {
 				clearArticleAnnotations();
@@ -2737,7 +4290,9 @@ blockquote.comment-quote-redundant {
 		};
 
 		document
-			.querySelectorAll("#hn-restore-button, #hn-collapse-button")
+			.querySelectorAll(
+				"#hn-restore-button, #hn-collapse-button, #hn-submit-button",
+			)
 			.forEach((button) => destroyFloatingButton(button));
 
 		sidebar = host;
@@ -2792,7 +4347,12 @@ blockquote.comment-quote-redundant {
 	<td class="story-body-cell">
 	<div class="story-meta">
 	<span class="story-score" data-story-score-id="${escapeHTML(storyID)}" data-story-score="${escapeHTML(String(story.score || 0))}">${story.score || 0}</span> points by
-	${escapeHTML(story.by || "")}
+	${
+		story.by
+			? `<a target="_blank"
+	href="https://news.ycombinator.com/user?id=${encodeURIComponent(story.by)}">${escapeHTML(story.by)}</a>`
+			: ""
+	}
 	|
 	<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(story.time)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
 	|
@@ -2807,11 +4367,7 @@ blockquote.comment-quote-redundant {
 	`
 			: ""
 	}
-	<div class="story-actions">
-	<button type="submit" class="add-comment">
-	add comment
-	</button>
-	</div>
+	${composerHTML({ label: "add comment", placeholder: "Add a comment…" })}
 	</td>
 	</tr>
 	</tbody>
@@ -2825,11 +4381,300 @@ blockquote.comment-quote-redundant {
 		storyElement.dataset.storyId = storyID;
 		container.appendChild(storyElement);
 
-		storyElement.querySelector(".add-comment").onclick = () => {
-			openHNWindow(commentURL(story.id));
-		};
+		wireComposer(storyElement.querySelector(".comment-composer"), {
+			storyID,
+		});
 
 		return storyElement;
+	}
+
+	// -------------------------
+	// Comment composer
+	// -------------------------
+
+	const openCommentBridgePopup = createBridgeChannel(
+		COMMENT_BRIDGE_MESSAGE_SOURCE,
+	);
+
+	// One markup for the story-level box and every reply box. The only differences are
+	// the button label and the placeholder, so a reply gets the same formatting help,
+	// spinner and draft handling for free.
+	function composerHTML({ label, placeholder }) {
+		return `
+	<div class="comment-composer">
+	<textarea class="composer-text" rows="4" placeholder="${escapeHTML(placeholder)}" aria-label="${escapeHTML(label)}"></textarea>
+	<div class="composer-actions">
+	<button type="submit" class="composer-submit">${escapeHTML(label)}</button>
+	<div class="composer-status hidden" role="status"></div>
+	<button type="button" class="composer-help-toggle" aria-expanded="false">formatting</button>
+	</div>
+	<div class="composer-help hidden">
+	<p>Blank lines separate paragraphs.</p>
+	<p>Text surrounded by asterisks is italicized. To get a literal asterisk, use <code>\\*</code> or <code>**</code>.</p>
+	<p>Text after a blank line that is indented by two or more spaces is formatted as code.</p>
+	<p>Urls become links, except in the text field of a submission.</p>
+	<p>If your url gets linked incorrectly, put it in <code>&lt;angle brackets&gt;</code> and it should work.</p>
+	</div>
+	</div>
+`;
+	}
+
+	// Keyed on the comment being replied to, or the story for a top-level comment, so
+	// two drafts in the same thread cannot overwrite each other.
+	function composerDraftKey({ storyID, parentId }) {
+		return "HNewhere:comment_draft:" + (parentId || storyID);
+	}
+
+	const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+	// Returns a stop function. The caller owns the lifetime, because the spinner has
+	// to survive across the await that opens the popup and outlive any one message.
+	function startSpinner(element) {
+		let frame = 0;
+
+		element.textContent = SPINNER_FRAMES[0];
+
+		const timer = window.setInterval(() => {
+			frame = (frame + 1) % SPINNER_FRAMES.length;
+			element.textContent = SPINNER_FRAMES[frame];
+		}, 90);
+
+		return () => window.clearInterval(timer);
+	}
+
+	// parentId set means this is a reply to that comment; absent means a top-level
+	// comment on the story. Everything else about the two is identical.
+	function wireComposer(composer, { storyID, parentId = null, onPosted } = {}) {
+		if (!composer) {
+			return null;
+		}
+
+		const draftKey = composerDraftKey({ storyID, parentId });
+		const textarea = composer.querySelector(".composer-text");
+		const submitButton = composer.querySelector(".composer-submit");
+		const submitLabel = submitButton.textContent;
+		const helpToggle = composer.querySelector(".composer-help-toggle");
+		const help = composer.querySelector(".composer-help");
+		const status = composer.querySelector(".composer-status");
+
+		let stopSpinner = null;
+		let swapTimer = 0;
+
+		// Deliberately synchronous and never awaited. The fade is a CSS transition
+		// driven by a class, not a promise -- awaiting it before opening the bridge
+		// popup would break the user-activation chain that window.open depends on.
+		const setStatus = (message, { error = false, html = false } = {}) => {
+			stopSpinner?.();
+			stopSpinner = null;
+
+			clearTimeout(swapTimer);
+
+			const write = () => {
+				if (!message) {
+					status.classList.add("hidden");
+					status.replaceChildren();
+					return;
+				}
+
+				status.classList.remove("hidden");
+				status.classList.toggle("error", error);
+
+				if (html) {
+					status.innerHTML = message;
+				} else {
+					status.textContent = message;
+				}
+			};
+
+			// Nothing showing yet, so there is nothing to fade out of.
+			if (status.classList.contains("hidden")) {
+				write();
+				return;
+			}
+
+			status.classList.add("is-fading");
+
+			swapTimer = window.setTimeout(() => {
+				write();
+				status.classList.remove("is-fading");
+			}, 140);
+		};
+
+		const showSpinner = (label) => {
+			clearTimeout(swapTimer);
+			stopSpinner?.();
+
+			status.classList.remove("hidden", "error");
+			status.replaceChildren();
+
+			const spinner = document.createElement("span");
+
+			spinner.className = "composer-spinner";
+			status.appendChild(spinner);
+
+			if (label) {
+				status.appendChild(document.createTextNode(" " + label));
+			}
+
+			status.classList.remove("is-fading");
+			stopSpinner = startSpinner(spinner);
+		};
+
+		helpToggle.onclick = () => {
+			const hidden = help.classList.toggle("hidden");
+
+			helpToggle.classList.toggle("is-open", !hidden);
+			helpToggle.setAttribute("aria-expanded", hidden ? "false" : "true");
+		};
+
+		// Restored asynchronously, and only into a box the reader has not already
+		// started typing in, so a slow storage read cannot overwrite live input.
+		load(draftKey, "")
+			.then((draft) => {
+				if (draft && !textarea.value) {
+					textarea.value = draft;
+				}
+			})
+			.catch(console.error);
+
+		let saveTimer = 0;
+
+		textarea.addEventListener("input", () => {
+			clearTimeout(saveTimer);
+
+			saveTimer = window.setTimeout(() => {
+				save(draftKey, textarea.value).catch(console.error);
+			}, 400);
+		});
+
+		const setBusy = (busy) => {
+			submitButton.disabled = busy;
+			textarea.disabled = busy;
+			// Ellipsis form of whatever the button says, so "reply" and "add comment"
+			// both read correctly without the caller having to supply a second label.
+			submitButton.textContent = busy ? submitLabel + "…" : submitLabel;
+		};
+
+		submitButton.onclick = async () => {
+			// Not trimmed. HN reads two leading spaces as a code block, so trimming
+			// would silently change what the reader wrote. Only the emptiness check
+			// ignores whitespace.
+			const text = textarea.value;
+
+			if (!text.trim()) {
+				setStatus("Write something first.", { error: true });
+				textarea.focus();
+				return;
+			}
+
+			setBusy(true);
+			showSpinner();
+
+			try {
+				// Called before any await in this handler, so window.open still counts as
+				// user-initiated. Do not introduce an await above this line.
+				const result = await submitCommentToHN(storyID, text, parentId);
+
+				if (!result?.ok) {
+					setStatus(commentFailureMessage(result), { error: true });
+					return;
+				}
+
+				textarea.value = "";
+				clearTimeout(saveTimer);
+				await save(draftKey, null);
+
+				setStatus("Posted");
+
+				// Reloaded automatically, but only after a beat: HN's API lags behind a
+				// fresh comment, so refetching the instant the popup reports back tends
+				// to return the thread without it. The delay is not a guarantee -- if the
+				// comment is still missing it will appear on the next open.
+				window.setTimeout(() => {
+					onPosted?.();
+					reloadDiscussion(storyID);
+				}, 1400);
+			} finally {
+				setBusy(false);
+			}
+		};
+
+		return { focus: () => textarea.focus() };
+	}
+
+	// Deliberately NOT async: the popup has to be opened while the click is still on
+	// the stack. Everything that needs awaiting happens inside the returned promise,
+	// after the window already exists.
+	function submitCommentToHN(storyID, text, parentId = null) {
+		const nonce = bridgeNonce();
+		const session = openCommentBridgePopup(nonce);
+
+		if (session.blocked) {
+			return session.result;
+		}
+
+		return (async () => {
+			try {
+				await stageBridgePayload(nonce, {
+					kind: "comment",
+					storyID: String(storyID),
+					parentId: parentId ? String(parentId) : null,
+					text,
+					origin: location.origin,
+				});
+				await indexBridgePayload(nonce);
+
+				const hash = new URLSearchParams();
+
+				hash.set("hnewhere-comment", "1");
+				hash.set("nonce", nonce);
+				hash.set("story", String(storyID));
+				hash.set("origin", location.origin);
+
+				// /reply carries its own goto back to the item page, so both paths land
+				// somewhere reportCommentResultAfterReload can read the result from.
+				const target = parentId
+					? replyURL({ id: parentId }, storyID)
+					: commentURL(storyID);
+
+				session.navigate(target + "#" + hash.toString());
+
+				return await session.result;
+			} finally {
+				await clearBridgePayload(nonce);
+			}
+		})();
+	}
+
+	function commentFailureMessage(result) {
+		switch (result?.reason) {
+			case "popup-blocked":
+				return "Your browser blocked the popup. Allow popups for this site and try again.";
+			case "timeout":
+				return "Hacker News did not respond in time. Check the popup window — your draft is saved.";
+			case "not-logged-in":
+				return "Log in to Hacker News in the popup, then submit again.";
+			case "rate-limited":
+				return "Hacker News is rate limiting comments. Wait a moment and try again.";
+			case "no-form":
+				return "Could not find the comment box on Hacker News. The thread may be locked.";
+			case "unconfirmed":
+				return "Submitted, but Hacker News did not show the comment back. Check the thread before reposting.";
+			default:
+				return result?.message || "Comment did not go through — your draft is saved.";
+		}
+	}
+
+	// Reuses the ordinary open path rather than patching a comment into the DOM, so
+	// the reloaded thread is whatever HN actually holds.
+	//
+	// Clears the whole item cache rather than just the story's entry: the new comment
+	// changes the story's kids list, and every ancestor of a reply holds its own
+	// cached kids too, so there is no cheaper key set that is actually correct.
+	function reloadDiscussion(storyID) {
+		itemCache.clear();
+
+		openSidebar([{ objectID: String(storyID) }]).catch(console.error);
 	}
 
 	function mountFilterBanner(afterElement, ui) {
@@ -2924,7 +4769,6 @@ blockquote.comment-quote-redundant {
 		}
 
 		const replies = comment.kids || [];
-		const reply = replyURL(comment, storyID);
 		const commentID = String(comment.id);
 
 		div.innerHTML = `
@@ -2968,6 +4812,9 @@ blockquote.comment-quote-redundant {
       <div class="comment-content">
        	<div class="text">
         		${sanitizeHTML(comment.text) || ""}
+       	</div>
+       	<div class="reply-composer collapsed">
+       	${composerHTML({ label: "reply", placeholder: "Reply…" })}
        	</div>
        	<div class="children"></div>
       </div>
@@ -3028,11 +4875,42 @@ blockquote.comment-quote-redundant {
 		};
 
 		const replyButton = div.querySelector(".reply-link");
+		const replyComposer = div.querySelector(".reply-composer");
+
+		// Wired lazily. A thread can render hundreds of comments, and wiring every
+		// reply box up front would mean hundreds of storage reads for drafts nobody
+		// asked for.
+		let composerAPI = null;
 
 		replyButton.onclick = function (event) {
 			event.preventDefault();
 
-			openHNWindow(reply);
+			const opening = replyComposer.classList.contains("collapsed");
+
+			replyComposer.classList.toggle("collapsed", !opening);
+			replyButton.classList.toggle("is-open", opening);
+
+			if (!opening) {
+				return;
+			}
+
+			// Expanding a collapsed reply box inside a collapsed comment would put it
+			// somewhere invisible, so make sure the comment itself is showing.
+			if (content.classList.contains("hidden")) {
+				content.classList.remove("hidden");
+				toggle.textContent = "[–]";
+				toggleCollapsed(comment.id, false).catch(console.error);
+			}
+
+			composerAPI ||= wireComposer(
+				replyComposer.querySelector(".comment-composer"),
+				{
+					storyID,
+					parentId: comment.id,
+				},
+			);
+
+			composerAPI?.focus();
 		};
 
 		if (replies.length) {
@@ -3408,6 +5286,354 @@ blockquote.comment-quote-redundant {
 		return true;
 	}
 
+	// -------------------------
+	// HN side: submit bridge
+	// -------------------------
+
+	// HN's submit form posts to /r. Login pages have no such form, which is how being
+	// logged out is detected.
+	function findSubmitForm() {
+		for (const form of document.querySelectorAll("form")) {
+			if (
+				form.querySelector('input[name="title"]') &&
+				form.querySelector('input[name="url"]')
+			) {
+				return form;
+			}
+		}
+
+		return null;
+	}
+
+	// Scrapes whatever HN said went wrong. Its error pages are bare text, so this
+	// looks for the phrases rather than a structure that does not exist.
+	function readSubmitError() {
+		const text = (document.body?.textContent || "").toLowerCase();
+
+		if (text.includes("that link has already been submitted")) {
+			return { reason: "dupe" };
+		}
+
+		if (text.includes("please log in") || text.includes("bad login")) {
+			return { reason: "not-logged-in" };
+		}
+
+		if (text.includes("submitting too fast")) {
+			return {
+				reason: "rate-limited",
+				message: "Hacker News is rate limiting submissions. Try again shortly.",
+			};
+		}
+
+		return null;
+	}
+
+	// Runs on whatever page HN lands on after the submission POST. Three outcomes are
+	// possible and they are not distinguishable by anything except the pathname, so
+	// each is handled explicitly rather than assumed.
+	function reportSubmitResultAfterReload() {
+		let stored = null;
+
+		try {
+			stored = window.sessionStorage.getItem(SUBMIT_BRIDGE_STORAGE_KEY);
+			// Cleared first: if anything below throws, a stale payload must not make the
+			// next HN page load try to report again.
+			window.sessionStorage.removeItem(SUBMIT_BRIDGE_STORAGE_KEY);
+		} catch {
+			return false;
+		}
+
+		if (!stored) {
+			return false;
+		}
+
+		let payload = null;
+
+		try {
+			payload = JSON.parse(stored);
+		} catch {
+			return false;
+		}
+
+		if (!payload?.nonce) {
+			return false;
+		}
+
+		const finish = (result) => {
+			postBridgeResult(SUBMIT_BRIDGE_MESSAGE_SOURCE, payload, result);
+			window.setTimeout(() => window.close(), 60);
+		};
+
+		// Already submitted by someone: HN redirects straight to the existing item.
+		if (location.pathname === "/item") {
+			const id = new URLSearchParams(location.search).get("id");
+
+			finish({ ok: Boolean(id), storyID: id, reason: id ? "existing" : "dupe" });
+			return true;
+		}
+
+		// The success case. HN drops you on /newest, so the new story has to be found
+		// by matching the URL that was just submitted.
+		if (location.pathname === "/newest") {
+			finish({
+				ok: true,
+				storyID: findSubmittedStoryID(payload.normalized),
+				reason: "submitted",
+			});
+			return true;
+		}
+
+		// Still on a form or an error page: the submission did not go through.
+		finish({ ok: false, ...(readSubmitError() || { reason: "unknown" }) });
+		return true;
+	}
+
+	// Returns null rather than a guess when the row cannot be found. /newest ordering
+	// and indexing are not guaranteed, and reporting a wrong id would send the reader
+	// to somebody else's thread -- strictly worse than reporting none and letting the
+	// ordinary findHN path pick the story up on the next load.
+	function findSubmittedStoryID(normalized) {
+		if (!normalized) {
+			return null;
+		}
+
+		for (const link of document.querySelectorAll(".titleline > a")) {
+			if (normalizeURL(link.href) !== normalized) {
+				continue;
+			}
+
+			const row = link.closest("tr.athing");
+
+			if (row?.id) {
+				return row.id;
+			}
+		}
+
+		return null;
+	}
+
+	async function maybeHandleHNSubmitBridge() {
+		const payload = parseBridgeHash("hnewhere-submit");
+
+		if (!payload) {
+			return false;
+		}
+
+		const staged = await readBridgePayload(payload.nonce);
+		const form = findSubmitForm();
+
+		if (!form) {
+			postBridgeResult(SUBMIT_BRIDGE_MESSAGE_SOURCE, payload, {
+				ok: false,
+				reason: "not-logged-in",
+			});
+			return true;
+		}
+
+		// /submitlink prefills title and url from the query string; these are assigned
+		// anyway so what the reader edited in the popover wins, and so a deliberately
+		// cleared url actually arrives cleared rather than falling back to the query.
+		const titleInput = form.querySelector('input[name="title"]');
+		const urlInput = form.querySelector('input[name="url"]');
+		const textInput = form.querySelector('textarea[name="text"]');
+
+		if (titleInput && staged?.title) {
+			titleInput.value = staged.title.slice(0, HN_TITLE_LIMIT);
+		}
+
+		if (urlInput) {
+			urlInput.value = staged?.url || "";
+		}
+
+		// Assigned verbatim, for the same reason as the comment bridge: HN's formatter
+		// is the only thing that should interpret this.
+		if (textInput) {
+			textInput.value = staged?.text || "";
+		}
+
+		try {
+			window.sessionStorage.setItem(
+				SUBMIT_BRIDGE_STORAGE_KEY,
+				JSON.stringify({
+					...payload,
+					normalized: staged?.normalized || null,
+				}),
+			);
+		} catch (error) {
+			console.error("HNewhere: could not stage submit payload", error);
+			postBridgeResult(SUBMIT_BRIDGE_MESSAGE_SOURCE, payload, {
+				ok: false,
+				reason: "storage-unavailable",
+			});
+			return true;
+		}
+
+		// Same reasoning as the vote bridge: submit the form as a navigation rather
+		// than clicking, so closing the popup cannot abort an in-flight request.
+		form.submit();
+		return true;
+	}
+
+	// -------------------------
+	// HN side: comment bridge
+	// -------------------------
+
+	// The top-level comment form on an item page. A locked thread or a logged-out
+	// reader gets no such form, which is how both are detected.
+	function findCommentForm() {
+		for (const form of document.querySelectorAll("form")) {
+			const textarea = form.querySelector('textarea[name="text"]');
+
+			if (textarea) {
+				return { form, textarea };
+			}
+		}
+
+		return null;
+	}
+
+	function readCommentError() {
+		const text = (document.body?.textContent || "").toLowerCase();
+
+		if (text.includes("you're posting too fast") || text.includes("posting too fast")) {
+			return { reason: "rate-limited" };
+		}
+
+		if (text.includes("please log in") || text.includes("bad login")) {
+			return { reason: "not-logged-in" };
+		}
+
+		return null;
+	}
+
+	// Comparison key for "did HN echo our comment back". Whitespace and case are
+	// normalized because HN reflows the text into paragraphs, and only a prefix is
+	// used because it wraps long comments in markup this cannot see through.
+	function commentMatchKey(text) {
+		return (text || "")
+			.replace(/\s+/g, " ")
+			.trim()
+			.toLowerCase()
+			.slice(0, 120);
+	}
+
+	function reportCommentResultAfterReload() {
+		let stored = null;
+
+		try {
+			stored = window.sessionStorage.getItem(COMMENT_BRIDGE_STORAGE_KEY);
+			window.sessionStorage.removeItem(COMMENT_BRIDGE_STORAGE_KEY);
+		} catch {
+			return false;
+		}
+
+		if (!stored) {
+			return false;
+		}
+
+		let payload = null;
+
+		try {
+			payload = JSON.parse(stored);
+		} catch {
+			return false;
+		}
+
+		if (!payload?.nonce) {
+			return false;
+		}
+
+		const finish = (result) => {
+			postBridgeResult(COMMENT_BRIDGE_MESSAGE_SOURCE, payload, result);
+			window.setTimeout(() => window.close(), 60);
+		};
+
+		const error = readCommentError();
+
+		if (error) {
+			finish({ ok: false, ...error });
+			return true;
+		}
+
+		// Server-rendered proof: HN redirected back to the item page, so if the comment
+		// landed it is on this page.
+		const needle = payload.matchKey;
+		let found = false;
+
+		if (needle) {
+			for (const node of document.querySelectorAll(".commtext")) {
+				if (commentMatchKey(node.textContent).startsWith(needle.slice(0, 60))) {
+					found = true;
+					break;
+				}
+			}
+		}
+
+		// Reported as unconfirmed rather than failed. The post very likely succeeded --
+		// HN redirected here rather than showing an error -- but the text was not found,
+		// so telling the reader it failed would invite a duplicate.
+		finish(
+			found
+				? { ok: true, reason: "posted" }
+				: { ok: false, reason: "unconfirmed" },
+		);
+		return true;
+	}
+
+	async function maybeHandleHNCommentBridge() {
+		const payload = parseBridgeHash("hnewhere-comment");
+
+		if (!payload) {
+			return false;
+		}
+
+		const staged = await readBridgePayload(payload.nonce);
+
+		if (!staged?.text) {
+			postBridgeResult(COMMENT_BRIDGE_MESSAGE_SOURCE, payload, {
+				ok: false,
+				reason: "draft-missing",
+			});
+			return true;
+		}
+
+		const target = findCommentForm();
+
+		if (!target) {
+			postBridgeResult(COMMENT_BRIDGE_MESSAGE_SOURCE, payload, {
+				ok: false,
+				...(readCommentError() || { reason: "no-form" }),
+			});
+			return true;
+		}
+
+		// Assigned verbatim. HN's formatter is the only thing that should interpret
+		// this text, so nothing here trims, collapses or re-wraps it.
+		target.textarea.value = staged.text;
+
+		try {
+			window.sessionStorage.setItem(
+				COMMENT_BRIDGE_STORAGE_KEY,
+				JSON.stringify({
+					...payload,
+					matchKey: commentMatchKey(staged.text),
+				}),
+			);
+		} catch (error) {
+			console.error("HNewhere: could not stage comment payload", error);
+			postBridgeResult(COMMENT_BRIDGE_MESSAGE_SOURCE, payload, {
+				ok: false,
+				reason: "storage-unavailable",
+			});
+			return true;
+		}
+
+		// Navigation rather than a click, for the same reason as the vote bridge: a
+		// backgrounded request dies with the popup, a form navigation does not.
+		target.form.submit();
+		return true;
+	}
+
 	function setupHNListener() {
 		document.addEventListener(
 			"click",
@@ -3459,13 +5685,6 @@ blockquote.comment-quote-redundant {
 			Boolean(settings.annotations) &&
 			!shouldAutoOpenSidebar(settings, siteState) &&
 			Boolean(settings.annotationsWhenSidebarClosed)
-		);
-	}
-
-	function shouldDeferInitialLookup(settings, siteState = null) {
-		return (
-			!shouldAutoOpenSidebar(settings, siteState) &&
-			!shouldPreloadHiddenSidebar(settings, siteState)
 		);
 	}
 
@@ -4840,23 +7059,51 @@ blockquote.comment-quote-redundant {
 	async function init() {
 		await migrateStorage();
 
-		// On HN, only record clicked stories and service popup vote actions.
+		// On HN, only record clicked stories and service popup bridge actions.
 		if (location.hostname === "news.ycombinator.com") {
 			setupHNListener();
 
-			// Order matters: after the vote navigation the hash is gone and the
-			// payload is in sessionStorage, so the post-vote report has to be
-			// checked before treating this as a fresh bridge request.
+			// Order matters: after a bridge navigation the hash is gone and the payload
+			// is in sessionStorage, so every post-action report has to be checked before
+			// treating this page as a fresh bridge request.
 			if (reportVoteResultAfterReload()) {
 				return;
 			}
 
-			maybeHandleHNVoteBridge();
+			if (reportSubmitResultAfterReload()) {
+				return;
+			}
+
+			if (reportCommentResultAfterReload()) {
+				return;
+			}
+
+			if (maybeHandleHNVoteBridge()) {
+				return;
+			}
+
+			// Both are async because the staged payload lives in GM storage rather than
+			// the URL fragment, so they cannot be tested with a plain if.
+			if (await maybeHandleHNSubmitBridge()) {
+				return;
+			}
+
+			await maybeHandleHNCommentBridge();
+			return;
+		}
+
+		// After the HN branch, which has to keep working because the bridge popups run
+		// there, and before anything else: no lookup, no button, no stored state on a
+		// page that could never be a submission in the first place.
+		if (isHiddenSite()) {
 			return;
 		}
 
 		// Before anything renders, so the first paint already knows what is voted.
 		await loadRememberedVotes();
+
+		// A popup closed before it finished leaves its staged draft behind.
+		sweepBridgePayloads().catch(console.error);
 
 		const settings = await loadSettings();
 		const siteState = await loadSidebarState();
@@ -4877,52 +7124,51 @@ blockquote.comment-quote-redundant {
 		) {
 			await save(STORAGE.last, null);
 
-			const storyRefs = last.ids.map((id) => ({
-				objectID: id,
-			}));
-
-			if (shouldAutoOpenSidebar(settings, siteState)) {
-				await openSidebar(storyRefs);
-			} else if (shouldPreloadHiddenSidebar(settings, siteState)) {
-				await openSidebar(storyRefs, {
-					startHidden: true,
-				});
-			} else {
-				await createCollapsedButton(storyRefs);
-			}
+			await presentDiscussion(
+				last.ids.map((id) => ({ objectID: id })),
+				settings,
+				siteState,
+			);
 
 			return;
 		}
 
-		// Otherwise, silently check if this URL
-		// already has an HN discussion.
-		if (shouldDeferInitialLookup(settings, siteState)) {
-			await createCollapsedButton(async () => {
-				const stories = await findHN(location.href);
-				return stories.map((story) => ({
-					objectID: story.objectID,
-				}));
-			});
-			return;
-		}
-
+		// Otherwise look the URL up now rather than on click. 1.5.3 makes the button's
+		// colour mean "a discussion exists", which is only answerable before it is
+		// drawn. findHN caches per URL for an hour, so this is one request per new
+		// page rather than one per visit.
 		const stories = await findHN(location.href);
 
 		if (stories.length) {
-			const storyRefs = stories.map((story) => ({
-				objectID: story.objectID,
-			}));
-
-			if (shouldAutoOpenSidebar(settings, siteState)) {
-				await openSidebar(storyRefs);
-			} else if (shouldPreloadHiddenSidebar(settings, siteState)) {
-				await openSidebar(storyRefs, {
-					startHidden: true,
-				});
-			} else {
-				await createCollapsedButton(storyRefs);
-			}
+			await presentDiscussion(
+				stories.map((story) => ({ objectID: story.objectID })),
+				settings,
+				siteState,
+			);
+			return;
 		}
+
+		// Nothing on HN for this page. Offer to put it there, unless the reader has
+		// asked for the button to stay out of the way when there is nothing to read.
+		if (!settings.hideWithoutDiscussion) {
+			await createSubmitButton();
+		}
+	}
+
+	// The three ways a known discussion can be presented, in one place because init
+	// reaches this point by two different routes.
+	async function presentDiscussion(storyRefs, settings, siteState) {
+		if (shouldAutoOpenSidebar(settings, siteState)) {
+			await openSidebar(storyRefs);
+			return;
+		}
+
+		if (shouldPreloadHiddenSidebar(settings, siteState)) {
+			await openSidebar(storyRefs, { startHidden: true });
+			return;
+		}
+
+		await createCollapsedButton(storyRefs);
 	}
 
 	init().catch(console.error);
