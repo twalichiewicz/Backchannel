@@ -887,6 +887,41 @@
 		return value + " " + (value === 1 ? singular : plural);
 	}
 
+	// #region hnewhere-test-export
+	// What the sidebar is waiting on, named rather than measured. Lowercase to sit
+	// under the header title the way the rest of the secondary text does.
+	const SIDEBAR_STAGES = {
+		discussion: "loading discussion…",
+		comments: "loading comments…",
+		votes: "loading votes…",
+		annotations: "loading annotations…",
+	};
+
+	// Returns "" for no stage and for an unrecognised one, so the caller can clear
+	// the subtitle by passing null and never has to strip a placeholder.
+	function sidebarStageLabel(stage) {
+		return SIDEBAR_STAGES[stage] || "";
+	}
+
+	// The matcher is a parameter so the decision can be tested without touching
+	// window, and so a browser without matchMedia degrades to "animate" rather
+	// than throwing during init.
+	function prefersReducedMotion(
+		mediaMatcher = typeof window === "undefined" ? null : window.matchMedia,
+	) {
+		if (typeof mediaMatcher !== "function") {
+			return false;
+		}
+
+		try {
+			return mediaMatcher("(prefers-reduced-motion: reduce)")?.matches === true;
+		} catch {
+			return false;
+		}
+	}
+
+	// #endregion hnewhere-test-export
+
 	function timeAgo(timestamp) {
 		if (!timestamp) return "";
 
@@ -1104,7 +1139,93 @@
 			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
 			title: "No Hacker News discussion yet — click to submit this page",
 		},
+		// Borrows the inactive grey rather than the orange: this is shown before the
+		// lookup answers, and a page with no discussion would otherwise flash orange
+		// on its way to grey.
+		checking: {
+			background: "#b8b8b8",
+			darkBackground: "#4a4a4a",
+			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
+			title: "Checking Hacker News…",
+		},
 	};
+
+	const BUTTON_SPINNER_ID = "hnewhere-button-spinner";
+	const BUTTON_PENDING_ID = "hn-checking-button";
+
+	// The button lives in the page, not in a shadow root, and the script injects no
+	// page-level stylesheet anywhere -- so the ring is animated with the Web
+	// Animations API instead of keyframes. Nothing we add can then collide with the
+	// host page's CSS.
+	function startButtonSpinner(button) {
+		if (!button || button.querySelector(`#${BUTTON_SPINNER_ID}`)) {
+			return;
+		}
+
+		// The rim itself never moves: it is a mask on this element, cut to whatever
+		// border-radius the button is wearing. overflow keeps the sweep inside that
+		// shape before the mask narrows it to the edge.
+		const ring = document.createElement("span");
+
+		ring.id = BUTTON_SPINNER_ID;
+		ring.setAttribute("aria-hidden", "true");
+		ring.style.cssText = `
+				position:absolute;
+				inset:0;
+				border-radius:inherit;
+				padding:2px;
+				overflow:hidden;
+				-webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+				-webkit-mask-composite:xor;
+				mask:linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+				pointer-events:none;
+				opacity:0;
+				transition:opacity .2s ease;
+			`;
+
+		// Only this rotates. Rotating the ring turned the squircle's own outline
+		// with it, which read as a spinning square rather than a light traveling
+		// the edge. Oversized so its corners still cover the rim once turned.
+		const sweep = document.createElement("span");
+
+		sweep.style.cssText = `
+				position:absolute;
+				inset:-50%;
+				background:conic-gradient(from 0turn, rgba(255,255,255,0) 0 55%, rgba(255,255,255,.95) 100%);
+			`;
+
+		ring.appendChild(sweep);
+		button.appendChild(ring);
+
+		// Next frame, so the transition has a 0 to animate away from.
+		requestAnimationFrame(() => {
+			ring.style.opacity = "1";
+		});
+
+		if (prefersReducedMotion()) {
+			return;
+		}
+
+		ring._hnewhereAnimation = sweep.animate(
+			[{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
+			{ duration: 900, iterations: Number.POSITIVE_INFINITY },
+		);
+	}
+
+	function stopButtonSpinner(button) {
+		const ring = button?.querySelector(`#${BUTTON_SPINNER_ID}`);
+
+		if (!ring) {
+			return;
+		}
+
+		ring.style.opacity = "0";
+
+		window.setTimeout(() => {
+			ring._hnewhereAnimation?.cancel();
+			ring.remove();
+		}, 220);
+	}
 
 	// The only place these four properties are set. They used to be spelled out in
 	// both createFloatingHNButton's cssText and applyButtonMobileStyle, which
@@ -1185,6 +1306,18 @@
 
 			if (button) return button;
 
+			// A button drawn before the lookup answered becomes whichever button the
+			// answer calls for, rather than being torn down and rebuilt: rebuilding
+			// would drop the ring mid-fade and discard a position the reader had
+			// already dragged it to.
+			button = document.getElementById(BUTTON_PENDING_ID);
+
+			if (button) {
+				button.id = id;
+				setFloatingButtonVariant(button, variant);
+				return button;
+			}
+
 			button = document.createElement("button");
 			button.id = id;
 			button.textContent = "HN";
@@ -1206,7 +1339,10 @@
 					align-items:center;
 					justify-content:center;
 					-webkit-tap-highlight-color:transparent;
-					transition:background .2s ease;
+					/* box-shadow rides along because setFloatingButtonVariant writes it
+					   too: without it the glow snapped while the fill cross-faded, which
+					   is visible when the button settles out of "checking". */
+					transition:background .2s ease, box-shadow .2s ease;
 					/* So the fill overlay can be clipped to the circle. */
 					overflow:hidden;
 					isolation:isolate;
@@ -2207,6 +2343,14 @@
 
 		container.classList.remove("hidden");
 
+		// The arrows cannot be drawn until HN's per-item auth link has been scraped,
+		// so they always arrive after the comment they belong to. The slot already
+		// reserves their width, so nothing moves -- this only stops them snapping in.
+		container.classList.add("vote-controls-arriving");
+		requestAnimationFrame(() => {
+			container.classList.remove("vote-controls-arriving");
+		});
+
 		for (const descriptor of descriptors) {
 			const button = document.createElement("button");
 			button.type = "button";
@@ -2442,6 +2586,36 @@
 	// Takes a resolved array now rather than the resolver it used to accept: the
 	// discussion lookup moved ahead of the first paint in 1.5.3 so the button's
 	// colour can mean something, which leaves nothing left to resolve on click.
+	// The colour answers "is there a discussion here", the ring answers "am I still
+	// working". They are separate questions, so the colour settles the moment the
+	// lookup replies rather than waiting for the comments and the annotation pass
+	// -- which is what kept the button grey for the whole of startup.
+	function settleButtonToDiscussion(button) {
+		if (button) {
+			setFloatingButtonVariant(button, "active");
+		}
+	}
+
+	// Drawn before the discussion lookup answers, so the page shows something at
+	// once. It is inert on purpose: there is nothing to open yet, and a click that
+	// did nothing would read as broken. createFloatingHNButton adopts it as soon as
+	// the real button is asked for.
+	async function createCheckingButton() {
+		const button = createFloatingHNButton(BUTTON_PENDING_ID, "checking");
+
+		if (!button._dragController) {
+			button._dragController = makeButtonDraggable(button);
+		}
+
+		if (!isMobile()) {
+			await applyButtonPosition(button);
+		}
+
+		startButtonSpinner(button);
+
+		return button;
+	}
+
 	async function createCollapsedButton(stories) {
 		const button = createFloatingHNButton("hn-collapse-button");
 
@@ -3045,6 +3219,10 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --text:#000;
     --header-bg:#ff6600;
     --header-text:#000;
+    /* Dark orange on the header's own orange: legible, but clearly subordinate
+       to the black title. The peak is the travelling highlight. */
+    --subtitle-stage:#8f3900;
+    --subtitle-stage-peak:#d0721f;
     --border:#ccc;
     --border-soft:#ddd;
     --link:#0000aa;
@@ -3092,6 +3270,9 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --text:#dcdcdc;
     --header-bg:#cc5200;
     --header-text:#000;
+    /* Darker to hold the same relationship against the dimmer header. */
+    --subtitle-stage:#6d2b00;
+    --subtitle-stage-peak:#ad5a17;
     --border:#3d3d3d;
     --border-soft:#383838;
     --link:#8ab4f8;
@@ -3189,11 +3370,59 @@ header button {
     padding-left:12px;
 }
 
+/* Only the two-line case needs tightening, and the subtitle exists only in the
+   sidebar -- the popover header has none. Default leading put most of a line's
+   worth of air between the title and the status under it. */
+.header-title:has(.header-subtitle) > span:first-child {
+    line-height:1.25;
+}
+
+/* Collapsed until it has something to say. Animating the height is what moves
+   the title, so the status arriving reads as the header opening rather than as
+   the whole panel jumping. */
 .header-subtitle {
     font-size:11px;
     font-weight:normal;
     line-height:1.2;
+    max-height:0;
+    opacity:0;
+    overflow:hidden;
+    transition:max-height .2s ease, opacity .2s ease;
+}
+
+.header-subtitle-visible {
+    max-height:16px;
     opacity:.85;
+}
+
+/* Dark orange rather than the header's black, so a status reads as transient
+   next to the permanent title. Applied whether or not motion is allowed, so the
+   colour never depends on the animation. */
+.header-subtitle-stage {
+    color:var(--subtitle-stage);
+}
+
+/* A highlight swept across the text itself rather than a spinner beside it, so
+   the header gains no furniture for a state that is usually brief. */
+.header-subtitle-loading {
+    background:linear-gradient(
+        90deg,
+        var(--subtitle-stage) 0%,
+        var(--subtitle-stage) 40%,
+        var(--subtitle-stage-peak) 50%,
+        var(--subtitle-stage) 60%,
+        var(--subtitle-stage) 100%
+    );
+    background-size:220% 100%;
+    -webkit-background-clip:text;
+    background-clip:text;
+    -webkit-text-fill-color:transparent;
+    animation:hnewhere-subtitle-shimmer 1.6s linear infinite;
+}
+
+@keyframes hnewhere-subtitle-shimmer {
+    from { background-position:120% 0; }
+    to { background-position:-20% 0; }
 }
 
 .settings-panel {
@@ -3219,14 +3448,18 @@ header button {
     border-top:1px solid var(--surface-divider);
 }
 
-/* U+2699 defaults to its emoji presentation on iOS. font-variant-emoji is the
-   stated way to ask for the text glyph but only lands in Safari 17+, and
-   system-ui alone does not help because iOS still resolves the codepoint through
-   Apple Color Emoji. The U+FE0E variation selector in the markup is what actually
-   forces it; these remain as support for browsers that honour them. */
-#settings-toggle {
-    font-family: system-ui, sans-serif;
-    font-variant-emoji: text;
+/* Every header icon is drawn, not typed. Flexbox centres a glyph's line box
+   rather than its ink, so where a character lands depends on the font's ascent
+   and descent -- the gear used to sit about a pixel low and the minus half a
+   pixel high, while the drawn eye was exactly centred, which is what made the
+   eye look like the odd one out. Paths centred on the same 16-unit viewBox are
+   aligned by construction, on every platform.
+
+   Drawing the gear also retires a workaround: U+2699 defaults to its emoji
+   presentation on iOS, which needed a U+FE0E variation selector in the markup
+   plus font-variant-emoji, and that only lands in Safari 17+. */
+header button svg {
+    display:block;
 }
 
 /* Held while the dropdown is open so the gear reads as a toggle rather than a
@@ -3852,12 +4085,16 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </svg>
 </button>
 <button id="settings-toggle" aria-label="Open HNewhere settings" title="HNewhere settings" aria-expanded="false" aria-controls="settings-panel">
-&#9881;&#65038;
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>
+</svg>
 </button>
 ${
 	minimize
 		? `<button id="minimize" aria-label="Minimize HNewhere" title="Minimize">
-&#8722;
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<line x1="3.4" y1="8" x2="12.6" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</svg>
 </button>`
 		: ""
 }
@@ -4712,6 +4949,12 @@ ${CHROME_CSS}
     flex-direction:column;
     align-items:center;
     width:17px;
+    opacity:1;
+    transition:opacity .15s ease;
+}
+
+.vote-controls-arriving {
+    opacity:0;
 }
 
 .story-table {
@@ -6264,7 +6507,7 @@ ${settingsPanelHTML()}
 		clearCommentFilter({ animate: false });
 		renderedComments = [];
 		ui.body.innerHTML = "";
-		ui.headerSubtitle.textContent = "";
+		setSidebarRestingSubtitle(ui, "");
 
 		const generation = sidebarGeneration;
 		const votePromise = isSidebarVisible() ? loadVoteLinks(story.id) : null;
@@ -6275,8 +6518,12 @@ ${settingsPanelHTML()}
 		comments.className = "top-level-comments";
 		ui.body.appendChild(comments);
 
-		const seenTime = await getSeenTime(story.id);
-		const collapsedIds = await loadCollapsed();
+		// Independent reads, so they resolve together instead of one after the
+		// other in front of the first comment.
+		const [seenTime, collapsedIds] = await Promise.all([
+			getSeenTime(story.id),
+			loadCollapsed(),
+		]);
 
 		await renderChildren(
 			story.kids || [],
@@ -6290,6 +6537,10 @@ ${settingsPanelHTML()}
 		await markSeen(story.id);
 
 		if (votePromise && generation === sidebarGeneration) {
+			// The fetch was started before rendering, so this names only whatever is
+			// left of it. It sits between the comments and the annotations because
+			// that is where the reader actually waits for it.
+			setSidebarStage(ui, "votes");
 			hydrateVoteControlsForStory(story.id, await votePromise);
 			hydrateDisplayAges(story.id);
 		}
@@ -6300,7 +6551,10 @@ ${settingsPanelHTML()}
 		clearCommentFilter({ animate: false });
 		renderedComments = [];
 		ui.body.innerHTML = "";
-		ui.headerSubtitle.textContent = pluralize(stories.length, "submission") + " on HN";
+		setSidebarRestingSubtitle(
+			ui,
+			pluralize(stories.length, "submission") + " on HN",
+		);
 
 		const generation = sidebarGeneration;
 
@@ -6326,8 +6580,10 @@ ${settingsPanelHTML()}
 
 			section.appendChild(comments);
 
-			const seenTime = await getSeenTime(story.id);
-			const collapsedIds = await loadCollapsed();
+			const [seenTime, collapsedIds] = await Promise.all([
+				getSeenTime(story.id),
+				loadCollapsed(),
+			]);
 
 			await renderChildren(
 				story.kids || [],
@@ -6341,6 +6597,7 @@ ${settingsPanelHTML()}
 			await markSeen(story.id);
 
 			if (votePromise && generation === sidebarGeneration) {
+				setSidebarStage(ui, "votes");
 				hydrateVoteControlsForStory(story.id, await votePromise);
 				hydrateDisplayAges(story.id);
 			}
@@ -6375,19 +6632,83 @@ ${settingsPanelHTML()}
 		);
 	}
 
+	// Must outlast the .2s max-height transition on .header-subtitle, or the text
+	// disappears while the header is still closing.
+	const SUBTITLE_COLLAPSE_MS = 240;
+
+	// The subtitle carries two things: what the sidebar is loading, and, once it is
+	// idle, how many submissions it is showing. The resting text is recorded rather
+	// than written straight out, so a render finishing mid-stage cannot overwrite
+	// the stage the reader is currently being shown.
+	// Every write goes through here, so the collapsed-when-empty class can never
+	// drift out of step with the text that justifies it.
+	function writeSidebarSubtitle(element, text) {
+		window.clearTimeout(element._hnewhereSubtitleTimer);
+
+		if (text) {
+			element.textContent = text;
+			element.classList.add("header-subtitle-visible");
+			return;
+		}
+
+		// The text has to outlive the collapse. Emptying it now would take the
+		// element's own height to zero in a single frame, and max-height would have
+		// nothing left to animate -- which is the title dropping rather than easing.
+		element.classList.remove("header-subtitle-visible");
+		element._hnewhereSubtitleTimer = window.setTimeout(() => {
+			element.textContent = "";
+		}, SUBTITLE_COLLAPSE_MS);
+	}
+
+	function setSidebarStage(ui, stage) {
+		const element = ui?.headerSubtitle;
+		const label = sidebarStageLabel(stage);
+
+		if (!element || !label) {
+			return;
+		}
+
+		ui.activeStage = stage;
+		writeSidebarSubtitle(element, label);
+		element.classList.add("header-subtitle-stage");
+		element.classList.toggle("header-subtitle-loading", !prefersReducedMotion());
+	}
+
+	function clearSidebarStage(ui) {
+		const element = ui?.headerSubtitle;
+
+		if (!element) {
+			return;
+		}
+
+		ui.activeStage = null;
+		element.classList.remove("header-subtitle-stage", "header-subtitle-loading");
+		writeSidebarSubtitle(element, ui.restingSubtitle || "");
+	}
+
+	function setSidebarRestingSubtitle(ui, text) {
+		if (!ui?.headerSubtitle) {
+			return;
+		}
+
+		ui.restingSubtitle = text;
+
+		if (!ui.activeStage) {
+			writeSidebarSubtitle(ui.headerSubtitle, text);
+		}
+	}
+
 	async function openSidebar(stories, options = {}) {
 		if (opening) return;
 
 		opening = true;
 
 		try {
-			const loaded = await loadStories(stories);
-
-			if (!loaded.length) {
-				throw new Error("No HN stories could be loaded");
-			}
-
 			const generation = ++sidebarGeneration;
+
+			// The chrome does not depend on the stories, so it is built first and the
+			// panel reports what it is waiting for. Loading first meant the reader
+			// watched an empty page through the slowest part of startup.
 			const ui = await createSidebar();
 			sidebarUI = ui;
 
@@ -6402,6 +6723,20 @@ ${settingsPanelHTML()}
 				await saveSidebarState("open");
 			}
 
+			setSidebarStage(ui, "discussion");
+
+			const loaded = await loadStories(stories);
+
+			if (!loaded.length) {
+				throw new Error("No HN stories could be loaded");
+			}
+
+			if (generation !== sidebarGeneration) {
+				return;
+			}
+
+			setSidebarStage(ui, "comments");
+
 			if (loaded.length === 1) {
 				await renderSingleDiscussion(loaded[0], ui);
 			} else {
@@ -6409,6 +6744,14 @@ ${settingsPanelHTML()}
 			}
 
 			if (generation === sidebarGeneration) {
+				// Announced only when the pass will actually run, so the sidebar never
+				// claims to be doing work that is switched off.
+				const settings = await loadSettings();
+
+				if (settings.annotations && shouldShowArticleAnnotations(settings)) {
+					setSidebarStage(ui, "annotations");
+				}
+
 				await refreshArticleAnnotations();
 
 				if (options.startHidden) {
@@ -6418,6 +6761,8 @@ ${settingsPanelHTML()}
 		} catch (e) {
 			console.error(e);
 		} finally {
+			clearSidebarStage(sidebarUI);
+			stopButtonSpinner(document.getElementById("hn-restore-button"));
 			opening = false;
 		}
 	}
@@ -8964,25 +9309,47 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		// Same guarantee as isHiddenSite above -- no lookup, no button, no stored
-		// state -- but the list lives in async storage, so it cannot fold into that
-		// synchronous check.
-		if (await isSiteBlocked()) {
+		// Four independent reads, run together rather than one after another in front
+		// of the first paint. The blocked-site check is one of them: it is a read of
+		// our own storage like the rest, so resolving it alongside them costs nothing
+		// and still gates everything that follows.
+		const [blocked, settings, siteState, storedLast] = await Promise.all([
+			isSiteBlocked(),
+			loadSettings(),
+			loadSidebarState(),
+			load(STORAGE.last, null),
+		]);
+
+		// Same guarantee as isHiddenSite above: no lookup, no button, no stored
+		// state. Nothing above this line writes, so reaching it early is safe.
+		if (blocked) {
 			return;
 		}
-
-		// Before anything renders, so the first paint already knows what is voted.
-		await loadRememberedVotes();
 
 		// A popup closed before it finished leaves its staged draft behind.
 		sweepBridgePayloads().catch(console.error);
 
-		const settings = await loadSettings();
-		const siteState = await loadSidebarState();
+		// Deliberately not in the batch above: this one prunes expired votes and
+		// therefore writes, which a blocked site must never trigger. Started here and
+		// awaited below, so it overlaps the button rather than delaying it.
+		const votesReady = loadRememberedVotes();
+
+		// Drawn before the lookup, so the page shows something immediately and the
+		// ring covers whatever comes next. Skipped when the reader has asked for no
+		// button without a discussion, because then it might correctly never appear
+		// and would flicker in and back out. The setting is already in hand, so the
+		// decision costs nothing.
+		const pendingButton = settings.hideWithoutDiscussion
+			? null
+			: await createCheckingButton();
+
+		// Vote memory is only read once something renders, so it no longer sits in
+		// front of the first paint -- but it must still land before it does.
+		await votesReady;
 
 		// Check if we arrived here by clicking
 		// a story from Hacker News.
-		let last = await load(STORAGE.last, null);
+		let last = storedLast;
 
 		if (last && Date.now() - last.timestamp > 300000) {
 			await save(STORAGE.last, null);
@@ -8995,6 +9362,8 @@ ${settingsPanelHTML()}
 			Date.now() - last.timestamp < 300000
 		) {
 			await save(STORAGE.last, null);
+
+			settleButtonToDiscussion(pendingButton);
 
 			await presentDiscussion(
 				last.ids.map((id) => ({ objectID: id })),
@@ -9012,6 +9381,8 @@ ${settingsPanelHTML()}
 		const stories = await findHN(location.href);
 
 		if (stories.length) {
+			settleButtonToDiscussion(pendingButton);
+
 			await presentDiscussion(
 				stories.map((story) => ({ objectID: story.objectID })),
 				settings,
@@ -9025,22 +9396,29 @@ ${settingsPanelHTML()}
 		if (!settings.hideWithoutDiscussion) {
 			await createSubmitButton();
 		}
+
+		stopButtonSpinner(pendingButton);
 	}
 
 	// The three ways a known discussion can be presented, in one place because init
 	// reaches this point by two different routes.
 	async function presentDiscussion(storyRefs, settings, siteState) {
 		if (shouldAutoOpenSidebar(settings, siteState)) {
+			// The sidebar itself is the answer here, so the placeholder goes rather
+			// than becoming a button that would sit on top of an open panel.
+			destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
 			await openSidebar(storyRefs);
 			return;
 		}
 
 		if (shouldPreloadHiddenSidebar(settings, siteState)) {
+			// Kept: createRestoreButton adopts it, so the ring carries on spinning
+			// across the render and the annotation pass, which is the slow case.
 			await openSidebar(storyRefs, { startHidden: true });
 			return;
 		}
 
-		await createCollapsedButton(storyRefs);
+		stopButtonSpinner(await createCollapsedButton(storyRefs));
 	}
 
 	init().catch(console.error);

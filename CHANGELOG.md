@@ -12,6 +12,20 @@ use to detect updates, so every release bumps it.
 
 ### Added
 
+- **The button appears immediately.** It used to wait for the discussion lookup,
+  and on the preload-hidden path for the sidebar render and the whole annotation
+  pass as well — so on a long article the page looked as though nothing was
+  installed. It is now drawn before any network request, with a spinner around
+  its rim, and turns orange the moment the lookup replies rather than waiting for
+  the comments and the annotation pass to finish. Skipped when
+  "hide HNewhere without a discussion" is on, since there it may correctly never
+  appear.
+- **The sidebar says what it is loading.** Under the HNewhere title, in sequence:
+  loading discussion, loading comments, loading votes, loading annotations. The
+  annotations stage is only claimed when that pass will actually run. The status
+  opens and closes the header rather than appearing in it, and is set in dark
+  orange with a shimmer travelling through it.
+
 - **Quotes render as quotes.** Hacker News has no quote syntax — commenters
   start a line with `>` and HN prints the marker literally, so quoted text is
   styled exactly like the commenter's own words. Consecutive `>` lines are now
@@ -24,6 +38,13 @@ use to detect updates, so every release bumps it.
 
 ### Changed
 
+- Header icons are drawn rather than typed. The settings gear and the minimize
+  dash were text characters, and flexbox centres a glyph's line box rather than
+  its ink — so the gear sat about a pixel low and the dash half a pixel high,
+  while the drawn eye was exactly centred and read as the odd one out. All three
+  are now paths on the same 16-unit grid, aligned by construction on every
+  platform and matched in weight. Retires the iOS workaround that kept the gear
+  from rendering as a colour emoji.
 - **Quotes are marked by an ornament, not a rule.** A quoted passage in a comment
   used to carry a left border, which read as thread hierarchy — nested comments
   use a left border for exactly that. Quotes are now set in italics behind a ❛ in
@@ -54,6 +75,16 @@ use to detect updates, so every release bumps it.
   spans more than one line. Previously the block was tried first and claimed
   whenever it merely contained the quote, so with several discussions quoting one
   comment, whichever was processed first took the whole quote.
+- The sidebar builds its chrome before loading stories, rather than after. The
+  panel does not depend on them, and loading first meant the reader watched an
+  empty page through the slowest part of startup.
+- Startup reads settings, sidebar state, the last-clicked story and remembered
+  votes together rather than one after another, as does each discussion's seen
+  time and collapsed set.
+- Vote arrows fade in. They cannot be drawn before HN's per-item auth link has
+  been fetched, so they always arrive late; their slot was already reserved, so
+  only the snap needed fixing.
+- Motion is now suppressed for readers who ask for reduced motion.
 - Comment text is read block-aware when scoring discussion heat. It previously
   used raw `textContent`, which butts the last word of a paragraph against the
   first word of the next and tokenizes the join as a single junk term.
