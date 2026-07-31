@@ -131,15 +131,31 @@
 		squircle: "30%",
 	};
 
-	// Snapped to the step and clamped, so a hand-edited or legacy stored value can
-	// never produce a button the stepper cannot get back to.
+	// Clamped to the range but deliberately NOT snapped to the step: a size typed
+	// into the field is the user's choice and is kept exactly, so any whole pixel
+	// from 24 to 64 is a valid stored value. Snapping belongs to the stepper alone.
 	function normalizeButtonSize(value) {
 		const raw = typeof value === "string" ? LEGACY_BUTTON_SIZES[value] : value;
-		const numeric = Number.isFinite(raw) ? raw : BUTTON_SIZE_DEFAULT;
-		const snapped =
-			Math.round(numeric / BUTTON_SIZE_STEP) * BUTTON_SIZE_STEP;
+		const numeric = Number.isFinite(raw)
+			? Math.round(raw)
+			: BUTTON_SIZE_DEFAULT;
 
-		return Math.min(BUTTON_SIZE_MAX, Math.max(BUTTON_SIZE_MIN, snapped));
+		return Math.min(BUTTON_SIZE_MAX, Math.max(BUTTON_SIZE_MIN, numeric));
+	}
+
+	// Moves to the next step in the direction pressed, so a typed 45 steps up to
+	// 48 and down to 44 rather than to 49 and 41. Directional rather than nearest:
+	// pressing + must never make the button smaller.
+	function stepButtonSize(current, direction) {
+		const from = normalizeButtonSize(current);
+		const next =
+			direction > 0
+				? Math.floor(from / BUTTON_SIZE_STEP) * BUTTON_SIZE_STEP +
+					BUTTON_SIZE_STEP
+				: Math.ceil(from / BUTTON_SIZE_STEP) * BUTTON_SIZE_STEP -
+					BUTTON_SIZE_STEP;
+
+		return normalizeButtonSize(next);
 	}
 
 	// Kept proportional to the button rather than fixed, and bounded so "HN" still
@@ -4089,10 +4105,11 @@ Highlights the passages commenters quote, so you can jump between the article an
 				previewShape.style.fontSize = `${buttonFontSizeFor(size)}px`;
 			}
 
+			// Disabled only when stepping cannot move at all, which is the ends of
+			// the range. From a typed 63 the + button still works, landing on 64.
 			for (const button of stepperButtons) {
-				const next = size + Number(button.dataset.sizeStep) * BUTTON_SIZE_STEP;
-
-				button.disabled = next < BUTTON_SIZE_MIN || next > BUTTON_SIZE_MAX;
+				button.disabled =
+					stepButtonSize(size, Number(button.dataset.sizeStep)) === size;
 			}
 		};
 
@@ -4230,12 +4247,13 @@ Highlights the passages commenters quote, so you can jump between the article an
 				const current = normalizeButtonSize(
 					(await loadSettings()).buttonSize,
 				);
-				const next = normalizeButtonSize(
-					current + Number(button.dataset.sizeStep) * BUTTON_SIZE_STEP,
+				const next = stepButtonSize(
+					current,
+					Number(button.dataset.sizeStep),
 				);
 
-				// Clamping means the ends of the range produce no change; skip the
-				// write rather than churning storage on a disabled-looking click.
+				// The ends of the range produce no change; skip the write rather than
+				// churning storage on a click that cannot move anything.
 				if (next === current) {
 					return;
 				}
