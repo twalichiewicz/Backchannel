@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HNewhere
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.5.4
+// @version      1.5.5
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
@@ -7468,6 +7468,7 @@ ${settingsPanelHTML()}
 		});
 	}
 
+	// #region hnewhere-test-export
 	function findNormalizedOccurrences(haystack, needle) {
 		const matches = [];
 
@@ -7499,7 +7500,6 @@ ${settingsPanelHTML()}
 		return matches;
 	}
 
-	// #region hnewhere-test-export
 	function resolveRawPoint(index, rawOffset, bias) {
 		if (!index.rawPoints.length) {
 			return null;
@@ -7574,8 +7574,6 @@ ${settingsPanelHTML()}
 			};
 	}
 
-	// #endregion hnewhere-test-export
-
 	function findRangeInRoot(root, normalizedNeedle, uniqueOnly = true) {
 		const index = buildTextIndex(root, {
 			skipHidden: false,
@@ -7589,6 +7587,8 @@ ${settingsPanelHTML()}
 
 		return createRangeFromMatch(index, matches[0], normalizedNeedle.length)?.range || null;
 	}
+
+	// #endregion hnewhere-test-export
 
 	function findBestQuoteMatch(articleIndex, quoteText) {
 		let best = null;
@@ -8361,6 +8361,7 @@ ${settingsPanelHTML()}
 		}
 	}
 
+	// #region hnewhere-test-export
 	function activateCommentQuoteElement(element, onActivate) {
 		element.classList.add("comment-quote-link");
 		element.setAttribute("role", "button");
@@ -8381,25 +8382,35 @@ ${settingsPanelHTML()}
 	}
 
 	function wrapInlineCommentQuote(range, onActivate) {
-		const fragment = range.extractContents();
-
+		// Ask with cloneContents, not extractContents. Both build the same fragment,
+		// but extractContents mutates: a range straddling a block boundary leaves the
+		// partially covered ancestors cloned into the fragment and cut in half in the
+		// document. Re-inserting the fragment does not put them back together — it
+		// adds the clones alongside the halves, so one paragraph becomes two split at
+		// the match boundary. HN separates paragraphs with an unclosed <p> and quote
+		// lines with a leading `>`, and normalizeSearchText flattens both to a space,
+		// so a multi-line `>` quote matches straight across the break and lands here
+		// every time. Cloning first keeps the bail-out free of side effects.
 		if (
-			fragment.querySelector(
-				"article, aside, blockquote, div, footer, header, h1, h2, h3, h4, h5, h6, li, ol, p, pre, section, table, ul",
-			)
+			range
+				.cloneContents()
+				.querySelector(
+					"article, aside, blockquote, div, footer, header, h1, h2, h3, h4, h5, h6, li, ol, p, pre, section, table, ul",
+				)
 		) {
-			range.insertNode(fragment);
 			return null;
 		}
 
 		const wrapper = document.createElement("span");
 		wrapper.dataset.hnewhereQuoteLink = "1";
 		wrapper.className = "comment-quote-link comment-quote-link-inline";
-		wrapper.appendChild(fragment);
+		wrapper.appendChild(range.extractContents());
 		range.insertNode(wrapper);
 		activateCommentQuoteElement(wrapper, onActivate);
 		return wrapper;
 	}
+
+	// #endregion hnewhere-test-export
 
 	function decorateSidebarMatches(controller) {
 		for (const group of controller.groups) {

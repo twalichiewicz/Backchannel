@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.5.5] — Unreleased
+
+### Fixed
+
+- Comments quoting more than one line were rendered shredded: paragraphs split
+  mid-sentence, with the trailing punctuation stranded on a line of its own. When
+  a quote match straddled a paragraph boundary, the inline quote-link wrapper
+  detected it only after calling `extractContents()`, which had already cut the
+  paragraph in half; re-inserting the fragment added the halves back as separate
+  paragraphs instead of restoring the original. The check now runs against
+  `cloneContents()`, so declining to wrap leaves the comment untouched.
+
 ## [1.5.4] — 2026-07-30
 
 ### Added
