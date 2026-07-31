@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
-## [1.5.5] — Unreleased
+## [1.5.5] — 2026-07-31
 
 ### Added
 
