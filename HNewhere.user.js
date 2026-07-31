@@ -4007,7 +4007,13 @@ Highlights the passages commenters quote, so you can jump between the article an
 		// tallest child, which would leave the short hidden-sites pane in a box
 		// sized for the main one.
 		const syncPanesHeight = () => {
-			const active = panes?.querySelector(
+			// scrollHeight reads 0 under display:none, so measuring while the panel
+			// is closed would pin the track to zero until the next open.
+			if (!panes || settingsPanel.classList.contains("hidden")) {
+				return;
+			}
+
+			const active = panes.querySelector(
 				panes.classList.contains("is-secondary")
 					? ".settings-pane-secondary"
 					: ".settings-pane-primary",
@@ -4017,6 +4023,21 @@ Highlights the passages commenters quote, so you can jump between the article an
 				panes.style.height = `${active.scrollHeight}px`;
 			}
 		};
+
+		// The track's height is fixed in JS, so anything that changes the active
+		// pane's content has to resync it. Observing rather than calling
+		// syncPanesHeight from each such place is deliberate: the annotation
+		// sub-options collapse over a 0.22s max-height transition, so a call made
+		// at toggle time measures the height they are leaving rather than the one
+		// they are arriving at. The observer fires throughout the transition, and
+		// covers any content added later without a new call site.
+		if (panes && typeof ResizeObserver === "function") {
+			const paneObserver = new ResizeObserver(() => syncPanesHeight());
+
+			for (const pane of panes.querySelectorAll(".settings-pane")) {
+				paneObserver.observe(pane);
+			}
+		}
 
 		const head = shadow.querySelector("#settings-head");
 		const crumbBack = shadow.querySelector("#settings-blocked-back");
