@@ -24,6 +24,31 @@ use to detect updates, so every release bumps it.
 
 ### Changed
 
+- **Quotes are marked by an ornament, not a rule.** A quoted passage in a comment
+  used to carry a left border, which read as thread hierarchy — nested comments
+  use a left border for exactly that. Quotes are now set in italics behind a ❛ in
+  the gutter, so a deep thread can be scanned without the two devices competing.
+  A quote linked to the article shows its ornament in HN orange.
+- **Focused discussion reads as part of Hacker News.** Its header uses HN's own
+  pipe-separated meta form — `Focused discussion | show all comments` —
+  left-aligned, in sentence case, with the close as a text link rather than a
+  floating `×`. The quote sits at the comment text size, opened and closed by
+  paired ❛ ❜ ornaments that distinguish it from the single-marked quotes in the
+  stream. Aligned to the story's own left edge and capped at the composer's
+  720px. Drops a bespoke brown palette that appeared nowhere else.
+- Filtering to a discussion fades only the comment list. The story header, the
+  composer and the banner stay put, rather than the whole sidebar blinking for
+  what is an edit to the list underneath.
+- Entering a focused discussion scrolls to the banner instead of centring the
+  matched comment, so the filtered thread is read from its start rather than
+  from the middle. Re-applying an already-open filter still does not scroll,
+  since annotations refresh on resize and on setting changes.
+
+### Removed
+
+- The author chips under a focused discussion. They repeated what the filtered
+  list already showed and did not survive a discussion with more than a handful
+  of participants.
 - A discussion now anchors to the line it quoted rather than to the enclosing
   quote block. The block is the fallback, used only when the quote genuinely
   spans more than one line. Previously the block was tried first and claimed

@@ -3058,12 +3058,8 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --active-tint:rgba(0,0,0,.16);
     --grip:rgba(0,0,0,.2);
     --quote-text:#5f5f5f;
+    --quote-ornament:#b4b4b4;
     --faded-underline:rgba(0,0,0,.14);
-    --banner-text:#4a3a26;
-    --banner-quote:#3b3022;
-    --chip-text:#7b4f24;
-    --chip-active-text:#5e2e00;
-    --banner-close:#8d5c2d;
 
     /* 1.5.3 surfaces */
     --field-bg:#fff;
@@ -3109,12 +3105,8 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --active-tint:rgba(255,255,255,.18);
     --grip:rgba(255,255,255,.25);
     --quote-text:#a8a8a8;
+    --quote-ornament:#6d6d6d;
     --faded-underline:rgba(255,255,255,.18);
-    --banner-text:#cfc3b2;
-    --banner-quote:#ddd2c2;
-    --chip-text:#d8a26a;
-    --chip-active-text:#e8b784;
-    --banner-close:#c99b66;
 
     --field-bg:#262626;
     --field-text:#dcdcdc;
@@ -4503,45 +4495,90 @@ ${CHROME_CSS}
     word-wrap:break-word;
 }
 
-#comments-content {
+/* Only the comment lists fade. Filtering to a discussion changes which comments
+   are shown; the story header, the composer and the focused-discussion banner
+   are the frame around that change, so fading them made the whole sidebar blink
+   for what is really an edit to the list underneath. */
+.top-level-comments {
     opacity:1;
     transition:opacity .18s ease;
     will-change:opacity;
 }
 
-#comments-content.comments-transitioning {
+.comments-transitioning .top-level-comments {
     opacity:.12;
 }
 
+/* The 14px indent is the width of the story's vote-arrow column
+   (.story-votelinks), which is what sets the left edge of the title, the
+   composer and every submission. Matching it lines the banner up with them
+   instead of with the scroll container. */
 .filter-banner {
-    position:relative;
-    margin:12px 0 16px;
-    padding:6px 34px 4px;
-    color:var(--banner-text);
-    text-align:center;
+    max-width:720px;
+    margin:12px 0 16px 14px;
+    color:var(--meta);
 }
 
-.filter-banner-title {
+/* Reads as an HN meta line: same 11px Verdana and the same pipe separators as
+   "deergomoo 11 hours ago | reply". Adopting the idiom already in use is what
+   lets the header drop its uppercase treatment without losing its rank. */
+.filter-banner-head {
+    display:flex;
+    flex-wrap:wrap;
+    align-items:baseline;
+    color:var(--meta);
+    font-family:Verdana, Geneva, sans-serif;
     font-size:11px;
-    font-weight:600;
-    letter-spacing:.04em;
-    text-transform:uppercase;
-    opacity:.72;
 }
 
+/* The one piece of contrast in the row, echoing how the story title sits above
+   its own grey meta line. Without it every word carries equal weight and the
+   label stops reading as a label. */
+.filter-banner-title {
+    color:var(--text);
+}
+
+.filter-banner-close::before {
+    content:"|";
+    margin:0 5px;
+}
+
+/* Same chrome as .composer-help, at the panel's own 13px so the quote reads at
+   the size of the comments it was pulled from. Paired ornaments open and close
+   it, which is what separates a focused quote from the comment quotes below --
+   those carry the opening mark alone. */
 .filter-banner-quote {
-    margin-top:8px;
+    margin-top:6px;
     padding:7px 8px;
     border:1px solid var(--help-border);
     border-radius:4px;
     background:var(--help-bg);
-    color:var(--banner-quote);
+    color:var(--quote-text);
     font-size:13px;
     font-style:italic;
     line-height:1.5;
-    /* .filter-banner centers its children; the boxed quote reads better ragged
-       right, matching the formatting panel it now borrows its chrome from. */
-    text-align:left;
+}
+
+/* Set above the text size: at 13px the ornament reads as a speck rather than a
+   quote mark. The nudge drops it off the cap height onto the x-height, where a
+   raised comma sits in type. */
+.filter-banner-quote::before,
+.filter-banner-quote::after {
+    color:var(--quote-ornament);
+    font-size:17px;
+    font-style:normal;
+    line-height:0;
+    vertical-align:-2px;
+}
+
+.filter-banner-quote::before {
+    content:"❛";
+    margin-right:3px;
+}
+
+.filter-banner-quote::after {
+    content:"❜";
+    margin-left:3px;
 }
 
 /* Unboxed, an empty quote was invisible. Boxed, it would render as a stray
@@ -4550,58 +4587,30 @@ ${CHROME_CSS}
     display:none;
 }
 
-.filter-banner-meta {
-    display:none;
-}
 
-.filter-match-list {
-    display:flex;
-    flex-wrap:wrap;
-    justify-content:center;
-    gap:6px;
-    margin-top:10px;
-}
-
-.filter-match-chip {
-    border:1px solid rgba(255,102,0,.18);
-    border-radius:999px;
-    background:transparent;
-    color:var(--chip-text);
-    cursor:pointer;
-    padding:3px 8px;
-    font:500 11px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-@media (hover: hover) {
-    .filter-match-chip:hover {
-        background:rgba(255,102,0,.05);
-    }
-}
-
-.filter-match-chip-active {
-    border-color:rgba(255,102,0,.34);
-    background:rgba(255,102,0,.09);
-    color:var(--chip-active-text);
-}
-
+/* A text link on the meta row, not a floating glyph. Same rule as .meta a and
+   .composer-help-toggle: no underline until hover, no colour shift. */
 .filter-banner-close {
-    position:absolute;
-    right:2px;
-    top:2px;
-    width:26px;
-    height:26px;
-    border:none;
-    border-radius:999px;
-    background:none;
-    color:var(--banner-close);
-    cursor:pointer;
-    font:500 18px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    border:0;
     padding:0;
+    background:none;
+    color:var(--meta);
+    cursor:pointer;
+    font-family:Verdana, Geneva, sans-serif;
+    font-size:11px;
+    text-decoration:none;
+    text-underline-offset:2px;
+}
+
+/* Split from :hover deliberately, same as the quote links: keyboard focus must
+   show regardless of pointer type. */
+.filter-banner-close:focus-visible {
+    text-decoration:underline;
 }
 
 @media (hover: hover) {
     .filter-banner-close:hover {
-        background:rgba(255,102,0,.05);
+        text-decoration:underline;
     }
 }
 
@@ -4872,14 +4881,31 @@ ${CHROME_CSS}
 }
 
 /* HN ships no quote syntax, so foldQuoteBlocks turns runs of marked lines into
-   real blockquotes. Every quote gets the neutral treatment; matching promotes
-   the border to HN orange rather than introducing the styling from nothing.
+   real blockquotes. A left rule would read as thread hierarchy -- .children >
+   .comment already uses one for exactly that -- so the quote is marked by an
+   ornament in the gutter and italics instead, which cannot be confused with
+   nesting when scanning a deep thread.
    No backticks in here - this whole stylesheet is inside a template literal. */
 .text blockquote {
+    position:relative;
     margin:6px 0;
-    padding:2px 0 2px 10px;
-    border-left:2px solid var(--faded-underline);
+    padding-left:15px;
     color:var(--quote-text);
+    font-style:italic;
+}
+
+/* The ornaments are written as literal characters, not CSS codepoint escapes.
+   This stylesheet is a template literal, and JS reads a backslash followed by a
+   digit as an octal escape, which is a syntax error in template strings. */
+.text blockquote::before {
+    content:"❛";
+    position:absolute;
+    left:0;
+    top:0;
+    color:var(--quote-ornament);
+    font-size:15px;
+    font-style:normal;
+    line-height:1.35;
 }
 
 .text blockquote p:first-child {
@@ -4890,9 +4916,10 @@ ${CHROME_CSS}
     margin-bottom:0;
 }
 
-blockquote.comment-quote-link {
-    border-left-color:rgba(255,102,0,.32);
-}
+/* The ornament stays neutral whether or not the quote is linked. The orange
+   underline on the anchored text is already the loud signal; colouring the mark
+   too gave the same information twice, and left the difference unreadable
+   without comparing two quotes side by side. */
 
 .comment-quote-link-inline {
     text-decoration:underline;
@@ -4931,7 +4958,6 @@ blockquote.comment-quote-redundant {
     overflow:hidden;
     margin:0;
     padding:0;
-    border-left-color:transparent;
     opacity:.08;
 }
 
@@ -5169,13 +5195,10 @@ ${headerHTML({ subtitle: true, minimize: true })}
 ${settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
-<button id="clear-filter" class="filter-banner-close" type="button" aria-label="Close filtered discussion" title="Show all comments">
-×
-</button>
-<div class="filter-banner-title">Focused discussion</div>
+<div class="filter-banner-head">
+<span class="filter-banner-title">Focused discussion</span><button id="clear-filter" class="filter-banner-close" type="button">show all comments</button>
+</div>
 <div id="filter-banner-quote" class="filter-banner-quote"></div>
-<div id="filter-banner-meta" class="filter-banner-meta"></div>
-<div id="filter-match-list" class="filter-match-list hidden"></div>
 </div>
 <div id="comments-content">Loading...</div>
 </div>
@@ -5190,8 +5213,6 @@ ${settingsPanelHTML()}
 		const stopWatchingTheme = watchTheme(host);
 		const filterBanner = shadow.querySelector("#filter-banner");
 		const filterBannerQuote = shadow.querySelector("#filter-banner-quote");
-		const filterBannerMeta = shadow.querySelector("#filter-banner-meta");
-		const filterMatchList = shadow.querySelector("#filter-match-list");
 		const clearFilterButton = shadow.querySelector("#clear-filter");
 
 		// Stop scroll/touch events moving out of sidebar so sites with
@@ -5414,8 +5435,6 @@ ${settingsPanelHTML()}
 			headerSubtitle: shadow.querySelector("#header-subtitle"),
 			filterBanner,
 			filterBannerQuote,
-			filterBannerMeta,
-			filterMatchList,
 		};
 	}
 
@@ -7069,14 +7088,36 @@ ${settingsPanelHTML()}
 		}
 	}
 
-	function scrollToCommentElement(element) {
-		if (!element) {
+	// Matches #comments' own top padding, so the banner lands where a first item
+	// would sit rather than jammed against the edge.
+	const FILTER_BANNER_SCROLL_MARGIN = 12;
+
+	// scrollIntoView would sit the banner flush against the container edge, under
+	// #comments' own top padding. Scrolling the container directly lets the banner
+	// keep that padding, so it reads as the top of the list rather than as
+	// something clipped by it.
+	function scrollFilterBannerToTop() {
+		const banner = sidebarUI?.filterBanner;
+
+		if (!banner || banner.classList.contains("hidden")) {
 			return;
 		}
 
-		element.scrollIntoView({
+		const container = banner.closest("#comments");
+
+		if (!container) {
+			banner.scrollIntoView({ behavior: "smooth", block: "start" });
+			return;
+		}
+
+		const offset =
+			banner.getBoundingClientRect().top -
+			container.getBoundingClientRect().top +
+			container.scrollTop;
+
+		container.scrollTo({
+			top: Math.max(0, offset - FILTER_BANNER_SCROLL_MARGIN),
 			behavior: "smooth",
-			block: "center",
 		});
 	}
 
@@ -7125,13 +7166,6 @@ ${settingsPanelHTML()}
 			sidebarUI?.filterBanner?.classList.add("hidden");
 			if (sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBannerQuote.textContent = "";
-			}
-			if (sidebarUI?.filterBannerMeta) {
-				sidebarUI.filterBannerMeta.textContent = "";
-			}
-			if (sidebarUI?.filterMatchList) {
-				sidebarUI.filterMatchList.replaceChildren();
-				sidebarUI.filterMatchList.classList.add("hidden");
 			}
 		}, options);
 	}
@@ -8480,51 +8514,6 @@ ${settingsPanelHTML()}
 		return visible;
 	}
 
-	function setActiveFilterMatchChip(commentId) {
-		sidebarUI?.filterMatchList
-			?.querySelectorAll(".filter-match-chip")
-			.forEach((chip) => {
-				chip.classList.toggle(
-					"filter-match-chip-active",
-					chip.dataset.commentId === String(commentId),
-				);
-			});
-	}
-
-	function renderFilterMatchList(group) {
-		const list = sidebarUI?.filterMatchList;
-
-		if (!list) {
-			return;
-		}
-
-		list.replaceChildren();
-
-		if ((group?.comments?.length || 0) <= 1) {
-			list.classList.add("hidden");
-			return;
-		}
-
-		for (const match of group.comments) {
-			const chip = document.createElement("button");
-			chip.type = "button";
-			chip.className = "filter-match-chip";
-			chip.dataset.commentId = String(match.commentId);
-			chip.textContent = match.author || "anonymous";
-			chip.title = truncateText(match.commentText || match.fullQuoteText || "", 180);
-			chip.onclick = (event) => {
-				event.preventDefault();
-				event.stopPropagation();
-				setActiveFilterMatchChip(match.commentId);
-				scrollToCommentElement(match.element);
-			};
-			list.appendChild(chip);
-		}
-
-		setActiveFilterMatchChip(group.comments[0]?.commentId);
-		list.classList.remove("hidden");
-	}
-
 	function applyCommentFilter(groupKey, options = {}) {
 		const group = annotationController?.groupsByKey.get(groupKey);
 
@@ -8562,7 +8551,6 @@ ${settingsPanelHTML()}
 
 			setQuoteRedundancy(group, true);
 			updateSubmissionVisibility(visibleCommentIds);
-			renderFilterMatchList(group);
 
 			if (sidebarUI?.filterBanner && sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBanner.classList.remove("hidden");
@@ -8572,15 +8560,14 @@ ${settingsPanelHTML()}
 				);
 			}
 
-			if (sidebarUI?.filterBannerMeta) {
-				sidebarUI.filterBannerMeta.textContent = "";
-			}
 		}, options);
 
-		setActiveFilterMatchChip(targetMatch?.commentId);
-
+		// Entering the filter puts the banner at the top rather than centring the
+		// matched comment: the banner is the explanation of what just happened, and
+		// starting at it means the reader gets the whole filtered thread from its
+		// beginning instead of landing midway down it.
 		if (options.scroll !== false) {
-			scrollToCommentElement(targetMatch?.element);
+			scrollFilterBannerToTop();
 		}
 	}
 
@@ -8636,9 +8623,11 @@ ${settingsPanelHTML()}
 	function decorateSidebarMatches(controller) {
 		for (const group of controller.groups) {
 			for (const comment of group.comments) {
+				// Scrolls, unlike the refresh path below: this is the reader entering
+				// the filter, and the list they were looking at is about to be
+				// replaced, so the old scroll position means nothing afterwards.
 				const onActivate = () => {
 					applyCommentFilter(group.key, {
-						scroll: false,
 						commentId: comment.commentId,
 					});
 					controller.focusGroup(group.key);
@@ -8905,6 +8894,9 @@ ${settingsPanelHTML()}
 		annotationController = createAnnotationOverlay(groups, [], settings);
 		decorateSidebarMatches(annotationController);
 
+		// Re-applying a filter that is already open, not entering one. Must not
+		// scroll: annotations refresh on resize and on setting changes, and each
+		// refresh would otherwise yank the reader back to the banner.
 		if (activeCommentFilter) {
 			applyCommentFilter(activeCommentFilter, {
 				scroll: false,
