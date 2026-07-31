@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HNewhere
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.5.3
+// @version      1.5.4
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
@@ -102,6 +102,7 @@
 		settings: "HNewhere:settings",
 		state: "HNewhere:sidebar_state",
 		votes: "HNewhere:votes",
+		blocked: "HNewhere:blocked_sites",
 	};
 
 	// Votes have to be remembered locally. The sidebar reads HN over a cross-site
@@ -110,6 +111,60 @@
 	// Only the popup sees the real state, so what it reports is recorded here and
 	// replayed over anonymously fetched pages.
 	const VOTE_MEMORY_TTL = 90 * 24 * 60 * 60 * 1000;
+
+	// #region hnewhere-test-export
+	const BUTTON_SIZE_MIN = 24;
+	const BUTTON_SIZE_MAX = 64;
+	const BUTTON_SIZE_STEP = 4;
+	const BUTTON_SIZE_DEFAULT = 44;
+
+	// 1.5.4 stored these as named presets. Mapped rather than discarded so an
+	// existing choice survives the change to a pixel value.
+	const LEGACY_BUTTON_SIZES = {
+		small: 36,
+		medium: 44,
+		large: 56,
+	};
+
+	const BUTTON_SHAPES = {
+		circle: "50%",
+		squircle: "30%",
+	};
+
+	// Snapped to the step and clamped, so a hand-edited or legacy stored value can
+	// never produce a button the stepper cannot get back to.
+	function normalizeButtonSize(value) {
+		const raw = typeof value === "string" ? LEGACY_BUTTON_SIZES[value] : value;
+		const numeric = Number.isFinite(raw) ? raw : BUTTON_SIZE_DEFAULT;
+		const snapped =
+			Math.round(numeric / BUTTON_SIZE_STEP) * BUTTON_SIZE_STEP;
+
+		return Math.min(BUTTON_SIZE_MAX, Math.max(BUTTON_SIZE_MIN, snapped));
+	}
+
+	// Kept proportional to the button rather than fixed, and bounded so "HN" still
+	// fits inside a 24px button and does not swamp a 64px one.
+	function buttonFontSizeFor(size) {
+		return Math.min(18, Math.max(9, Math.round(size * 0.3)));
+	}
+
+	// detectDarkMode runs synchronously on every annotation render, and
+	// applyButtonAppearance runs on every resize, so neither can await GM storage.
+	// These three caches are the synchronous view of the stored settings.
+	let themePreference = "auto";
+	let buttonShapePreference = "circle";
+	let buttonSizePreference = BUTTON_SIZE_DEFAULT;
+
+	// The only writer of the three caches. Called by loadSettings and saveSettings
+	// so they cannot drift from stored settings, and directly by tests.
+	function syncAppearancePreferences(settings) {
+		themePreference = settings.theme || "auto";
+		buttonShapePreference = BUTTON_SHAPES[settings.buttonShape]
+			? settings.buttonShape
+			: "circle";
+		buttonSizePreference = normalizeButtonSize(settings.buttonSize);
+	}
+	// #endregion hnewhere-test-export
 
 	const DEFAULT_SETTINGS = {
 		annotations: false,
@@ -120,6 +175,10 @@
 		// discussion rather than not appearing at all. Turning it on restores the
 		// pre-1.5.3 behaviour of staying hidden unless there is something to read.
 		hideWithoutDiscussion: false,
+		// "auto" reproduces the pre-1.5.4 behaviour of following the page.
+		theme: "auto",
+		buttonShape: "circle",
+		buttonSize: BUTTON_SIZE_DEFAULT,
 	};
 
 	const HN_ORIGIN = "https://news.ycombinator.com";
@@ -243,6 +302,8 @@
 			merged.annotationsWhenSidebarClosed = false;
 		}
 
+		syncAppearancePreferences(merged);
+
 		return merged;
 	}
 
@@ -254,11 +315,36 @@
 
 		await save(STORAGE.settings, next);
 
+		// Re-synced from the patched result. loadSettings above already synced, but
+		// it ran against the pre-patch settings, so relying on it alone would leave
+		// the caches one change behind whatever was just saved.
+		syncAppearancePreferences(next);
+
 		return next;
 	}
 
 	function siteKey() {
 		return location.hostname;
+	}
+
+	// Exact hostname only, matching how per-site widths are keyed. Subdomains are
+	// therefore independent entries, which is what "hide it on this site" means.
+	async function loadBlockedSites() {
+		const stored = await load(STORAGE.blocked, []);
+
+		return new Set(
+			Array.isArray(stored)
+				? stored.filter((entry) => typeof entry === "string")
+				: [],
+		);
+	}
+
+	async function saveBlockedSites(sites) {
+		await save(STORAGE.blocked, [...sites].sort());
+	}
+
+	async function isSiteBlocked() {
+		return (await loadBlockedSites()).has(siteKey());
 	}
 
 	async function loadSiteWidth() {
@@ -841,6 +927,7 @@
 
 	// Returns null when the colour says nothing about the page -- fully transparent,
 	// or a format this cannot read -- so the caller can look somewhere else.
+	// #region hnewhere-test-export
 	function isDarkColor(color) {
 		const match = /rgba?\(([^)]+)\)/.exec(color || "");
 
@@ -866,6 +953,14 @@
 	}
 
 	function detectDarkMode() {
+		if (themePreference === "dark") {
+			return true;
+		}
+
+		if (themePreference === "light") {
+			return false;
+		}
+
 		for (const element of [document.body, document.documentElement]) {
 			if (!element) {
 				continue;
@@ -881,6 +976,8 @@
 		return window.matchMedia("(prefers-color-scheme: dark)").matches;
 	}
 
+	// #endregion hnewhere-test-export
+
 	const DARK_CLASS = "hnewhere-dark";
 
 	// The class goes on the host element rather than anything inside the shadow root,
@@ -890,6 +987,10 @@
 		host.classList.toggle(DARK_CLASS, detectDarkMode());
 	}
 
+	// Every mounted surface registers its applier here so a settings change can be
+	// pushed to all of them; matchMedia only covers the OS-level trigger.
+	const themeAppliers = new Set();
+
 	// Returns a cleanup function. The OS setting can change while a surface is open,
 	// and it is the fallback whenever the page background is transparent.
 	function watchTheme(host) {
@@ -898,8 +999,65 @@
 
 		apply();
 		query.addEventListener("change", apply);
+		themeAppliers.add(apply);
 
-		return () => query.removeEventListener("change", apply);
+		return () => {
+			query.removeEventListener("change", apply);
+			themeAppliers.delete(apply);
+		};
+	}
+
+	const KEYBOARD_GUARD_EVENTS = ["keydown", "keypress", "keyup"];
+	const EDITABLE_SELECTOR =
+		"input, textarea, select, [contenteditable=''], [contenteditable='true']";
+
+	// Host pages bind single-key shortcuts on document -- GitHub uses "s" for
+	// search -- and guard them by checking whether event.target is a text field.
+	// That guard is correct for the light DOM but blind to ours: an event leaving a
+	// shadow root is retargeted, so by the time it reaches document the target is
+	// this host <div> rather than the <input>. The page concludes nobody is typing,
+	// fires the shortcut, and steals focus mid-word (issue #32).
+	//
+	// Stopping at the host is late enough that every listener inside the shadow
+	// root has already run, and narrow enough that shortcuts still work when focus
+	// is on one of our buttons rather than in a field. It does not defeat a page
+	// listener registered in the capture phase, which would see the event before it
+	// ever reaches us; no site is known to bind shortcuts that way.
+	function guardHostKeyboard(host) {
+		const onKey = (event) => {
+			const source = event.composedPath()[0];
+
+			if (source instanceof Element && source.matches(EDITABLE_SELECTOR)) {
+				event.stopPropagation();
+			}
+		};
+
+		for (const type of KEYBOARD_GUARD_EVENTS) {
+			host.addEventListener(type, onKey);
+		}
+	}
+
+	// The floating buttons sit in the page rather than a shadow root, so they
+	// resolve their own colour and have to be repainted by hand.
+	function refreshThemeSurfaces() {
+		for (const apply of themeAppliers) {
+			apply();
+		}
+
+		for (const id of [
+			"hn-restore-button",
+			"hn-collapse-button",
+			"hn-submit-button",
+		]) {
+			const button = document.getElementById(id);
+
+			if (button) {
+				setFloatingButtonVariant(
+					button,
+					button.dataset.hnewhereVariant || "active",
+				);
+			}
+		}
 	}
 
 	function isMobile() {
@@ -932,6 +1090,44 @@
 		},
 	};
 
+	// The only place these four properties are set. They used to be spelled out in
+	// both createFloatingHNButton's cssText and applyButtonMobileStyle, which
+	// re-asserts them on every resize -- so a value applied to only one of them was
+	// silently reverted the next time the window changed size.
+	function applyButtonAppearance(button) {
+		const size = buttonSizePreference;
+
+		button.style.width = `${size}px`;
+		button.style.height = `${size}px`;
+		button.style.fontSize = `${buttonFontSizeFor(size)}px`;
+		button.style.borderRadius =
+			BUTTON_SHAPES[buttonShapePreference] || BUTTON_SHAPES.circle;
+	}
+
+	async function refreshButtonAppearance() {
+		for (const id of [
+			"hn-restore-button",
+			"hn-collapse-button",
+			"hn-submit-button",
+		]) {
+			const button = document.getElementById(id);
+
+			if (!button) {
+				continue;
+			}
+
+			applyButtonAppearance(button);
+
+			// Re-clamped because a button grown to 56px near a viewport edge would
+			// otherwise hang partly off-screen at its stored position. Skipped on
+			// mobile for the same reason createRestoreButton skips it: the button is
+			// corner-pinned there, not freely positioned.
+			if (!isMobile()) {
+				await applyButtonPosition(button);
+			}
+		}
+	}
+
 	function setFloatingButtonVariant(button, variant) {
 		const style = BUTTON_VARIANTS[variant] || BUTTON_VARIANTS.active;
 
@@ -948,19 +1144,17 @@
 	function applyButtonMobileStyle(button) {
 		Object.assign(button.style, {
 			boxSizing: "border-box",
-			width: "44px",
-			height: "44px",
 			padding: "0",
-			borderRadius: "50%",
 			display: "flex",
 			alignItems: "center",
 			justifyContent: "center",
-			fontSize: "13px",
 			color: "white",
 			top: "16px",
 			right: "16px",
 			opacity: "1",
 		});
+
+		applyButtonAppearance(button);
 
 		// Re-asserted because this runs on every resize and would otherwise reset a
 		// button that is deliberately showing the inactive colour.
@@ -986,12 +1180,8 @@
 					z-index:2147483647;
 					color:white;
 					border:none;
-					border-radius:50%;
-					width:44px;
-					height:44px;
 					padding:0;
 					font-family:Verdana,sans-serif;
-					font-size:13px;
 					font-weight:bold;
 					cursor:pointer;
 					user-select:none;
@@ -2298,11 +2488,12 @@ ${CHROME_CSS}
     border:1px solid var(--border);
     border-radius:8px;
     box-shadow:0 8px 24px rgba(0,0,0,.18);
-    /* No padding of its own: the header runs edge to edge like the sidebar's, and
-       overflow:hidden is what makes the border radius actually clip it. The body
-       below carries the inset instead. */
+    /* No padding of its own: the header runs edge to edge like the sidebar's and
+       rounds its own top corners. The body below carries the inset instead.
+       Deliberately no overflow:hidden -- it used to clip the header, but it also
+       clipped the absolutely positioned settings dropdown to this box, and the
+       popover is only as tall as a short submit form. */
     padding:0;
-    overflow:hidden;
     /* Containing block for the absolutely positioned settings dropdown. */
     position:relative;
     font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -2318,6 +2509,11 @@ ${CHROME_CSS}
        and the popover's own vertical margins. */
     max-height:calc(100vh - 120px);
     overflow-y:auto;
+}
+
+/* Rounds its own top corners now that #popover no longer clips its children. */
+#popover header {
+    border-radius:7px 7px 0 0;
 }
 
 /* Narrower host than the sidebar, so the dropdown spans the width rather than
@@ -2501,6 +2697,7 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 </div>
 `;
 
+		guardHostKeyboard(host);
 		document.body.appendChild(host);
 
 		// Same palette as the sidebar, resolved independently because this is its own
@@ -2861,6 +3058,12 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --help-border:#e2e2d9;
     --help-text:#555;
     --code-bg:#efefe6;
+    /* Deliberately cool against the panel's warm neutrals: the preview is a
+       measuring surface, not part of the orange brand language. */
+    --blueprint-bg:#f6f8fa;
+    --blueprint-grid:rgba(64,86,112,.13);
+    --blueprint-line:rgba(64,86,112,.22);
+    --blueprint-ink:rgba(52,72,96,.72);
     --status-text:#555;
     --error:#c00;
     --button-bg:#fff;
@@ -2905,6 +3108,10 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --help-border:#3a3a3a;
     --help-text:#b0b0b0;
     --code-bg:#333;
+    --blueprint-bg:#1b1f25;
+    --blueprint-grid:rgba(150,180,214,.12);
+    --blueprint-line:rgba(150,180,214,.2);
+    --blueprint-ink:rgba(168,196,226,.75);
     --status-text:#b0b0b0;
     --error:#ff8080;
     --button-bg:#333;
@@ -2998,12 +3205,6 @@ header button {
     z-index:3;
 }
 
-.settings-title {
-    margin:0 0 8px;
-    font-size:12px;
-    font-weight:600;
-}
-
 .settings-group + .settings-group {
     margin-top:10px;
     padding-top:10px;
@@ -3039,8 +3240,57 @@ header button {
     margin-top:8px;
 }
 
-.settings-option input {
+/* Drawn from the panel's own tokens rather than left to appearance:auto. Chrome
+   paints a UA checkbox from its dark form palette -- a lighter fill and a pale
+   border -- which never matched the segmented controls beside it, and hand-
+   matching that value would only move the mismatch to Safari and Firefox.
+   13px is the native width the .settings-option-hint indent is measured against,
+   so it stays 13px including the border. */
+.settings-option input[type="checkbox"] {
+    appearance:none;
+    -webkit-appearance:none;
+    box-sizing:border-box;
+    flex:0 0 auto;
+    width:13px;
+    height:13px;
     margin:2px 0 0;
+    display:inline-grid;
+    place-content:center;
+    border:1px solid var(--help-border);
+    border-radius:3px;
+    background:var(--help-bg);
+    cursor:pointer;
+    transition:background .14s ease, border-color .14s ease;
+}
+
+/* Same accent the selected segment uses, so a checked box and a chosen segment
+   read as the same kind of "on". */
+.settings-option input[type="checkbox"]:checked {
+    border-color:transparent;
+    background:#0b63ce;
+    background:AccentColor;
+}
+
+.settings-option input[type="checkbox"]:checked::after {
+    content:"";
+    width:6px;
+    height:3px;
+    border-left:1.5px solid #fff;
+    border-bottom:1.5px solid #fff;
+    transform:translateY(-1px) rotate(-45deg);
+}
+
+.settings-option input[type="checkbox"]:focus-visible {
+    outline:2px solid #0b63ce;
+    outline:2px solid AccentColor;
+    outline-offset:1px;
+}
+
+/* The annotation sub-options are disabled while annotations are off, and an
+   appearance:none box has no UA disabled styling of its own. */
+.settings-option input[type="checkbox"]:disabled {
+    opacity:.45;
+    cursor:default;
 }
 
 .settings-option.sub-option {
@@ -3123,6 +3373,457 @@ header button {
 .hidden {
     display:none;
 }
+
+.settings-field + .settings-field {
+    margin-top:10px;
+}
+
+.settings-field-label {
+    font-size:11px;
+    color:var(--muted);
+    margin-bottom:4px;
+}
+
+/* Two panes side by side inside a clipped viewport. Height is set in JS from the
+   active pane, because a flex row is always as tall as its tallest child and the
+   hidden-sites pane is much shorter than the main one. */
+.settings-panel {
+    overflow-x:hidden;
+    /* The popover no longer clips this, so the panel bounds itself against a
+       short viewport rather than running off the bottom of the screen. */
+    max-height:calc(100vh - 120px);
+    overflow-y:auto;
+}
+
+/* The title and credits sit outside the sliding track, so both panes keep them.
+   This replaces the .settings-group + .settings-group rule that used to draw the
+   separator when credits was itself a group inside the stack. */
+.settings-panes + .settings-credits {
+    margin-top:10px;
+    padding-top:10px;
+    border-top:1px solid var(--surface-divider);
+}
+
+.settings-panes {
+    display:flex;
+    align-items:flex-start;
+    width:200%;
+    overflow:hidden;
+    transition:transform .26s ease, height .26s ease;
+}
+
+.settings-panes.is-secondary {
+    transform:translateX(-50%);
+}
+
+.settings-pane {
+    flex:0 0 50%;
+    width:50%;
+    min-width:0;
+    /* Delayed on the way out so the outgoing pane stays visible for the whole
+       slide, then drops out of the tab order once it is off-screen. */
+    visibility:hidden;
+    transition:visibility 0s linear .26s;
+}
+
+.settings-panes:not(.is-secondary) > .settings-pane-primary,
+.settings-panes.is-secondary > .settings-pane-secondary {
+    visibility:visible;
+    transition-delay:0s;
+}
+
+/* A breadcrumb rather than a bare title: the hidden-sites list is a second level
+   of the same panel, so the trail is what says where you are and how to get back.
+   Sits outside the sliding track, so it survives the transition. */
+/* No gap: the chevron animates its own width and margin, and a flex gap would
+   still reserve space for it while collapsed, indenting the title on level one. */
+.settings-head {
+    display:flex;
+    align-items:baseline;
+    margin:0 0 8px;
+}
+
+/* Collapsed to zero width rather than hidden, so entering the second level slides
+   it open and pushes the trail across instead of snapping. */
+.settings-back {
+    flex:0 0 auto;
+    width:0;
+    margin-right:0;
+    padding:0;
+    border:0;
+    overflow:hidden;
+    background:none;
+    color:var(--muted);
+    font-size:15px;
+    line-height:1;
+    opacity:0;
+    cursor:pointer;
+    align-self:center;
+    transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
+}
+
+.settings-head.is-secondary .settings-back {
+    width:9px;
+    margin-right:5px;
+    opacity:1;
+}
+
+.settings-crumb-root {
+    padding:0;
+    border:0;
+    background:none;
+    color:inherit;
+    font-size:12px;
+    font-weight:600;
+    line-height:1.3;
+    /* Inert on the first level, where it is simply the panel's title. */
+    cursor:default;
+    transition:color .2s ease, font-weight .2s ease;
+}
+
+/* Enabled only on the second level, where it stops being the title and becomes
+   the way back -- so emphasis moves off it and onto the current page. */
+.settings-crumb-root:enabled {
+    cursor:pointer;
+    font-weight:400;
+    color:var(--muted);
+    text-decoration:underline;
+    text-underline-offset:2px;
+}
+
+/* Always in flow, faded and nudged rather than display:none, so it can animate
+   in both directions. Laying it out on the first level costs nothing: the head
+   is left-aligned, so an invisible trail shifts nothing. */
+.settings-crumb-tail {
+    display:flex;
+    align-items:baseline;
+    gap:5px;
+    /* The head has no flex gap -- the chevron animates its own -- so the space
+       before the separator belongs to the trail. */
+    margin-left:5px;
+    font-size:12px;
+    font-weight:600;
+    line-height:1.3;
+    opacity:0;
+    transform:translateX(-4px);
+    pointer-events:none;
+    transition:opacity .2s ease, transform .2s ease;
+}
+
+.settings-head.is-secondary .settings-crumb-tail {
+    opacity:1;
+    transform:none;
+    pointer-events:auto;
+}
+
+.settings-crumb-sep {
+    font-weight:400;
+    color:var(--muted);
+}
+
+.segmented {
+    display:flex;
+    border:1px solid var(--help-border);
+    border-radius:5px;
+    background:var(--help-bg);
+    overflow:hidden;
+}
+
+.segment {
+    position:relative;
+    flex:1 1 0;
+    min-width:0;
+}
+
+.segment + .segment {
+    border-left:1px solid var(--help-border);
+}
+
+/* Full-bleed rather than display:none so the control stays keyboard reachable and
+   arrow keys still move through the group. */
+.segment input {
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    margin:0;
+    opacity:0;
+    cursor:pointer;
+}
+
+.segment span {
+    display:block;
+    padding:4px 5px;
+    text-align:center;
+    font-size:11px;
+    line-height:1.3;
+    color:var(--help-text);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    transition:background .14s ease, color .14s ease;
+}
+
+/* Matches the native checkboxes above rather than the HN orange: orange is
+   reserved for the product button, which the preview beside this renders in full.
+   AccentColor is the same value the unstyled checkboxes resolve to; the literal
+   is the fallback where it is unsupported. */
+/* Always white, never AccentColorText: that keyword resolves to black against a
+   light system accent, which left the selected label unreadable on the blue. The
+   background follows the system accent; the label does not follow it back. */
+.segment input:checked + span {
+    background:#0b63ce;
+    background:AccentColor;
+    color:#fff;
+    font-weight:600;
+}
+
+.segment input:focus-visible + span {
+    outline:2px solid #0b63ce;
+    outline:2px solid AccentColor;
+    outline-offset:-2px;
+}
+
+.button-designer {
+    display:flex;
+    align-items:stretch;
+    gap:10px;
+}
+
+/* flex-start so the "Button" label sits level with the top of the preview box
+   beside it rather than floating in the middle of the column. */
+.button-designer-controls {
+    flex:1 1 auto;
+    min-width:0;
+    display:flex;
+    flex-direction:column;
+    justify-content:flex-start;
+}
+
+/* align-self so the row is only as wide as its three controls; stretched to the
+   column it left the two buttons marooned at opposite edges. */
+.stepper {
+    display:flex;
+    align-items:center;
+    align-self:flex-start;
+    gap:4px;
+    margin-top:8px;
+}
+
+.stepper-button {
+    flex:0 0 24px;
+    width:24px;
+    height:24px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:0;
+    border:1px solid var(--help-border);
+    border-radius:4px;
+    background:var(--help-bg);
+    color:var(--help-text);
+    font-size:14px;
+    line-height:1;
+    cursor:pointer;
+}
+
+.stepper-button:disabled {
+    opacity:.4;
+    cursor:default;
+}
+
+.stepper-value {
+    display:flex;
+    align-items:baseline;
+    gap:1px;
+    padding:0 5px;
+    border:1px solid var(--help-border);
+    border-radius:4px;
+    background:var(--field-bg);
+}
+
+.stepper-value:focus-within {
+    outline:2px solid #0b63ce;
+    outline:2px solid AccentColor;
+    outline-offset:-1px;
+}
+
+/* Fixed at three digits' worth: the field accepts anything typed and clamps on
+   commit, so it has to hold a number wider than the 64px ceiling without the
+   row resizing as you type. */
+.stepper-input {
+    width:24px;
+    padding:3px 0;
+    border:0;
+    background:none;
+    color:var(--field-text);
+    font-family:Menlo, Consolas, monospace;
+    font-size:11px;
+    text-align:right;
+}
+
+.stepper-input:focus {
+    outline:none;
+}
+
+.stepper-unit {
+    font-family:Menlo, Consolas, monospace;
+    font-size:9px;
+    color:var(--muted);
+}
+
+/* A drafting surface: hairline graph grid, the button drawn as line art rather
+   than filled, and a measured callout under it. The grid makes the size change
+   legible as a measurement instead of just "bigger". */
+.button-preview {
+    /* Sized to clear the 64px maximum button plus its padding and border, and no
+       wider -- the controls column is the constraint, and "Squircle" truncates
+       before it. */
+    flex:0 0 88px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:5px;
+    padding:8px 6px;
+    border:1px solid var(--blueprint-line);
+    border-radius:5px;
+    background-color:var(--blueprint-bg);
+    background-image:
+        linear-gradient(var(--blueprint-grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--blueprint-grid) 1px, transparent 1px);
+    background-size:8px 8px;
+    background-position:center center;
+}
+
+/* Fixed so the panel does not jump as the button grows through its range. */
+.button-preview-stage {
+    height:68px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+}
+
+/* Filled rather than drawn as line art: the point of the preview is to show the
+   button you will actually get, colour included. The grid behind it still does
+   the measuring work. */
+.button-preview-shape {
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border:0;
+    background:#ff6600;
+    box-shadow:0 1px 4px rgba(0,0,0,.25);
+    color:#fff;
+    font-family:Verdana,sans-serif;
+    font-weight:bold;
+    transition:width .16s ease, height .16s ease, border-radius .16s ease, font-size .16s ease;
+}
+
+.button-preview-rule {
+    position:relative;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    width:100%;
+    height:9px;
+}
+
+/* The rule sits on each box's bottom edge so the side ticks rise from it toward
+   the object being measured. On border-top the box hung below the line and the
+   ticks pointed away from it. */
+.button-preview-rule::before,
+.button-preview-rule::after {
+    content:"";
+    position:absolute;
+    top:calc(50% - 5px);
+    height:5px;
+    width:calc(50% - 14px);
+    border-bottom:1px solid var(--blueprint-ink);
+}
+
+.button-preview-rule::before {
+    left:0;
+    border-left:1px solid var(--blueprint-ink);
+}
+
+.button-preview-rule::after {
+    right:0;
+    border-right:1px solid var(--blueprint-ink);
+}
+
+.button-preview-dim {
+    position:relative;
+    padding:0 4px;
+    background:var(--blueprint-bg);
+    color:var(--blueprint-ink);
+    font-family:Menlo, Consolas, monospace;
+    font-size:9px;
+}
+
+/* A text link at the foot of the controls column rather than a button under the
+   whole row: it undoes the two controls directly above it, and reads as
+   secondary to them. */
+.settings-reset {
+    align-self:flex-end;
+    margin-top:6px;
+    padding:0;
+    border:0;
+    background:none;
+    color:var(--muted);
+    font-size:11px;
+    text-decoration:underline;
+    text-underline-offset:2px;
+    cursor:pointer;
+}
+
+.settings-link-button {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    width:100%;
+    padding:6px 8px;
+    border:1px solid var(--help-border);
+    border-radius:4px;
+    background:var(--help-bg);
+    color:var(--help-text);
+    font-size:12px;
+    text-align:left;
+    cursor:pointer;
+}
+
+.settings-link-chevron {
+    font-size:14px;
+    opacity:.6;
+}
+
+.settings-blocked-list {
+    margin-top:4px;
+}
+
+.settings-blocked-entry {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:8px;
+    padding:3px 0;
+    font-size:11px;
+}
+
+.settings-blocked-remove {
+    border:0;
+    background:none;
+    color:var(--muted);
+    font-size:14px;
+    line-height:1;
+    padding:0 2px;
+    cursor:pointer;
+}
+
+.settings-blocked-empty {
+    font-size:11px;
+    color:var(--muted);
+}
 `;
 
 	function headerHTML({ subtitle = false, minimize = false } = {}) {
@@ -3135,6 +3836,13 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </span>
 
 <div class="header-actions">
+<button id="hide-site" aria-label="Hide HNewhere on this site" title="Hide HNewhere on this site">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M1.4 8S3.9 3.9 8 3.9 14.6 8 14.6 8 12.1 12.1 8 12.1 1.4 8 1.4 8Z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
+<circle cx="8" cy="8" r="1.85" fill="none" stroke="currentColor" stroke-width="1.25"/>
+<line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
+</svg>
+</button>
 <button id="settings-toggle" aria-label="Open HNewhere settings" title="HNewhere settings" aria-expanded="false" aria-controls="settings-panel">
 &#9881;&#65038;
 </button>
@@ -3154,7 +3862,14 @@ ${
 	function settingsPanelHTML() {
 		return `
 <div id="settings-panel" class="settings-panel hidden">
-<div class="settings-title">Settings</div>
+<div id="settings-head" class="settings-head">
+<button id="settings-blocked-back" class="settings-back" type="button" aria-label="Back to settings" disabled>&lsaquo;</button>
+<button id="settings-crumb-root" class="settings-crumb-root" type="button" disabled>Settings</button>
+<span id="settings-crumb-tail" class="settings-crumb-tail" aria-hidden="true"><span class="settings-crumb-sep">/</span>Hidden sites</span>
+</div>
+<div id="settings-panes" class="settings-panes">
+
+<div class="settings-pane settings-pane-primary">
 
 <div class="settings-group">
 <label class="settings-option">
@@ -3190,7 +3905,57 @@ Highlights the passages commenters quote, so you can jump between the article an
 </div>
 </div>
 
-<div class="settings-group settings-credits">
+<div class="settings-group">
+<div class="settings-field">
+<div class="settings-field-label">Theme</div>
+<div class="segmented">
+<label class="segment"><input type="radio" name="hnewhere-theme" data-setting="theme" value="auto"><span>Detect</span></label>
+<label class="segment"><input type="radio" name="hnewhere-theme" data-setting="theme" value="light"><span>Light</span></label>
+<label class="segment"><input type="radio" name="hnewhere-theme" data-setting="theme" value="dark"><span>Dark</span></label>
+</div>
+</div>
+
+<div class="settings-field">
+<div class="button-designer">
+<div class="button-designer-controls">
+<div class="settings-field-label">Button</div>
+<div class="segmented">
+<label class="segment"><input type="radio" name="hnewhere-button-shape" data-setting="buttonShape" value="circle"><span>Circle</span></label>
+<label class="segment"><input type="radio" name="hnewhere-button-shape" data-setting="buttonShape" value="squircle"><span>Squircle</span></label>
+</div>
+<div class="stepper">
+<button type="button" class="stepper-button" data-size-step="-1" aria-label="Smaller button">&#8722;</button>
+<span class="stepper-value">
+<input id="button-size-input" class="stepper-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Button size in pixels" value="44">
+<span class="stepper-unit">px</span>
+</span>
+<button type="button" class="stepper-button" data-size-step="1" aria-label="Larger button">+</button>
+</div>
+<button id="settings-reset-button" class="settings-reset" type="button">Reset</button>
+</div>
+<div class="button-preview" aria-hidden="true">
+<div class="button-preview-stage">
+<div id="button-preview-shape" class="button-preview-shape">HN</div>
+</div>
+<div class="button-preview-rule"><span id="button-preview-dim" class="button-preview-dim">44</span></div>
+</div>
+</div>
+</div>
+
+</div>
+
+<div class="settings-group">
+<button id="settings-manage-blocked" class="settings-link-button" type="button">Manage hidden sites<span class="settings-link-chevron">&rsaquo;</span></button>
+</div>
+</div>
+
+<div class="settings-pane settings-pane-secondary">
+<div id="settings-blocked-list" class="settings-blocked-list"></div>
+</div>
+
+</div>
+
+<div class="settings-credits">
 <a href="${escapeHTML(REPO_URL)}" target="_blank" rel="noopener noreferrer">HNewhere${SCRIPT_VERSION ? " v" + escapeHTML(SCRIPT_VERSION) : ""}</a>
 <a href="${escapeHTML(REPO_URL)}/issues" target="_blank" rel="noopener noreferrer">Report an issue</a>
 </div>
@@ -3223,6 +3988,93 @@ Highlights the passages commenters quote, so you can jump between the article an
 			),
 		};
 
+		const settingsRadios = {
+			theme: [...settingsPanel.querySelectorAll("input[data-setting='theme']")],
+			buttonShape: [
+				...settingsPanel.querySelectorAll("input[data-setting='buttonShape']"),
+			],
+		};
+
+		const panes = shadow.querySelector("#settings-panes");
+		const previewShape = shadow.querySelector("#button-preview-shape");
+		const previewDim = shadow.querySelector("#button-preview-dim");
+		const sizeInput = shadow.querySelector("#button-size-input");
+		const stepperButtons = [
+			...settingsPanel.querySelectorAll("[data-size-step]"),
+		];
+
+		// Measured from the active pane because a flex row is always as tall as its
+		// tallest child, which would leave the short hidden-sites pane in a box
+		// sized for the main one.
+		const syncPanesHeight = () => {
+			const active = panes?.querySelector(
+				panes.classList.contains("is-secondary")
+					? ".settings-pane-secondary"
+					: ".settings-pane-primary",
+			);
+
+			if (active) {
+				panes.style.height = `${active.scrollHeight}px`;
+			}
+		};
+
+		const head = shadow.querySelector("#settings-head");
+		const crumbBack = shadow.querySelector("#settings-blocked-back");
+		const crumbRoot = shadow.querySelector("#settings-crumb-root");
+		const crumbTail = shadow.querySelector("#settings-crumb-tail");
+
+		const showSecondaryPane = (secondary) => {
+			panes?.classList.toggle("is-secondary", secondary);
+
+			// One class drives the whole trail so the chevron, the de-emphasis of
+			// "Settings", and the trail fading in all run off the same transition.
+			head?.classList.toggle("is-secondary", secondary);
+			crumbTail?.setAttribute("aria-hidden", secondary ? "false" : "true");
+
+			// Disabled rather than hidden: both stay in the layout for the animation,
+			// and disabling is what keeps them out of the tab order meanwhile.
+			if (crumbBack) {
+				crumbBack.disabled = !secondary;
+			}
+
+			// On the first level "Settings" is the panel's title, not a link back to
+			// somewhere.
+			if (crumbRoot) {
+				crumbRoot.disabled = !secondary;
+			}
+
+			syncPanesHeight();
+		};
+
+		const applyButtonDesigner = (settings) => {
+			const size = normalizeButtonSize(settings.buttonSize);
+			const radius =
+				BUTTON_SHAPES[settings.buttonShape] || BUTTON_SHAPES.circle;
+
+			// Left alone while focused, so a half-typed value is not overwritten
+			// mid-keystroke by a refresh triggered elsewhere in the panel.
+			if (sizeInput && shadow.activeElement !== sizeInput) {
+				sizeInput.value = String(size);
+			}
+
+			if (previewDim) {
+				previewDim.textContent = String(size);
+			}
+
+			if (previewShape) {
+				previewShape.style.width = `${size}px`;
+				previewShape.style.height = `${size}px`;
+				previewShape.style.borderRadius = radius;
+				previewShape.style.fontSize = `${buttonFontSizeFor(size)}px`;
+			}
+
+			for (const button of stepperButtons) {
+				const next = size + Number(button.dataset.sizeStep) * BUTTON_SIZE_STEP;
+
+				button.disabled = next < BUTTON_SIZE_MIN || next > BUTTON_SIZE_MAX;
+			}
+		};
+
 		const annotationSuboptions = shadow.querySelector(
 			"#settings-annotation-suboptions",
 		);
@@ -3233,6 +4085,14 @@ Highlights the passages commenters quote, so you can jump between the article an
 					input.checked = Boolean(settings[key]);
 				}
 			}
+
+			for (const [key, inputs] of Object.entries(settingsRadios)) {
+				for (const input of inputs) {
+					input.checked = input.value === settings[key];
+				}
+			}
+
+			applyButtonDesigner(settings);
 
 			const annotationsEnabled = Boolean(settings.annotations);
 
@@ -3258,6 +4118,16 @@ Highlights the passages commenters quote, so you can jump between the article an
 			settingsPanel.classList.toggle("hidden", !open);
 			settingsToggle.classList.toggle("is-open", open);
 			settingsToggle.setAttribute("aria-expanded", open ? "true" : "false");
+
+			// Measured only while visible: scrollHeight reads 0 under display:none,
+			// which is why this runs after the class toggle rather than before it.
+			if (open) {
+				syncPanesHeight();
+				return;
+			}
+
+			// Reopening lands on the main pane rather than wherever it was left.
+			showSecondaryPane(false);
 		};
 
 		setSettingsOpen(false);
@@ -3267,6 +4137,18 @@ Highlights the passages commenters quote, so you can jump between the article an
 			event.stopPropagation();
 			setSettingsOpen(settingsPanel.classList.contains("hidden"));
 		};
+
+		// Wired here rather than per-surface because this is the one function both
+		// the sidebar header and the submit popover header pass through.
+		const hideSiteButton = shadow.querySelector("#hide-site");
+
+		if (hideSiteButton) {
+			hideSiteButton.onclick = (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				hideCurrentSite().catch(console.error);
+			};
+		}
 
 		settingsPanel.addEventListener("click", (event) => {
 			event.stopPropagation();
@@ -3290,21 +4172,181 @@ Highlights the passages commenters quote, so you can jump between the article an
 			}
 
 			const settings = await saveSettings({
-				[input.dataset.setting]: input.checked,
+				[input.dataset.setting]:
+					input.type === "radio" ? input.value : input.checked,
 			});
 
 			applySettingsPanelState(settings);
+
+			const setting = input.dataset.setting;
+
+			// saveSettings re-syncs the appearance caches from its patched result, so
+			// they are current by the time these refreshers run.
+			if (setting === "theme") {
+				refreshThemeSurfaces();
+				await onAnnotationChange?.();
+				return;
+			}
+
+			if (setting === "buttonShape") {
+				await refreshButtonAppearance();
+				return;
+			}
 
 			if (
 				[
 					"annotations",
 					"annotationsWhenSidebarOpen",
 					"annotationsWhenSidebarClosed",
-				].includes(input.dataset.setting)
+				].includes(setting)
 			) {
 				await onAnnotationChange?.();
 			}
 		});
+
+		for (const button of stepperButtons) {
+			button.onclick = async () => {
+				const current = normalizeButtonSize(
+					(await loadSettings()).buttonSize,
+				);
+				const next = normalizeButtonSize(
+					current + Number(button.dataset.sizeStep) * BUTTON_SIZE_STEP,
+				);
+
+				// Clamping means the ends of the range produce no change; skip the
+				// write rather than churning storage on a disabled-looking click.
+				if (next === current) {
+					return;
+				}
+
+				const settings = await saveSettings({ buttonSize: next });
+
+				applySettingsPanelState(settings);
+				await refreshButtonAppearance();
+			};
+		}
+
+		if (sizeInput) {
+			const commitSizeInput = async () => {
+				const current = normalizeButtonSize((await loadSettings()).buttonSize);
+				const parsed = Number.parseInt(sizeInput.value, 10);
+				// normalizeButtonSize clamps out-of-range values to the ends of the
+				// range, so 5 becomes 24 and 999 becomes 64. Anything unparseable
+				// falls back to the stored value rather than the default.
+				const next = Number.isFinite(parsed)
+					? normalizeButtonSize(parsed)
+					: current;
+
+				if (next === current) {
+					// Snap the field back: it may hold "5" or "abc" that resolved to
+					// the value already in effect.
+					sizeInput.value = String(current);
+					return;
+				}
+
+				const settings = await saveSettings({ buttonSize: next });
+
+				applySettingsPanelState(settings);
+				await refreshButtonAppearance();
+			};
+
+			sizeInput.onchange = () => {
+				commitSizeInput().catch(console.error);
+			};
+
+			sizeInput.onkeydown = (event) => {
+				if (event.key !== "Enter") {
+					return;
+				}
+
+				event.preventDefault();
+				// Blur rather than committing directly, so Enter and click-away take
+				// exactly the same path through onchange.
+				sizeInput.blur();
+			};
+		}
+
+		const resetButton = shadow.querySelector("#settings-reset-button");
+
+		if (resetButton) {
+			resetButton.onclick = async () => {
+				// Shape and size only. A button reset should not silently change the
+				// user's theme choice.
+				const settings = await saveSettings({
+					buttonShape: DEFAULT_SETTINGS.buttonShape,
+					buttonSize: DEFAULT_SETTINGS.buttonSize,
+				});
+
+				applySettingsPanelState(settings);
+				await refreshButtonAppearance();
+			};
+		}
+
+		const blockedList = shadow.querySelector("#settings-blocked-list");
+
+		const renderBlockedList = async () => {
+			if (!blockedList) {
+				return;
+			}
+
+			const sites = await loadBlockedSites();
+
+			blockedList.replaceChildren();
+
+			if (!sites.size) {
+				const empty = document.createElement("div");
+
+				empty.className = "settings-blocked-empty";
+				empty.textContent = "No sites hidden yet.";
+				blockedList.appendChild(empty);
+				syncPanesHeight();
+
+				return;
+			}
+
+			for (const host of [...sites].sort()) {
+				const row = document.createElement("div");
+				const name = document.createElement("span");
+				const remove = document.createElement("button");
+
+				row.className = "settings-blocked-entry";
+				name.textContent = host;
+
+				remove.type = "button";
+				remove.className = "settings-blocked-remove";
+				remove.textContent = "×";
+				remove.setAttribute("aria-label", `Stop hiding HNewhere on ${host}`);
+				remove.onclick = async () => {
+					const next = await loadBlockedSites();
+
+					next.delete(host);
+					await saveBlockedSites(next);
+					await renderBlockedList();
+				};
+
+				row.append(name, remove);
+				blockedList.appendChild(row);
+			}
+
+			syncPanesHeight();
+		};
+
+		await renderBlockedList();
+
+		const manageBlocked = shadow.querySelector("#settings-manage-blocked");
+
+		if (manageBlocked) {
+			manageBlocked.onclick = async () => {
+				await renderBlockedList();
+				showSecondaryPane(true);
+			};
+		}
+
+		for (const control of [crumbBack, crumbRoot]) {
+			if (control) {
+				control.onclick = () => showSecondaryPane(false);
+			}
+		}
 
 		return { setSettingsOpen };
 	}
@@ -3326,6 +4368,7 @@ Highlights the passages commenters quote, so you can jump between the article an
 
 		const host = document.createElement("div");
 		host.setAttribute("data-hnewhere-sidebar", "1");
+		guardHostKeyboard(host);
 		document.body.appendChild(host);
 
 		const shadow = host.attachShadow({
@@ -3449,10 +4492,23 @@ ${CHROME_CSS}
 
 .filter-banner-quote {
     margin-top:8px;
+    padding:7px 8px;
+    border:1px solid var(--help-border);
+    border-radius:4px;
+    background:var(--help-bg);
     color:var(--banner-quote);
-    font-size:16px;
+    font-size:13px;
     font-style:italic;
-    line-height:1.55;
+    line-height:1.5;
+    /* .filter-banner centers its children; the boxed quote reads better ragged
+       right, matching the formatting panel it now borrows its chrome from. */
+    text-align:left;
+}
+
+/* Unboxed, an empty quote was invisible. Boxed, it would render as a stray
+   empty rectangle whenever a group carries no quote text. */
+.filter-banner-quote:empty {
+    display:none;
 }
 
 .filter-banner-meta {
@@ -5855,6 +6911,7 @@ ${settingsPanelHTML()}
 		}
 	}
 
+	// #region hnewhere-test-export
 	function normalizeSearchText(text) {
 		let normalized = "";
 		const map = [];
@@ -5895,6 +6952,8 @@ ${settingsPanelHTML()}
 			map,
 		};
 	}
+
+	// #endregion hnewhere-test-export
 
 	function truncateText(text, maxLength = 120) {
 		const value = String(text || "").replace(/\s+/g, " ").trim();
@@ -6014,6 +7073,7 @@ ${settingsPanelHTML()}
 		return segments;
 	}
 
+	// #region hnewhere-test-export
 	const SEARCH_BLOCK_TAGS = new Set([
 		"ARTICLE",
 		"ASIDE",
@@ -6052,6 +7112,8 @@ ${settingsPanelHTML()}
 		"SVG",
 		"TEXTAREA",
 	]);
+
+	// #endregion hnewhere-test-export
 
 	function extractTextWithBreaks(node) {
 		const pieces = [];
@@ -6206,6 +7268,7 @@ ${settingsPanelHTML()}
 		return candidates.sort((a, b) => b.length - a.length);
 	}
 
+	// #region hnewhere-test-export
 	function shouldSkipElementForIndex(element, options = {}) {
 		if (SEARCH_SKIP_TAGS.has(element.tagName)) {
 			return true;
@@ -6314,6 +7377,8 @@ ${settingsPanelHTML()}
 		};
 	}
 
+	// #endregion hnewhere-test-export
+
 	function getArticleSearchRoot() {
 		const candidates = [
 			document.querySelector("main article"),
@@ -6395,6 +7460,7 @@ ${settingsPanelHTML()}
 		return matches;
 	}
 
+	// #region hnewhere-test-export
 	function resolveRawPoint(index, rawOffset, bias) {
 		if (!index.rawPoints.length) {
 			return null;
@@ -6468,6 +7534,8 @@ ${settingsPanelHTML()}
 				range,
 			};
 	}
+
+	// #endregion hnewhere-test-export
 
 	function findRangeInRoot(root, normalizedNeedle, uniqueOnly = true) {
 		const index = buildTextIndex(root, {
@@ -6565,8 +7633,8 @@ ${settingsPanelHTML()}
 		}, 1200);
 	}
 
-	function buildAnnotationGroups(comments) {
-		const articleIndex = buildArticleTextIndex();
+	function buildAnnotationGroups(comments, providedIndex = null) {
+		const articleIndex = providedIndex || buildArticleTextIndex();
 
 		if (!articleIndex.normalizedText) {
 			return [];
@@ -6618,6 +7686,430 @@ ${settingsPanelHTML()}
 		return [...groups.values()];
 	}
 
+	// #region hnewhere-test-export
+	const HEAT_MIN_PASSAGE_CHARS = 40;
+	const HEAT_MIN_PASSAGES = 5;
+	const HEAT_MIN_COMMENTS = 10;
+	const HEAT_MIN_REGION_COMMENTS = 3;
+	const HEAT_BM25_K1 = 1.2;
+	const HEAT_BM25_B = 0.75;
+	const HEAT_MIN_Z_RATIO = 0.55;
+	const HEAT_MIN_MATCHED_TERMS = 2;
+
+	const HEAT_STOPWORDS = new Set([
+		"about", "above", "after", "again", "against", "all", "almost", "also",
+		"although", "always", "among", "and", "another", "any", "anyone",
+		"anything", "are", "around", "because", "been", "before", "being",
+		"below", "besides", "between", "both", "but", "came", "can", "cannot",
+		"come", "could", "did", "does", "doing", "done", "down", "during",
+		"each", "either", "else", "enough", "even", "ever", "every", "everyone",
+		"everything", "few", "for", "from", "further", "get", "gets", "getting",
+		"give", "given", "goes", "going", "gone", "got", "had", "has", "have",
+		"having", "her", "here", "hers", "herself", "him", "himself", "his",
+		"how", "however", "into", "its", "itself", "just", "keep", "kind",
+		"know", "known", "least", "less", "let", "like", "likely", "made",
+		"make", "makes", "many", "may", "maybe", "mean", "might", "more",
+		"most", "much", "must", "myself", "need", "needs", "neither", "never",
+		"next", "not", "nothing", "now", "off", "often", "once", "one", "only",
+		"onto", "other", "others", "otherwise", "our", "ours", "ourselves",
+		"out", "over", "own", "particular", "per", "perhaps", "put", "quite",
+		"rather", "really", "said", "same", "say", "says", "see", "seem",
+		"seems", "seen", "several", "shall", "she", "should", "significant",
+		"since", "some", "someone", "something", "sometimes", "still", "such",
+		"sure", "take", "taken", "takes", "than", "that", "the", "their",
+		"theirs", "them", "themselves", "then", "there", "therefore", "these",
+		"they", "this", "those", "though", "through", "thus", "together",
+		"too", "toward", "under", "unless", "until", "upon", "use", "used",
+		"uses", "using", "usually", "various", "very", "want", "wants", "was",
+		"way", "ways", "well", "went", "were", "what", "whatever", "when",
+		"where", "whether", "which", "while", "who", "whom", "whose", "why",
+		"will", "with", "within", "without", "would", "yet", "you", "your",
+		"yours", "yourself",
+	]);
+
+	function foldPlural(token) {
+		if (token.length >= 6 && token.endsWith("es")) {
+			return token.slice(0, -2);
+		}
+
+		if (token.length >= 5 && token.endsWith("s") && !token.endsWith("ss")) {
+			return token.slice(0, -1);
+		}
+
+		return token;
+	}
+
+	function tokenizeNormalizedText(normalizedSlice) {
+		const tokens = [];
+
+		for (const token of String(normalizedSlice || "").split(" ")) {
+			if (token.length < 3 || HEAT_STOPWORDS.has(token)) {
+				continue;
+			}
+
+			tokens.push(foldPlural(token));
+		}
+
+		return tokens;
+	}
+
+	function normalizedIndexForRaw(normalizedMap, rawOffset, bias) {
+		let low = 0;
+		let high = normalizedMap.length - 1;
+		let result = -1;
+
+		while (low <= high) {
+			const mid = (low + high) >> 1;
+			const value = normalizedMap[mid];
+
+			if (bias === "start") {
+				if (value >= rawOffset) {
+					result = mid;
+					high = mid - 1;
+				} else {
+					low = mid + 1;
+				}
+			} else if (value <= rawOffset) {
+				result = mid;
+				low = mid + 1;
+			} else {
+				high = mid - 1;
+			}
+		}
+
+		return result;
+	}
+
+	function segmentArticlePassages(index) {
+		const passages = [];
+		const rawText = index?.rawText || "";
+		const normalizedMap = index?.normalizedMap || [];
+		const normalizedText = index?.normalizedText || "";
+
+		if (!rawText || !normalizedMap.length) {
+			return passages;
+		}
+
+		const pushSegment = (fromRaw, toRaw) => {
+			if (toRaw <= fromRaw) {
+				return;
+			}
+
+			const normStart = normalizedIndexForRaw(normalizedMap, fromRaw, "start");
+			const normEnd = normalizedIndexForRaw(normalizedMap, toRaw - 1, "end");
+
+			if (normStart < 0 || normEnd < 0 || normStart > normEnd) {
+				return;
+			}
+
+			if (normEnd - normStart + 1 < HEAT_MIN_PASSAGE_CHARS) {
+				return;
+			}
+
+			const tokens = tokenizeNormalizedText(
+				normalizedText.slice(normStart, normEnd + 1),
+			);
+
+			if (!tokens.length) {
+				return;
+			}
+
+			passages.push({
+				normStart,
+				normEnd,
+				tokens,
+				length: tokens.length,
+			});
+		};
+
+		const boundaries = /\n+/g;
+		let cursor = 0;
+		let match = boundaries.exec(rawText);
+
+		while (match) {
+			pushSegment(cursor, match.index);
+			cursor = match.index + match[0].length;
+			match = boundaries.exec(rawText);
+		}
+
+		pushSegment(cursor, rawText.length);
+
+		return passages;
+	}
+
+	function buildBM25Model(passages) {
+		const documentFrequency = new Map();
+		const termFreqs = [];
+		let totalLength = 0;
+
+		for (const passage of passages) {
+			const freqs = new Map();
+
+			for (const term of passage.tokens) {
+				freqs.set(term, (freqs.get(term) || 0) + 1);
+			}
+
+			for (const term of freqs.keys()) {
+				documentFrequency.set(term, (documentFrequency.get(term) || 0) + 1);
+			}
+
+			termFreqs.push(freqs);
+			totalLength += passage.length;
+		}
+
+		const total = passages.length;
+		const idf = new Map();
+
+		for (const [term, count] of documentFrequency) {
+			idf.set(term, Math.log((total - count + 0.5) / (count + 0.5) + 1));
+		}
+
+		return {
+			passages,
+			idf,
+			avgLen: total ? totalLength / total : 0,
+			termFreqs,
+		};
+	}
+
+	function scoreCommentAgainstModel(model, tokens) {
+		const scores = new Array(model.passages.length).fill(0);
+		const queryTerms = new Set(tokens);
+
+		for (let index = 0; index < model.passages.length; index += 1) {
+			const freqs = model.termFreqs[index];
+			const ratio = model.avgLen
+				? model.passages[index].length / model.avgLen
+				: 1;
+			const norm = HEAT_BM25_K1 * (1 - HEAT_BM25_B + HEAT_BM25_B * ratio);
+			let score = 0;
+
+			for (const term of queryTerms) {
+				const frequency = freqs.get(term);
+
+				if (!frequency) {
+					continue;
+				}
+
+				score +=
+					(model.idf.get(term) || 0) *
+					((frequency * (HEAT_BM25_K1 + 1)) / (frequency + norm));
+			}
+
+			scores[index] = score;
+		}
+
+		return scores;
+	}
+
+	function selectBestPassage(scores, model, tokens) {
+		if (!scores.length) {
+			return null;
+		}
+
+		let sum = 0;
+		let bestIndex = 0;
+
+		for (let index = 0; index < scores.length; index += 1) {
+			sum += scores[index];
+
+			if (scores[index] > scores[bestIndex]) {
+				bestIndex = index;
+			}
+		}
+
+		const mean = sum / scores.length;
+		let variance = 0;
+
+		for (const score of scores) {
+			variance += (score - mean) ** 2;
+		}
+
+		const stddev = Math.sqrt(variance / scores.length);
+
+		if (!(stddev > 0)) {
+			return null;
+		}
+
+		// The z-score of a maximum over n samples cannot exceed sqrt(n - 1), so a
+		// fixed threshold would silently tighten on short articles. Scaling by the
+		// attainable maximum keeps the isolation requirement constant.
+		const threshold = HEAT_MIN_Z_RATIO * Math.sqrt(scores.length - 1);
+
+		if ((scores[bestIndex] - mean) / stddev < threshold) {
+			return null;
+		}
+
+		const freqs = model.termFreqs[bestIndex];
+		let matched = 0;
+
+		for (const term of new Set(tokens)) {
+			if (!freqs.get(term)) {
+				continue;
+			}
+
+			matched += 1;
+
+			if (matched >= HEAT_MIN_MATCHED_TERMS) {
+				return bestIndex;
+			}
+		}
+
+		return null;
+	}
+
+	function bucketAndMergeRegions(passages, counts, index) {
+		let max = 0;
+
+		for (const count of counts) {
+			if (count > max) {
+				max = count;
+			}
+		}
+
+		if (max < HEAT_MIN_REGION_COMMENTS) {
+			return [];
+		}
+
+		const buckets = counts.map((count) => {
+			if (count < HEAT_MIN_REGION_COMMENTS) {
+				return null;
+			}
+
+			const ratio = count / max;
+
+			if (ratio > 0.75) {
+				return "heavy";
+			}
+
+			return ratio >= 0.4 ? "medium" : "light";
+		});
+
+		const regions = [];
+		let runStart = -1;
+
+		const flushRun = (endIndex) => {
+			if (runStart < 0) {
+				return;
+			}
+
+			const first = passages[runStart];
+			const last = passages[endIndex];
+			let total = 0;
+
+			for (let i = runStart; i <= endIndex; i += 1) {
+				total += counts[i];
+			}
+
+			const built = createRangeFromMatch(
+				index,
+				first.normStart,
+				last.normEnd - first.normStart + 1,
+			);
+
+			if (built?.range) {
+				regions.push({
+					normStart: first.normStart,
+					normEnd: last.normEnd,
+					range: built.range,
+					commentCount: total,
+					bucket: buckets[runStart],
+				});
+			}
+
+			runStart = -1;
+		};
+
+		for (let i = 0; i < buckets.length; i += 1) {
+			if (buckets[i] == null) {
+				flushRun(i - 1);
+				continue;
+			}
+
+			if (runStart < 0) {
+				runStart = i;
+				continue;
+			}
+
+			if (buckets[i] !== buckets[runStart]) {
+				flushRun(i - 1);
+				runStart = i;
+			}
+		}
+
+		flushRun(buckets.length - 1);
+
+		return regions;
+	}
+	// #endregion hnewhere-test-export
+
+	function buildHeatRegions(comments, index) {
+		try {
+			if (!comments || comments.length < HEAT_MIN_COMMENTS) {
+				return [];
+			}
+
+			// Quote matching survives a body-fallback root because it demands a
+			// literal string match. BM25 has no such immunity and would wash the
+			// footer, so heat declines to run without real article structure.
+			if (getArticleSearchRoot() === document.body) {
+				return [];
+			}
+
+			const passages = segmentArticlePassages(index);
+
+			if (passages.length < HEAT_MIN_PASSAGES) {
+				return [];
+			}
+
+			const model = buildBM25Model(passages);
+			const counts = new Array(passages.length).fill(0);
+
+			for (const comment of comments) {
+				if (comment.matchedGroupKeys?.size) {
+					continue;
+				}
+
+				const normalized = normalizeSearchText(
+					comment.textElement?.textContent || "",
+				).text;
+				const tokens = tokenizeNormalizedText(normalized);
+
+				if (!tokens.length) {
+					continue;
+				}
+
+				const best = selectBestPassage(
+					scoreCommentAgainstModel(model, tokens),
+					model,
+					tokens,
+				);
+
+				if (best != null) {
+					counts[best] += 1;
+				}
+			}
+
+			return bucketAndMergeRegions(passages, counts, index);
+		} catch (error) {
+			console.error("HNewhere: heat regions failed", error);
+			return [];
+		}
+	}
+
+	// #region hnewhere-test-export
+	const HEAT_FILL_LIGHT = {
+		light: "rgba(255,102,0,.025)",
+		medium: "rgba(255,102,0,.045)",
+		heavy: "rgba(255,102,0,.07)",
+	};
+
+	const HEAT_FILL_DARK = {
+		light: "rgba(255,102,0,.035)",
+		medium: "rgba(255,102,0,.055)",
+		heavy: "rgba(255,102,0,.075)",
+	};
+
 	function createHighlightRect(rect, options = {}) {
 		const node = document.createElement(options.interactive ? "button" : "div");
 		const variant = options.variant || "highlight";
@@ -6639,6 +8131,11 @@ ${settingsPanelHTML()}
 			style.background = options.emphasis
 				? "rgba(255,102,0,.6)"
 				: "rgba(255,102,0,.34)";
+		}
+
+		if (variant === "heat") {
+			const palette = options.dark ? HEAT_FILL_DARK : HEAT_FILL_LIGHT;
+			style.background = palette[options.bucket] || palette.light;
 		}
 
 		if (options.interactive) {
@@ -6667,6 +8164,8 @@ ${settingsPanelHTML()}
 
 		return node;
 	}
+
+	// #endregion hnewhere-test-export
 
 	function getCommentGraph() {
 		const byId = new Map(renderedComments.map((comment) => [comment.id, comment]));
@@ -6918,7 +8417,7 @@ ${settingsPanelHTML()}
 		}
 	}
 
-	function createAnnotationOverlay(groups, settings) {
+	function createAnnotationOverlay(groups, regions, settings) {
 		const overlay = document.createElement("div");
 		overlay.setAttribute("data-hnewhere-annotation-overlay", "1");
 		overlay.style.cssText = `
@@ -6930,9 +8429,15 @@ ${settingsPanelHTML()}
 			z-index:2147483645;
 		`;
 
+		// Heat paints first so quote highlights always stack above it; the
+		// resulting overlap makes a quoted phrase inside a hot paragraph the
+		// hottest thing on the page, which is the hierarchy we want.
+		const heatLayer = document.createElement("div");
 		const baseLayer = document.createElement("div");
-		overlay.append(baseLayer);
+		overlay.append(heatLayer, baseLayer);
 		document.body.appendChild(overlay);
+
+		let heatRegions = regions || [];
 
 		const groupsByKey = new Map(groups.map((group) => [group.key, group]));
 		let renderFrame = 0;
@@ -6942,6 +8447,22 @@ ${settingsPanelHTML()}
 				Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) +
 				"px";
 			baseLayer.replaceChildren();
+			heatLayer.replaceChildren();
+
+			const dark = detectDarkMode();
+
+			for (const region of heatRegions) {
+				for (const rect of getPageRectsForRange(region.range)) {
+					heatLayer.appendChild(
+						createHighlightRect(rect, {
+							interactive: false,
+							variant: "heat",
+							bucket: region.bucket,
+							dark,
+						}),
+					);
+				}
+			}
 
 			for (const group of groups) {
 				const rects = getPageRectsForRange(group.range);
@@ -6994,6 +8515,10 @@ ${settingsPanelHTML()}
 		return {
 			groups,
 			groupsByKey,
+			setHeatRegions(next) {
+				heatRegions = next || [];
+				scheduleRender();
+			},
 			focusGroup(groupKey) {
 				const group = groupsByKey.get(groupKey);
 
@@ -7016,6 +8541,59 @@ ${settingsPanelHTML()}
 		};
 	}
 
+	// Safari only shipped requestIdleCallback in 16.4 and the Userscripts app
+	// targets Safari, so fall back to a macrotask.
+	function scheduleIdleTask(callback) {
+		if (typeof requestIdleCallback === "function") {
+			requestIdleCallback(callback, { timeout: 500 });
+			return;
+		}
+
+		setTimeout(callback, 0);
+	}
+
+	// Ticking the blocklist toggle removes the sidebar the settings panel lives in,
+	// so callers must finish persisting before calling this and must not read
+	// sidebar or sidebarUI afterwards.
+	function teardownForBlockedSite() {
+		clearArticleAnnotations();
+
+		for (const id of [
+			"hn-restore-button",
+			"hn-collapse-button",
+			"hn-submit-button",
+		]) {
+			const button = document.getElementById(id);
+
+			if (button) {
+				destroyFloatingButton(button);
+			}
+		}
+
+		// The popover is a separate host with its own shadow root, and the hide
+		// control lives in its header too, so it has to go the same way.
+		document
+			.querySelectorAll("[data-hnewhere-submit-popover]")
+			.forEach((host) => host.remove());
+
+		if (sidebar) {
+			sidebar._cleanup?.();
+			sidebar.remove();
+			sidebar = null;
+			sidebarUI = null;
+		}
+	}
+
+	// Shared by both headers. Persists before tearing down, because the teardown
+	// destroys the surface this was clicked in.
+	async function hideCurrentSite() {
+		const sites = await loadBlockedSites();
+
+		sites.add(siteKey());
+		await saveBlockedSites(sites);
+		teardownForBlockedSite();
+	}
+
 	async function refreshArticleAnnotations() {
 		clearArticleAnnotations();
 
@@ -7034,14 +8612,18 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		const groups = buildAnnotationGroups(renderedComments);
+		const articleIndex = buildArticleTextIndex();
+		// Must run before buildHeatRegions: it populates comment.matchedGroupKeys,
+		// which heat reads to skip comments already represented by a quote match.
+		const groups = buildAnnotationGroups(renderedComments, articleIndex);
 
+		// No early return on an empty group list: heat exists precisely to serve
+		// articles nobody quoted, so the overlay has to be created either way.
 		if (!groups.length) {
 			clearCommentFilter({ animate: false });
-			return;
 		}
 
-		annotationController = createAnnotationOverlay(groups, settings);
+		annotationController = createAnnotationOverlay(groups, [], settings);
 		decorateSidebarMatches(annotationController);
 
 		if (activeCommentFilter) {
@@ -7050,6 +8632,18 @@ ${settingsPanelHTML()}
 				animate: false,
 			});
 		}
+
+		const controller = annotationController;
+
+		scheduleIdleTask(() => {
+			// A newer refresh (or a teardown) may have replaced the controller
+			// while we were queued; drop the stale result rather than cancelling.
+			if (annotationController !== controller) {
+				return;
+			}
+
+			controller.setHeatRegions(buildHeatRegions(renderedComments, articleIndex));
+		});
 	}
 
 	// -------------------------
@@ -7096,6 +8690,13 @@ ${settingsPanelHTML()}
 		// there, and before anything else: no lookup, no button, no stored state on a
 		// page that could never be a submission in the first place.
 		if (isHiddenSite()) {
+			return;
+		}
+
+		// Same guarantee as isHiddenSite above -- no lookup, no button, no stored
+		// state -- but the list lives in async storage, so it cannot fold into that
+		// synchronous check.
+		if (await isSiteBlocked()) {
 			return;
 		}
 
