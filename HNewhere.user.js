@@ -4871,11 +4871,27 @@ ${CHROME_CSS}
     transition:background .18s ease, opacity .18s ease, max-height .18s ease, margin .18s ease, padding .18s ease, border-color .18s ease;
 }
 
-blockquote.comment-quote-link {
+/* HN ships no quote syntax, so foldQuoteBlocks turns runs of marked lines into
+   real blockquotes. Every quote gets the neutral treatment; matching promotes
+   the border to HN orange rather than introducing the styling from nothing.
+   No backticks in here - this whole stylesheet is inside a template literal. */
+.text blockquote {
     margin:6px 0;
     padding:2px 0 2px 10px;
-    border-left:2px solid rgba(255,102,0,.32);
+    border-left:2px solid var(--faded-underline);
     color:var(--quote-text);
+}
+
+.text blockquote p:first-child {
+    margin-top:0;
+}
+
+.text blockquote p:last-child {
+    margin-bottom:0;
+}
+
+blockquote.comment-quote-link {
+    border-left-color:rgba(255,102,0,.32);
 }
 
 .comment-quote-link-inline {
@@ -5836,6 +5852,202 @@ ${settingsPanelHTML()}
 		}
 	}
 
+	// #region hnewhere-test-export
+	// Tags sanitizeHTML can emit that establish a block. Deliberately not
+	// SEARCH_BLOCK_TAGS, which counts BR because the text index wants a line break
+	// there — here BR must stay inline, or a comment's first line would split at
+	// the break and only its first fragment would be tested for a quote marker.
+	const QUOTE_BLOCK_CONTAINERS = new Set(["P", "PRE", "BLOCKQUOTE", "UL", "OL", "LI", "HR"]);
+
+	function readQuoteMarker(text) {
+		const match = /^\s*((?:>\s*)+)/.exec(text || "");
+
+		return match
+			? { depth: (match[1].match(/>/g) || []).length, length: match[0].length }
+			: null;
+	}
+
+	// Drop `count` characters from the front of `nodes` in document order, which
+	// is where the marker sits. Walking text nodes rather than rewriting the
+	// markup keeps any inline <a> or <i> in the quoted line intact.
+	function dropLeadingCharacters(nodes, count) {
+		let remaining = count;
+
+		const walk = (node) => {
+			if (remaining <= 0) {
+				return;
+			}
+
+			if (node.nodeType === Node.TEXT_NODE) {
+				const value = node.nodeValue || "";
+				const taken = Math.min(remaining, value.length);
+
+				node.nodeValue = value.slice(taken);
+				remaining -= taken;
+				return;
+			}
+
+			for (const child of [...node.childNodes]) {
+				walk(child);
+			}
+		};
+
+		for (const node of nodes) {
+			walk(node);
+		}
+	}
+
+	function buildQuoteTree(lines) {
+		const quote = document.createElement("blockquote");
+		let index = 0;
+
+		while (index < lines.length) {
+			if (lines[index].depth <= 1) {
+				const paragraph = document.createElement("p");
+
+				for (const node of lines[index].nodes) {
+					paragraph.appendChild(node);
+				}
+
+				if (paragraph.textContent.trim()) {
+					quote.appendChild(paragraph);
+				}
+
+				index += 1;
+				continue;
+			}
+
+			const start = index;
+
+			while (index < lines.length && lines[index].depth > 1) {
+				index += 1;
+			}
+
+			quote.appendChild(
+				buildQuoteTree(
+					lines.slice(start, index).map((line) => ({ ...line, depth: line.depth - 1 })),
+				),
+			);
+		}
+
+		return quote;
+	}
+
+	function partitionCommentBlocks(root) {
+		const blocks = [];
+		let loose = null;
+
+		for (const node of [...root.childNodes]) {
+			if (node.nodeType === Node.ELEMENT_NODE && QUOTE_BLOCK_CONTAINERS.has(node.tagName)) {
+				loose = null;
+				blocks.push({ nodes: [node], element: node });
+				continue;
+			}
+
+			if (!loose) {
+				loose = { nodes: [], element: null };
+				blocks.push(loose);
+			}
+
+			loose.nodes.push(node);
+		}
+
+		for (const block of blocks) {
+			const text = block.nodes.map((node) => node.textContent || "").join("");
+
+			block.blank = !text.trim();
+			block.depth = 0;
+
+			// A quote line is a bare leading run or a <p>. A <pre> is excluded on
+			// purpose: shell prompts and diffs legitimately begin lines with `>`.
+			if (block.blank || (block.element && block.element.tagName !== "P")) {
+				continue;
+			}
+
+			const marker = readQuoteMarker(text);
+
+			if (marker) {
+				block.depth = marker.depth;
+				block.prefix = marker.length;
+			}
+		}
+
+		return blocks;
+	}
+
+	function foldQuoteRun(root, run) {
+		const lines = [];
+
+		for (const block of run) {
+			if (block.blank) {
+				continue;
+			}
+
+			const nodes = block.element ? [...block.element.childNodes] : block.nodes;
+
+			dropLeadingCharacters(nodes, block.prefix);
+			lines.push({ depth: block.depth, nodes });
+		}
+
+		// Hold the position before building, because building moves the run's own
+		// nodes into the new blockquote and they can no longer anchor the insert.
+		const placeholder = document.createComment("");
+
+		root.insertBefore(placeholder, run[0].nodes[0]);
+		root.replaceChild(buildQuoteTree(lines), placeholder);
+
+		// Whatever the tree did not adopt — emptied <p> shells, blank lines — is
+		// still a direct child of root and is now redundant.
+		for (const block of run) {
+			for (const node of block.nodes) {
+				if (node.parentNode === root) {
+					node.remove();
+				}
+			}
+		}
+	}
+
+	// Hacker News has no quote syntax. Commenters mark a quotation by starting a
+	// line with `>`, and HN renders that marker literally, so quoted text arrives
+	// styled like the commenter's own words and split across sibling <p>s. Folding
+	// each run of marked lines into one <blockquote> makes the quote a single
+	// element, which is what lets it be styled, clicked and collapsed as a unit —
+	// the block path in decorateSidebarMatches has always looked for exactly this.
+	// Idempotent: folded lines no longer begin with a marker.
+	function foldQuoteBlocks(root) {
+		if (!root) {
+			return;
+		}
+
+		const blocks = partitionCommentBlocks(root);
+		let index = 0;
+
+		while (index < blocks.length) {
+			if (!blocks[index].depth) {
+				index += 1;
+				continue;
+			}
+
+			// Blank blocks do not break a run; they are absorbed and dropped, so a
+			// stray whitespace node between two quote lines cannot split the quote.
+			let last = index;
+			let end = index + 1;
+
+			while (end < blocks.length && (blocks[end].depth || blocks[end].blank)) {
+				if (blocks[end].depth) {
+					last = end;
+				}
+
+				end += 1;
+			}
+
+			foldQuoteRun(root, blocks.slice(index, last + 1));
+			index = last + 1;
+		}
+	}
+
+	// #endregion hnewhere-test-export
+
 	async function renderComment(
 		id,
 		container,
@@ -5923,6 +6135,8 @@ ${settingsPanelHTML()}
 		const textElement = div.querySelector(".text");
 		const children = div.querySelector(".children");
 		const toggle = div.querySelector(".toggle");
+
+		foldQuoteBlocks(textElement);
 
 		renderedComments.push({
 			id: comment.id,
@@ -7154,6 +7368,7 @@ ${settingsPanelHTML()}
 
 	// #endregion hnewhere-test-export
 
+	// #region hnewhere-test-export
 	function extractTextWithBreaks(node) {
 		const pieces = [];
 
@@ -7193,6 +7408,8 @@ ${settingsPanelHTML()}
 
 		return pieces.join("");
 	}
+
+	// #endregion hnewhere-test-export
 
 	function buildQuoteSearchVariants(text) {
 		const cleaned = String(text || "").replace(/\s+/g, " ").trim();
@@ -7710,7 +7927,13 @@ ${settingsPanelHTML()}
 					textElement: rendered.textElement,
 					author: rendered.author,
 					time: rendered.time,
-					commentText: rendered.textElement?.textContent || "",
+					// Block-aware, not raw textContent: textContent butts the last word
+					// of one paragraph against the first of the next, and the scorer
+					// then tokenizes the join as a single junk term. The `>` markers
+					// used to mask this by accident; folding removes them.
+					commentText: rendered.textElement
+						? extractTextWithBreaks(rendered.textElement)
+						: "",
 					quoteText: match.quoteText,
 					quoteNormalized: match.quoteNormalized,
 					fullQuoteText: match.fullQuoteText,
@@ -8410,8 +8633,6 @@ ${settingsPanelHTML()}
 		return wrapper;
 	}
 
-	// #endregion hnewhere-test-export
-
 	function decorateSidebarMatches(controller) {
 		for (const group of controller.groups) {
 			for (const comment of group.comments) {
@@ -8423,6 +8644,27 @@ ${settingsPanelHTML()}
 					controller.focusGroup(group.key);
 				};
 				const quoteElements = [];
+
+				// Anchor to the quoted text itself, the way a document comment
+				// attaches to the selection that prompted it. The enclosing block is
+				// the fallback, not the first choice: it is only the right anchor
+				// when the quote genuinely spans more than one line, which is exactly
+				// when the inline wrapper declines. Trying the block first would let
+				// whichever discussion happened to be processed first claim the whole
+				// quote, and the coarser anchor would be an accident of ordering.
+				const range = findRangeInRoot(
+					comment.textElement,
+					comment.quoteNormalized,
+					false,
+				);
+				const wrapper = range ? wrapInlineCommentQuote(range, onActivate) : null;
+
+				if (wrapper) {
+					quoteElements.push(wrapper);
+					comment.quoteElements = quoteElements;
+					continue;
+				}
+
 				const blockquote = [...comment.textElement.querySelectorAll("blockquote")].find(
 					(element) =>
 						!element.dataset.hnewhereQuoteBlock &&
@@ -8435,27 +8677,14 @@ ${settingsPanelHTML()}
 					blockquote.dataset.hnewhereQuoteBlock = "1";
 					activateCommentQuoteElement(blockquote, onActivate);
 					quoteElements.push(blockquote);
-					comment.quoteElements = quoteElements;
-					continue;
-				}
-
-				const range = findRangeInRoot(
-					comment.textElement,
-					comment.quoteNormalized,
-					false,
-				);
-
-				if (range) {
-					const wrapper = wrapInlineCommentQuote(range, onActivate);
-					if (wrapper) {
-						quoteElements.push(wrapper);
-					}
 				}
 
 				comment.quoteElements = quoteElements;
 			}
 		}
 	}
+
+	// #endregion hnewhere-test-export
 
 	async function openFocusedDiscussion(groupKey, options = {}) {
 		const wasHidden = await revealSidebar();

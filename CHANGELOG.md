@@ -10,6 +10,29 @@ use to detect updates, so every release bumps it.
 
 ## [1.5.5] — Unreleased
 
+### Added
+
+- **Quotes render as quotes.** Hacker News has no quote syntax — commenters
+  start a line with `>` and HN prints the marker literally, so quoted text is
+  styled exactly like the commenter's own words. Consecutive `>` lines are now
+  folded into a real blockquote with a left border, and the markers are dropped.
+  `>>` nests. Code blocks are left alone, since diffs and shell prompts
+  legitimately begin lines with `>`.
+- Multi-line quotes are clickable, and collapse once you are focused on the
+  discussion they belong to. Both behaviours already existed for `<blockquote>`
+  elements but could never fire, because HN's API never emits one.
+
+### Changed
+
+- A discussion now anchors to the line it quoted rather than to the enclosing
+  quote block. The block is the fallback, used only when the quote genuinely
+  spans more than one line. Previously the block was tried first and claimed
+  whenever it merely contained the quote, so with several discussions quoting one
+  comment, whichever was processed first took the whole quote.
+- Comment text is read block-aware when scoring discussion heat. It previously
+  used raw `textContent`, which butts the last word of a paragraph against the
+  first word of the next and tokenizes the join as a single junk term.
+
 ### Fixed
 
 - Comments quoting more than one line were rendered shredded: paragraphs split
