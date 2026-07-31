@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HNewhere
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.5.4
+// @version      1.5.5
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
@@ -887,6 +887,41 @@
 		return value + " " + (value === 1 ? singular : plural);
 	}
 
+	// #region hnewhere-test-export
+	// What the sidebar is waiting on, named rather than measured. Lowercase to sit
+	// under the header title the way the rest of the secondary text does.
+	const SIDEBAR_STAGES = {
+		discussion: "loading discussion…",
+		comments: "loading comments…",
+		votes: "loading votes…",
+		annotations: "loading annotations…",
+	};
+
+	// Returns "" for no stage and for an unrecognised one, so the caller can clear
+	// the subtitle by passing null and never has to strip a placeholder.
+	function sidebarStageLabel(stage) {
+		return SIDEBAR_STAGES[stage] || "";
+	}
+
+	// The matcher is a parameter so the decision can be tested without touching
+	// window, and so a browser without matchMedia degrades to "animate" rather
+	// than throwing during init.
+	function prefersReducedMotion(
+		mediaMatcher = typeof window === "undefined" ? null : window.matchMedia,
+	) {
+		if (typeof mediaMatcher !== "function") {
+			return false;
+		}
+
+		try {
+			return mediaMatcher("(prefers-reduced-motion: reduce)")?.matches === true;
+		} catch {
+			return false;
+		}
+	}
+
+	// #endregion hnewhere-test-export
+
 	function timeAgo(timestamp) {
 		if (!timestamp) return "";
 
@@ -1104,7 +1139,93 @@
 			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
 			title: "No Hacker News discussion yet — click to submit this page",
 		},
+		// Borrows the inactive grey rather than the orange: this is shown before the
+		// lookup answers, and a page with no discussion would otherwise flash orange
+		// on its way to grey.
+		checking: {
+			background: "#b8b8b8",
+			darkBackground: "#4a4a4a",
+			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
+			title: "Checking Hacker News…",
+		},
 	};
+
+	const BUTTON_SPINNER_ID = "hnewhere-button-spinner";
+	const BUTTON_PENDING_ID = "hn-checking-button";
+
+	// The button lives in the page, not in a shadow root, and the script injects no
+	// page-level stylesheet anywhere -- so the ring is animated with the Web
+	// Animations API instead of keyframes. Nothing we add can then collide with the
+	// host page's CSS.
+	function startButtonSpinner(button) {
+		if (!button || button.querySelector(`#${BUTTON_SPINNER_ID}`)) {
+			return;
+		}
+
+		// The rim itself never moves: it is a mask on this element, cut to whatever
+		// border-radius the button is wearing. overflow keeps the sweep inside that
+		// shape before the mask narrows it to the edge.
+		const ring = document.createElement("span");
+
+		ring.id = BUTTON_SPINNER_ID;
+		ring.setAttribute("aria-hidden", "true");
+		ring.style.cssText = `
+				position:absolute;
+				inset:0;
+				border-radius:inherit;
+				padding:2px;
+				overflow:hidden;
+				-webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+				-webkit-mask-composite:xor;
+				mask:linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+				pointer-events:none;
+				opacity:0;
+				transition:opacity .2s ease;
+			`;
+
+		// Only this rotates. Rotating the ring turned the squircle's own outline
+		// with it, which read as a spinning square rather than a light traveling
+		// the edge. Oversized so its corners still cover the rim once turned.
+		const sweep = document.createElement("span");
+
+		sweep.style.cssText = `
+				position:absolute;
+				inset:-50%;
+				background:conic-gradient(from 0turn, rgba(255,255,255,0) 0 55%, rgba(255,255,255,.95) 100%);
+			`;
+
+		ring.appendChild(sweep);
+		button.appendChild(ring);
+
+		// Next frame, so the transition has a 0 to animate away from.
+		requestAnimationFrame(() => {
+			ring.style.opacity = "1";
+		});
+
+		if (prefersReducedMotion()) {
+			return;
+		}
+
+		ring._hnewhereAnimation = sweep.animate(
+			[{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }],
+			{ duration: 900, iterations: Number.POSITIVE_INFINITY },
+		);
+	}
+
+	function stopButtonSpinner(button) {
+		const ring = button?.querySelector(`#${BUTTON_SPINNER_ID}`);
+
+		if (!ring) {
+			return;
+		}
+
+		ring.style.opacity = "0";
+
+		window.setTimeout(() => {
+			ring._hnewhereAnimation?.cancel();
+			ring.remove();
+		}, 220);
+	}
 
 	// The only place these four properties are set. They used to be spelled out in
 	// both createFloatingHNButton's cssText and applyButtonMobileStyle, which
@@ -1185,6 +1306,18 @@
 
 			if (button) return button;
 
+			// A button drawn before the lookup answered becomes whichever button the
+			// answer calls for, rather than being torn down and rebuilt: rebuilding
+			// would drop the ring mid-fade and discard a position the reader had
+			// already dragged it to.
+			button = document.getElementById(BUTTON_PENDING_ID);
+
+			if (button) {
+				button.id = id;
+				setFloatingButtonVariant(button, variant);
+				return button;
+			}
+
 			button = document.createElement("button");
 			button.id = id;
 			button.textContent = "HN";
@@ -1206,7 +1339,10 @@
 					align-items:center;
 					justify-content:center;
 					-webkit-tap-highlight-color:transparent;
-					transition:background .2s ease;
+					/* box-shadow rides along because setFloatingButtonVariant writes it
+					   too: without it the glow snapped while the fill cross-faded, which
+					   is visible when the button settles out of "checking". */
+					transition:background .2s ease, box-shadow .2s ease;
 					/* So the fill overlay can be clipped to the circle. */
 					overflow:hidden;
 					isolation:isolate;
@@ -2207,6 +2343,14 @@
 
 		container.classList.remove("hidden");
 
+		// The arrows cannot be drawn until HN's per-item auth link has been scraped,
+		// so they always arrive after the comment they belong to. The slot already
+		// reserves their width, so nothing moves -- this only stops them snapping in.
+		container.classList.add("vote-controls-arriving");
+		requestAnimationFrame(() => {
+			container.classList.remove("vote-controls-arriving");
+		});
+
 		for (const descriptor of descriptors) {
 			const button = document.createElement("button");
 			button.type = "button";
@@ -2442,6 +2586,36 @@
 	// Takes a resolved array now rather than the resolver it used to accept: the
 	// discussion lookup moved ahead of the first paint in 1.5.3 so the button's
 	// colour can mean something, which leaves nothing left to resolve on click.
+	// The colour answers "is there a discussion here", the ring answers "am I still
+	// working". They are separate questions, so the colour settles the moment the
+	// lookup replies rather than waiting for the comments and the annotation pass
+	// -- which is what kept the button grey for the whole of startup.
+	function settleButtonToDiscussion(button) {
+		if (button) {
+			setFloatingButtonVariant(button, "active");
+		}
+	}
+
+	// Drawn before the discussion lookup answers, so the page shows something at
+	// once. It is inert on purpose: there is nothing to open yet, and a click that
+	// did nothing would read as broken. createFloatingHNButton adopts it as soon as
+	// the real button is asked for.
+	async function createCheckingButton() {
+		const button = createFloatingHNButton(BUTTON_PENDING_ID, "checking");
+
+		if (!button._dragController) {
+			button._dragController = makeButtonDraggable(button);
+		}
+
+		if (!isMobile()) {
+			await applyButtonPosition(button);
+		}
+
+		startButtonSpinner(button);
+
+		return button;
+	}
+
 	async function createCollapsedButton(stories) {
 		const button = createFloatingHNButton("hn-collapse-button");
 
@@ -3045,6 +3219,10 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --text:#000;
     --header-bg:#ff6600;
     --header-text:#000;
+    /* Dark orange on the header's own orange: legible, but clearly subordinate
+       to the black title. The peak is the travelling highlight. */
+    --subtitle-stage:#8f3900;
+    --subtitle-stage-peak:#d0721f;
     --border:#ccc;
     --border-soft:#ddd;
     --link:#0000aa;
@@ -3058,12 +3236,8 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --active-tint:rgba(0,0,0,.16);
     --grip:rgba(0,0,0,.2);
     --quote-text:#5f5f5f;
+    --quote-ornament:#b4b4b4;
     --faded-underline:rgba(0,0,0,.14);
-    --banner-text:#4a3a26;
-    --banner-quote:#3b3022;
-    --chip-text:#7b4f24;
-    --chip-active-text:#5e2e00;
-    --banner-close:#8d5c2d;
 
     /* 1.5.3 surfaces */
     --field-bg:#fff;
@@ -3096,6 +3270,9 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --text:#dcdcdc;
     --header-bg:#cc5200;
     --header-text:#000;
+    /* Darker to hold the same relationship against the dimmer header. */
+    --subtitle-stage:#6d2b00;
+    --subtitle-stage-peak:#ad5a17;
     --border:#3d3d3d;
     --border-soft:#383838;
     --link:#8ab4f8;
@@ -3109,12 +3286,8 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --active-tint:rgba(255,255,255,.18);
     --grip:rgba(255,255,255,.25);
     --quote-text:#a8a8a8;
+    --quote-ornament:#6d6d6d;
     --faded-underline:rgba(255,255,255,.18);
-    --banner-text:#cfc3b2;
-    --banner-quote:#ddd2c2;
-    --chip-text:#d8a26a;
-    --chip-active-text:#e8b784;
-    --banner-close:#c99b66;
 
     --field-bg:#262626;
     --field-text:#dcdcdc;
@@ -3197,11 +3370,59 @@ header button {
     padding-left:12px;
 }
 
+/* Only the two-line case needs tightening, and the subtitle exists only in the
+   sidebar -- the popover header has none. Default leading put most of a line's
+   worth of air between the title and the status under it. */
+.header-title:has(.header-subtitle) > span:first-child {
+    line-height:1.25;
+}
+
+/* Collapsed until it has something to say. Animating the height is what moves
+   the title, so the status arriving reads as the header opening rather than as
+   the whole panel jumping. */
 .header-subtitle {
     font-size:11px;
     font-weight:normal;
     line-height:1.2;
+    max-height:0;
+    opacity:0;
+    overflow:hidden;
+    transition:max-height .2s ease, opacity .2s ease;
+}
+
+.header-subtitle-visible {
+    max-height:16px;
     opacity:.85;
+}
+
+/* Dark orange rather than the header's black, so a status reads as transient
+   next to the permanent title. Applied whether or not motion is allowed, so the
+   colour never depends on the animation. */
+.header-subtitle-stage {
+    color:var(--subtitle-stage);
+}
+
+/* A highlight swept across the text itself rather than a spinner beside it, so
+   the header gains no furniture for a state that is usually brief. */
+.header-subtitle-loading {
+    background:linear-gradient(
+        90deg,
+        var(--subtitle-stage) 0%,
+        var(--subtitle-stage) 40%,
+        var(--subtitle-stage-peak) 50%,
+        var(--subtitle-stage) 60%,
+        var(--subtitle-stage) 100%
+    );
+    background-size:220% 100%;
+    -webkit-background-clip:text;
+    background-clip:text;
+    -webkit-text-fill-color:transparent;
+    animation:hnewhere-subtitle-shimmer 1.6s linear infinite;
+}
+
+@keyframes hnewhere-subtitle-shimmer {
+    from { background-position:120% 0; }
+    to { background-position:-20% 0; }
 }
 
 .settings-panel {
@@ -3227,14 +3448,18 @@ header button {
     border-top:1px solid var(--surface-divider);
 }
 
-/* U+2699 defaults to its emoji presentation on iOS. font-variant-emoji is the
-   stated way to ask for the text glyph but only lands in Safari 17+, and
-   system-ui alone does not help because iOS still resolves the codepoint through
-   Apple Color Emoji. The U+FE0E variation selector in the markup is what actually
-   forces it; these remain as support for browsers that honour them. */
-#settings-toggle {
-    font-family: system-ui, sans-serif;
-    font-variant-emoji: text;
+/* Every header icon is drawn, not typed. Flexbox centres a glyph's line box
+   rather than its ink, so where a character lands depends on the font's ascent
+   and descent -- the gear used to sit about a pixel low and the minus half a
+   pixel high, while the drawn eye was exactly centred, which is what made the
+   eye look like the odd one out. Paths centred on the same 16-unit viewBox are
+   aligned by construction, on every platform.
+
+   Drawing the gear also retires a workaround: U+2699 defaults to its emoji
+   presentation on iOS, which needed a U+FE0E variation selector in the markup
+   plus font-variant-emoji, and that only lands in Safari 17+. */
+header button svg {
+    display:block;
 }
 
 /* Held while the dropdown is open so the gear reads as a toggle rather than a
@@ -3860,12 +4085,16 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </svg>
 </button>
 <button id="settings-toggle" aria-label="Open HNewhere settings" title="HNewhere settings" aria-expanded="false" aria-controls="settings-panel">
-&#9881;&#65038;
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>
+</svg>
 </button>
 ${
 	minimize
 		? `<button id="minimize" aria-label="Minimize HNewhere" title="Minimize">
-&#8722;
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<line x1="3.4" y1="8" x2="12.6" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</svg>
 </button>`
 		: ""
 }
@@ -4503,45 +4732,90 @@ ${CHROME_CSS}
     word-wrap:break-word;
 }
 
-#comments-content {
+/* Only the comment lists fade. Filtering to a discussion changes which comments
+   are shown; the story header, the composer and the focused-discussion banner
+   are the frame around that change, so fading them made the whole sidebar blink
+   for what is really an edit to the list underneath. */
+.top-level-comments {
     opacity:1;
     transition:opacity .18s ease;
     will-change:opacity;
 }
 
-#comments-content.comments-transitioning {
+.comments-transitioning .top-level-comments {
     opacity:.12;
 }
 
+/* The 14px indent is the width of the story's vote-arrow column
+   (.story-votelinks), which is what sets the left edge of the title, the
+   composer and every submission. Matching it lines the banner up with them
+   instead of with the scroll container. */
 .filter-banner {
-    position:relative;
-    margin:12px 0 16px;
-    padding:6px 34px 4px;
-    color:var(--banner-text);
-    text-align:center;
+    max-width:720px;
+    margin:12px 0 16px 14px;
+    color:var(--meta);
 }
 
-.filter-banner-title {
+/* Reads as an HN meta line: same 11px Verdana and the same pipe separators as
+   "deergomoo 11 hours ago | reply". Adopting the idiom already in use is what
+   lets the header drop its uppercase treatment without losing its rank. */
+.filter-banner-head {
+    display:flex;
+    flex-wrap:wrap;
+    align-items:baseline;
+    color:var(--meta);
+    font-family:Verdana, Geneva, sans-serif;
     font-size:11px;
-    font-weight:600;
-    letter-spacing:.04em;
-    text-transform:uppercase;
-    opacity:.72;
 }
 
+/* The one piece of contrast in the row, echoing how the story title sits above
+   its own grey meta line. Without it every word carries equal weight and the
+   label stops reading as a label. */
+.filter-banner-title {
+    color:var(--text);
+}
+
+.filter-banner-close::before {
+    content:"|";
+    margin:0 5px;
+}
+
+/* Same chrome as .composer-help, at the panel's own 13px so the quote reads at
+   the size of the comments it was pulled from. Paired ornaments open and close
+   it, which is what separates a focused quote from the comment quotes below --
+   those carry the opening mark alone. */
 .filter-banner-quote {
-    margin-top:8px;
+    margin-top:6px;
     padding:7px 8px;
     border:1px solid var(--help-border);
     border-radius:4px;
     background:var(--help-bg);
-    color:var(--banner-quote);
+    color:var(--quote-text);
     font-size:13px;
     font-style:italic;
     line-height:1.5;
-    /* .filter-banner centers its children; the boxed quote reads better ragged
-       right, matching the formatting panel it now borrows its chrome from. */
-    text-align:left;
+}
+
+/* Set above the text size: at 13px the ornament reads as a speck rather than a
+   quote mark. The nudge drops it off the cap height onto the x-height, where a
+   raised comma sits in type. */
+.filter-banner-quote::before,
+.filter-banner-quote::after {
+    color:var(--quote-ornament);
+    font-size:17px;
+    font-style:normal;
+    line-height:0;
+    vertical-align:-2px;
+}
+
+.filter-banner-quote::before {
+    content:"❛";
+    margin-right:3px;
+}
+
+.filter-banner-quote::after {
+    content:"❜";
+    margin-left:3px;
 }
 
 /* Unboxed, an empty quote was invisible. Boxed, it would render as a stray
@@ -4550,58 +4824,30 @@ ${CHROME_CSS}
     display:none;
 }
 
-.filter-banner-meta {
-    display:none;
-}
 
-.filter-match-list {
-    display:flex;
-    flex-wrap:wrap;
-    justify-content:center;
-    gap:6px;
-    margin-top:10px;
-}
-
-.filter-match-chip {
-    border:1px solid rgba(255,102,0,.18);
-    border-radius:999px;
-    background:transparent;
-    color:var(--chip-text);
-    cursor:pointer;
-    padding:3px 8px;
-    font:500 11px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-@media (hover: hover) {
-    .filter-match-chip:hover {
-        background:rgba(255,102,0,.05);
-    }
-}
-
-.filter-match-chip-active {
-    border-color:rgba(255,102,0,.34);
-    background:rgba(255,102,0,.09);
-    color:var(--chip-active-text);
-}
-
+/* A text link on the meta row, not a floating glyph. Same rule as .meta a and
+   .composer-help-toggle: no underline until hover, no colour shift. */
 .filter-banner-close {
-    position:absolute;
-    right:2px;
-    top:2px;
-    width:26px;
-    height:26px;
-    border:none;
-    border-radius:999px;
-    background:none;
-    color:var(--banner-close);
-    cursor:pointer;
-    font:500 18px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    border:0;
     padding:0;
+    background:none;
+    color:var(--meta);
+    cursor:pointer;
+    font-family:Verdana, Geneva, sans-serif;
+    font-size:11px;
+    text-decoration:none;
+    text-underline-offset:2px;
+}
+
+/* Split from :hover deliberately, same as the quote links: keyboard focus must
+   show regardless of pointer type. */
+.filter-banner-close:focus-visible {
+    text-decoration:underline;
 }
 
 @media (hover: hover) {
     .filter-banner-close:hover {
-        background:rgba(255,102,0,.05);
+        text-decoration:underline;
     }
 }
 
@@ -4703,6 +4949,12 @@ ${CHROME_CSS}
     flex-direction:column;
     align-items:center;
     width:17px;
+    opacity:1;
+    transition:opacity .15s ease;
+}
+
+.vote-controls-arriving {
+    opacity:0;
 }
 
 .story-table {
@@ -4871,12 +5123,46 @@ ${CHROME_CSS}
     transition:background .18s ease, opacity .18s ease, max-height .18s ease, margin .18s ease, padding .18s ease, border-color .18s ease;
 }
 
-blockquote.comment-quote-link {
+/* HN ships no quote syntax, so foldQuoteBlocks turns runs of marked lines into
+   real blockquotes. A left rule would read as thread hierarchy -- .children >
+   .comment already uses one for exactly that -- so the quote is marked by an
+   ornament in the gutter and italics instead, which cannot be confused with
+   nesting when scanning a deep thread.
+   No backticks in here - this whole stylesheet is inside a template literal. */
+.text blockquote {
+    position:relative;
     margin:6px 0;
-    padding:2px 0 2px 10px;
-    border-left:2px solid rgba(255,102,0,.32);
+    padding-left:15px;
     color:var(--quote-text);
+    font-style:italic;
 }
+
+/* The ornaments are written as literal characters, not CSS codepoint escapes.
+   This stylesheet is a template literal, and JS reads a backslash followed by a
+   digit as an octal escape, which is a syntax error in template strings. */
+.text blockquote::before {
+    content:"❛";
+    position:absolute;
+    left:0;
+    top:0;
+    color:var(--quote-ornament);
+    font-size:15px;
+    font-style:normal;
+    line-height:1.35;
+}
+
+.text blockquote p:first-child {
+    margin-top:0;
+}
+
+.text blockquote p:last-child {
+    margin-bottom:0;
+}
+
+/* The ornament stays neutral whether or not the quote is linked. The orange
+   underline on the anchored text is already the loud signal; colouring the mark
+   too gave the same information twice, and left the difference unreadable
+   without comparing two quotes side by side. */
 
 .comment-quote-link-inline {
     text-decoration:underline;
@@ -4915,7 +5201,6 @@ blockquote.comment-quote-redundant {
     overflow:hidden;
     margin:0;
     padding:0;
-    border-left-color:transparent;
     opacity:.08;
 }
 
@@ -5153,13 +5438,10 @@ ${headerHTML({ subtitle: true, minimize: true })}
 ${settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
-<button id="clear-filter" class="filter-banner-close" type="button" aria-label="Close filtered discussion" title="Show all comments">
-×
-</button>
-<div class="filter-banner-title">Focused discussion</div>
+<div class="filter-banner-head">
+<span class="filter-banner-title">Focused discussion</span><button id="clear-filter" class="filter-banner-close" type="button">show all comments</button>
+</div>
 <div id="filter-banner-quote" class="filter-banner-quote"></div>
-<div id="filter-banner-meta" class="filter-banner-meta"></div>
-<div id="filter-match-list" class="filter-match-list hidden"></div>
 </div>
 <div id="comments-content">Loading...</div>
 </div>
@@ -5174,8 +5456,6 @@ ${settingsPanelHTML()}
 		const stopWatchingTheme = watchTheme(host);
 		const filterBanner = shadow.querySelector("#filter-banner");
 		const filterBannerQuote = shadow.querySelector("#filter-banner-quote");
-		const filterBannerMeta = shadow.querySelector("#filter-banner-meta");
-		const filterMatchList = shadow.querySelector("#filter-match-list");
 		const clearFilterButton = shadow.querySelector("#clear-filter");
 
 		// Stop scroll/touch events moving out of sidebar so sites with
@@ -5398,8 +5678,6 @@ ${settingsPanelHTML()}
 			headerSubtitle: shadow.querySelector("#header-subtitle"),
 			filterBanner,
 			filterBannerQuote,
-			filterBannerMeta,
-			filterMatchList,
 		};
 	}
 
@@ -5836,6 +6114,202 @@ ${settingsPanelHTML()}
 		}
 	}
 
+	// #region hnewhere-test-export
+	// Tags sanitizeHTML can emit that establish a block. Deliberately not
+	// SEARCH_BLOCK_TAGS, which counts BR because the text index wants a line break
+	// there — here BR must stay inline, or a comment's first line would split at
+	// the break and only its first fragment would be tested for a quote marker.
+	const QUOTE_BLOCK_CONTAINERS = new Set(["P", "PRE", "BLOCKQUOTE", "UL", "OL", "LI", "HR"]);
+
+	function readQuoteMarker(text) {
+		const match = /^\s*((?:>\s*)+)/.exec(text || "");
+
+		return match
+			? { depth: (match[1].match(/>/g) || []).length, length: match[0].length }
+			: null;
+	}
+
+	// Drop `count` characters from the front of `nodes` in document order, which
+	// is where the marker sits. Walking text nodes rather than rewriting the
+	// markup keeps any inline <a> or <i> in the quoted line intact.
+	function dropLeadingCharacters(nodes, count) {
+		let remaining = count;
+
+		const walk = (node) => {
+			if (remaining <= 0) {
+				return;
+			}
+
+			if (node.nodeType === Node.TEXT_NODE) {
+				const value = node.nodeValue || "";
+				const taken = Math.min(remaining, value.length);
+
+				node.nodeValue = value.slice(taken);
+				remaining -= taken;
+				return;
+			}
+
+			for (const child of [...node.childNodes]) {
+				walk(child);
+			}
+		};
+
+		for (const node of nodes) {
+			walk(node);
+		}
+	}
+
+	function buildQuoteTree(lines) {
+		const quote = document.createElement("blockquote");
+		let index = 0;
+
+		while (index < lines.length) {
+			if (lines[index].depth <= 1) {
+				const paragraph = document.createElement("p");
+
+				for (const node of lines[index].nodes) {
+					paragraph.appendChild(node);
+				}
+
+				if (paragraph.textContent.trim()) {
+					quote.appendChild(paragraph);
+				}
+
+				index += 1;
+				continue;
+			}
+
+			const start = index;
+
+			while (index < lines.length && lines[index].depth > 1) {
+				index += 1;
+			}
+
+			quote.appendChild(
+				buildQuoteTree(
+					lines.slice(start, index).map((line) => ({ ...line, depth: line.depth - 1 })),
+				),
+			);
+		}
+
+		return quote;
+	}
+
+	function partitionCommentBlocks(root) {
+		const blocks = [];
+		let loose = null;
+
+		for (const node of [...root.childNodes]) {
+			if (node.nodeType === Node.ELEMENT_NODE && QUOTE_BLOCK_CONTAINERS.has(node.tagName)) {
+				loose = null;
+				blocks.push({ nodes: [node], element: node });
+				continue;
+			}
+
+			if (!loose) {
+				loose = { nodes: [], element: null };
+				blocks.push(loose);
+			}
+
+			loose.nodes.push(node);
+		}
+
+		for (const block of blocks) {
+			const text = block.nodes.map((node) => node.textContent || "").join("");
+
+			block.blank = !text.trim();
+			block.depth = 0;
+
+			// A quote line is a bare leading run or a <p>. A <pre> is excluded on
+			// purpose: shell prompts and diffs legitimately begin lines with `>`.
+			if (block.blank || (block.element && block.element.tagName !== "P")) {
+				continue;
+			}
+
+			const marker = readQuoteMarker(text);
+
+			if (marker) {
+				block.depth = marker.depth;
+				block.prefix = marker.length;
+			}
+		}
+
+		return blocks;
+	}
+
+	function foldQuoteRun(root, run) {
+		const lines = [];
+
+		for (const block of run) {
+			if (block.blank) {
+				continue;
+			}
+
+			const nodes = block.element ? [...block.element.childNodes] : block.nodes;
+
+			dropLeadingCharacters(nodes, block.prefix);
+			lines.push({ depth: block.depth, nodes });
+		}
+
+		// Hold the position before building, because building moves the run's own
+		// nodes into the new blockquote and they can no longer anchor the insert.
+		const placeholder = document.createComment("");
+
+		root.insertBefore(placeholder, run[0].nodes[0]);
+		root.replaceChild(buildQuoteTree(lines), placeholder);
+
+		// Whatever the tree did not adopt — emptied <p> shells, blank lines — is
+		// still a direct child of root and is now redundant.
+		for (const block of run) {
+			for (const node of block.nodes) {
+				if (node.parentNode === root) {
+					node.remove();
+				}
+			}
+		}
+	}
+
+	// Hacker News has no quote syntax. Commenters mark a quotation by starting a
+	// line with `>`, and HN renders that marker literally, so quoted text arrives
+	// styled like the commenter's own words and split across sibling <p>s. Folding
+	// each run of marked lines into one <blockquote> makes the quote a single
+	// element, which is what lets it be styled, clicked and collapsed as a unit —
+	// the block path in decorateSidebarMatches has always looked for exactly this.
+	// Idempotent: folded lines no longer begin with a marker.
+	function foldQuoteBlocks(root) {
+		if (!root) {
+			return;
+		}
+
+		const blocks = partitionCommentBlocks(root);
+		let index = 0;
+
+		while (index < blocks.length) {
+			if (!blocks[index].depth) {
+				index += 1;
+				continue;
+			}
+
+			// Blank blocks do not break a run; they are absorbed and dropped, so a
+			// stray whitespace node between two quote lines cannot split the quote.
+			let last = index;
+			let end = index + 1;
+
+			while (end < blocks.length && (blocks[end].depth || blocks[end].blank)) {
+				if (blocks[end].depth) {
+					last = end;
+				}
+
+				end += 1;
+			}
+
+			foldQuoteRun(root, blocks.slice(index, last + 1));
+			index = last + 1;
+		}
+	}
+
+	// #endregion hnewhere-test-export
+
 	async function renderComment(
 		id,
 		container,
@@ -5923,6 +6397,8 @@ ${settingsPanelHTML()}
 		const textElement = div.querySelector(".text");
 		const children = div.querySelector(".children");
 		const toggle = div.querySelector(".toggle");
+
+		foldQuoteBlocks(textElement);
 
 		renderedComments.push({
 			id: comment.id,
@@ -6031,7 +6507,7 @@ ${settingsPanelHTML()}
 		clearCommentFilter({ animate: false });
 		renderedComments = [];
 		ui.body.innerHTML = "";
-		ui.headerSubtitle.textContent = "";
+		setSidebarRestingSubtitle(ui, "");
 
 		const generation = sidebarGeneration;
 		const votePromise = isSidebarVisible() ? loadVoteLinks(story.id) : null;
@@ -6042,8 +6518,12 @@ ${settingsPanelHTML()}
 		comments.className = "top-level-comments";
 		ui.body.appendChild(comments);
 
-		const seenTime = await getSeenTime(story.id);
-		const collapsedIds = await loadCollapsed();
+		// Independent reads, so they resolve together instead of one after the
+		// other in front of the first comment.
+		const [seenTime, collapsedIds] = await Promise.all([
+			getSeenTime(story.id),
+			loadCollapsed(),
+		]);
 
 		await renderChildren(
 			story.kids || [],
@@ -6057,6 +6537,10 @@ ${settingsPanelHTML()}
 		await markSeen(story.id);
 
 		if (votePromise && generation === sidebarGeneration) {
+			// The fetch was started before rendering, so this names only whatever is
+			// left of it. It sits between the comments and the annotations because
+			// that is where the reader actually waits for it.
+			setSidebarStage(ui, "votes");
 			hydrateVoteControlsForStory(story.id, await votePromise);
 			hydrateDisplayAges(story.id);
 		}
@@ -6067,7 +6551,10 @@ ${settingsPanelHTML()}
 		clearCommentFilter({ animate: false });
 		renderedComments = [];
 		ui.body.innerHTML = "";
-		ui.headerSubtitle.textContent = pluralize(stories.length, "submission") + " on HN";
+		setSidebarRestingSubtitle(
+			ui,
+			pluralize(stories.length, "submission") + " on HN",
+		);
 
 		const generation = sidebarGeneration;
 
@@ -6093,8 +6580,10 @@ ${settingsPanelHTML()}
 
 			section.appendChild(comments);
 
-			const seenTime = await getSeenTime(story.id);
-			const collapsedIds = await loadCollapsed();
+			const [seenTime, collapsedIds] = await Promise.all([
+				getSeenTime(story.id),
+				loadCollapsed(),
+			]);
 
 			await renderChildren(
 				story.kids || [],
@@ -6108,6 +6597,7 @@ ${settingsPanelHTML()}
 			await markSeen(story.id);
 
 			if (votePromise && generation === sidebarGeneration) {
+				setSidebarStage(ui, "votes");
 				hydrateVoteControlsForStory(story.id, await votePromise);
 				hydrateDisplayAges(story.id);
 			}
@@ -6142,19 +6632,83 @@ ${settingsPanelHTML()}
 		);
 	}
 
+	// Must outlast the .2s max-height transition on .header-subtitle, or the text
+	// disappears while the header is still closing.
+	const SUBTITLE_COLLAPSE_MS = 240;
+
+	// The subtitle carries two things: what the sidebar is loading, and, once it is
+	// idle, how many submissions it is showing. The resting text is recorded rather
+	// than written straight out, so a render finishing mid-stage cannot overwrite
+	// the stage the reader is currently being shown.
+	// Every write goes through here, so the collapsed-when-empty class can never
+	// drift out of step with the text that justifies it.
+	function writeSidebarSubtitle(element, text) {
+		window.clearTimeout(element._hnewhereSubtitleTimer);
+
+		if (text) {
+			element.textContent = text;
+			element.classList.add("header-subtitle-visible");
+			return;
+		}
+
+		// The text has to outlive the collapse. Emptying it now would take the
+		// element's own height to zero in a single frame, and max-height would have
+		// nothing left to animate -- which is the title dropping rather than easing.
+		element.classList.remove("header-subtitle-visible");
+		element._hnewhereSubtitleTimer = window.setTimeout(() => {
+			element.textContent = "";
+		}, SUBTITLE_COLLAPSE_MS);
+	}
+
+	function setSidebarStage(ui, stage) {
+		const element = ui?.headerSubtitle;
+		const label = sidebarStageLabel(stage);
+
+		if (!element || !label) {
+			return;
+		}
+
+		ui.activeStage = stage;
+		writeSidebarSubtitle(element, label);
+		element.classList.add("header-subtitle-stage");
+		element.classList.toggle("header-subtitle-loading", !prefersReducedMotion());
+	}
+
+	function clearSidebarStage(ui) {
+		const element = ui?.headerSubtitle;
+
+		if (!element) {
+			return;
+		}
+
+		ui.activeStage = null;
+		element.classList.remove("header-subtitle-stage", "header-subtitle-loading");
+		writeSidebarSubtitle(element, ui.restingSubtitle || "");
+	}
+
+	function setSidebarRestingSubtitle(ui, text) {
+		if (!ui?.headerSubtitle) {
+			return;
+		}
+
+		ui.restingSubtitle = text;
+
+		if (!ui.activeStage) {
+			writeSidebarSubtitle(ui.headerSubtitle, text);
+		}
+	}
+
 	async function openSidebar(stories, options = {}) {
 		if (opening) return;
 
 		opening = true;
 
 		try {
-			const loaded = await loadStories(stories);
-
-			if (!loaded.length) {
-				throw new Error("No HN stories could be loaded");
-			}
-
 			const generation = ++sidebarGeneration;
+
+			// The chrome does not depend on the stories, so it is built first and the
+			// panel reports what it is waiting for. Loading first meant the reader
+			// watched an empty page through the slowest part of startup.
 			const ui = await createSidebar();
 			sidebarUI = ui;
 
@@ -6169,6 +6723,20 @@ ${settingsPanelHTML()}
 				await saveSidebarState("open");
 			}
 
+			setSidebarStage(ui, "discussion");
+
+			const loaded = await loadStories(stories);
+
+			if (!loaded.length) {
+				throw new Error("No HN stories could be loaded");
+			}
+
+			if (generation !== sidebarGeneration) {
+				return;
+			}
+
+			setSidebarStage(ui, "comments");
+
 			if (loaded.length === 1) {
 				await renderSingleDiscussion(loaded[0], ui);
 			} else {
@@ -6176,6 +6744,14 @@ ${settingsPanelHTML()}
 			}
 
 			if (generation === sidebarGeneration) {
+				// Announced only when the pass will actually run, so the sidebar never
+				// claims to be doing work that is switched off.
+				const settings = await loadSettings();
+
+				if (settings.annotations && shouldShowArticleAnnotations(settings)) {
+					setSidebarStage(ui, "annotations");
+				}
+
 				await refreshArticleAnnotations();
 
 				if (options.startHidden) {
@@ -6185,6 +6761,8 @@ ${settingsPanelHTML()}
 		} catch (e) {
 			console.error(e);
 		} finally {
+			clearSidebarStage(sidebarUI);
+			stopButtonSpinner(document.getElementById("hn-restore-button"));
 			opening = false;
 		}
 	}
@@ -6855,14 +7433,36 @@ ${settingsPanelHTML()}
 		}
 	}
 
-	function scrollToCommentElement(element) {
-		if (!element) {
+	// Matches #comments' own top padding, so the banner lands where a first item
+	// would sit rather than jammed against the edge.
+	const FILTER_BANNER_SCROLL_MARGIN = 12;
+
+	// scrollIntoView would sit the banner flush against the container edge, under
+	// #comments' own top padding. Scrolling the container directly lets the banner
+	// keep that padding, so it reads as the top of the list rather than as
+	// something clipped by it.
+	function scrollFilterBannerToTop() {
+		const banner = sidebarUI?.filterBanner;
+
+		if (!banner || banner.classList.contains("hidden")) {
 			return;
 		}
 
-		element.scrollIntoView({
+		const container = banner.closest("#comments");
+
+		if (!container) {
+			banner.scrollIntoView({ behavior: "smooth", block: "start" });
+			return;
+		}
+
+		const offset =
+			banner.getBoundingClientRect().top -
+			container.getBoundingClientRect().top +
+			container.scrollTop;
+
+		container.scrollTo({
+			top: Math.max(0, offset - FILTER_BANNER_SCROLL_MARGIN),
 			behavior: "smooth",
-			block: "center",
 		});
 	}
 
@@ -6911,13 +7511,6 @@ ${settingsPanelHTML()}
 			sidebarUI?.filterBanner?.classList.add("hidden");
 			if (sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBannerQuote.textContent = "";
-			}
-			if (sidebarUI?.filterBannerMeta) {
-				sidebarUI.filterBannerMeta.textContent = "";
-			}
-			if (sidebarUI?.filterMatchList) {
-				sidebarUI.filterMatchList.replaceChildren();
-				sidebarUI.filterMatchList.classList.add("hidden");
 			}
 		}, options);
 	}
@@ -7154,6 +7747,7 @@ ${settingsPanelHTML()}
 
 	// #endregion hnewhere-test-export
 
+	// #region hnewhere-test-export
 	function extractTextWithBreaks(node) {
 		const pieces = [];
 
@@ -7193,6 +7787,8 @@ ${settingsPanelHTML()}
 
 		return pieces.join("");
 	}
+
+	// #endregion hnewhere-test-export
 
 	function buildQuoteSearchVariants(text) {
 		const cleaned = String(text || "").replace(/\s+/g, " ").trim();
@@ -7468,6 +8064,7 @@ ${settingsPanelHTML()}
 		});
 	}
 
+	// #region hnewhere-test-export
 	function findNormalizedOccurrences(haystack, needle) {
 		const matches = [];
 
@@ -7499,7 +8096,6 @@ ${settingsPanelHTML()}
 		return matches;
 	}
 
-	// #region hnewhere-test-export
 	function resolveRawPoint(index, rawOffset, bias) {
 		if (!index.rawPoints.length) {
 			return null;
@@ -7574,8 +8170,6 @@ ${settingsPanelHTML()}
 			};
 	}
 
-	// #endregion hnewhere-test-export
-
 	function findRangeInRoot(root, normalizedNeedle, uniqueOnly = true) {
 		const index = buildTextIndex(root, {
 			skipHidden: false,
@@ -7589,6 +8183,8 @@ ${settingsPanelHTML()}
 
 		return createRangeFromMatch(index, matches[0], normalizedNeedle.length)?.range || null;
 	}
+
+	// #endregion hnewhere-test-export
 
 	function findBestQuoteMatch(articleIndex, quoteText) {
 		let best = null;
@@ -7710,7 +8306,13 @@ ${settingsPanelHTML()}
 					textElement: rendered.textElement,
 					author: rendered.author,
 					time: rendered.time,
-					commentText: rendered.textElement?.textContent || "",
+					// Block-aware, not raw textContent: textContent butts the last word
+					// of one paragraph against the first of the next, and the scorer
+					// then tokenizes the join as a single junk term. The `>` markers
+					// used to mask this by accident; folding removes them.
+					commentText: rendered.textElement
+						? extractTextWithBreaks(rendered.textElement)
+						: "",
 					quoteText: match.quoteText,
 					quoteNormalized: match.quoteNormalized,
 					fullQuoteText: match.fullQuoteText,
@@ -8257,51 +8859,6 @@ ${settingsPanelHTML()}
 		return visible;
 	}
 
-	function setActiveFilterMatchChip(commentId) {
-		sidebarUI?.filterMatchList
-			?.querySelectorAll(".filter-match-chip")
-			.forEach((chip) => {
-				chip.classList.toggle(
-					"filter-match-chip-active",
-					chip.dataset.commentId === String(commentId),
-				);
-			});
-	}
-
-	function renderFilterMatchList(group) {
-		const list = sidebarUI?.filterMatchList;
-
-		if (!list) {
-			return;
-		}
-
-		list.replaceChildren();
-
-		if ((group?.comments?.length || 0) <= 1) {
-			list.classList.add("hidden");
-			return;
-		}
-
-		for (const match of group.comments) {
-			const chip = document.createElement("button");
-			chip.type = "button";
-			chip.className = "filter-match-chip";
-			chip.dataset.commentId = String(match.commentId);
-			chip.textContent = match.author || "anonymous";
-			chip.title = truncateText(match.commentText || match.fullQuoteText || "", 180);
-			chip.onclick = (event) => {
-				event.preventDefault();
-				event.stopPropagation();
-				setActiveFilterMatchChip(match.commentId);
-				scrollToCommentElement(match.element);
-			};
-			list.appendChild(chip);
-		}
-
-		setActiveFilterMatchChip(group.comments[0]?.commentId);
-		list.classList.remove("hidden");
-	}
-
 	function applyCommentFilter(groupKey, options = {}) {
 		const group = annotationController?.groupsByKey.get(groupKey);
 
@@ -8339,7 +8896,6 @@ ${settingsPanelHTML()}
 
 			setQuoteRedundancy(group, true);
 			updateSubmissionVisibility(visibleCommentIds);
-			renderFilterMatchList(group);
 
 			if (sidebarUI?.filterBanner && sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBanner.classList.remove("hidden");
@@ -8349,18 +8905,18 @@ ${settingsPanelHTML()}
 				);
 			}
 
-			if (sidebarUI?.filterBannerMeta) {
-				sidebarUI.filterBannerMeta.textContent = "";
-			}
 		}, options);
 
-		setActiveFilterMatchChip(targetMatch?.commentId);
-
+		// Entering the filter puts the banner at the top rather than centring the
+		// matched comment: the banner is the explanation of what just happened, and
+		// starting at it means the reader gets the whole filtered thread from its
+		// beginning instead of landing midway down it.
 		if (options.scroll !== false) {
-			scrollToCommentElement(targetMatch?.element);
+			scrollFilterBannerToTop();
 		}
 	}
 
+	// #region hnewhere-test-export
 	function activateCommentQuoteElement(element, onActivate) {
 		element.classList.add("comment-quote-link");
 		element.setAttribute("role", "button");
@@ -8381,21 +8937,29 @@ ${settingsPanelHTML()}
 	}
 
 	function wrapInlineCommentQuote(range, onActivate) {
-		const fragment = range.extractContents();
-
+		// Ask with cloneContents, not extractContents. Both build the same fragment,
+		// but extractContents mutates: a range straddling a block boundary leaves the
+		// partially covered ancestors cloned into the fragment and cut in half in the
+		// document. Re-inserting the fragment does not put them back together — it
+		// adds the clones alongside the halves, so one paragraph becomes two split at
+		// the match boundary. HN separates paragraphs with an unclosed <p> and quote
+		// lines with a leading `>`, and normalizeSearchText flattens both to a space,
+		// so a multi-line `>` quote matches straight across the break and lands here
+		// every time. Cloning first keeps the bail-out free of side effects.
 		if (
-			fragment.querySelector(
-				"article, aside, blockquote, div, footer, header, h1, h2, h3, h4, h5, h6, li, ol, p, pre, section, table, ul",
-			)
+			range
+				.cloneContents()
+				.querySelector(
+					"article, aside, blockquote, div, footer, header, h1, h2, h3, h4, h5, h6, li, ol, p, pre, section, table, ul",
+				)
 		) {
-			range.insertNode(fragment);
 			return null;
 		}
 
 		const wrapper = document.createElement("span");
 		wrapper.dataset.hnewhereQuoteLink = "1";
 		wrapper.className = "comment-quote-link comment-quote-link-inline";
-		wrapper.appendChild(fragment);
+		wrapper.appendChild(range.extractContents());
 		range.insertNode(wrapper);
 		activateCommentQuoteElement(wrapper, onActivate);
 		return wrapper;
@@ -8404,14 +8968,37 @@ ${settingsPanelHTML()}
 	function decorateSidebarMatches(controller) {
 		for (const group of controller.groups) {
 			for (const comment of group.comments) {
+				// Scrolls, unlike the refresh path below: this is the reader entering
+				// the filter, and the list they were looking at is about to be
+				// replaced, so the old scroll position means nothing afterwards.
 				const onActivate = () => {
 					applyCommentFilter(group.key, {
-						scroll: false,
 						commentId: comment.commentId,
 					});
 					controller.focusGroup(group.key);
 				};
 				const quoteElements = [];
+
+				// Anchor to the quoted text itself, the way a document comment
+				// attaches to the selection that prompted it. The enclosing block is
+				// the fallback, not the first choice: it is only the right anchor
+				// when the quote genuinely spans more than one line, which is exactly
+				// when the inline wrapper declines. Trying the block first would let
+				// whichever discussion happened to be processed first claim the whole
+				// quote, and the coarser anchor would be an accident of ordering.
+				const range = findRangeInRoot(
+					comment.textElement,
+					comment.quoteNormalized,
+					false,
+				);
+				const wrapper = range ? wrapInlineCommentQuote(range, onActivate) : null;
+
+				if (wrapper) {
+					quoteElements.push(wrapper);
+					comment.quoteElements = quoteElements;
+					continue;
+				}
+
 				const blockquote = [...comment.textElement.querySelectorAll("blockquote")].find(
 					(element) =>
 						!element.dataset.hnewhereQuoteBlock &&
@@ -8424,27 +9011,14 @@ ${settingsPanelHTML()}
 					blockquote.dataset.hnewhereQuoteBlock = "1";
 					activateCommentQuoteElement(blockquote, onActivate);
 					quoteElements.push(blockquote);
-					comment.quoteElements = quoteElements;
-					continue;
-				}
-
-				const range = findRangeInRoot(
-					comment.textElement,
-					comment.quoteNormalized,
-					false,
-				);
-
-				if (range) {
-					const wrapper = wrapInlineCommentQuote(range, onActivate);
-					if (wrapper) {
-						quoteElements.push(wrapper);
-					}
 				}
 
 				comment.quoteElements = quoteElements;
 			}
 		}
 	}
+
+	// #endregion hnewhere-test-export
 
 	async function openFocusedDiscussion(groupKey, options = {}) {
 		const wasHidden = await revealSidebar();
@@ -8665,6 +9239,9 @@ ${settingsPanelHTML()}
 		annotationController = createAnnotationOverlay(groups, [], settings);
 		decorateSidebarMatches(annotationController);
 
+		// Re-applying a filter that is already open, not entering one. Must not
+		// scroll: annotations refresh on resize and on setting changes, and each
+		// refresh would otherwise yank the reader back to the banner.
 		if (activeCommentFilter) {
 			applyCommentFilter(activeCommentFilter, {
 				scroll: false,
@@ -8732,25 +9309,47 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		// Same guarantee as isHiddenSite above -- no lookup, no button, no stored
-		// state -- but the list lives in async storage, so it cannot fold into that
-		// synchronous check.
-		if (await isSiteBlocked()) {
+		// Four independent reads, run together rather than one after another in front
+		// of the first paint. The blocked-site check is one of them: it is a read of
+		// our own storage like the rest, so resolving it alongside them costs nothing
+		// and still gates everything that follows.
+		const [blocked, settings, siteState, storedLast] = await Promise.all([
+			isSiteBlocked(),
+			loadSettings(),
+			loadSidebarState(),
+			load(STORAGE.last, null),
+		]);
+
+		// Same guarantee as isHiddenSite above: no lookup, no button, no stored
+		// state. Nothing above this line writes, so reaching it early is safe.
+		if (blocked) {
 			return;
 		}
-
-		// Before anything renders, so the first paint already knows what is voted.
-		await loadRememberedVotes();
 
 		// A popup closed before it finished leaves its staged draft behind.
 		sweepBridgePayloads().catch(console.error);
 
-		const settings = await loadSettings();
-		const siteState = await loadSidebarState();
+		// Deliberately not in the batch above: this one prunes expired votes and
+		// therefore writes, which a blocked site must never trigger. Started here and
+		// awaited below, so it overlaps the button rather than delaying it.
+		const votesReady = loadRememberedVotes();
+
+		// Drawn before the lookup, so the page shows something immediately and the
+		// ring covers whatever comes next. Skipped when the reader has asked for no
+		// button without a discussion, because then it might correctly never appear
+		// and would flicker in and back out. The setting is already in hand, so the
+		// decision costs nothing.
+		const pendingButton = settings.hideWithoutDiscussion
+			? null
+			: await createCheckingButton();
+
+		// Vote memory is only read once something renders, so it no longer sits in
+		// front of the first paint -- but it must still land before it does.
+		await votesReady;
 
 		// Check if we arrived here by clicking
 		// a story from Hacker News.
-		let last = await load(STORAGE.last, null);
+		let last = storedLast;
 
 		if (last && Date.now() - last.timestamp > 300000) {
 			await save(STORAGE.last, null);
@@ -8763,6 +9362,8 @@ ${settingsPanelHTML()}
 			Date.now() - last.timestamp < 300000
 		) {
 			await save(STORAGE.last, null);
+
+			settleButtonToDiscussion(pendingButton);
 
 			await presentDiscussion(
 				last.ids.map((id) => ({ objectID: id })),
@@ -8780,6 +9381,8 @@ ${settingsPanelHTML()}
 		const stories = await findHN(location.href);
 
 		if (stories.length) {
+			settleButtonToDiscussion(pendingButton);
+
 			await presentDiscussion(
 				stories.map((story) => ({ objectID: story.objectID })),
 				settings,
@@ -8793,22 +9396,29 @@ ${settingsPanelHTML()}
 		if (!settings.hideWithoutDiscussion) {
 			await createSubmitButton();
 		}
+
+		stopButtonSpinner(pendingButton);
 	}
 
 	// The three ways a known discussion can be presented, in one place because init
 	// reaches this point by two different routes.
 	async function presentDiscussion(storyRefs, settings, siteState) {
 		if (shouldAutoOpenSidebar(settings, siteState)) {
+			// The sidebar itself is the answer here, so the placeholder goes rather
+			// than becoming a button that would sit on top of an open panel.
+			destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
 			await openSidebar(storyRefs);
 			return;
 		}
 
 		if (shouldPreloadHiddenSidebar(settings, siteState)) {
+			// Kept: createRestoreButton adopts it, so the ring carries on spinning
+			// across the render and the annotation pass, which is the slow case.
 			await openSidebar(storyRefs, { startHidden: true });
 			return;
 		}
 
-		await createCollapsedButton(storyRefs);
+		stopButtonSpinner(await createCollapsedButton(storyRefs));
 	}
 
 	init().catch(console.error);
