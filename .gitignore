@@ -1,0 +1,16 @@
+# Local test harness and fixtures. Not shipped to users and not published --
+# HNewhere.user.js is the only file the install URL serves.
+tests/
+
+# Design specs and implementation plans. Working notes, kept locally.
+docs/
+
+# Playwright MCP run artifacts
+.playwright-mcp/
+
+# Screenshots captured at the repo root while verifying changes by hand.
+# Scoped to the root so images committed under a folder still work.
+/*.png
+/*.jpg
+
+.DS_Store
