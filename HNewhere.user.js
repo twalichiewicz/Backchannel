@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HNewhere
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.5.5
+// @version      1.5.6
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
@@ -248,6 +248,7 @@
 	let sidebar = null;
 	let sidebarUI = null;
 	let opening = false;
+	let openingRun = null;
 	let sidebarGeneration = 0;
 	let renderedComments = [];
 	let annotationController = null;
@@ -4667,6 +4668,9 @@ Highlights the passages commenters quote, so you can jump between the article an
     font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     font-size:13px;
     overflow:visible;
+    /* Reading width for a single block of prose. Never applied to a container: a
+       cap on any ancestor of .children narrows every reply nested under it. */
+    --measure:1215px;
 }
 
 ${THEME_CSS}
@@ -4918,6 +4922,7 @@ ${CHROME_CSS}
     line-height:132%;
     font-weight:normal;
     cursor:text;
+    max-width:var(--measure);
 }
 
 .text p {
@@ -5244,10 +5249,8 @@ blockquote.comment-quote-redundant {
     cursor:text;
 }
 
-.story-text p:first-child {
-    margin-top:0;
-}
-
+/* No p:first-child rule to match: HN never wraps a story's opening paragraph, so
+   the first <p> is the second paragraph and zeroing it closed a real gap. */
 .story-text p:last-child {
     margin-bottom:0;
 }
@@ -6698,11 +6701,24 @@ ${settingsPanelHTML()}
 		}
 	}
 
-	async function openSidebar(stories, options = {}) {
-		if (opening) return;
+	// Still one open at a time, but the guard hands the in-flight run back rather
+	// than only refusing, so a navigation can wait for it to unwind.
+	function openSidebar(stories, options = {}) {
+		if (opening) {
+			return openingRun ?? Promise.resolve();
+		}
 
 		opening = true;
 
+		openingRun = runOpenSidebar(stories, options).finally(() => {
+			opening = false;
+			openingRun = null;
+		});
+
+		return openingRun;
+	}
+
+	async function runOpenSidebar(stories, options = {}) {
 		try {
 			const generation = ++sidebarGeneration;
 
@@ -6763,7 +6779,6 @@ ${settingsPanelHTML()}
 		} finally {
 			clearSidebarStage(sidebarUI);
 			stopButtonSpinner(document.getElementById("hn-restore-button"));
-			opening = false;
 		}
 	}
 
@@ -9165,13 +9180,13 @@ ${settingsPanelHTML()}
 		setTimeout(callback, 0);
 	}
 
-	// Ticking the blocklist toggle removes the sidebar the settings panel lives in,
-	// so callers must finish persisting before calling this and must not read
-	// sidebar or sidebarUI afterwards.
-	function teardownForBlockedSite() {
+	// Every surface this script puts on a page. Annotations go first: they unwrap
+	// quote links inside the sidebar's shadow root, so it has to still exist.
+	function teardownSurfaces() {
 		clearArticleAnnotations();
 
 		for (const id of [
+			BUTTON_PENDING_ID,
 			"hn-restore-button",
 			"hn-collapse-button",
 			"hn-submit-button",
@@ -9195,6 +9210,13 @@ ${settingsPanelHTML()}
 			sidebar = null;
 			sidebarUI = null;
 		}
+	}
+
+	// Ticking the blocklist toggle removes the sidebar the settings panel lives in,
+	// so callers must finish persisting before calling this and must not read
+	// sidebar or sidebarUI afterwards.
+	function teardownForBlockedSite() {
+		teardownSurfaces();
 	}
 
 	// Shared by both headers. Persists before tearing down, because the teardown
@@ -9263,6 +9285,94 @@ ${settingsPanelHTML()}
 	}
 
 	// -------------------------
+	// Soft navigation
+	// -------------------------
+
+	// The generation bump tells a render in flight to stop at its next checkpoint;
+	// awaiting openingRun is how we learn that it has.
+	async function teardownForNavigation() {
+		sidebarGeneration++;
+
+		if (openingRun) {
+			await openingRun.catch(() => {});
+		}
+
+		teardownSurfaces();
+
+		renderedComments = [];
+		activeCommentFilter = null;
+	}
+
+	// Routers push more than once for one navigation, and the new article is
+	// usually not in the DOM yet when they do, so the pass waits for the burst.
+	const SOFT_NAV_SETTLE_MS = 250;
+	const SOFT_NAV_POLL_MS = 400;
+
+	// Three feeds because none is sufficient alone: patching history is instant but
+	// only lands where the manager's sandbox shares the page's History object,
+	// popstate covers only back and forward, and the poll catches the rest.
+	function watchSoftNavigation() {
+		let currentHref = location.href;
+		let currentURL = normalizeURL(currentHref);
+		let timer = null;
+		let queue = Promise.resolve();
+
+		const check = () => {
+			if (location.href === currentHref) {
+				return;
+			}
+
+			currentHref = location.href;
+
+			// Normalized, so a fragment or a tracking parameter findHN already
+			// discards is not treated as a new page.
+			const nextURL = normalizeURL(currentHref);
+
+			if (nextURL === currentURL) {
+				return;
+			}
+
+			currentURL = nextURL;
+
+			clearTimeout(timer);
+
+			timer = setTimeout(() => {
+				// Chained, so two navigations cannot have one's teardown run against
+				// the other's half-built surfaces.
+				queue = queue
+					.then(async () => {
+						await teardownForNavigation();
+						await runPagePass();
+					})
+					.catch(console.error);
+			}, SOFT_NAV_SETTLE_MS);
+		};
+
+		for (const method of ["pushState", "replaceState"]) {
+			const original = history[method];
+
+			if (typeof original !== "function") {
+				continue;
+			}
+
+			try {
+				history[method] = function (...args) {
+					const result = original.apply(this, args);
+
+					check();
+
+					return result;
+				};
+			} catch {
+				// Frozen or isolated by the manager. Polling still catches it.
+			}
+		}
+
+		window.addEventListener("popstate", check);
+		setInterval(check, SOFT_NAV_POLL_MS);
+	}
+
+	// -------------------------
 	// Initialization
 	// -------------------------
 
@@ -9302,6 +9412,17 @@ ${settingsPanelHTML()}
 			return;
 		}
 
+		// Never gated on what the pass decides: a page the script declines to touch
+		// is exactly the one a reader navigates away from.
+		watchSoftNavigation();
+
+		await runPagePass();
+	}
+
+	// Split from init so a soft navigation can ask again. What stays above it --
+	// the storage migration, the HN bridge -- belongs to the document rather than
+	// to the page it is currently showing.
+	async function runPagePass() {
 		// After the HN branch, which has to keep working because the bridge popups run
 		// there, and before anything else: no lookup, no button, no stored state on a
 		// page that could never be a submission in the first place.

@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.5.6] — 2026-07-31
+
+### Fixed
+
+- **[#35](https://github.com/twalichiewicz/HNewhere/issues/35)** — the discussion
+  lookup ran once, when the script loaded. On a site that navigates without
+  reloading — GitHub, and anything else built on Turbo or a client-side router —
+  whichever answer it computed first was the one it kept. Landing on a subpage
+  and moving to a page that had been posted left the button grey until a manual
+  reload; starting on the posted page and moving away left it orange on a page
+  that was never submitted. Navigation is now noticed and the page asked about
+  again, arriving at whatever a fresh load of that URL would have shown.
+
+  Three signals feed one debounced check, because no single one is reliable
+  everywhere: patching `history` is instant but only reaches the page in some
+  userscript managers, and is discarded without an error in others; `popstate`
+  always arrives but only covers back and forward; a poll catches the rest. A
+  fragment, an added tracking parameter, and a burst of pushes that ends where it
+  started are all still the same page, and leave the sidebar alone.
+- **[#37](https://github.com/twalichiewicz/HNewhere/issues/37)** — a comment's
+  text had no line length of its own, and ran to whatever width the panel had
+  been dragged to. It now takes a 1215px measure. The composer keeps the narrower
+  720px it already had, which is sized to an input rather than to reading.
+
+  The cap is on the text and nothing else. `.children` sits beside a comment's
+  text rather than around it, so a reply is not bounded by the comment it
+  answers: it starts further right and gets the full measure again. A cap on the
+  comment, the list, or the scrolling wrapper would instead compound with the
+  indent into a column that narrows at every level, which is the thing the indent
+  spends horizontal space to avoid.
+- A story's opening paragraph ran into the one below it, with no break between
+  them. Hacker News does not wrap the first paragraph of a story's text — it
+  emits it as bare text and wraps only the ones after it — so a rule zeroing the
+  top margin of `p:first-child` was never matching the first paragraph at all. It
+  matched the second, and closed the gap the reader needed. The comment renderer
+  takes the same markup and never had the rule.
+
 ## [1.5.5] — 2026-07-31
 
 ### Added
@@ -160,6 +197,8 @@ Releases before 1.4.7 are recorded in the
 commit history. Entries for 1.4.7 through 1.5.3 are summarized from their release
 commits rather than written at the time.
 
+[1.5.6]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.5...v1.5.6
+[1.5.5]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.2...v1.5.3
 [1.5.2]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.1...v1.5.2
