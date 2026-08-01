@@ -5010,6 +5010,41 @@ ${CHROME_CSS}
     margin-bottom:0;
 }
 
+/* A <pre> defaults to white-space:pre, which does not wrap at any width, so a code
+   block or an indented quote ran straight out of the panel and took the comment's
+   own edge with it. overflow-wrap is inherited from .comment and only bites once
+   wrapping is allowed at all, which is what pre-wrap turns on -- and pre-wrap keeps
+   the indentation and line breaks that made the author reach for a code block.
+
+   overflow-x is the backstop for the case that still cannot break, an unbroken
+   200-character token being the usual one: it scrolls inside its own block rather
+   than widening everything around it. */
+.text pre,
+.story-text pre {
+    white-space:pre-wrap;
+    overflow-x:auto;
+    max-width:100%;
+}
+
+/* Browser defaults are 1em, which is 13px here and sits oddly beside the 8px every
+   other break in a comment uses. Lists also default to 40px of indent, most of a
+   nested reply's remaining width, where enough to hang a bullet on will do. */
+.text pre,
+.text ul,
+.text ol,
+.story-text pre,
+.story-text ul,
+.story-text ol {
+    margin:8px 0;
+}
+
+.text ul,
+.text ol,
+.story-text ul,
+.story-text ol {
+    padding-left:22px;
+}
+
 .text a {
     color:var(--link);
 }
@@ -8040,6 +8075,13 @@ ${settingsPanelHTML()}
 
 	// #endregion hnewhere-test-export
 
+	// #region hnewhere-test-export
+	// How much of a passage a cut has to save before it is worth making. A 251
+	// character quote trimmed to 220 lost its last four words to save an eighth of
+	// itself: the reader got a line barely shorter that no longer ended anywhere,
+	// and the words it dropped were sitting in full in the comment underneath.
+	const TRUNCATE_MIN_SAVING = 0.25;
+
 	function truncateText(text, maxLength = 120) {
 		const value = String(text || "").replace(/\s+/g, " ").trim();
 
@@ -8047,8 +8089,23 @@ ${settingsPanelHTML()}
 			return value;
 		}
 
-		return value.slice(0, maxLength - 1).trimEnd() + "…";
+		if (value.length * (1 - TRUNCATE_MIN_SAVING) <= maxLength) {
+			return value;
+		}
+
+		const cut = value.slice(0, maxLength - 1).trimEnd();
+		const lastSpace = cut.lastIndexOf(" ");
+
+		// On a word, not through one: "Minimum ef…" reads as something broken, where
+		// "Minimum…" reads as a quotation carrying on. The floor is there for text
+		// with no spaces to fall back to, a long URL being the usual one, which would
+		// otherwise be cut back to nothing.
+		return (
+			(lastSpace > maxLength * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd() +
+			"…"
+		);
 	}
+	// #endregion hnewhere-test-export
 
 	function addUniqueText(target, seen, text, minNormalizedLength = 24) {
 		const value = String(text || "").replace(/\s+/g, " ").trim();
