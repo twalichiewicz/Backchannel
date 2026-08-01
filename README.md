@@ -5,7 +5,7 @@
 ███▀▀▀███ ███  ▀████ ██▄█▀ ██ █ ██ ██ ██ ██▄█▀ ██ ▀▀ ██▄█▀ 
 ███   ███ ███    ███ ▀█▄▄▄  ██▀██  ██ ██ ▀█▄▄▄ ██    ▀█▄▄▄ 
 
-A userscript that brings Hacker News discussions directly into the context where they were made.  
+A userscript that tells you when Hacker News has been there.  
 ```
                                                
 <img width="1161" height="753" alt="A screenshot of Safari on macOS opened to https://john.fun/elevators, with the HNewhere side bar open viewing the comments. The settings dropdown in the sidebar is also open, showing which settings the user currently has enabled." src="https://github.com/user-attachments/assets/8f56269d-a707-4107-9e17-8d1c36e37daa" />
