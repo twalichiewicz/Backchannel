@@ -107,6 +107,19 @@ use to detect updates, so every release bumps it.
 
 ### Fixed
 
+- Code blocks in comments wrap instead of running off the side of the panel. A
+  `<pre>` does not wrap at any width by default, so a code block — or a quote
+  someone marked by indenting it, which Hacker News turns into one — pushed 697
+  pixels of content through a 419 pixel panel and took the comment's own edge with
+  it. It now wraps while keeping the indentation and line breaks that made the
+  author reach for a code block, and anything that still cannot break scrolls
+  inside its own block rather than widening everything around it. Every other kind
+  of content — inline code, monospace, long links, unbroken words, lists — already
+  wrapped.
+
+  Code blocks and lists also sat on the browser's own 1em spacing rather than the
+  8px every other break in a comment uses, and lists indented 40px, most of a
+  nested reply's remaining width. Both now match everything around them.
 - The quote under **Focused discussion** stops cutting off passages that very
   nearly fit. A 251-character quote was trimmed to 220, which took its last four
   words to save an eighth of it and ended mid-word on "Minimum ef…" — words that
