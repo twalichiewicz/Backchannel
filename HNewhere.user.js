@@ -4982,6 +4982,27 @@ ${CHROME_CSS}
     margin:8px 0;
 }
 
+/* A comment's first and last element must not decide how far the comment sits from
+   its neighbours, which is what happened while their margins were left to escape.
+   .comment-layout is a flex row, so nothing collapses out through it: the margin
+   stayed inside the comment and added to the 12px every comment already has,
+   putting a multi-paragraph comment 20px from the next one, a comment ending in a
+   quote 18px, and a single-paragraph one -- which is a bare text node, since HN
+   does not wrap an opening paragraph -- at 12px. The same happened above, where
+   what a comment opened with set its distance from its own byline.
+
+   Bare text is untouched by this and needs to be: an anonymous block has no margins
+   to zero, which is why it was the odd one out to begin with. */
+.text > *:first-child,
+.story-text > *:first-child {
+    margin-top:0;
+}
+
+.text > *:last-child,
+.story-text > *:last-child {
+    margin-bottom:0;
+}
+
 .text a {
     color:var(--link);
 }
@@ -5187,9 +5208,13 @@ ${CHROME_CSS}
    ornament in the gutter and italics instead, which cannot be confused with
    nesting when scanning a deep thread.
    No backticks in here - this whole stylesheet is inside a template literal. */
+/* Same 8px as a paragraph. At 6px a quote sat closer to its neighbour than two
+   paragraphs did, which only showed between two stacked quotes -- everywhere else
+   collapsing against a paragraph's 8px hid it. One gap for every break in the
+   prose, whatever is on either side of it. */
 .text blockquote {
     position:relative;
-    margin:6px 0;
+    margin:8px 0;
     padding-left:15px;
     color:var(--quote-text);
     font-style:italic;
@@ -5318,10 +5343,13 @@ blockquote.comment-quote-redundant {
     cursor:text;
 }
 
-/* No p:first-child rule to match: HN never wraps a story's opening paragraph, so
-   the first <p> is the second paragraph and zeroing it closed a real gap. */
-.story-text p:last-child {
-    margin-bottom:0;
+/* The story ran on the browser's default paragraph margin -- 13px against the
+   comments' 8px -- so prose in the panel had two rhythms depending on whether it
+   was the submission or a reply to it. The edges are handled by the shared
+   first-child/last-child rules above, which is what the old p:last-child rule here
+   was reaching for. */
+.story-text p {
+    margin:8px 0;
 }
 
 .story-text a {
@@ -5824,6 +5852,11 @@ ${settingsPanelHTML()}
 `;
 		const storyElement = wrapper.firstElementChild;
 		storyElement.dataset.storyId = storyID;
+
+		// Same treatment a comment gets: a story's opening paragraph arrives unwrapped
+		// too, so without this the first-child rule would land on its second paragraph.
+		wrapLooseCommentText(storyElement.querySelector(".story-text"));
+
 		container.appendChild(storyElement);
 
 		wireComposer(storyElement.querySelector(".comment-composer"), {
@@ -6380,6 +6413,64 @@ ${settingsPanelHTML()}
 		}
 	}
 
+	// Blocks that stand on their own. Anything else at the top level of a comment is
+	// inline and belongs to whatever paragraph surrounds it.
+	const COMMENT_BLOCK_TAGS = new Set([
+		"P",
+		"BLOCKQUOTE",
+		"PRE",
+		"DIV",
+		"UL",
+		"OL",
+		"TABLE",
+	]);
+
+	// HN opens a comment's first paragraph without a <p> and never closes the ones
+	// that follow, so the opening paragraph arrives as loose text rather than an
+	// element -- and the same happens to the reply under a quote, which is the shape
+	// "> quoted line" plus an answer produces. Loose text becomes an anonymous block,
+	// which has no margins and cannot be addressed by a selector, so those paragraphs
+	// sat at different distances from their neighbours than the wrapped ones and no
+	// rule could reach them. Wrapping them makes every paragraph a real element, which
+	// is what lets one margin apply to all of them.
+	//
+	// Runs, not nodes: a paragraph is often text, an <a>, and more text, and those are
+	// one paragraph rather than three.
+	function wrapLooseCommentText(root) {
+		if (!root) {
+			return;
+		}
+
+		let run = [];
+
+		const flush = () => {
+			// A run of nothing but whitespace is the surrounding template's own
+			// indentation. Wrapping it would invent a paragraph.
+			const meaningful = run.some(
+				(node) => node.nodeType !== 3 || node.textContent.trim(),
+			);
+
+			if (run.length && meaningful) {
+				const paragraph = document.createElement("p");
+				run[0].before(paragraph);
+				paragraph.append(...run);
+			}
+
+			run = [];
+		};
+
+		for (const node of [...root.childNodes]) {
+			if (node.nodeType === 1 && COMMENT_BLOCK_TAGS.has(node.tagName)) {
+				flush();
+				continue;
+			}
+
+			run.push(node);
+		}
+
+		flush();
+	}
+
 	// #endregion hnewhere-test-export
 
 	async function renderComment(
@@ -6470,7 +6561,10 @@ ${settingsPanelHTML()}
 		const children = div.querySelector(".children");
 		const toggle = div.querySelector(".toggle");
 
+		// After folding, so the quote detector still sees the raw line structure it
+		// partitions on rather than paragraphs this put around it.
 		foldQuoteBlocks(textElement);
+		wrapLooseCommentText(textElement);
 
 		renderedComments.push({
 			id: comment.id,
