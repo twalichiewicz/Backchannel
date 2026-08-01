@@ -260,6 +260,12 @@
 	let annotationController = null;
 	let activeCommentFilter = null;
 
+	// Where the reader was in the full list before a focused discussion replaced it.
+	// Leaving the focus puts every hidden comment back above them, so without this
+	// the list grows under the scroll position and drops them at the top, having to
+	// find their place again to carry on reading.
+	let preFilterAnchor = null;
+
 	// -------------------------
 	// Storage
 	// -------------------------
@@ -5573,7 +5579,7 @@ ${settingsPanelHTML()}
 		clearFilterButton.onclick = (event) => {
 			event.preventDefault();
 			event.stopPropagation();
-			clearCommentFilter();
+			clearCommentFilter({ restore: true });
 		};
 
 		let resizing = false;
@@ -7691,6 +7697,64 @@ ${settingsPanelHTML()}
 	// #comments' own top padding. Scrolling the container directly lets the banner
 	// keep that padding, so it reads as the top of the list rather than as
 	// something clipped by it.
+	// #comments scrolls; #comments-content is the list inside it.
+	function commentScrollContainer() {
+		return sidebarUI?.body?.closest("#comments") || null;
+	}
+
+	// The topmost comment still on screen, and how far its top sits from the
+	// container's. A comment rather than a raw scrollTop, because the offset that
+	// described this position stops meaning anything once the list is a different
+	// length -- which is exactly what entering and leaving a focus does to it.
+	function captureCommentScrollAnchor() {
+		const container = commentScrollContainer();
+
+		if (!container) {
+			return null;
+		}
+
+		const top = container.getBoundingClientRect().top;
+
+		for (const rendered of renderedComments) {
+			if (rendered.element.classList.contains("comment-filter-hidden")) {
+				continue;
+			}
+
+			const rect = rendered.element.getBoundingClientRect();
+
+			// The first whose bottom edge has not yet passed the top of the viewport.
+			// That is what the reader is looking at, even part-scrolled.
+			if (rect.bottom > top) {
+				return { id: rendered.id, offset: rect.top - top };
+			}
+		}
+
+		return null;
+	}
+
+	// Called once the list is whole again, so the measurement is against the layout
+	// the reader is about to see rather than the filtered one.
+	function restoreCommentScrollAnchor(anchor) {
+		const container = commentScrollContainer();
+
+		if (!container || !anchor) {
+			return;
+		}
+
+		const rendered = renderedComments.find(
+			(comment) => comment.id === anchor.id,
+		);
+
+		if (!rendered) {
+			return;
+		}
+
+		container.scrollTop +=
+			rendered.element.getBoundingClientRect().top -
+			container.getBoundingClientRect().top -
+			anchor.offset;
+	}
+
 	function scrollFilterBannerToTop() {
 		const banner = sidebarUI?.filterBanner;
 
@@ -7698,7 +7762,7 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		const container = banner.closest("#comments");
+		const container = commentScrollContainer();
 
 		if (!container) {
 			banner.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -7743,6 +7807,14 @@ ${settingsPanelHTML()}
 	function clearCommentFilter(options = {}) {
 		activeCommentFilter = null;
 
+		// Read out before the transition, which may run a beat later, and dropped
+		// here either way: an anchor kept past this point would describe a list that
+		// no longer exists. Only an explicit "show all comments" restores -- the other
+		// callers are tearing the list down or refreshing annotations, where moving
+		// the reader would be an interruption rather than a return.
+		const anchor = options.restore ? preFilterAnchor : null;
+		preFilterAnchor = null;
+
 		positionFilterBannerForComment(null);
 
 		transitionCommentList(() => {
@@ -7762,6 +7834,10 @@ ${settingsPanelHTML()}
 			if (sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBannerQuote.textContent = "";
 			}
+
+			// Last, with every comment back in the list and the banner gone, so the
+			// position it puts the reader at is the one they will actually see.
+			restoreCommentScrollAnchor(anchor);
 		}, options);
 	}
 
@@ -9123,6 +9199,13 @@ ${settingsPanelHTML()}
 		if (!group) {
 			clearCommentFilter(options);
 			return;
+		}
+
+		// Only when entering from the full list. A refresh re-applies a filter that is
+		// already open, and a focus opened from inside another one should still return
+		// to where the reader started rather than to the focus they passed through.
+		if (!activeCommentFilter) {
+			preFilterAnchor = captureCommentScrollAnchor();
 		}
 
 		activeCommentFilter = groupKey;
