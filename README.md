@@ -1,10 +1,33 @@
-# HNewhere
+```
+▄▄▄   ▄▄▄ ▄▄▄    ▄▄▄               ▄▄                      
+███   ███ ████▄  ███               ██                      
+█████████ ███▀██▄███ ▄█▀█▄ ██   ██ ████▄ ▄█▀█▄ ████▄ ▄█▀█▄ 
+███▀▀▀███ ███  ▀████ ██▄█▀ ██ █ ██ ██ ██ ██▄█▀ ██ ▀▀ ██▄█▀ 
+███   ███ ███    ███ ▀█▄▄▄  ██▀██  ██ ██ ▀█▄▄▄ ██    ▀█▄▄▄ 
 
-<img width="1085" height="1006" alt="SCR-20260728-ndit" src="https://github.com/user-attachments/assets/e5d46dba-d099-416c-a10a-0177c403ff56" />
+A userscript that brings Hacker News discussions directly into the context where they were made.  
+```
+                                               
+<img width="1161" height="753" alt="A screenshot of Safari on macOS opened to https://john.fun/elevators, with the HNewhere side bar open viewing the comments. The settings dropdown in the sidebar is also open, showing which settings the user currently has enabled." src="https://github.com/user-attachments/assets/8f56269d-a707-4107-9e17-8d1c36e37daa" />
 
-A lightweight userscript that adds Hacker News discussions to any article.
+## What it does
 
-HNewhere detects matching Hacker News stories, loads comments into a sidebar, and lets you browse discussions without leaving the page.
+- **The web's commentary track:** Avoid the two-tab-tango and conveniently read the community's comments in-context.
+- **Never miss a thread:** Every page you land on gets checked against Hacker News, so you find out a discussion exists without going hunting for one.
+- **See what they're talking about:** Quotes in the comments get matched back to the article and lit where they sit. Click a highlight to filter the thread to the people discussing that passage; click a quote inside a comment to jump to the sentence it came from.
+   - _Currently in beta. Enable Annotations in the settings menu to try it out!_ 
+- **Read, then join in:** Vote, reply, and even submit. It uses the Hacker News session you already have, in a popup on news.ycombinator.com. The script never sees your password. 
+- **The small things:** Indent guides, OP marking, and new comment highlighting.
+- **Yours to adjust:** Button shape and size, sidebar width, theme, which annotation layers show, and a per-site off switch. It's one file with no build step, so if the settings don't cover it, the source is right there.
+
+## What it can see
+
+It runs on every page, so this matters: there's no backend, no analytics, and
+no telemetry. Requests go to three hosts: the HN API, Algolia search, and
+news.ycombinator.com and nowhere else. Webmail, banking, auth flows, and
+cloud consoles are excluded outright. 
+
+Full detail in [SECURITY.md](SECURITY.md).
 
 ## Install
 
@@ -14,57 +37,14 @@ HNewhere detects matching Hacker News stories, loads comments into a sidebar, an
    - [Userscripts (Safari)](https://apps.apple.com/us/app/userscripts/id1463298887)
 
 2. [Install HNewhere](https://raw.githubusercontent.com/twalichiewicz/HNewhere/refs/heads/main/HNewhere.user.js)
-3. Visit an article with a Hacker News discussion.
-
-## Features
-
-- Automatically detects Hacker News discussions for articles
-- Displays HN comments in a sidebar without leaving the page
-- Quote-linked article annotations while the sidebar is open
-- Discussion heat: an ambient wash over passages several commenters are discussing, even when nobody quoted them
-- Clickable article highlights for matched quotes, blended under the text so they
-  mark a passage without making it harder to read, and lit on hover
-- Clickable cited text inside matched comments that jumps back to the article and filters the discussion
-- Comments can link multiple cited passages from the same article
-- Clicking an article annotation can filter the sidebar to the matching comment thread
-- Filtered discussion view with a pull-quote summary, direct-match navigator, and quick return to the full thread
-- In blended views, filtered mode hides HN submissions that do not contain a matching quote
-- Comment and reply straight from the sidebar, with Hacker News' own formatting rules to hand
-- Submit the current page to Hacker News when no discussion exists yet
-- Theme that matches the page, or is pinned to light or dark, so it works with Dark Reader and site themes
-- Adjustable HN button: circle or squircle, 24px to 64px, with a live preview
-- Hide HNewhere on any site, with a managed list of hidden sites to undo it later
-- Greyed-out button on pages with no discussion, or hidden entirely if you prefer
-- Stays out of the way on webmail, banking, auth flows, consoles, and local addresses
-- Vote on stories and comments without leaving the article
-- Tracks stories opened from Hacker News
-- Resizable sidebar with saved width
-- Draggable floating HN button with remembered desktop position
-- Collapsible comment threads with saved state
-- Highlights new comments since your last visit
-- Shows story text when available
-- Marks original poster comments
-- Blended view when multiple matching HN submissions exist
-- Opens the sidebar by itself when a discussion exists, on desktop or mobile,
-  and can be narrowed to pages you arrived at from Hacker News
-- Sidebar settings for annotation layers and automatic opening behavior
-
-## Requirements
-
-- A browser with userscript support
-- Access to:
-  - Hacker News API
-  - HN Algolia search API
+3. Browse the web as usual. If a thread exists for that page the (HN) button will light up the familiar orange. Clicking it will open the sidebar. Still grey? Nobody's posted it yet-- click to submit it yourself.
 
 ## Contributing
 
-Bug reports and pull requests are welcome. HNewhere is a single file with no
+Bug reports and pull requests are welcome. Please report anything security-sensitive privately via [SECURITY.md](SECURITY.md). HNewhere is a single file with no
 build step or dependencies: edit `HNewhere.user.js`, load it in your userscript
 manager, and what you see is what users install. Release history is in
 [CHANGELOG.md](CHANGELOG.md).
-
-To report something security-sensitive, see [SECURITY.md](SECURITY.md), which
-also documents what the script can access and the limits placed on it.
 
 ## License
 
