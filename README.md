@@ -22,7 +22,8 @@ HNewhere detects matching Hacker News stories, loads comments into a sidebar, an
 - Displays HN comments in a sidebar without leaving the page
 - Quote-linked article annotations while the sidebar is open
 - Discussion heat: an ambient wash over passages several commenters are discussing, even when nobody quoted them
-- Subtle clickable article highlights and underlines for matched quotes
+- Clickable article highlights for matched quotes, blended under the text so they
+  mark a passage without making it harder to read, and lit on hover
 - Clickable cited text inside matched comments that jumps back to the article and filters the discussion
 - Comments can link multiple cited passages from the same article
 - Clicking an article annotation can filter the sidebar to the matching comment thread
@@ -44,6 +45,8 @@ HNewhere detects matching Hacker News stories, loads comments into a sidebar, an
 - Shows story text when available
 - Marks original poster comments
 - Blended view when multiple matching HN submissions exist
+- Opens the sidebar by itself when a discussion exists, on desktop or mobile,
+  and can be narrowed to pages you arrived at from Hacker News
 - Sidebar settings for annotation layers and automatic opening behavior
 
 ## Requirements
