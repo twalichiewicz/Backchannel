@@ -7,6 +7,8 @@
 
 A userscript that tells you when Hacker News has been there.  
 ```
+
+<a href="https://trendshift.io/repositories/95983?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-95983" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/95983/daily?language=JavaScript" alt="twalichiewicz%2FHNewhere | Trendshift" width="250" height="55"/></a>
                                                
 <img width="1161" height="753" alt="A screenshot of Safari on macOS opened to https://john.fun/elevators, with the HNewhere side bar open viewing the comments. The settings dropdown in the sidebar is also open, showing which settings the user currently has enabled." src="https://github.com/user-attachments/assets/8f56269d-a707-4107-9e17-8d1c36e37daa" />
 
