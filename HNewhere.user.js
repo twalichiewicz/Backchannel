@@ -5219,7 +5219,8 @@ ${CHROME_CSS}
    paragraphs did, which only showed between two stacked quotes -- everywhere else
    collapsing against a paragraph's 8px hid it. One gap for every break in the
    prose, whatever is on either side of it. */
-.text blockquote {
+.text blockquote,
+.text p.comment-quote-promoted {
     position:relative;
     margin:8px 0;
     padding-left:15px;
@@ -5230,7 +5231,8 @@ ${CHROME_CSS}
 /* The ornaments are written as literal characters, not CSS codepoint escapes.
    This stylesheet is a template literal, and JS reads a backslash followed by a
    digit as an octal escape, which is a syntax error in template strings. */
-.text blockquote::before {
+.text blockquote::before,
+.text p.comment-quote-promoted::before {
     content:"❛";
     position:absolute;
     left:0;
@@ -5253,6 +5255,17 @@ ${CHROME_CSS}
    underline on the anchored text is already the loud signal; colouring the mark
    too gave the same information twice, and left the difference unreadable
    without comparing two quotes side by side. */
+
+/* A block that already reads as a quote -- indented, italic, ornamented -- does not
+   also need its words underlined; that says the same thing twice, and the underline
+   is the mark for a quote sitting inside a sentence, where nothing else could show
+   it. Applies to both forms, so a marker-folded quote and a paragraph promoted on a
+   match look alike.
+   No backticks in here - this whole stylesheet is inside a template literal. */
+.text blockquote .comment-quote-link-inline,
+.comment-quote-promoted .comment-quote-link-inline {
+    text-decoration:none;
+}
 
 /* A hairline. 1.5px was landing on three device pixels at 2x, which read as a rule
    under the text rather than as a mark on it. */
@@ -6241,6 +6254,45 @@ ${settingsPanelHTML()}
 			: null;
 	}
 
+	// Openers mapped to the closer that ends them. Single quotes are deliberately
+	// absent: an apostrophe is the same character, so "'tis a fine day, isn't it'"
+	// would read as a quotation and most possessives would flirt with it.
+	const QUOTATION_PAIRS = { '"': '"', "“": "”", "«": "»" };
+
+	// A paragraph that is nothing but one quotation. HN has no quote syntax, so
+	// plenty of commenters reach for quotation marks rather than `>`, and the result
+	// arrived styled like their own words -- the same problem `>` folding solves,
+	// arriving by a different route.
+	//
+	// Wholly enclosed is the entire test, and it is what keeps ordinary quoting
+	// inside a sentence alone: `I think "move fast" is a bad motto` has text outside
+	// the marks, and `"A" and "B"` has a closer before the end.
+	function readQuotationWrapper(text) {
+		const trimmed = (text || "").trim();
+
+		// Two marks and something between them.
+		if (trimmed.length < 3) {
+			return null;
+		}
+
+		const closer = QUOTATION_PAIRS[trimmed[0]];
+
+		if (!closer || trimmed[trimmed.length - 1] !== closer) {
+			return null;
+		}
+
+		const inner = trimmed.slice(1, -1);
+
+		if (!inner.trim() || inner.includes(closer)) {
+			return null;
+		}
+
+		return {
+			prefix: text.length - text.trimStart().length + 1,
+			suffix: text.length - text.trimEnd().length + 1,
+		};
+	}
+
 	// Drop `count` characters from the front of `nodes` in document order, which
 	// is where the marker sits. Walking text nodes rather than rewriting the
 	// markup keeps any inline <a> or <i> in the quoted line intact.
@@ -6267,6 +6319,35 @@ ${settingsPanelHTML()}
 		};
 
 		for (const node of nodes) {
+			walk(node);
+		}
+	}
+
+	// The mirror of the above, for the closing mark of a quotation. `>` needs no such
+	// thing -- it only ever has a front -- so this exists solely for the wrapped form.
+	function dropTrailingCharacters(nodes, count) {
+		let remaining = count;
+
+		const walk = (node) => {
+			if (remaining <= 0) {
+				return;
+			}
+
+			if (node.nodeType === Node.TEXT_NODE) {
+				const value = node.nodeValue || "";
+				const taken = Math.min(remaining, value.length);
+
+				node.nodeValue = value.slice(0, value.length - taken);
+				remaining -= taken;
+				return;
+			}
+
+			for (const child of [...node.childNodes].reverse()) {
+				walk(child);
+			}
+		};
+
+		for (const node of [...nodes].reverse()) {
 			walk(node);
 		}
 	}
@@ -6343,6 +6424,17 @@ ${settingsPanelHTML()}
 			if (marker) {
 				block.depth = marker.depth;
 				block.prefix = marker.length;
+				continue;
+			}
+
+			// Tried second, so a line carrying both -- `> "quoted"` -- keeps its `>`
+			// depth and its marks, which is what the commenter typed.
+			const wrapper = readQuotationWrapper(text);
+
+			if (wrapper) {
+				block.depth = 1;
+				block.prefix = wrapper.prefix;
+				block.suffix = wrapper.suffix;
 			}
 		}
 
@@ -6359,6 +6451,10 @@ ${settingsPanelHTML()}
 
 			const nodes = block.element ? [...block.element.childNodes] : block.nodes;
 
+			// Trailing first: dropping the front shifts nothing at the back, but both
+			// walk the same text nodes and taking the end first keeps the two counts
+			// independent of each other on a single-node line.
+			dropTrailingCharacters(nodes, block.suffix || 0);
 			dropLeadingCharacters(nodes, block.prefix);
 			lines.push({ depth: block.depth, nodes });
 		}
@@ -7884,6 +7980,16 @@ ${settingsPanelHTML()}
 					delete element.dataset.hnewhereQuoteBlock;
 				});
 
+			// Quote styling given to a paragraph on the strength of a match. With the
+			// annotations gone there is nothing left proving it was a quote, so the
+			// paragraph goes back to being ordinary prose.
+			sidebarUI.shadow
+				.querySelectorAll("[data-hnewhere-quote-promoted='1']")
+				.forEach((element) => {
+					element.classList.remove("comment-quote-promoted");
+					delete element.dataset.hnewhereQuotePromoted;
+				});
+
 			sidebarUI.shadow
 				.querySelectorAll(".comment-target")
 				.forEach((element) => element.classList.remove("comment-target"));
@@ -8227,6 +8333,20 @@ ${settingsPanelHTML()}
 			}
 
 			flushQuote();
+
+			// An unmarked paragraph, offered whole. Nothing in the text says "quote"
+			// here -- no `>`, no marks -- so the only thing that can establish it is
+			// the article itself. That works because matching is exact once case,
+			// punctuation and whitespace are normalised away: a verbatim paste will
+			// match and a paraphrase will not, however close it reads.
+			//
+			// The floor is higher than the 24 the quotation-mark rule below uses.
+			// Marks are a statement of intent that carries a short quote on its own;
+			// an unmarked sentence has to be long enough that appearing word for word
+			// in the article is not a coincidence.
+			if (line.length >= 40 && line.length <= 320) {
+				addUniqueText(candidates, seen, line);
+			}
 		}
 
 		flushQuote();
@@ -9327,6 +9447,37 @@ ${settingsPanelHTML()}
 		return wrapper;
 	}
 
+	// A commenter who pastes a sentence from the article as its own paragraph, with
+	// neither `>` nor quotation marks around it, is quoting just as plainly as one
+	// who marks it -- and the annotation pass has just proved the words are the
+	// article's. That proof is what makes this safe: the styling follows a verified
+	// match rather than a guess at punctuation, which is why it can be applied to
+	// text carrying no marks at all.
+	//
+	// A class, not a <blockquote>: the promotion has to come undone when annotations
+	// are switched off, and removing a class is something clearArticleAnnotations can
+	// do without having to rebuild the paragraph it replaced.
+	function promoteWholeParagraphQuote(wrapper) {
+		const paragraph = wrapper?.closest("p");
+
+		if (!paragraph || paragraph.closest("blockquote")) {
+			return;
+		}
+
+		// Only when the match is the whole paragraph. A sentence quoted inside a
+		// longer one keeps the inline mark, which is precisely what says "this part
+		// came from the article" while the rest is the commenter's own.
+		if (
+			normalizeSearchText(paragraph.textContent).text !==
+			normalizeSearchText(wrapper.textContent).text
+		) {
+			return;
+		}
+
+		paragraph.dataset.hnewhereQuotePromoted = "1";
+		paragraph.classList.add("comment-quote-promoted");
+	}
+
 	function decorateSidebarMatches(controller) {
 		for (const group of controller.groups) {
 			for (const comment of group.comments) {
@@ -9358,6 +9509,7 @@ ${settingsPanelHTML()}
 				if (wrapper) {
 					quoteElements.push(wrapper);
 					comment.quoteElements = quoteElements;
+					promoteWholeParagraphQuote(wrapper);
 					continue;
 				}
 
