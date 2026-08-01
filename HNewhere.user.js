@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HNewhere
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.5.6
+// @version      1.5.7
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
@@ -184,9 +184,12 @@
 
 	const DEFAULT_SETTINGS = {
 		annotations: false,
-		annotationsWhenSidebarOpen: true,
 		annotationsWhenSidebarClosed: false,
 		autoOpenSidebar: false,
+		// Narrows the setting above to pages reached from HN. Off by default, so an
+		// existing reader's auto-open keeps opening everywhere until they say
+		// otherwise.
+		autoOpenSidebarOnlyFromHN: false,
 		// Off by default, so the button now appears greyed out on pages with no
 		// discussion rather than not appearing at all. Turning it on restores the
 		// pre-1.5.3 behaviour of staying hidden unless there is something to read.
@@ -197,7 +200,10 @@
 		buttonSize: BUTTON_SIZE_DEFAULT,
 	};
 
+	// #region hnewhere-test-export
 	const HN_ORIGIN = "https://news.ycombinator.com";
+	// #endregion hnewhere-test-export
+
 	const REPO_URL = "https://github.com/twalichiewicz/HNewhere";
 
 	// Read back from the manager rather than written out a second time, so the
@@ -310,10 +316,6 @@
 			...DEFAULT_SETTINGS,
 			...(stored && typeof stored === "object" ? stored : {}),
 		};
-
-		if (merged.annotationsWhenSidebarOpen == null) {
-			merged.annotationsWhenSidebarOpen = Boolean(merged.annotations);
-		}
 
 		if (merged.annotationsWhenSidebarClosed == null) {
 			merged.annotationsWhenSidebarClosed = false;
@@ -3495,7 +3497,16 @@ header button svg {
     flex:0 0 auto;
     width:13px;
     height:13px;
-    margin:2px 0 0;
+    /* Centred on the first line of the label, which is what the row aligns to --
+       align-items is flex-start so a wrapping option keeps its box beside the
+       first line rather than beside the middle of the block. Derived rather than
+       tuned: a flat 2px was right for the 12px rows and dropped the 11px
+       sub-option boxes 2px below their text, because the shorter line box needs a
+       smaller offset. 1.35 is .settings-option's line-height, and font-size:inherit
+       is what makes em resolve against the label rather than the input's UA
+       default. Nothing here has text, so inheriting a size costs nothing. */
+    font-size:inherit;
+    margin:calc((1.35em - 13px) / 2) 0 0;
     display:inline-grid;
     place-content:center;
     border:1px solid var(--help-border);
@@ -3528,8 +3539,8 @@ header button svg {
     outline-offset:1px;
 }
 
-/* The annotation sub-options are disabled while annotations are off, and an
-   appearance:none box has no UA disabled styling of its own. */
+/* Sub-options are disabled while their parent is off, and an appearance:none box
+   has no UA disabled styling of its own. */
 .settings-option input[type="checkbox"]:disabled {
     opacity:.45;
     cursor:default;
@@ -3540,8 +3551,8 @@ header button svg {
     font-size:11px;
 }
 
-/* Collapsed rather than merely disabled when annotations are off: two dead
-   checkboxes read as broken, where nothing reads as "not applicable yet". The
+/* Collapsed rather than merely disabled when the parent option is off: a dead
+   checkbox reads as broken, where nothing reads as "not applicable yet". The
    max-height ceiling is generous because the real height is not knowable in CSS --
    it only has to exceed the content for the transition to run to completion. */
 .settings-suboptions {
@@ -3555,7 +3566,15 @@ header button svg {
 .settings-suboptions.is-visible {
     max-height:140px;
     opacity:1;
-    /* Separates the first sub-option from the hint text above it. */
+    /* Separates the first sub-option from whatever it belongs to above it. */
+    margin-top:8px;
+}
+
+/* A sub-options group sits between two options in the auto-open block, which
+   breaks the .settings-option + .settings-option adjacency the spacing rule
+   relies on. Without this the option below would touch the one above whenever the
+   group is collapsed to zero height. */
+.settings-suboptions + .settings-option {
     margin-top:8px;
 }
 
@@ -4122,6 +4141,12 @@ ${
 <input id="setting-auto-open-sidebar" data-setting="autoOpenSidebar" type="checkbox">
 <span>Automatically open the sidebar when a discussion exists</span>
 </label>
+<div class="settings-suboptions" data-suboptions-of="autoOpenSidebar">
+<label class="settings-option sub-option">
+<input id="setting-auto-open-only-from-hn" data-setting="autoOpenSidebarOnlyFromHN" type="checkbox">
+<span>Only when arriving from Hacker News</span>
+</label>
+</div>
 <label class="settings-option">
 <input id="setting-hide-without-discussion" data-setting="hideWithoutDiscussion" type="checkbox">
 <span>Only show the HN button when a discussion exists</span>
@@ -4139,14 +4164,10 @@ When off, pages with no discussion get a greyed-out button that offers to submit
 <div class="settings-option-hint">
 Highlights the passages commenters quote, so you can jump between the article and what was said about it.
 </div>
-<div id="settings-annotation-suboptions" class="settings-suboptions">
-<label class="settings-option sub-option">
-<input id="setting-annotations-open" data-setting="annotationsWhenSidebarOpen" type="checkbox">
-<span>When sidebar open</span>
-</label>
+<div class="settings-suboptions" data-suboptions-of="annotations">
 <label class="settings-option sub-option">
 <input id="setting-annotations-closed" data-setting="annotationsWhenSidebarClosed" type="checkbox">
-<span>When sidebar closed</span>
+<span>Show when sidebar closed</span>
 </label>
 </div>
 </div>
@@ -4226,11 +4247,11 @@ Highlights the passages commenters quote, so you can jump between the article an
 				"#setting-hide-without-discussion",
 			),
 			annotations: shadow.querySelector("#setting-annotations"),
-			annotationsWhenSidebarOpen: shadow.querySelector(
-				"#setting-annotations-open",
-			),
 			annotationsWhenSidebarClosed: shadow.querySelector(
 				"#setting-annotations-closed",
+			),
+			autoOpenSidebarOnlyFromHN: shadow.querySelector(
+				"#setting-auto-open-only-from-hn",
 			),
 		};
 
@@ -4343,9 +4364,11 @@ Highlights the passages commenters quote, so you can jump between the article an
 			}
 		};
 
-		const annotationSuboptions = shadow.querySelector(
-			"#settings-annotation-suboptions",
-		);
+		// Found by the setting each group hangs off rather than by id, so a third
+		// group needs markup and nothing here.
+		const suboptionGroups = [
+			...settingsPanel.querySelectorAll("[data-suboptions-of]"),
+		];
 
 		const applySettingsPanelState = (settings) => {
 			for (const [key, input] of Object.entries(settingsInputs)) {
@@ -4362,19 +4385,17 @@ Highlights the passages commenters quote, so you can jump between the article an
 
 			applyButtonDesigner(settings);
 
-			const annotationsEnabled = Boolean(settings.annotations);
+			for (const group of suboptionGroups) {
+				const enabled = Boolean(settings[group.dataset.suboptionsOf]);
 
-			annotationSuboptions?.classList.toggle("is-visible", annotationsEnabled);
+				group.classList.toggle("is-visible", enabled);
 
-			// Still disabled as well as collapsed. max-height:0 hides them visually but
-			// leaves them in the tab order, so keyboard focus could land on a control
-			// nobody can see.
-			if (settingsInputs.annotationsWhenSidebarOpen) {
-				settingsInputs.annotationsWhenSidebarOpen.disabled = !annotationsEnabled;
-			}
-
-			if (settingsInputs.annotationsWhenSidebarClosed) {
-				settingsInputs.annotationsWhenSidebarClosed.disabled = !annotationsEnabled;
+				// Still disabled as well as collapsed. max-height:0 hides them visually
+				// but leaves them in the tab order, so keyboard focus could land on a
+				// control nobody can see.
+				for (const input of group.querySelectorAll("input")) {
+					input.disabled = !enabled;
+				}
 			}
 		};
 
@@ -4461,13 +4482,7 @@ Highlights the passages commenters quote, so you can jump between the article an
 				return;
 			}
 
-			if (
-				[
-					"annotations",
-					"annotationsWhenSidebarOpen",
-					"annotationsWhenSidebarClosed",
-				].includes(setting)
-			) {
+			if (["annotations", "annotationsWhenSidebarClosed"].includes(setting)) {
 				await onAnnotationChange?.();
 			}
 		});
@@ -6733,9 +6748,19 @@ ${settingsPanelHTML()}
 			}
 
 			if (options.startHidden && sidebar) {
+				// Deliberately records nothing. This branch is the annotation preload:
+				// the panel is built hidden so highlights can be drawn, which is the
+				// script's own doing and not a reader shutting anything. Writing
+				// "collapsed" here could only ever fabricate a preference -- the
+				// preload is unreachable when the site is already "open", and a
+				// no-op when it is already "collapsed" -- and the fabricated one
+				// outranks the auto-open setting, silently killing it for the site.
 				sidebar.style.display = "none";
-				await saveSidebarState("collapsed");
-			} else {
+			} else if (options.remember !== false) {
+				// Skipped only for an open the HN-arrival rule granted. The per-site
+				// memory outranks the global setting, so recording one would turn the
+				// site into one that opens on every visit -- and the reader would have
+				// no way to see why the rule had stopped applying.
 				await saveSidebarState("open");
 			}
 
@@ -7356,22 +7381,61 @@ ${settingsPanelHTML()}
 		return normalizeURL(a) === normalizeURL(b);
 	}
 
-	function shouldAutoOpenSidebar(settings, siteState = null) {
-		if (siteState === "open") {
-			return true;
-		}
-
-		if (siteState === "collapsed") {
+	// #region hnewhere-test-export
+	// True when this document was reached by clicking a link on HN. HN serves
+	// <meta name="referrer" content="origin">, so the value arrives as the bare
+	// origin rather than the item URL; comparing origins accepts that and a
+	// full-URL referrer alike. A typed URL or a bookmark leaves it empty, which
+	// makes the URL constructor throw -- that throw is the direct-visit answer.
+	// The argument defaults to the real referrer and exists so tests can hand it a
+	// string; document.referrer is read-only, and faking it would mean redefining a
+	// property of the live document.
+	function referrerIsHN(referrer = document.referrer) {
+		try {
+			return new URL(referrer).origin === HN_ORIGIN;
+		} catch {
 			return false;
 		}
-
-		return !isMobile() && settings.autoOpenSidebar;
 	}
 
-	function shouldPreloadHiddenSidebar(settings, siteState = null) {
+	// fromHN is passed in rather than read here because it has two sources: the
+	// referrer, and the story click STORAGE.last already recorded on HN. The page
+	// pass knows both; this only has to weigh the answer.
+	function shouldAutoOpenSidebar(settings, siteState = null, fromHN = false) {
+		// The setting reads as a sentence -- "automatically open the sidebar when a
+		// discussion exists", narrowed by "only when arriving from Hacker News" --
+		// and while it is on it is the whole answer. A panel the reader shut on some
+		// earlier visit is not a standing objection to a preference they have since
+		// expressed, and letting it win is how the setting ends up not doing what it
+		// says. The sub-option is part of the same sentence, so it is weighed here
+		// and nowhere else.
+		if (settings.autoOpenSidebar) {
+			return settings.autoOpenSidebarOnlyFromHN ? fromHN : true;
+		}
+
+		// With the setting off, what the reader did on this site by hand is all there
+		// is to go on. Only a deliberate open is ever recorded, so reaching this can
+		// never be the script honouring something it decided for itself.
+		return siteState === "open";
+	}
+	// #endregion hnewhere-test-export
+
+	// Read once at load, because document.referrer belongs to the document rather
+	// than to the URL currently showing. A client-side router changes the address
+	// without touching it, so a reader who arrived from HN and then clicked through
+	// four articles would otherwise register as four arrivals. watchSoftNavigation
+	// clears this the moment it commits to a new URL; a hard navigation needs no
+	// help, because the referrer then becomes the site itself.
+	let arrivedFromHNReferrer = referrerIsHN();
+
+	function forgetHNReferrer() {
+		arrivedFromHNReferrer = false;
+	}
+
+	function shouldPreloadHiddenSidebar(settings, siteState = null, fromHN = false) {
 		return (
 			Boolean(settings.annotations) &&
-			!shouldAutoOpenSidebar(settings, siteState) &&
+			!shouldAutoOpenSidebar(settings, siteState, fromHN) &&
 			Boolean(settings.annotationsWhenSidebarClosed)
 		);
 	}
@@ -7380,14 +7444,15 @@ ${settingsPanelHTML()}
 		return Boolean(sidebar && sidebar.style.display !== "none");
 	}
 
+	// Unconditional while the sidebar is open, because that is the context the
+	// annotations exist for: clicking a highlight filters the thread to the comment
+	// that quoted it. The only choice left is whether they outlive the panel.
 	function shouldShowArticleAnnotations(settings) {
 		if (!settings.annotations) {
 			return false;
 		}
 
-		return isSidebarVisible()
-			? Boolean(settings.annotationsWhenSidebarOpen)
-			: Boolean(settings.annotationsWhenSidebarClosed);
+		return isSidebarVisible() || Boolean(settings.annotationsWhenSidebarClosed);
 	}
 
 	async function ensureVoteControlsLoaded() {
@@ -9334,6 +9399,10 @@ ${settingsPanelHTML()}
 
 			currentURL = nextURL;
 
+			// This page was navigated to, not arrived at. The referrer still says HN
+			// and will keep saying so for the rest of the document's life.
+			forgetHNReferrer();
+
 			clearTimeout(timer);
 
 			timer = setTimeout(() => {
@@ -9486,10 +9555,14 @@ ${settingsPanelHTML()}
 
 			settleButtonToDiscussion(pendingButton);
 
+			// Reaching this branch is itself an arrival from HN: the click that
+			// recorded it happened on HN, on a link to this URL. Stated rather than
+			// re-derived from the referrer, which some browsers withhold entirely.
 			await presentDiscussion(
 				last.ids.map((id) => ({ objectID: id })),
 				settings,
 				siteState,
+				true,
 			);
 
 			return;
@@ -9508,6 +9581,7 @@ ${settingsPanelHTML()}
 				stories.map((story) => ({ objectID: story.objectID })),
 				settings,
 				siteState,
+				arrivedFromHNReferrer,
 			);
 			return;
 		}
@@ -9523,16 +9597,20 @@ ${settingsPanelHTML()}
 
 	// The three ways a known discussion can be presented, in one place because init
 	// reaches this point by two different routes.
-	async function presentDiscussion(storyRefs, settings, siteState) {
-		if (shouldAutoOpenSidebar(settings, siteState)) {
+	async function presentDiscussion(storyRefs, settings, siteState, fromHN = false) {
+		if (shouldAutoOpenSidebar(settings, siteState, fromHN)) {
 			// The sidebar itself is the answer here, so the placeholder goes rather
 			// than becoming a button that would sit on top of an open panel.
 			destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
-			await openSidebar(storyRefs);
+
+			// Records nothing: the script opened this, not the reader. Per-site memory
+			// now means "what I did here by hand", which is the only reading under
+			// which it can be trusted once the setting is turned off again.
+			await openSidebar(storyRefs, { remember: false });
 			return;
 		}
 
-		if (shouldPreloadHiddenSidebar(settings, siteState)) {
+		if (shouldPreloadHiddenSidebar(settings, siteState, fromHN)) {
 			// Kept: createRestoreButton adopts it, so the ring carries on spinning
 			// across the render and the annotation pass, which is the slow case.
 			await openSidebar(storyRefs, { startHidden: true });
