@@ -107,6 +107,22 @@ use to detect updates, so every release bumps it.
 
 ### Fixed
 
+- The orange accent on a new comment comes off when you scroll past it, on devices
+  with no pointer. It had only ever come off under the pointer, and a finger has no
+  equivalent: a touch lands on whichever comment happens to be beneath it while
+  scrolling, so the one that lost its accent was arbitrary and the rest kept theirs
+  however far past them you had read. Scrolling clear of a comment is the touch
+  equivalent of having attended to it.
+
+  Only where there is no hover. Where there is a pointer, pointing at a comment is
+  both more precise and more deliberate than scrolling past it, and that is left to
+  do the job as before.
+
+  Scrolling the panel does on your own behalf never clears anything: returning to a
+  reading position, jumping to the focus banner, and reflowing the list around a
+  filter all sweep comments past the top without you having read a word. A comment
+  hidden by a filter or a collapsed thread is not counted as scrolled past either —
+  it reports no box at all, which would otherwise satisfy the test.
 - Code blocks in comments wrap instead of running off the side of the panel. A
   `<pre>` does not wrap at any width by default, so a code block — or a quote
   someone marked by indenting it, which Hacker News turns into one — pushed 697

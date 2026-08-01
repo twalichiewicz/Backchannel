@@ -6234,6 +6234,92 @@ ${settingsPanelHTML()}
 		}
 
 		element.classList.add("comment-new-seen");
+		newCommentScrollObserver?.unobserve(element);
+	}
+
+	// The accent comes off a comment the reader has attended to, which on a pointer
+	// device is the one they put the pointer on. A finger has no equivalent: a touch
+	// lands on whichever comment happens to be under it while scrolling, so the one
+	// that loses its accent is arbitrary and the rest keep theirs however far past
+	// them the reader has gone.
+	//
+	// Scrolling clear of a comment is the touch equivalent of having attended to it.
+	let newCommentScrollObserver = null;
+
+	// Set while the panel is scrolling itself: returning to a reading position,
+	// jumping to the focus banner, or reflowing the list around a filter. Every one
+	// of those sweeps comments past the top of the panel without the reader having
+	// read anything, and would otherwise clear every accent it passed.
+	let suppressNewCommentAutoClearUntil = 0;
+
+	// Generous, and refreshed by each call: a smooth scroll runs a few hundred
+	// milliseconds and a filter transition adds its own, so the window has to
+	// outlast both rather than race them.
+	function suppressNewCommentAutoClear(duration = 1200) {
+		suppressNewCommentAutoClearUntil = Date.now() + duration;
+	}
+
+	// Only where there is no hover to do the job. On a pointer device the existing
+	// pointerenter is both more precise and more deliberate, and scrolling past
+	// something is a weaker claim to have read it.
+	function newCommentAutoClearEnabled() {
+		if (typeof window.matchMedia !== "function") {
+			return false;
+		}
+
+		return !window.matchMedia("(hover: hover)").matches;
+	}
+
+	function observeNewCommentForScroll(element) {
+		if (!newCommentAutoClearEnabled() || typeof IntersectionObserver !== "function") {
+			return;
+		}
+
+		if (!newCommentScrollObserver) {
+			const root = commentScrollContainer();
+
+			if (!root) {
+				return;
+			}
+
+			newCommentScrollObserver = new IntersectionObserver(
+				(entries) => {
+					if (Date.now() < suppressNewCommentAutoClearUntil) {
+						return;
+					}
+
+					for (const entry of entries) {
+						if (entry.isIntersecting || !entry.rootBounds) {
+							continue;
+						}
+
+						// A comment with no box is display:none -- filtered out of a
+						// focused discussion, or inside a collapsed thread. Its rect
+						// reads as all zeros, which would otherwise satisfy the test
+						// below for any container not sitting at the top of the
+						// viewport, and clear an accent nobody has been near.
+						if (!entry.boundingClientRect.height) {
+							continue;
+						}
+
+						// Past the top, not merely out of view. A comment below the
+						// fold has not been read; one the reader has scrolled up and
+						// over has.
+						if (entry.boundingClientRect.bottom <= entry.rootBounds.top) {
+							startNewCommentFade(entry.target);
+						}
+					}
+				},
+				{ root, threshold: 0 },
+			);
+		}
+
+		newCommentScrollObserver.observe(element);
+	}
+
+	function stopObservingNewComments() {
+		newCommentScrollObserver?.disconnect();
+		newCommentScrollObserver = null;
 	}
 
 	// -------------------------
@@ -6739,6 +6825,8 @@ ${settingsPanelHTML()}
 			div.addEventListener("pointerdown", () => startNewCommentFade(div), {
 				once: true,
 			});
+
+			observeNewCommentForScroll(div);
 		}
 
 		toggle.onclick = async () => {
@@ -6809,6 +6897,8 @@ ${settingsPanelHTML()}
 	async function renderSingleDiscussion(story, ui) {
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
+		// The observer holds the elements about to be thrown away with the list.
+		stopObservingNewComments();
 		renderedComments = [];
 		ui.body.innerHTML = "";
 		setSidebarRestingSubtitle(ui, "");
@@ -6853,6 +6943,8 @@ ${settingsPanelHTML()}
 	async function renderBlendedDiscussion(stories, ui) {
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
+		// The observer holds the elements about to be thrown away with the list.
+		stopObservingNewComments();
 		renderedComments = [];
 		ui.body.innerHTML = "";
 		setSidebarRestingSubtitle(
@@ -7765,6 +7857,10 @@ ${settingsPanelHTML()}
 	// -------------------------
 
 	function transitionCommentList(update, options = {}) {
+		// Entering or leaving a focused discussion hides and restores comments in
+		// bulk, which moves everything below them without the reader scrolling.
+		suppressNewCommentAutoClear();
+
 		const container = sidebarUI?.body;
 
 		if (!container || options.animate === false) {
@@ -7879,6 +7975,10 @@ ${settingsPanelHTML()}
 			return;
 		}
 
+		// Putting the reader back sweeps every comment the focus had been hiding past
+		// the top of the panel. None of them has been read.
+		suppressNewCommentAutoClear();
+
 		window.scrollTo({
 			top: position.pageScrollY,
 			behavior: prefersReducedMotion() ? "auto" : "smooth",
@@ -7910,6 +8010,8 @@ ${settingsPanelHTML()}
 		if (!banner || banner.classList.contains("hidden")) {
 			return;
 		}
+
+		suppressNewCommentAutoClear();
 
 		const container = commentScrollContainer();
 
@@ -10044,6 +10146,7 @@ ${settingsPanelHTML()}
 
 		teardownSurfaces();
 
+		stopObservingNewComments();
 		renderedComments = [];
 		activeCommentFilter = null;
 	}
