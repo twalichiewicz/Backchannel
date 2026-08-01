@@ -8604,14 +8604,9 @@ ${settingsPanelHTML()}
 		return null;
 	}
 
-	function createRangeFromMatch(index, matchStart, matchLength) {
-		const startRaw = index.normalizedMap[matchStart];
-		const endRaw = index.normalizedMap[matchStart + matchLength - 1];
-
-		if (startRaw == null || endRaw == null) {
-			return null;
-		}
-
+	// Split out from createRangeFromMatch so a span can also be built from raw offsets
+	// that never came from one match -- the union of several overlapping ones.
+	function createRangeFromRawSpan(index, startRaw, endRaw) {
 		const start = resolveRawPoint(index, startRaw, "start");
 		const end = resolveRawPoint(index, endRaw, "end");
 
@@ -8628,13 +8623,20 @@ ${settingsPanelHTML()}
 			return null;
 		}
 
-		return range.collapsed
-			? null
-			: {
-				startRaw,
-				endRaw,
-				range,
-			};
+		return range.collapsed ? null : range;
+	}
+
+	function createRangeFromMatch(index, matchStart, matchLength) {
+		const startRaw = index.normalizedMap[matchStart];
+		const endRaw = index.normalizedMap[matchStart + matchLength - 1];
+
+		if (startRaw == null || endRaw == null) {
+			return null;
+		}
+
+		const range = createRangeFromRawSpan(index, startRaw, endRaw);
+
+		return range ? { startRaw, endRaw, range } : null;
 	}
 
 	function findRangeInRoot(root, normalizedNeedle, uniqueOnly = true) {
@@ -8764,6 +8766,8 @@ ${settingsPanelHTML()}
 					range: match.range,
 					quoteText: match.quoteText,
 					fullQuoteText: match.fullQuoteText,
+					startRaw: match.startRaw,
+					endRaw: match.endRaw,
 					comments: [],
 				};
 
@@ -8791,8 +8795,79 @@ ${settingsPanelHTML()}
 			}
 		}
 
-		return [...groups.values()];
+		return mergeOverlappingGroups([...groups.values()], articleIndex);
 	}
+
+	// #region hnewhere-test-export
+	// Two commenters quoting the same sentence rarely quote the same span of it: one
+	// takes a clause, another the whole thing. Keying a discussion on the exact
+	// characters matched made those two discussions about one passage, so a reader
+	// following either found half the conversation and no sign of the rest.
+	//
+	// Ranges that overlap are the same passage, so they become one discussion
+	// reaching as wide as everything that landed on it.
+	function mergeOverlappingGroups(groups, articleIndex) {
+		const sorted = [...groups].sort(
+			(a, b) => a.startRaw - b.startRaw || a.endRaw - b.endRaw,
+		);
+
+		const merged = [];
+
+		for (const group of sorted) {
+			const previous = merged[merged.length - 1];
+
+			// Sharing characters, not merely meeting: two sentences quoted separately
+			// sit end to end and stay two discussions, which is right -- they are two.
+			if (previous && group.startRaw <= previous.endRaw) {
+				previous.endRaw = Math.max(previous.endRaw, group.endRaw);
+				previous.comments.push(...group.comments);
+				continue;
+			}
+
+			merged.push({ ...group, comments: [...group.comments] });
+		}
+
+		for (const group of merged) {
+			// One comment can quote two overlapping spans of a passage and land in
+			// both, which after merging would list it twice in its own discussion.
+			const seen = new Set();
+
+			group.comments = group.comments.filter((comment) => {
+				if (seen.has(comment.commentId)) {
+					return false;
+				}
+
+				seen.add(comment.commentId);
+				return true;
+			});
+
+			const span = createRangeFromRawSpan(
+				articleIndex,
+				group.startRaw,
+				group.endRaw,
+			);
+
+			if (!span) {
+				continue;
+			}
+
+			group.key = `${group.startRaw}:${group.endRaw}`;
+			group.range = span;
+
+			// The passage as the article words it, rather than whichever commenter's
+			// excerpt happened to be found first. That is what the discussion is
+			// about, and what the banner should be showing.
+			const text = span.toString().trim();
+
+			if (text) {
+				group.quoteText = text;
+				group.fullQuoteText = text;
+			}
+		}
+
+		return merged;
+	}
+	// #endregion hnewhere-test-export
 
 	// #region hnewhere-test-export
 	const HEAT_MIN_PASSAGE_CHARS = 40;
