@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HNewhere
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.5.6
+// @version      1.5.7
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
@@ -184,9 +184,12 @@
 
 	const DEFAULT_SETTINGS = {
 		annotations: false,
-		annotationsWhenSidebarOpen: true,
 		annotationsWhenSidebarClosed: false,
 		autoOpenSidebar: false,
+		// Narrows the setting above to pages reached from HN. Off by default, so an
+		// existing reader's auto-open keeps opening everywhere until they say
+		// otherwise.
+		autoOpenSidebarOnlyFromHN: false,
 		// Off by default, so the button now appears greyed out on pages with no
 		// discussion rather than not appearing at all. Turning it on restores the
 		// pre-1.5.3 behaviour of staying hidden unless there is something to read.
@@ -197,7 +200,10 @@
 		buttonSize: BUTTON_SIZE_DEFAULT,
 	};
 
+	// #region hnewhere-test-export
 	const HN_ORIGIN = "https://news.ycombinator.com";
+	// #endregion hnewhere-test-export
+
 	const REPO_URL = "https://github.com/twalichiewicz/HNewhere";
 
 	// Read back from the manager rather than written out a second time, so the
@@ -253,6 +259,13 @@
 	let renderedComments = [];
 	let annotationController = null;
 	let activeCommentFilter = null;
+
+	// Where the reader was, in both the thread and the article, before a focused
+	// discussion moved them. Leaving the focus puts every hidden comment back above
+	// them, so without this the list grows under the scroll position and drops them
+	// at the top; and the article is left at the quoted passage the focus jumped to
+	// rather than at whatever they were reading.
+	let preFilterPosition = null;
 
 	// -------------------------
 	// Storage
@@ -310,10 +323,6 @@
 			...DEFAULT_SETTINGS,
 			...(stored && typeof stored === "object" ? stored : {}),
 		};
-
-		if (merged.annotationsWhenSidebarOpen == null) {
-			merged.annotationsWhenSidebarOpen = Boolean(merged.annotations);
-		}
 
 		if (merged.annotationsWhenSidebarClosed == null) {
 			merged.annotationsWhenSidebarClosed = false;
@@ -1026,6 +1035,46 @@
 		}
 
 		return window.matchMedia("(prefers-color-scheme: dark)").matches;
+	}
+
+	// Which way a highlight has to blend depends on the paper it lands on, and that
+	// is not the question detectDarkMode answers. That one decides what the sidebar's
+	// own chrome should look like, so it obeys the reader's theme preference first
+	// and, when the page paints no background of its own, the operating system's.
+	// Neither is evidence about the article. A highlight told "dark" on a white page
+	// screens instead of multiplying, and screen over white paper is white: the mark
+	// disappears and only the glyphs shift, which reads as a highlight far too faint
+	// rather than as one applied backwards.
+	//
+	// So this asks the page directly, walking up from the marked text until something
+	// has actually painted a background.
+	function isDarkBackdrop(element) {
+		for (let node = element; node; node = node.parentElement) {
+			const dark = isDarkColor(getComputedStyle(node).backgroundColor);
+
+			if (dark !== null) {
+				return dark;
+			}
+		}
+
+		// Nothing in the chain painted anything, so the canvas shows through. That is
+		// white unless the page opted into a dark one, which is the only case where
+		// the reader's colour scheme says anything about the article.
+		const scheme = getComputedStyle(document.documentElement).colorScheme || "";
+
+		return (
+			/\bdark\b/.test(scheme) &&
+			window.matchMedia("(prefers-color-scheme: dark)").matches
+		);
+	}
+
+	// getComputedStyle needs an element, and a range routinely lands on a text node.
+	function nearestElement(node) {
+		if (!node) {
+			return null;
+		}
+
+		return node.nodeType === 1 ? node : node.parentElement;
 	}
 
 	// #endregion hnewhere-test-export
@@ -3238,7 +3287,6 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --grip:rgba(0,0,0,.2);
     --quote-text:#5f5f5f;
     --quote-ornament:#b4b4b4;
-    --faded-underline:rgba(0,0,0,.14);
 
     /* 1.5.3 surfaces */
     --field-bg:#fff;
@@ -3288,7 +3336,6 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --grip:rgba(255,255,255,.25);
     --quote-text:#a8a8a8;
     --quote-ornament:#6d6d6d;
-    --faded-underline:rgba(255,255,255,.18);
 
     --field-bg:#262626;
     --field-text:#dcdcdc;
@@ -3495,7 +3542,16 @@ header button svg {
     flex:0 0 auto;
     width:13px;
     height:13px;
-    margin:2px 0 0;
+    /* Centred on the first line of the label, which is what the row aligns to --
+       align-items is flex-start so a wrapping option keeps its box beside the
+       first line rather than beside the middle of the block. Derived rather than
+       tuned: a flat 2px was right for the 12px rows and dropped the 11px
+       sub-option boxes 2px below their text, because the shorter line box needs a
+       smaller offset. 1.35 is .settings-option's line-height, and font-size:inherit
+       is what makes em resolve against the label rather than the input's UA
+       default. Nothing here has text, so inheriting a size costs nothing. */
+    font-size:inherit;
+    margin:calc((1.35em - 13px) / 2) 0 0;
     display:inline-grid;
     place-content:center;
     border:1px solid var(--help-border);
@@ -3528,8 +3584,8 @@ header button svg {
     outline-offset:1px;
 }
 
-/* The annotation sub-options are disabled while annotations are off, and an
-   appearance:none box has no UA disabled styling of its own. */
+/* Sub-options are disabled while their parent is off, and an appearance:none box
+   has no UA disabled styling of its own. */
 .settings-option input[type="checkbox"]:disabled {
     opacity:.45;
     cursor:default;
@@ -3540,8 +3596,8 @@ header button svg {
     font-size:11px;
 }
 
-/* Collapsed rather than merely disabled when annotations are off: two dead
-   checkboxes read as broken, where nothing reads as "not applicable yet". The
+/* Collapsed rather than merely disabled when the parent option is off: a dead
+   checkbox reads as broken, where nothing reads as "not applicable yet". The
    max-height ceiling is generous because the real height is not knowable in CSS --
    it only has to exceed the content for the transition to run to completion. */
 .settings-suboptions {
@@ -3555,7 +3611,15 @@ header button svg {
 .settings-suboptions.is-visible {
     max-height:140px;
     opacity:1;
-    /* Separates the first sub-option from the hint text above it. */
+    /* Separates the first sub-option from whatever it belongs to above it. */
+    margin-top:8px;
+}
+
+/* A sub-options group sits between two options in the auto-open block, which
+   breaks the .settings-option + .settings-option adjacency the spacing rule
+   relies on. Without this the option below would touch the one above whenever the
+   group is collapsed to zero height. */
+.settings-suboptions + .settings-option {
     margin-top:8px;
 }
 
@@ -4122,6 +4186,12 @@ ${
 <input id="setting-auto-open-sidebar" data-setting="autoOpenSidebar" type="checkbox">
 <span>Automatically open the sidebar when a discussion exists</span>
 </label>
+<div class="settings-suboptions" data-suboptions-of="autoOpenSidebar">
+<label class="settings-option sub-option">
+<input id="setting-auto-open-only-from-hn" data-setting="autoOpenSidebarOnlyFromHN" type="checkbox">
+<span>Only when arriving from Hacker News</span>
+</label>
+</div>
 <label class="settings-option">
 <input id="setting-hide-without-discussion" data-setting="hideWithoutDiscussion" type="checkbox">
 <span>Only show the HN button when a discussion exists</span>
@@ -4139,14 +4209,10 @@ When off, pages with no discussion get a greyed-out button that offers to submit
 <div class="settings-option-hint">
 Highlights the passages commenters quote, so you can jump between the article and what was said about it.
 </div>
-<div id="settings-annotation-suboptions" class="settings-suboptions">
-<label class="settings-option sub-option">
-<input id="setting-annotations-open" data-setting="annotationsWhenSidebarOpen" type="checkbox">
-<span>When sidebar open</span>
-</label>
+<div class="settings-suboptions" data-suboptions-of="annotations">
 <label class="settings-option sub-option">
 <input id="setting-annotations-closed" data-setting="annotationsWhenSidebarClosed" type="checkbox">
-<span>When sidebar closed</span>
+<span>Show when sidebar closed</span>
 </label>
 </div>
 </div>
@@ -4226,11 +4292,11 @@ Highlights the passages commenters quote, so you can jump between the article an
 				"#setting-hide-without-discussion",
 			),
 			annotations: shadow.querySelector("#setting-annotations"),
-			annotationsWhenSidebarOpen: shadow.querySelector(
-				"#setting-annotations-open",
-			),
 			annotationsWhenSidebarClosed: shadow.querySelector(
 				"#setting-annotations-closed",
+			),
+			autoOpenSidebarOnlyFromHN: shadow.querySelector(
+				"#setting-auto-open-only-from-hn",
 			),
 		};
 
@@ -4343,9 +4409,11 @@ Highlights the passages commenters quote, so you can jump between the article an
 			}
 		};
 
-		const annotationSuboptions = shadow.querySelector(
-			"#settings-annotation-suboptions",
-		);
+		// Found by the setting each group hangs off rather than by id, so a third
+		// group needs markup and nothing here.
+		const suboptionGroups = [
+			...settingsPanel.querySelectorAll("[data-suboptions-of]"),
+		];
 
 		const applySettingsPanelState = (settings) => {
 			for (const [key, input] of Object.entries(settingsInputs)) {
@@ -4362,19 +4430,17 @@ Highlights the passages commenters quote, so you can jump between the article an
 
 			applyButtonDesigner(settings);
 
-			const annotationsEnabled = Boolean(settings.annotations);
+			for (const group of suboptionGroups) {
+				const enabled = Boolean(settings[group.dataset.suboptionsOf]);
 
-			annotationSuboptions?.classList.toggle("is-visible", annotationsEnabled);
+				group.classList.toggle("is-visible", enabled);
 
-			// Still disabled as well as collapsed. max-height:0 hides them visually but
-			// leaves them in the tab order, so keyboard focus could land on a control
-			// nobody can see.
-			if (settingsInputs.annotationsWhenSidebarOpen) {
-				settingsInputs.annotationsWhenSidebarOpen.disabled = !annotationsEnabled;
-			}
-
-			if (settingsInputs.annotationsWhenSidebarClosed) {
-				settingsInputs.annotationsWhenSidebarClosed.disabled = !annotationsEnabled;
+				// Still disabled as well as collapsed. max-height:0 hides them visually
+				// but leaves them in the tab order, so keyboard focus could land on a
+				// control nobody can see.
+				for (const input of group.querySelectorAll("input")) {
+					input.disabled = !enabled;
+				}
 			}
 		};
 
@@ -4461,13 +4527,7 @@ Highlights the passages commenters quote, so you can jump between the article an
 				return;
 			}
 
-			if (
-				[
-					"annotations",
-					"annotationsWhenSidebarOpen",
-					"annotationsWhenSidebarClosed",
-				].includes(setting)
-			) {
+			if (["annotations", "annotationsWhenSidebarClosed"].includes(setting)) {
 				await onAnnotationChange?.();
 			}
 		});
@@ -4929,6 +4989,62 @@ ${CHROME_CSS}
     margin:8px 0;
 }
 
+/* A comment's first and last element must not decide how far the comment sits from
+   its neighbours, which is what happened while their margins were left to escape.
+   .comment-layout is a flex row, so nothing collapses out through it: the margin
+   stayed inside the comment and added to the 12px every comment already has,
+   putting a multi-paragraph comment 20px from the next one, a comment ending in a
+   quote 18px, and a single-paragraph one -- which is a bare text node, since HN
+   does not wrap an opening paragraph -- at 12px. The same happened above, where
+   what a comment opened with set its distance from its own byline.
+
+   Bare text is untouched by this and needs to be: an anonymous block has no margins
+   to zero, which is why it was the odd one out to begin with. */
+.text > *:first-child,
+.story-text > *:first-child {
+    margin-top:0;
+}
+
+.text > *:last-child,
+.story-text > *:last-child {
+    margin-bottom:0;
+}
+
+/* A <pre> defaults to white-space:pre, which does not wrap at any width, so a code
+   block or an indented quote ran straight out of the panel and took the comment's
+   own edge with it. overflow-wrap is inherited from .comment and only bites once
+   wrapping is allowed at all, which is what pre-wrap turns on -- and pre-wrap keeps
+   the indentation and line breaks that made the author reach for a code block.
+
+   overflow-x is the backstop for the case that still cannot break, an unbroken
+   200-character token being the usual one: it scrolls inside its own block rather
+   than widening everything around it. */
+.text pre,
+.story-text pre {
+    white-space:pre-wrap;
+    overflow-x:auto;
+    max-width:100%;
+}
+
+/* Browser defaults are 1em, which is 13px here and sits oddly beside the 8px every
+   other break in a comment uses. Lists also default to 40px of indent, most of a
+   nested reply's remaining width, where enough to hang a bullet on will do. */
+.text pre,
+.text ul,
+.text ol,
+.story-text pre,
+.story-text ul,
+.story-text ol {
+    margin:8px 0;
+}
+
+.text ul,
+.text ol,
+.story-text ul,
+.story-text ol {
+    padding-left:22px;
+}
+
 .text a {
     color:var(--link);
 }
@@ -5134,9 +5250,14 @@ ${CHROME_CSS}
    ornament in the gutter and italics instead, which cannot be confused with
    nesting when scanning a deep thread.
    No backticks in here - this whole stylesheet is inside a template literal. */
-.text blockquote {
+/* Same 8px as a paragraph. At 6px a quote sat closer to its neighbour than two
+   paragraphs did, which only showed between two stacked quotes -- everywhere else
+   collapsing against a paragraph's 8px hid it. One gap for every break in the
+   prose, whatever is on either side of it. */
+.text blockquote,
+.text p.comment-quote-promoted {
     position:relative;
-    margin:6px 0;
+    margin:8px 0;
     padding-left:15px;
     color:var(--quote-text);
     font-style:italic;
@@ -5145,7 +5266,8 @@ ${CHROME_CSS}
 /* The ornaments are written as literal characters, not CSS codepoint escapes.
    This stylesheet is a template literal, and JS reads a backslash followed by a
    digit as an octal escape, which is a syntax error in template strings. */
-.text blockquote::before {
+.text blockquote::before,
+.text p.comment-quote-promoted::before {
     content:"❛";
     position:absolute;
     left:0;
@@ -5169,10 +5291,23 @@ ${CHROME_CSS}
    too gave the same information twice, and left the difference unreadable
    without comparing two quotes side by side. */
 
+/* A block that already reads as a quote -- indented, italic, ornamented -- does not
+   also need its words underlined; that says the same thing twice, and the underline
+   is the mark for a quote sitting inside a sentence, where nothing else could show
+   it. Applies to both forms, so a marker-folded quote and a paragraph promoted on a
+   match look alike.
+   No backticks in here - this whole stylesheet is inside a template literal. */
+.text blockquote .comment-quote-link-inline,
+.comment-quote-promoted .comment-quote-link-inline {
+    text-decoration:none;
+}
+
+/* A hairline. 1.5px was landing on three device pixels at 2x, which read as a rule
+   under the text rather than as a mark on it. */
 .comment-quote-link-inline {
     text-decoration:underline;
     text-decoration-color:rgba(255,102,0,.32);
-    text-decoration-thickness:1.5px;
+    text-decoration-thickness:1px;
     text-underline-offset:2px;
 }
 
@@ -5196,9 +5331,23 @@ blockquote.comment-quote-link:focus-visible {
     }
 }
 
+/* Inside a focused discussion the banner is already showing this sentence, so
+   marking it again in the comment says the same thing twice -- and the mark invites
+   a click through to the view the reader is already in. The words themselves stay
+   at full strength: they are the comment's own prose, not an ornament, and fading
+   them would make the comment harder to read to solve a problem it does not have.
+   The blockquote form collapses instead, below, because there the quote is a
+   standalone block rather than part of a sentence. */
 .comment-quote-redundant.comment-quote-link-inline {
-    opacity:.28;
-    text-decoration-color:var(--faded-underline);
+    text-decoration:none;
+    cursor:default;
+}
+
+/* Outside the hover media query and more specific than the rules there, so a
+   quote the reader cannot usefully click does not light up under the pointer. */
+.comment-quote-redundant.comment-quote-link-inline:hover,
+.comment-quote-redundant.comment-quote-link-inline:focus-visible {
+    background:transparent;
 }
 
 blockquote.comment-quote-redundant {
@@ -5249,10 +5398,13 @@ blockquote.comment-quote-redundant {
     cursor:text;
 }
 
-/* No p:first-child rule to match: HN never wraps a story's opening paragraph, so
-   the first <p> is the second paragraph and zeroing it closed a real gap. */
-.story-text p:last-child {
-    margin-bottom:0;
+/* The story ran on the browser's default paragraph margin -- 13px against the
+   comments' 8px -- so prose in the panel had two rhythms depending on whether it
+   was the submission or a reply to it. The edges are handled by the shared
+   first-child/last-child rules above, which is what the old p:last-child rule here
+   was reaching for. */
+.story-text p {
+    margin:8px 0;
 }
 
 .story-text a {
@@ -5476,7 +5628,7 @@ ${settingsPanelHTML()}
 		clearFilterButton.onclick = (event) => {
 			event.preventDefault();
 			event.stopPropagation();
-			clearCommentFilter();
+			clearCommentFilter({ restore: true });
 		};
 
 		let resizing = false;
@@ -5755,6 +5907,11 @@ ${settingsPanelHTML()}
 `;
 		const storyElement = wrapper.firstElementChild;
 		storyElement.dataset.storyId = storyID;
+
+		// Same treatment a comment gets: a story's opening paragraph arrives unwrapped
+		// too, so without this the first-child rule would land on its second paragraph.
+		wrapLooseCommentText(storyElement.querySelector(".story-text"));
+
 		container.appendChild(storyElement);
 
 		wireComposer(storyElement.querySelector(".comment-composer"), {
@@ -6077,6 +6234,92 @@ ${settingsPanelHTML()}
 		}
 
 		element.classList.add("comment-new-seen");
+		newCommentScrollObserver?.unobserve(element);
+	}
+
+	// The accent comes off a comment the reader has attended to, which on a pointer
+	// device is the one they put the pointer on. A finger has no equivalent: a touch
+	// lands on whichever comment happens to be under it while scrolling, so the one
+	// that loses its accent is arbitrary and the rest keep theirs however far past
+	// them the reader has gone.
+	//
+	// Scrolling clear of a comment is the touch equivalent of having attended to it.
+	let newCommentScrollObserver = null;
+
+	// Set while the panel is scrolling itself: returning to a reading position,
+	// jumping to the focus banner, or reflowing the list around a filter. Every one
+	// of those sweeps comments past the top of the panel without the reader having
+	// read anything, and would otherwise clear every accent it passed.
+	let suppressNewCommentAutoClearUntil = 0;
+
+	// Generous, and refreshed by each call: a smooth scroll runs a few hundred
+	// milliseconds and a filter transition adds its own, so the window has to
+	// outlast both rather than race them.
+	function suppressNewCommentAutoClear(duration = 1200) {
+		suppressNewCommentAutoClearUntil = Date.now() + duration;
+	}
+
+	// Only where there is no hover to do the job. On a pointer device the existing
+	// pointerenter is both more precise and more deliberate, and scrolling past
+	// something is a weaker claim to have read it.
+	function newCommentAutoClearEnabled() {
+		if (typeof window.matchMedia !== "function") {
+			return false;
+		}
+
+		return !window.matchMedia("(hover: hover)").matches;
+	}
+
+	function observeNewCommentForScroll(element) {
+		if (!newCommentAutoClearEnabled() || typeof IntersectionObserver !== "function") {
+			return;
+		}
+
+		if (!newCommentScrollObserver) {
+			const root = commentScrollContainer();
+
+			if (!root) {
+				return;
+			}
+
+			newCommentScrollObserver = new IntersectionObserver(
+				(entries) => {
+					if (Date.now() < suppressNewCommentAutoClearUntil) {
+						return;
+					}
+
+					for (const entry of entries) {
+						if (entry.isIntersecting || !entry.rootBounds) {
+							continue;
+						}
+
+						// A comment with no box is display:none -- filtered out of a
+						// focused discussion, or inside a collapsed thread. Its rect
+						// reads as all zeros, which would otherwise satisfy the test
+						// below for any container not sitting at the top of the
+						// viewport, and clear an accent nobody has been near.
+						if (!entry.boundingClientRect.height) {
+							continue;
+						}
+
+						// Past the top, not merely out of view. A comment below the
+						// fold has not been read; one the reader has scrolled up and
+						// over has.
+						if (entry.boundingClientRect.bottom <= entry.rootBounds.top) {
+							startNewCommentFade(entry.target);
+						}
+					}
+				},
+				{ root, threshold: 0 },
+			);
+		}
+
+		newCommentScrollObserver.observe(element);
+	}
+
+	function stopObservingNewComments() {
+		newCommentScrollObserver?.disconnect();
+		newCommentScrollObserver = null;
 	}
 
 	// -------------------------
@@ -6132,6 +6375,45 @@ ${settingsPanelHTML()}
 			: null;
 	}
 
+	// Openers mapped to the closer that ends them. Single quotes are deliberately
+	// absent: an apostrophe is the same character, so "'tis a fine day, isn't it'"
+	// would read as a quotation and most possessives would flirt with it.
+	const QUOTATION_PAIRS = { '"': '"', "“": "”", "«": "»" };
+
+	// A paragraph that is nothing but one quotation. HN has no quote syntax, so
+	// plenty of commenters reach for quotation marks rather than `>`, and the result
+	// arrived styled like their own words -- the same problem `>` folding solves,
+	// arriving by a different route.
+	//
+	// Wholly enclosed is the entire test, and it is what keeps ordinary quoting
+	// inside a sentence alone: `I think "move fast" is a bad motto` has text outside
+	// the marks, and `"A" and "B"` has a closer before the end.
+	function readQuotationWrapper(text) {
+		const trimmed = (text || "").trim();
+
+		// Two marks and something between them.
+		if (trimmed.length < 3) {
+			return null;
+		}
+
+		const closer = QUOTATION_PAIRS[trimmed[0]];
+
+		if (!closer || trimmed[trimmed.length - 1] !== closer) {
+			return null;
+		}
+
+		const inner = trimmed.slice(1, -1);
+
+		if (!inner.trim() || inner.includes(closer)) {
+			return null;
+		}
+
+		return {
+			prefix: text.length - text.trimStart().length + 1,
+			suffix: text.length - text.trimEnd().length + 1,
+		};
+	}
+
 	// Drop `count` characters from the front of `nodes` in document order, which
 	// is where the marker sits. Walking text nodes rather than rewriting the
 	// markup keeps any inline <a> or <i> in the quoted line intact.
@@ -6158,6 +6440,35 @@ ${settingsPanelHTML()}
 		};
 
 		for (const node of nodes) {
+			walk(node);
+		}
+	}
+
+	// The mirror of the above, for the closing mark of a quotation. `>` needs no such
+	// thing -- it only ever has a front -- so this exists solely for the wrapped form.
+	function dropTrailingCharacters(nodes, count) {
+		let remaining = count;
+
+		const walk = (node) => {
+			if (remaining <= 0) {
+				return;
+			}
+
+			if (node.nodeType === Node.TEXT_NODE) {
+				const value = node.nodeValue || "";
+				const taken = Math.min(remaining, value.length);
+
+				node.nodeValue = value.slice(0, value.length - taken);
+				remaining -= taken;
+				return;
+			}
+
+			for (const child of [...node.childNodes].reverse()) {
+				walk(child);
+			}
+		};
+
+		for (const node of [...nodes].reverse()) {
 			walk(node);
 		}
 	}
@@ -6234,6 +6545,17 @@ ${settingsPanelHTML()}
 			if (marker) {
 				block.depth = marker.depth;
 				block.prefix = marker.length;
+				continue;
+			}
+
+			// Tried second, so a line carrying both -- `> "quoted"` -- keeps its `>`
+			// depth and its marks, which is what the commenter typed.
+			const wrapper = readQuotationWrapper(text);
+
+			if (wrapper) {
+				block.depth = 1;
+				block.prefix = wrapper.prefix;
+				block.suffix = wrapper.suffix;
 			}
 		}
 
@@ -6250,6 +6572,10 @@ ${settingsPanelHTML()}
 
 			const nodes = block.element ? [...block.element.childNodes] : block.nodes;
 
+			// Trailing first: dropping the front shifts nothing at the back, but both
+			// walk the same text nodes and taking the end first keeps the two counts
+			// independent of each other on a single-node line.
+			dropTrailingCharacters(nodes, block.suffix || 0);
 			dropLeadingCharacters(nodes, block.prefix);
 			lines.push({ depth: block.depth, nodes });
 		}
@@ -6309,6 +6635,64 @@ ${settingsPanelHTML()}
 			foldQuoteRun(root, blocks.slice(index, last + 1));
 			index = last + 1;
 		}
+	}
+
+	// Blocks that stand on their own. Anything else at the top level of a comment is
+	// inline and belongs to whatever paragraph surrounds it.
+	const COMMENT_BLOCK_TAGS = new Set([
+		"P",
+		"BLOCKQUOTE",
+		"PRE",
+		"DIV",
+		"UL",
+		"OL",
+		"TABLE",
+	]);
+
+	// HN opens a comment's first paragraph without a <p> and never closes the ones
+	// that follow, so the opening paragraph arrives as loose text rather than an
+	// element -- and the same happens to the reply under a quote, which is the shape
+	// "> quoted line" plus an answer produces. Loose text becomes an anonymous block,
+	// which has no margins and cannot be addressed by a selector, so those paragraphs
+	// sat at different distances from their neighbours than the wrapped ones and no
+	// rule could reach them. Wrapping them makes every paragraph a real element, which
+	// is what lets one margin apply to all of them.
+	//
+	// Runs, not nodes: a paragraph is often text, an <a>, and more text, and those are
+	// one paragraph rather than three.
+	function wrapLooseCommentText(root) {
+		if (!root) {
+			return;
+		}
+
+		let run = [];
+
+		const flush = () => {
+			// A run of nothing but whitespace is the surrounding template's own
+			// indentation. Wrapping it would invent a paragraph.
+			const meaningful = run.some(
+				(node) => node.nodeType !== 3 || node.textContent.trim(),
+			);
+
+			if (run.length && meaningful) {
+				const paragraph = document.createElement("p");
+				run[0].before(paragraph);
+				paragraph.append(...run);
+			}
+
+			run = [];
+		};
+
+		for (const node of [...root.childNodes]) {
+			if (node.nodeType === 1 && COMMENT_BLOCK_TAGS.has(node.tagName)) {
+				flush();
+				continue;
+			}
+
+			run.push(node);
+		}
+
+		flush();
 	}
 
 	// #endregion hnewhere-test-export
@@ -6401,7 +6785,10 @@ ${settingsPanelHTML()}
 		const children = div.querySelector(".children");
 		const toggle = div.querySelector(".toggle");
 
+		// After folding, so the quote detector still sees the raw line structure it
+		// partitions on rather than paragraphs this put around it.
 		foldQuoteBlocks(textElement);
+		wrapLooseCommentText(textElement);
 
 		renderedComments.push({
 			id: comment.id,
@@ -6438,6 +6825,8 @@ ${settingsPanelHTML()}
 			div.addEventListener("pointerdown", () => startNewCommentFade(div), {
 				once: true,
 			});
+
+			observeNewCommentForScroll(div);
 		}
 
 		toggle.onclick = async () => {
@@ -6508,6 +6897,8 @@ ${settingsPanelHTML()}
 	async function renderSingleDiscussion(story, ui) {
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
+		// The observer holds the elements about to be thrown away with the list.
+		stopObservingNewComments();
 		renderedComments = [];
 		ui.body.innerHTML = "";
 		setSidebarRestingSubtitle(ui, "");
@@ -6552,6 +6943,8 @@ ${settingsPanelHTML()}
 	async function renderBlendedDiscussion(stories, ui) {
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
+		// The observer holds the elements about to be thrown away with the list.
+		stopObservingNewComments();
 		renderedComments = [];
 		ui.body.innerHTML = "";
 		setSidebarRestingSubtitle(
@@ -6733,9 +7126,19 @@ ${settingsPanelHTML()}
 			}
 
 			if (options.startHidden && sidebar) {
+				// Deliberately records nothing. This branch is the annotation preload:
+				// the panel is built hidden so highlights can be drawn, which is the
+				// script's own doing and not a reader shutting anything. Writing
+				// "collapsed" here could only ever fabricate a preference -- the
+				// preload is unreachable when the site is already "open", and a
+				// no-op when it is already "collapsed" -- and the fabricated one
+				// outranks the auto-open setting, silently killing it for the site.
 				sidebar.style.display = "none";
-				await saveSidebarState("collapsed");
-			} else {
+			} else if (options.remember !== false) {
+				// Skipped only for an open the HN-arrival rule granted. The per-site
+				// memory outranks the global setting, so recording one would turn the
+				// site into one that opens on every visit -- and the reader would have
+				// no way to see why the rule had stopped applying.
 				await saveSidebarState("open");
 			}
 
@@ -7356,22 +7759,61 @@ ${settingsPanelHTML()}
 		return normalizeURL(a) === normalizeURL(b);
 	}
 
-	function shouldAutoOpenSidebar(settings, siteState = null) {
-		if (siteState === "open") {
-			return true;
-		}
-
-		if (siteState === "collapsed") {
+	// #region hnewhere-test-export
+	// True when this document was reached by clicking a link on HN. HN serves
+	// <meta name="referrer" content="origin">, so the value arrives as the bare
+	// origin rather than the item URL; comparing origins accepts that and a
+	// full-URL referrer alike. A typed URL or a bookmark leaves it empty, which
+	// makes the URL constructor throw -- that throw is the direct-visit answer.
+	// The argument defaults to the real referrer and exists so tests can hand it a
+	// string; document.referrer is read-only, and faking it would mean redefining a
+	// property of the live document.
+	function referrerIsHN(referrer = document.referrer) {
+		try {
+			return new URL(referrer).origin === HN_ORIGIN;
+		} catch {
 			return false;
 		}
-
-		return !isMobile() && settings.autoOpenSidebar;
 	}
 
-	function shouldPreloadHiddenSidebar(settings, siteState = null) {
+	// fromHN is passed in rather than read here because it has two sources: the
+	// referrer, and the story click STORAGE.last already recorded on HN. The page
+	// pass knows both; this only has to weigh the answer.
+	function shouldAutoOpenSidebar(settings, siteState = null, fromHN = false) {
+		// The setting reads as a sentence -- "automatically open the sidebar when a
+		// discussion exists", narrowed by "only when arriving from Hacker News" --
+		// and while it is on it is the whole answer. A panel the reader shut on some
+		// earlier visit is not a standing objection to a preference they have since
+		// expressed, and letting it win is how the setting ends up not doing what it
+		// says. The sub-option is part of the same sentence, so it is weighed here
+		// and nowhere else.
+		if (settings.autoOpenSidebar) {
+			return settings.autoOpenSidebarOnlyFromHN ? fromHN : true;
+		}
+
+		// With the setting off, what the reader did on this site by hand is all there
+		// is to go on. Only a deliberate open is ever recorded, so reaching this can
+		// never be the script honouring something it decided for itself.
+		return siteState === "open";
+	}
+	// #endregion hnewhere-test-export
+
+	// Read once at load, because document.referrer belongs to the document rather
+	// than to the URL currently showing. A client-side router changes the address
+	// without touching it, so a reader who arrived from HN and then clicked through
+	// four articles would otherwise register as four arrivals. watchSoftNavigation
+	// clears this the moment it commits to a new URL; a hard navigation needs no
+	// help, because the referrer then becomes the site itself.
+	let arrivedFromHNReferrer = referrerIsHN();
+
+	function forgetHNReferrer() {
+		arrivedFromHNReferrer = false;
+	}
+
+	function shouldPreloadHiddenSidebar(settings, siteState = null, fromHN = false) {
 		return (
 			Boolean(settings.annotations) &&
-			!shouldAutoOpenSidebar(settings, siteState) &&
+			!shouldAutoOpenSidebar(settings, siteState, fromHN) &&
 			Boolean(settings.annotationsWhenSidebarClosed)
 		);
 	}
@@ -7380,14 +7822,15 @@ ${settingsPanelHTML()}
 		return Boolean(sidebar && sidebar.style.display !== "none");
 	}
 
+	// Unconditional while the sidebar is open, because that is the context the
+	// annotations exist for: clicking a highlight filters the thread to the comment
+	// that quoted it. The only choice left is whether they outlive the panel.
 	function shouldShowArticleAnnotations(settings) {
 		if (!settings.annotations) {
 			return false;
 		}
 
-		return isSidebarVisible()
-			? Boolean(settings.annotationsWhenSidebarOpen)
-			: Boolean(settings.annotationsWhenSidebarClosed);
+		return isSidebarVisible() || Boolean(settings.annotationsWhenSidebarClosed);
 	}
 
 	async function ensureVoteControlsLoaded() {
@@ -7414,6 +7857,10 @@ ${settingsPanelHTML()}
 	// -------------------------
 
 	function transitionCommentList(update, options = {}) {
+		// Entering or leaving a focused discussion hides and restores comments in
+		// bulk, which moves everything below them without the reader scrolling.
+		suppressNewCommentAutoClear();
+
 		const container = sidebarUI?.body;
 
 		if (!container || options.animate === false) {
@@ -7435,14 +7882,36 @@ ${settingsPanelHTML()}
 		}, 110);
 	}
 
+	// Matched on what the quote says rather than on which group it landed in. Two
+	// comments quoting the same sentence can end up in different groups -- the groups
+	// are keyed by the article range each matched, and those ranges need not be
+	// identical -- so comparing group identity left one of them marked and the other
+	// not. The reader saw the banner restate a sentence and then found that same
+	// sentence underlined immediately beneath it.
 	function setQuoteRedundancy(group, redundant) {
+		// Measured against the passage the banner is showing, not against the group a
+		// comment happens to belong to. Two comments quoting the same sentence can
+		// land in different groups -- groups are keyed by the article range matched,
+		// and one comment may have quoted a longer run than another -- so comparing
+		// group identity left the banner restating a sentence while that very
+		// sentence stayed marked in the comment below it.
+		//
+		// Containment, because a comment quoting any part of the focused passage is
+		// quoting words the banner has already put on screen.
+		const focusedPassage =
+			redundant && group
+				? normalizeSearchText(group.fullQuoteText || group.quoteText || "").text
+				: "";
+
 		for (const candidateGroup of annotationController?.groups || []) {
 			for (const comment of candidateGroup.comments) {
+				const redundantHere =
+					Boolean(focusedPassage) &&
+					Boolean(comment.quoteNormalized) &&
+					focusedPassage.includes(comment.quoteNormalized);
+
 				for (const element of comment.quoteElements || []) {
-					element.classList.toggle(
-						"comment-quote-redundant",
-						redundant && candidateGroup.key === group?.key,
-					);
+					element.classList.toggle("comment-quote-redundant", redundantHere);
 				}
 			}
 		}
@@ -7456,6 +7925,85 @@ ${settingsPanelHTML()}
 	// #comments' own top padding. Scrolling the container directly lets the banner
 	// keep that padding, so it reads as the top of the list rather than as
 	// something clipped by it.
+	// #comments scrolls; #comments-content is the list inside it.
+	function commentScrollContainer() {
+		return sidebarUI?.body?.closest("#comments") || null;
+	}
+
+	// Both surfaces the reader was using, because entering a focus moves both: the
+	// thread jumps to the banner, and the article jumps to the quoted passage so the
+	// reader can see the context it was taken from.
+	//
+	// The thread is stored as a comment and how far down the panel it sat, since a
+	// raw offset stops describing anything once the list is a different length --
+	// which is what filtering does to it. The article is stored as a plain offset,
+	// because nothing reflows it: the sidebar is fixed, so the page it had is the
+	// page it will have.
+	function captureReadingPosition() {
+		const position = { pageScrollY: window.scrollY, commentId: null, offset: 0 };
+		const container = commentScrollContainer();
+
+		if (!container) {
+			return position;
+		}
+
+		const top = container.getBoundingClientRect().top;
+
+		for (const rendered of renderedComments) {
+			if (rendered.element.classList.contains("comment-filter-hidden")) {
+				continue;
+			}
+
+			const rect = rendered.element.getBoundingClientRect();
+
+			// The first whose bottom edge has not yet passed the top of the viewport.
+			// That is what the reader is looking at, even part-scrolled.
+			if (rect.bottom > top) {
+				position.commentId = rendered.id;
+				position.offset = rect.top - top;
+				break;
+			}
+		}
+
+		return position;
+	}
+
+	// Called once the list is whole again, so the thread is measured against the
+	// layout the reader is about to see rather than the filtered one.
+	function restoreReadingPosition(position) {
+		if (!position) {
+			return;
+		}
+
+		// Putting the reader back sweeps every comment the focus had been hiding past
+		// the top of the panel. None of them has been read.
+		suppressNewCommentAutoClear();
+
+		window.scrollTo({
+			top: position.pageScrollY,
+			behavior: prefersReducedMotion() ? "auto" : "smooth",
+		});
+
+		const container = commentScrollContainer();
+
+		if (!container || position.commentId == null) {
+			return;
+		}
+
+		const rendered = renderedComments.find(
+			(comment) => comment.id === position.commentId,
+		);
+
+		if (!rendered) {
+			return;
+		}
+
+		container.scrollTop +=
+			rendered.element.getBoundingClientRect().top -
+			container.getBoundingClientRect().top -
+			position.offset;
+	}
+
 	function scrollFilterBannerToTop() {
 		const banner = sidebarUI?.filterBanner;
 
@@ -7463,10 +8011,15 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		const container = banner.closest("#comments");
+		suppressNewCommentAutoClear();
+
+		const container = commentScrollContainer();
 
 		if (!container) {
-			banner.scrollIntoView({ behavior: "smooth", block: "start" });
+			banner.scrollIntoView({
+				behavior: prefersReducedMotion() ? "auto" : "smooth",
+				block: "start",
+			});
 			return;
 		}
 
@@ -7477,7 +8030,7 @@ ${settingsPanelHTML()}
 
 		container.scrollTo({
 			top: Math.max(0, offset - FILTER_BANNER_SCROLL_MARGIN),
-			behavior: "smooth",
+			behavior: prefersReducedMotion() ? "auto" : "smooth",
 		});
 	}
 
@@ -7508,6 +8061,14 @@ ${settingsPanelHTML()}
 	function clearCommentFilter(options = {}) {
 		activeCommentFilter = null;
 
+		// Read out before the transition, which may run a beat later, and dropped
+		// here either way: a position kept past this point would describe a list that
+		// no longer exists. Only an explicit "show all comments" restores -- the other
+		// callers are tearing the list down or refreshing annotations, where moving
+		// the reader would be an interruption rather than a return.
+		const position = options.restore ? preFilterPosition : null;
+		preFilterPosition = null;
+
 		positionFilterBannerForComment(null);
 
 		transitionCommentList(() => {
@@ -7527,6 +8088,10 @@ ${settingsPanelHTML()}
 			if (sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBannerQuote.textContent = "";
 			}
+
+			// Last, with every comment back in the list and the banner gone, so the
+			// position it puts the reader at is the one they will actually see.
+			restoreReadingPosition(position);
 		}, options);
 	}
 
@@ -7550,6 +8115,16 @@ ${settingsPanelHTML()}
 					element.onclick = null;
 					element.onkeydown = null;
 					delete element.dataset.hnewhereQuoteBlock;
+				});
+
+			// Quote styling given to a paragraph on the strength of a match. With the
+			// annotations gone there is nothing left proving it was a quote, so the
+			// paragraph goes back to being ordinary prose.
+			sidebarUI.shadow
+				.querySelectorAll("[data-hnewhere-quote-promoted='1']")
+				.forEach((element) => {
+					element.classList.remove("comment-quote-promoted");
+					delete element.dataset.hnewhereQuotePromoted;
 				});
 
 			sidebarUI.shadow
@@ -7602,6 +8177,13 @@ ${settingsPanelHTML()}
 
 	// #endregion hnewhere-test-export
 
+	// #region hnewhere-test-export
+	// How much of a passage a cut has to save before it is worth making. A 251
+	// character quote trimmed to 220 lost its last four words to save an eighth of
+	// itself: the reader got a line barely shorter that no longer ended anywhere,
+	// and the words it dropped were sitting in full in the comment underneath.
+	const TRUNCATE_MIN_SAVING = 0.25;
+
 	function truncateText(text, maxLength = 120) {
 		const value = String(text || "").replace(/\s+/g, " ").trim();
 
@@ -7609,8 +8191,23 @@ ${settingsPanelHTML()}
 			return value;
 		}
 
-		return value.slice(0, maxLength - 1).trimEnd() + "…";
+		if (value.length * (1 - TRUNCATE_MIN_SAVING) <= maxLength) {
+			return value;
+		}
+
+		const cut = value.slice(0, maxLength - 1).trimEnd();
+		const lastSpace = cut.lastIndexOf(" ");
+
+		// On a word, not through one: "Minimum ef…" reads as something broken, where
+		// "Minimum…" reads as a quotation carrying on. The floor is there for text
+		// with no spaces to fall back to, a long URL being the usual one, which would
+		// otherwise be cut back to nothing.
+		return (
+			(lastSpace > maxLength * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd() +
+			"…"
+		);
 	}
+	// #endregion hnewhere-test-export
 
 	function addUniqueText(target, seen, text, minNormalizedLength = 24) {
 		const value = String(text || "").replace(/\s+/g, " ").trim();
@@ -7895,6 +8492,20 @@ ${settingsPanelHTML()}
 			}
 
 			flushQuote();
+
+			// An unmarked paragraph, offered whole. Nothing in the text says "quote"
+			// here -- no `>`, no marks -- so the only thing that can establish it is
+			// the article itself. That works because matching is exact once case,
+			// punctuation and whitespace are normalised away: a verbatim paste will
+			// match and a paraphrase will not, however close it reads.
+			//
+			// The floor is higher than the 24 the quotation-mark rule below uses.
+			// Marks are a statement of intent that carries a short quote on its own;
+			// an unmarked sentence has to be long enough that appearing word for word
+			// in the article is not a coincidence.
+			if (line.length >= 40 && line.length <= 320) {
+				addUniqueText(candidates, seen, line);
+			}
 		}
 
 		flushQuote();
@@ -8152,14 +8763,9 @@ ${settingsPanelHTML()}
 		return null;
 	}
 
-	function createRangeFromMatch(index, matchStart, matchLength) {
-		const startRaw = index.normalizedMap[matchStart];
-		const endRaw = index.normalizedMap[matchStart + matchLength - 1];
-
-		if (startRaw == null || endRaw == null) {
-			return null;
-		}
-
+	// Split out from createRangeFromMatch so a span can also be built from raw offsets
+	// that never came from one match -- the union of several overlapping ones.
+	function createRangeFromRawSpan(index, startRaw, endRaw) {
 		const start = resolveRawPoint(index, startRaw, "start");
 		const end = resolveRawPoint(index, endRaw, "end");
 
@@ -8176,13 +8782,20 @@ ${settingsPanelHTML()}
 			return null;
 		}
 
-		return range.collapsed
-			? null
-			: {
-				startRaw,
-				endRaw,
-				range,
-			};
+		return range.collapsed ? null : range;
+	}
+
+	function createRangeFromMatch(index, matchStart, matchLength) {
+		const startRaw = index.normalizedMap[matchStart];
+		const endRaw = index.normalizedMap[matchStart + matchLength - 1];
+
+		if (startRaw == null || endRaw == null) {
+			return null;
+		}
+
+		const range = createRangeFromRawSpan(index, startRaw, endRaw);
+
+		return range ? { startRaw, endRaw, range } : null;
 	}
 
 	function findRangeInRoot(root, normalizedNeedle, uniqueOnly = true) {
@@ -8271,7 +8884,7 @@ ${settingsPanelHTML()}
 
 		window.scrollTo({
 			top: Math.max(0, rect.top + window.scrollY - window.innerHeight * 0.3),
-			behavior: "smooth",
+			behavior: prefersReducedMotion() ? "auto" : "smooth",
 		});
 	}
 
@@ -8312,6 +8925,8 @@ ${settingsPanelHTML()}
 					range: match.range,
 					quoteText: match.quoteText,
 					fullQuoteText: match.fullQuoteText,
+					startRaw: match.startRaw,
+					endRaw: match.endRaw,
 					comments: [],
 				};
 
@@ -8339,8 +8954,79 @@ ${settingsPanelHTML()}
 			}
 		}
 
-		return [...groups.values()];
+		return mergeOverlappingGroups([...groups.values()], articleIndex);
 	}
+
+	// #region hnewhere-test-export
+	// Two commenters quoting the same sentence rarely quote the same span of it: one
+	// takes a clause, another the whole thing. Keying a discussion on the exact
+	// characters matched made those two discussions about one passage, so a reader
+	// following either found half the conversation and no sign of the rest.
+	//
+	// Ranges that overlap are the same passage, so they become one discussion
+	// reaching as wide as everything that landed on it.
+	function mergeOverlappingGroups(groups, articleIndex) {
+		const sorted = [...groups].sort(
+			(a, b) => a.startRaw - b.startRaw || a.endRaw - b.endRaw,
+		);
+
+		const merged = [];
+
+		for (const group of sorted) {
+			const previous = merged[merged.length - 1];
+
+			// Sharing characters, not merely meeting: two sentences quoted separately
+			// sit end to end and stay two discussions, which is right -- they are two.
+			if (previous && group.startRaw <= previous.endRaw) {
+				previous.endRaw = Math.max(previous.endRaw, group.endRaw);
+				previous.comments.push(...group.comments);
+				continue;
+			}
+
+			merged.push({ ...group, comments: [...group.comments] });
+		}
+
+		for (const group of merged) {
+			// One comment can quote two overlapping spans of a passage and land in
+			// both, which after merging would list it twice in its own discussion.
+			const seen = new Set();
+
+			group.comments = group.comments.filter((comment) => {
+				if (seen.has(comment.commentId)) {
+					return false;
+				}
+
+				seen.add(comment.commentId);
+				return true;
+			});
+
+			const span = createRangeFromRawSpan(
+				articleIndex,
+				group.startRaw,
+				group.endRaw,
+			);
+
+			if (!span) {
+				continue;
+			}
+
+			group.key = `${group.startRaw}:${group.endRaw}`;
+			group.range = span;
+
+			// The passage as the article words it, rather than whichever commenter's
+			// excerpt happened to be found first. That is what the discussion is
+			// about, and what the banner should be showing.
+			const text = span.toString().trim();
+
+			if (text) {
+				group.quoteText = text;
+				group.fullQuoteText = text;
+			}
+		}
+
+		return merged;
+	}
+	// #endregion hnewhere-test-export
 
 	// #region hnewhere-test-export
 	const HEAT_MIN_PASSAGE_CHARS = 40;
@@ -8766,6 +9452,25 @@ ${settingsPanelHTML()}
 		heavy: "rgba(255,102,0,.075)",
 	};
 
+	// Quote rects paint solid and their layer carries the strength. Painting them
+	// translucent instead made a passage's colour depend on how many people happened
+	// to quote it -- one comment gave .22, six overlapping gave .78 -- so the same
+	// "this is quoted" mark ranged from barely there to vivid. Opaque ink inside a
+	// layer that is itself partly transparent cannot compound, so every quote reads
+	// the same. How much a passage is discussed is the heat layer's job, and it was
+	// only ever being said twice.
+	const QUOTE_INK = "#ff6600";
+	// Meant to read as a highlighter drawn over the line, not as a tint on it: half
+	// strength puts white paper at rgb(255,178,127). The overlay blends, so orange
+	// cannot touch the glyphs however heavy it gets -- text on a highlight keeps a
+	// contrast ratio above 10 here, against the 4.5 body text is asked for -- which
+	// is what lets this be a real mark rather than the .08 whisper it started as.
+	const QUOTE_FILL_OPACITY = 0.5;
+	// Stacks over the resting layer rather than replacing it: 1-(1-.5)(1-.24) lands
+	// the pointed-at quote at .62. Kept below the point where a dark page's text
+	// falls under 4.5 against its own highlight, which is around .68.
+	const QUOTE_ACTIVE_OPACITY = 0.24;
+
 	function createHighlightRect(rect, options = {}) {
 		const node = document.createElement(options.interactive ? "button" : "div");
 		const variant = options.variant || "highlight";
@@ -8775,19 +9480,8 @@ ${settingsPanelHTML()}
 			width: rect.width,
 			height: rect.height,
 			borderRadius: "3px",
-			background: options.emphasis
-				? "rgba(255,102,0,.22)"
-				: "rgba(255,102,0,.08)",
+			background: QUOTE_INK,
 		};
-
-		if (variant === "underline") {
-			style.top = rect.top + Math.max(0, rect.height - 2);
-			style.height = 2;
-			style.borderRadius = "999px";
-			style.background = options.emphasis
-				? "rgba(255,102,0,.6)"
-				: "rgba(255,102,0,.34)";
-		}
 
 		if (variant === "heat") {
 			const palette = options.dark ? HEAT_FILL_DARK : HEAT_FILL_LIGHT;
@@ -8880,6 +9574,13 @@ ${settingsPanelHTML()}
 		if (!group) {
 			clearCommentFilter(options);
 			return;
+		}
+
+		// Only when entering from the full list. A refresh re-applies a filter that is
+		// already open, and a focus opened from inside another one should still return
+		// to where the reader started rather than to the focus they passed through.
+		if (!activeCommentFilter) {
+			preFilterPosition = captureReadingPosition();
 		}
 
 		activeCommentFilter = groupKey;
@@ -8980,6 +9681,37 @@ ${settingsPanelHTML()}
 		return wrapper;
 	}
 
+	// A commenter who pastes a sentence from the article as its own paragraph, with
+	// neither `>` nor quotation marks around it, is quoting just as plainly as one
+	// who marks it -- and the annotation pass has just proved the words are the
+	// article's. That proof is what makes this safe: the styling follows a verified
+	// match rather than a guess at punctuation, which is why it can be applied to
+	// text carrying no marks at all.
+	//
+	// A class, not a <blockquote>: the promotion has to come undone when annotations
+	// are switched off, and removing a class is something clearArticleAnnotations can
+	// do without having to rebuild the paragraph it replaced.
+	function promoteWholeParagraphQuote(wrapper) {
+		const paragraph = wrapper?.closest("p");
+
+		if (!paragraph || paragraph.closest("blockquote")) {
+			return;
+		}
+
+		// Only when the match is the whole paragraph. A sentence quoted inside a
+		// longer one keeps the inline mark, which is precisely what says "this part
+		// came from the article" while the rest is the commenter's own.
+		if (
+			normalizeSearchText(paragraph.textContent).text !==
+			normalizeSearchText(wrapper.textContent).text
+		) {
+			return;
+		}
+
+		paragraph.dataset.hnewhereQuotePromoted = "1";
+		paragraph.classList.add("comment-quote-promoted");
+	}
+
 	function decorateSidebarMatches(controller) {
 		for (const group of controller.groups) {
 			for (const comment of group.comments) {
@@ -9011,6 +9743,7 @@ ${settingsPanelHTML()}
 				if (wrapper) {
 					quoteElements.push(wrapper);
 					comment.quoteElements = quoteElements;
+					promoteWholeParagraphQuote(wrapper);
 					continue;
 				}
 
@@ -9062,7 +9795,23 @@ ${settingsPanelHTML()}
 		// hottest thing on the page, which is the hierarchy we want.
 		const heatLayer = document.createElement("div");
 		const baseLayer = document.createElement("div");
-		overlay.append(heatLayer, baseLayer);
+		const activeLayer = document.createElement("div");
+
+		// The quote layers are where a highlight's strength lives, so that opaque
+		// rects inside them cannot compound where two comments quote the same words.
+		baseLayer.style.opacity = String(QUOTE_FILL_OPACITY);
+
+		// Decorative only, and above the interactive rects, so it must never take the
+		// pointer -- the base layer's buttons are what the reader is aiming at. Its
+		// opacity is animated rather than its children being added and removed, so a
+		// quote fades under the pointer instead of snapping.
+		activeLayer.style.cssText = `
+			opacity:0;
+			pointer-events:none;
+			${prefersReducedMotion() ? "" : "transition:opacity .12s ease;"}
+		`;
+
+		overlay.append(heatLayer, baseLayer, activeLayer);
 		document.body.appendChild(overlay);
 
 		let heatRegions = regions || [];
@@ -9070,14 +9819,86 @@ ${settingsPanelHTML()}
 		const groupsByKey = new Map(groups.map((group) => [group.key, group]));
 		let renderFrame = 0;
 
+		// A quote that wraps produces one rect per line, and they are one thing: the
+		// reader points at a sentence, not at a line of it. Kept so pointing at any
+		// rect can light the rest.
+		const rectsByGroup = new Map();
+		let activeGroupKey = null;
+
+		// Live rather than read once: a convertible laptop can gain and lose a mouse
+		// without reloading the page.
+		const hoverQuery =
+			typeof window.matchMedia === "function"
+				? window.matchMedia("(hover: hover)")
+				: null;
+
+		// Repaints only the active layer rather than re-rendering the overlay. A
+		// re-render would replace the very node the pointer is over, which fires
+		// pointerleave and leaves the highlight stuck on or flickering between states.
+		// The old rects are left in place while the layer fades out, so a quote the
+		// pointer has left finishes its fade instead of vanishing mid-transition.
+		const paintActiveLayer = () => {
+			const rects = activeGroupKey ? rectsByGroup.get(activeGroupKey) : null;
+
+			if (!rects?.length) {
+				activeLayer.style.opacity = "0";
+				return;
+			}
+
+			activeLayer.replaceChildren(
+				...rects.map((node) =>
+					createHighlightRect(
+						{
+							left: parseFloat(node.style.left),
+							top: parseFloat(node.style.top),
+							width: parseFloat(node.style.width),
+							height: parseFloat(node.style.height),
+						},
+						{ interactive: false, variant: "highlight" },
+					),
+				),
+			);
+
+			activeLayer.style.opacity = String(QUOTE_ACTIVE_OPACITY);
+		};
+
+		const setActiveGroup = (groupKey) => {
+			if (activeGroupKey === groupKey) {
+				return;
+			}
+
+			activeGroupKey = groupKey;
+			paintActiveLayer();
+		};
+
 		const render = () => {
 			overlay.style.height =
 				Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) +
 				"px";
 			baseLayer.replaceChildren();
 			heatLayer.replaceChildren();
+			rectsByGroup.clear();
 
-			const dark = detectDarkMode();
+			// Sampled from the text actually being marked rather than from the theme,
+			// because the blend has to answer to the paper under the highlight. Falls
+			// back through heat to the body, so a page with no quotes still resolves.
+			const backdrop =
+				nearestElement(groups[0]?.range?.commonAncestorContainer) ||
+				nearestElement(heatRegions[0]?.range?.commonAncestorContainer) ||
+				document.body;
+			const dark = isDarkBackdrop(backdrop);
+
+			// The whole overlay blends, rather than each rect: the overlay's z-index
+			// makes it a stacking context, which isolates its descendants' blending to
+			// the group. A mix-blend-mode on a rect would composite against the
+			// overlay's own transparency and change nothing on the page.
+			//
+			// Orange over paper lands on the same pixel either way, so this costs the
+			// highlight nothing and stops it washing the glyphs it covers -- the point
+			// being that a highlighter is ink under the text, not a film over it.
+			// Multiply can only darken, which is right until the page is dark, where it
+			// would eat light text and sink into the background; screen is its mirror.
+			overlay.style.mixBlendMode = dark ? "screen" : "multiply";
 
 			for (const region of heatRegions) {
 				for (const rect of getPageRectsForRange(region.range)) {
@@ -9099,30 +9920,56 @@ ${settingsPanelHTML()}
 					continue;
 				}
 
-				for (const rect of rects) {
-					baseLayer.appendChild(
-						createHighlightRect(rect, {
-							interactive: true,
-							title: "Show linked Hacker News comments",
-							onActivate: () => {
-								openFocusedDiscussion(group.key).catch(console.error);
-							},
-							variant: "highlight",
-						}),
-					);
+				const groupRects = [];
 
-					baseLayer.appendChild(
-						createHighlightRect(rect, {
-							interactive: true,
-							title: "Show linked Hacker News comments",
-							onActivate: () => {
-								openFocusedDiscussion(group.key).catch(console.error);
-							},
-							variant: "underline",
-						}),
-					);
+				for (const rect of rects) {
+					const node = createHighlightRect(rect, {
+						interactive: true,
+						title: "Show linked Hacker News comments",
+						onActivate: () => {
+							openFocusedDiscussion(group.key).catch(console.error);
+						},
+						variant: "highlight",
+					});
+
+					// Pointer feedback only where there is a pointer. On a touch screen
+					// hover states either never fire or, worse, stick after a tap.
+					node.addEventListener("pointerenter", () => {
+						if (hoverQuery?.matches !== false) {
+							setActiveGroup(group.key);
+						}
+					});
+
+					node.addEventListener("pointerleave", () => {
+						if (activeGroupKey === group.key) {
+							setActiveGroup(null);
+						}
+					});
+
+					// Keyboard parity. :focus-visible keeps this off the click that
+					// precedes an activation, where the pointer has already said it.
+					node.addEventListener("focus", () => {
+						if (node.matches(":focus-visible")) {
+							setActiveGroup(group.key);
+						}
+					});
+
+					node.addEventListener("blur", () => {
+						if (activeGroupKey === group.key) {
+							setActiveGroup(null);
+						}
+					});
+
+					groupRects.push(node);
+					baseLayer.appendChild(node);
 				}
+
+				rectsByGroup.set(group.key, groupRects);
 			}
+
+			// Rebuilt from the fresh geometry, so a resize under the pointer moves the
+			// lit quote with everything else rather than leaving it behind.
+			paintActiveLayer();
 		};
 
 		const scheduleRender = () => {
@@ -9299,6 +10146,7 @@ ${settingsPanelHTML()}
 
 		teardownSurfaces();
 
+		stopObservingNewComments();
 		renderedComments = [];
 		activeCommentFilter = null;
 	}
@@ -9333,6 +10181,10 @@ ${settingsPanelHTML()}
 			}
 
 			currentURL = nextURL;
+
+			// This page was navigated to, not arrived at. The referrer still says HN
+			// and will keep saying so for the rest of the document's life.
+			forgetHNReferrer();
 
 			clearTimeout(timer);
 
@@ -9486,10 +10338,14 @@ ${settingsPanelHTML()}
 
 			settleButtonToDiscussion(pendingButton);
 
+			// Reaching this branch is itself an arrival from HN: the click that
+			// recorded it happened on HN, on a link to this URL. Stated rather than
+			// re-derived from the referrer, which some browsers withhold entirely.
 			await presentDiscussion(
 				last.ids.map((id) => ({ objectID: id })),
 				settings,
 				siteState,
+				true,
 			);
 
 			return;
@@ -9508,6 +10364,7 @@ ${settingsPanelHTML()}
 				stories.map((story) => ({ objectID: story.objectID })),
 				settings,
 				siteState,
+				arrivedFromHNReferrer,
 			);
 			return;
 		}
@@ -9523,16 +10380,20 @@ ${settingsPanelHTML()}
 
 	// The three ways a known discussion can be presented, in one place because init
 	// reaches this point by two different routes.
-	async function presentDiscussion(storyRefs, settings, siteState) {
-		if (shouldAutoOpenSidebar(settings, siteState)) {
+	async function presentDiscussion(storyRefs, settings, siteState, fromHN = false) {
+		if (shouldAutoOpenSidebar(settings, siteState, fromHN)) {
 			// The sidebar itself is the answer here, so the placeholder goes rather
 			// than becoming a button that would sit on top of an open panel.
 			destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
-			await openSidebar(storyRefs);
+
+			// Records nothing: the script opened this, not the reader. Per-site memory
+			// now means "what I did here by hand", which is the only reading under
+			// which it can be trusted once the setting is turned off again.
+			await openSidebar(storyRefs, { remember: false });
 			return;
 		}
 
-		if (shouldPreloadHiddenSidebar(settings, siteState)) {
+		if (shouldPreloadHiddenSidebar(settings, siteState, fromHN)) {
 			// Kept: createRestoreButton adopts it, so the ring carries on spinning
 			// across the render and the annotation pass, which is the slow case.
 			await openSidebar(storyRefs, { startHidden: true });

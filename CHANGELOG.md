@@ -8,6 +8,235 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.5.7] — 2026-07-31
+
+### Added
+
+- Automatic opening can be narrowed to pages you reached from Hacker News.
+  **Only when arriving from Hacker News** appears under *Automatically open the
+  sidebar when a discussion exists* once that is on. It is off by default, so an
+  existing setup keeps opening everywhere until you say otherwise.
+
+  Arrival is read two ways, because neither is sufficient alone. `document.referrer`
+  carries HN's origin on any click from the site — HN serves
+  `<meta name="referrer" content="origin">`, so it arrives as the bare host
+  rather than the item URL — but some browsers withhold it entirely, and a
+  setting that silently never fires is worse than no setting at all. The second
+  signal is the story click HNewhere already records while you are on HN, which
+  no referrer policy can strip.
+
+  The referrer is read once, when the document loads. It is a property of the
+  document rather than of the address currently showing, so on a site that
+  navigates without reloading it would otherwise keep saying "from HN" for every
+  article you clicked through to afterwards.
+
+### Changed
+
+- **Article highlights read as ink under the text rather than a film over it.**
+  The highlight is drawn in an overlay above the page, so its orange was landing
+  on top of the words it marked and washing them out — the mark drew your eye to
+  a passage and then made it harder to read, which is backwards. The overlay now
+  blends with the page instead of covering it: orange that can only darken on a
+  light page, only lighten on a dark one, and so cannot touch the glyphs either
+  way. Over the page background it lands on exactly the pixel it did before, so
+  the highlight itself is unchanged.
+
+  Freed of that, the fill no longer has to stay faint to keep the text readable,
+  and has gone from barely visible to something that reads as a highlighter: half
+  strength, where it used to be eight percent.
+
+  Which way it blends is decided by the paper the highlight lands on, read from
+  the page itself, and not by the theme you have chosen for the sidebar. Those
+  are different questions — the sidebar's theme is about the sidebar — and
+  answering the second would put a lightening blend on a white page, where it
+  does nothing at all.
+
+  A passage is also lit the same however many people quoted it. Highlights were
+  painted once per comment, and translucent ones stacked, so a much-quoted
+  sentence came out several times stronger than a singly-quoted one — the same
+  mark meaning the same thing but rendered anywhere from faint to vivid. How much
+  a passage is discussed is what the heat wash already says, and it was only
+  being said twice.
+- A quoted sentence is no longer marked inside a focused discussion when the
+  banner at the top is already showing it. The underline invited a click through
+  to the view the reader was in, and said a second time what the banner had just
+  said. Quotes the banner does not cover keep their mark, because those still
+  lead somewhere. The words themselves stay at full strength either way — they
+  are the comment's own prose.
+- The underline under a quoted sentence is a hairline. It was set to 1.5px, which
+  a 2x screen rounds up to three device pixels, and read as a rule beneath the
+  text rather than a mark on it.
+- Article highlights lost their underline. The highlight carries the passage on
+  its own, and the underline was a second interactive element stacked on the
+  first — which is why tabbing through an annotated article used to stop on every
+  quote twice.
+- Pointing at a highlighted passage now deepens it, and the whole quote responds
+  rather than the line under the pointer, since a quote that wraps is still one
+  sentence. Keyboard focus does the same. Pointer feedback is limited to devices
+  that have a pointer, where hover states neither fail to fire nor stick after a
+  tap.
+- **While automatic opening is on, it is now what decides.** The sidebar
+  remembers per site whether you last opened or minimized it, and that memory
+  used to be consulted first — so minimizing the panel once on a site quietly
+  stopped it opening there again, whatever the setting said, with nothing on
+  screen to say so and no way back except opening it by hand. A setting that
+  reads *automatically open the sidebar when a discussion exists* has to do that,
+  and *only when arriving from Hacker News* narrows the same sentence rather than
+  making a second rule. Shutting a panel on one visit is not a standing objection
+  to a preference you have since expressed.
+
+  The per-site memory still decides when the setting is off, which is what makes
+  a site you opened by hand keep opening. It now records only that — what you did
+  yourself. An automatic open writes nothing.
+
+  One consequence worth knowing: with the setting on, minimizing no longer
+  silences a site. To stop the sidebar opening somewhere, turn the setting off —
+  per-site memory then governs again — or hide the site outright.
+- Automatic opening now works on phones and tablets. The switch was already
+  there and already saved what you set, but the decision discarded it on any
+  touch device, so turning it on did nothing and there was nothing to say why.
+  The sidebar has handled small screens since 1.5.2, taking the full width less
+  a sliver on a portrait phone.
+- *Enable article annotations* has one sub-option instead of two. **When sidebar
+  open** is gone. Annotations are what links a passage to the comment that
+  quoted it, so switching them off while the sidebar is open left the feature
+  enabled but absent from the one place it does anything; unchecking both left it
+  enabled and absent everywhere. What remains is **Show when sidebar closed**,
+  which is the only part that was ever a real choice. A stored preference from
+  the old checkbox is ignored.
+
+### Fixed
+
+- The orange accent on a new comment comes off when you scroll past it, on devices
+  with no pointer. It had only ever come off under the pointer, and a finger has no
+  equivalent: a touch lands on whichever comment happens to be beneath it while
+  scrolling, so the one that lost its accent was arbitrary and the rest kept theirs
+  however far past them you had read. Scrolling clear of a comment is the touch
+  equivalent of having attended to it.
+
+  Only where there is no hover. Where there is a pointer, pointing at a comment is
+  both more precise and more deliberate than scrolling past it, and that is left to
+  do the job as before.
+
+  Scrolling the panel does on your own behalf never clears anything: returning to a
+  reading position, jumping to the focus banner, and reflowing the list around a
+  filter all sweep comments past the top without you having read a word. A comment
+  hidden by a filter or a collapsed thread is not counted as scrolled past either —
+  it reports no box at all, which would otherwise satisfy the test.
+- Code blocks in comments wrap instead of running off the side of the panel. A
+  `<pre>` does not wrap at any width by default, so a code block — or a quote
+  someone marked by indenting it, which Hacker News turns into one — pushed 697
+  pixels of content through a 419 pixel panel and took the comment's own edge with
+  it. It now wraps while keeping the indentation and line breaks that made the
+  author reach for a code block, and anything that still cannot break scrolls
+  inside its own block rather than widening everything around it. Every other kind
+  of content — inline code, monospace, long links, unbroken words, lists — already
+  wrapped.
+
+  Code blocks and lists also sat on the browser's own 1em spacing rather than the
+  8px every other break in a comment uses, and lists indented 40px, most of a
+  nested reply's remaining width. Both now match everything around them.
+- The quote under **Focused discussion** stops cutting off passages that very
+  nearly fit. A 251-character quote was trimmed to 220, which took its last four
+  words to save an eighth of it and ended mid-word on "Minimum ef…" — words that
+  were sitting in full in the comment directly underneath. A cut now has to save
+  at least a quarter of the passage to be worth making, and when one is made it
+  lands between words rather than through one.
+- One passage is now one discussion. Two commenters quoting the same sentence
+  rarely quote the same span of it — one takes a clause, another the whole thing —
+  and a discussion was keyed on the exact characters matched, so those became two
+  separate discussions about one passage. Whichever you opened, you found half the
+  conversation with no sign that the other half existed.
+
+  Quotes whose spans overlap are now the same discussion, reaching as wide as
+  everything that landed on the passage, and the banner shows the passage as the
+  article words it rather than whichever excerpt happened to be found first.
+  Quotes that merely sit end to end stay separate, because two adjacent sentences
+  are two things to talk about.
+- Quoting without Hacker News' `>` marker is now recognised as quoting. HN has no
+  quote syntax — `>` is a convention, not markup — so a commenter who wraps the
+  passage in quotation marks instead, or pastes it as its own paragraph with no
+  marks at all, was quoting just as plainly and had it rendered as their own words.
+  Both now read as quotes, and the marks come off the way the `>` always did, since
+  the styling is what carries the meaning.
+
+  Quoting inside a sentence is untouched: `I think "move fast" is a terrible motto`
+  has text outside the marks, and keeps the underline that distinguishes the
+  article's words from the commenter's. Only a paragraph that is nothing but the
+  quotation folds.
+
+  The unmarked form is decided by the article rather than by punctuation, because
+  there is no punctuation to go on. Matching is exact once case, spacing and marks
+  are normalised away, so a verbatim paste matches and a paraphrase does not,
+  however closely it reads — and an unmarked sentence has to be longer than a
+  marked one before it is even tested, since marks are a statement of intent that a
+  short quote can rest on and bare text is not.
+- A quote rendered as a block no longer underlines its own words as well. The
+  indent, the ornament and the italics already say it is a quote; the underline is
+  for a quote sitting inside a sentence, where nothing else could show it.
+- Leaving a focused discussion returns you to where you were reading, in the
+  article as well as the thread. Opening a focus moves both — the thread to the
+  banner, and the article to the passage being quoted, so you can see the context
+  it came from — but leaving only ever put back the article, and not even that.
+
+  **show all comments** put back every comment the focus had been hiding, all of
+  them above the one you were on, and left the scroll position where the short
+  filtered list had it, which is the top; the article stayed down at the quote.
+  You then had to find your place twice to carry on.
+
+  Your place in the thread is remembered as a comment and how far down the panel it
+  sat, rather than as a scroll offset, because an offset stops describing anything
+  once the list changes length — which is precisely what filtering does to it. The
+  article needs no such care: the sidebar is fixed, so nothing reflows behind it.
+
+  Opening a second focus from inside the first still returns you to where you
+  started rather than to the one you passed through; wandering off through the
+  article while a focus is open does not cost you your place; and an annotation
+  refresh no longer counts as arriving at a focus.
+- Scrolling that the panel does on your behalf now stops when you have asked for
+  reduced motion. Jumping to a quoted passage, to the focus banner, and back again
+  were all animated regardless.
+- **[#39](https://github.com/twalichiewicz/HNewhere/issues/39)** — comments sat at
+  different distances from one another depending on what each one happened to end
+  with: 12px after a single paragraph, 18px after a quote, 20px after a
+  multi-paragraph comment. The same thing set the gap under a comment's byline,
+  from 4px to 8px depending on what it opened with.
+
+  The cause is that Hacker News opens a comment's first paragraph without a `<p>`
+  and never closes the ones that follow, so the opening paragraph arrives as loose
+  text rather than an element — as does the reply beneath a quote, which is what
+  "> quoted line" plus an answer produces. Loose text becomes an anonymous block:
+  it has no margins, and no selector can reach it. So the wrapped paragraphs
+  carried spacing the unwrapped ones did not, that spacing escaped the text block,
+  and `.comment-layout` being a flex row meant it never collapsed away — it added
+  to the gap every comment already had.
+
+  Every paragraph is now a real element before it is styled, which is what lets one
+  rule apply to all of them. A comment sits 12px from the next whatever it contains,
+  4px under its byline, and every break inside it — paragraph to paragraph,
+  paragraph to quote, quote to quote — is 8px.
+
+  Quotes moved from 6px to 8px to join that. The difference was only ever visible
+  between two stacked quotes, since anywhere else it collapsed against a
+  paragraph's 8px and was hidden.
+
+  A story's own text was on the browser's default paragraph margin, 13px against
+  the comments' 8px, so the submission and the replies to it read at different
+  rhythms. It now matches.
+- Sub-option checkboxes sat two pixels below their labels. The box carried a flat
+  2px top margin, which centres it against the 12px settings rows it was tuned
+  for and overshoots on the 11px sub-option rows, whose line box is shorter. The
+  offset is now derived from the row's own type size, so both sizes land within a
+  pixel and a third would too.
+- Drawing annotations with the sidebar closed silently disabled automatic
+  opening for the site. That combination builds the panel hidden, so the
+  highlights have something to hang off, and building it recorded the site as
+  one you had collapsed — a preference you never expressed, which then outranked
+  the setting. One ordinary visit to a page you had not opened the sidebar on was
+  enough to do it. The preload now records nothing; it never had cause to, since
+  it cannot run on a site already marked open and only repeated itself on one
+  already marked collapsed.
+
 ## [1.5.6] — 2026-07-31
 
 ### Fixed
@@ -197,6 +426,7 @@ Releases before 1.4.7 are recorded in the
 commit history. Entries for 1.4.7 through 1.5.3 are summarized from their release
 commits rather than written at the time.
 
+[1.5.7]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.6...v1.5.7
 [1.5.6]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.5...v1.5.6
 [1.5.5]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.3...v1.5.4
