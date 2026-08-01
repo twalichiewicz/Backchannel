@@ -1030,6 +1030,46 @@
 		return window.matchMedia("(prefers-color-scheme: dark)").matches;
 	}
 
+	// Which way a highlight has to blend depends on the paper it lands on, and that
+	// is not the question detectDarkMode answers. That one decides what the sidebar's
+	// own chrome should look like, so it obeys the reader's theme preference first
+	// and, when the page paints no background of its own, the operating system's.
+	// Neither is evidence about the article. A highlight told "dark" on a white page
+	// screens instead of multiplying, and screen over white paper is white: the mark
+	// disappears and only the glyphs shift, which reads as a highlight far too faint
+	// rather than as one applied backwards.
+	//
+	// So this asks the page directly, walking up from the marked text until something
+	// has actually painted a background.
+	function isDarkBackdrop(element) {
+		for (let node = element; node; node = node.parentElement) {
+			const dark = isDarkColor(getComputedStyle(node).backgroundColor);
+
+			if (dark !== null) {
+				return dark;
+			}
+		}
+
+		// Nothing in the chain painted anything, so the canvas shows through. That is
+		// white unless the page opted into a dark one, which is the only case where
+		// the reader's colour scheme says anything about the article.
+		const scheme = getComputedStyle(document.documentElement).colorScheme || "";
+
+		return (
+			/\bdark\b/.test(scheme) &&
+			window.matchMedia("(prefers-color-scheme: dark)").matches
+		);
+	}
+
+	// getComputedStyle needs an element, and a range routinely lands on a text node.
+	function nearestElement(node) {
+		if (!node) {
+			return null;
+		}
+
+		return node.nodeType === 1 ? node : node.parentElement;
+	}
+
 	// #endregion hnewhere-test-export
 
 	const DARK_CLASS = "hnewhere-dark";
@@ -3240,7 +3280,6 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --grip:rgba(0,0,0,.2);
     --quote-text:#5f5f5f;
     --quote-ornament:#b4b4b4;
-    --faded-underline:rgba(0,0,0,.14);
 
     /* 1.5.3 surfaces */
     --field-bg:#fff;
@@ -3290,7 +3329,6 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
     --grip:rgba(255,255,255,.25);
     --quote-text:#a8a8a8;
     --quote-ornament:#6d6d6d;
-    --faded-underline:rgba(255,255,255,.18);
 
     --field-bg:#262626;
     --field-text:#dcdcdc;
@@ -5184,10 +5222,12 @@ ${CHROME_CSS}
    too gave the same information twice, and left the difference unreadable
    without comparing two quotes side by side. */
 
+/* A hairline. 1.5px was landing on three device pixels at 2x, which read as a rule
+   under the text rather than as a mark on it. */
 .comment-quote-link-inline {
     text-decoration:underline;
     text-decoration-color:rgba(255,102,0,.32);
-    text-decoration-thickness:1.5px;
+    text-decoration-thickness:1px;
     text-underline-offset:2px;
 }
 
@@ -5211,9 +5251,23 @@ blockquote.comment-quote-link:focus-visible {
     }
 }
 
+/* Inside a focused discussion the banner is already showing this sentence, so
+   marking it again in the comment says the same thing twice -- and the mark invites
+   a click through to the view the reader is already in. The words themselves stay
+   at full strength: they are the comment's own prose, not an ornament, and fading
+   them would make the comment harder to read to solve a problem it does not have.
+   The blockquote form collapses instead, below, because there the quote is a
+   standalone block rather than part of a sentence. */
 .comment-quote-redundant.comment-quote-link-inline {
-    opacity:.28;
-    text-decoration-color:var(--faded-underline);
+    text-decoration:none;
+    cursor:default;
+}
+
+/* Outside the hover media query and more specific than the rules there, so a
+   quote the reader cannot usefully click does not light up under the pointer. */
+.comment-quote-redundant.comment-quote-link-inline:hover,
+.comment-quote-redundant.comment-quote-link-inline:focus-visible {
+    background:transparent;
 }
 
 blockquote.comment-quote-redundant {
@@ -7500,14 +7554,36 @@ ${settingsPanelHTML()}
 		}, 110);
 	}
 
+	// Matched on what the quote says rather than on which group it landed in. Two
+	// comments quoting the same sentence can end up in different groups -- the groups
+	// are keyed by the article range each matched, and those ranges need not be
+	// identical -- so comparing group identity left one of them marked and the other
+	// not. The reader saw the banner restate a sentence and then found that same
+	// sentence underlined immediately beneath it.
 	function setQuoteRedundancy(group, redundant) {
+		// Measured against the passage the banner is showing, not against the group a
+		// comment happens to belong to. Two comments quoting the same sentence can
+		// land in different groups -- groups are keyed by the article range matched,
+		// and one comment may have quoted a longer run than another -- so comparing
+		// group identity left the banner restating a sentence while that very
+		// sentence stayed marked in the comment below it.
+		//
+		// Containment, because a comment quoting any part of the focused passage is
+		// quoting words the banner has already put on screen.
+		const focusedPassage =
+			redundant && group
+				? normalizeSearchText(group.fullQuoteText || group.quoteText || "").text
+				: "";
+
 		for (const candidateGroup of annotationController?.groups || []) {
 			for (const comment of candidateGroup.comments) {
+				const redundantHere =
+					Boolean(focusedPassage) &&
+					Boolean(comment.quoteNormalized) &&
+					focusedPassage.includes(comment.quoteNormalized);
+
 				for (const element of comment.quoteElements || []) {
-					element.classList.toggle(
-						"comment-quote-redundant",
-						redundant && candidateGroup.key === group?.key,
-					);
+					element.classList.toggle("comment-quote-redundant", redundantHere);
 				}
 			}
 		}
@@ -8831,6 +8907,25 @@ ${settingsPanelHTML()}
 		heavy: "rgba(255,102,0,.075)",
 	};
 
+	// Quote rects paint solid and their layer carries the strength. Painting them
+	// translucent instead made a passage's colour depend on how many people happened
+	// to quote it -- one comment gave .22, six overlapping gave .78 -- so the same
+	// "this is quoted" mark ranged from barely there to vivid. Opaque ink inside a
+	// layer that is itself partly transparent cannot compound, so every quote reads
+	// the same. How much a passage is discussed is the heat layer's job, and it was
+	// only ever being said twice.
+	const QUOTE_INK = "#ff6600";
+	// Meant to read as a highlighter drawn over the line, not as a tint on it: half
+	// strength puts white paper at rgb(255,178,127). The overlay blends, so orange
+	// cannot touch the glyphs however heavy it gets -- text on a highlight keeps a
+	// contrast ratio above 10 here, against the 4.5 body text is asked for -- which
+	// is what lets this be a real mark rather than the .08 whisper it started as.
+	const QUOTE_FILL_OPACITY = 0.5;
+	// Stacks over the resting layer rather than replacing it: 1-(1-.5)(1-.24) lands
+	// the pointed-at quote at .62. Kept below the point where a dark page's text
+	// falls under 4.5 against its own highlight, which is around .68.
+	const QUOTE_ACTIVE_OPACITY = 0.24;
+
 	function createHighlightRect(rect, options = {}) {
 		const node = document.createElement(options.interactive ? "button" : "div");
 		const variant = options.variant || "highlight";
@@ -8840,19 +8935,8 @@ ${settingsPanelHTML()}
 			width: rect.width,
 			height: rect.height,
 			borderRadius: "3px",
-			background: options.emphasis
-				? "rgba(255,102,0,.22)"
-				: "rgba(255,102,0,.08)",
+			background: QUOTE_INK,
 		};
-
-		if (variant === "underline") {
-			style.top = rect.top + Math.max(0, rect.height - 2);
-			style.height = 2;
-			style.borderRadius = "999px";
-			style.background = options.emphasis
-				? "rgba(255,102,0,.6)"
-				: "rgba(255,102,0,.34)";
-		}
 
 		if (variant === "heat") {
 			const palette = options.dark ? HEAT_FILL_DARK : HEAT_FILL_LIGHT;
@@ -9127,7 +9211,23 @@ ${settingsPanelHTML()}
 		// hottest thing on the page, which is the hierarchy we want.
 		const heatLayer = document.createElement("div");
 		const baseLayer = document.createElement("div");
-		overlay.append(heatLayer, baseLayer);
+		const activeLayer = document.createElement("div");
+
+		// The quote layers are where a highlight's strength lives, so that opaque
+		// rects inside them cannot compound where two comments quote the same words.
+		baseLayer.style.opacity = String(QUOTE_FILL_OPACITY);
+
+		// Decorative only, and above the interactive rects, so it must never take the
+		// pointer -- the base layer's buttons are what the reader is aiming at. Its
+		// opacity is animated rather than its children being added and removed, so a
+		// quote fades under the pointer instead of snapping.
+		activeLayer.style.cssText = `
+			opacity:0;
+			pointer-events:none;
+			${prefersReducedMotion() ? "" : "transition:opacity .12s ease;"}
+		`;
+
+		overlay.append(heatLayer, baseLayer, activeLayer);
 		document.body.appendChild(overlay);
 
 		let heatRegions = regions || [];
@@ -9135,14 +9235,86 @@ ${settingsPanelHTML()}
 		const groupsByKey = new Map(groups.map((group) => [group.key, group]));
 		let renderFrame = 0;
 
+		// A quote that wraps produces one rect per line, and they are one thing: the
+		// reader points at a sentence, not at a line of it. Kept so pointing at any
+		// rect can light the rest.
+		const rectsByGroup = new Map();
+		let activeGroupKey = null;
+
+		// Live rather than read once: a convertible laptop can gain and lose a mouse
+		// without reloading the page.
+		const hoverQuery =
+			typeof window.matchMedia === "function"
+				? window.matchMedia("(hover: hover)")
+				: null;
+
+		// Repaints only the active layer rather than re-rendering the overlay. A
+		// re-render would replace the very node the pointer is over, which fires
+		// pointerleave and leaves the highlight stuck on or flickering between states.
+		// The old rects are left in place while the layer fades out, so a quote the
+		// pointer has left finishes its fade instead of vanishing mid-transition.
+		const paintActiveLayer = () => {
+			const rects = activeGroupKey ? rectsByGroup.get(activeGroupKey) : null;
+
+			if (!rects?.length) {
+				activeLayer.style.opacity = "0";
+				return;
+			}
+
+			activeLayer.replaceChildren(
+				...rects.map((node) =>
+					createHighlightRect(
+						{
+							left: parseFloat(node.style.left),
+							top: parseFloat(node.style.top),
+							width: parseFloat(node.style.width),
+							height: parseFloat(node.style.height),
+						},
+						{ interactive: false, variant: "highlight" },
+					),
+				),
+			);
+
+			activeLayer.style.opacity = String(QUOTE_ACTIVE_OPACITY);
+		};
+
+		const setActiveGroup = (groupKey) => {
+			if (activeGroupKey === groupKey) {
+				return;
+			}
+
+			activeGroupKey = groupKey;
+			paintActiveLayer();
+		};
+
 		const render = () => {
 			overlay.style.height =
 				Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) +
 				"px";
 			baseLayer.replaceChildren();
 			heatLayer.replaceChildren();
+			rectsByGroup.clear();
 
-			const dark = detectDarkMode();
+			// Sampled from the text actually being marked rather than from the theme,
+			// because the blend has to answer to the paper under the highlight. Falls
+			// back through heat to the body, so a page with no quotes still resolves.
+			const backdrop =
+				nearestElement(groups[0]?.range?.commonAncestorContainer) ||
+				nearestElement(heatRegions[0]?.range?.commonAncestorContainer) ||
+				document.body;
+			const dark = isDarkBackdrop(backdrop);
+
+			// The whole overlay blends, rather than each rect: the overlay's z-index
+			// makes it a stacking context, which isolates its descendants' blending to
+			// the group. A mix-blend-mode on a rect would composite against the
+			// overlay's own transparency and change nothing on the page.
+			//
+			// Orange over paper lands on the same pixel either way, so this costs the
+			// highlight nothing and stops it washing the glyphs it covers -- the point
+			// being that a highlighter is ink under the text, not a film over it.
+			// Multiply can only darken, which is right until the page is dark, where it
+			// would eat light text and sink into the background; screen is its mirror.
+			overlay.style.mixBlendMode = dark ? "screen" : "multiply";
 
 			for (const region of heatRegions) {
 				for (const rect of getPageRectsForRange(region.range)) {
@@ -9164,30 +9336,56 @@ ${settingsPanelHTML()}
 					continue;
 				}
 
-				for (const rect of rects) {
-					baseLayer.appendChild(
-						createHighlightRect(rect, {
-							interactive: true,
-							title: "Show linked Hacker News comments",
-							onActivate: () => {
-								openFocusedDiscussion(group.key).catch(console.error);
-							},
-							variant: "highlight",
-						}),
-					);
+				const groupRects = [];
 
-					baseLayer.appendChild(
-						createHighlightRect(rect, {
-							interactive: true,
-							title: "Show linked Hacker News comments",
-							onActivate: () => {
-								openFocusedDiscussion(group.key).catch(console.error);
-							},
-							variant: "underline",
-						}),
-					);
+				for (const rect of rects) {
+					const node = createHighlightRect(rect, {
+						interactive: true,
+						title: "Show linked Hacker News comments",
+						onActivate: () => {
+							openFocusedDiscussion(group.key).catch(console.error);
+						},
+						variant: "highlight",
+					});
+
+					// Pointer feedback only where there is a pointer. On a touch screen
+					// hover states either never fire or, worse, stick after a tap.
+					node.addEventListener("pointerenter", () => {
+						if (hoverQuery?.matches !== false) {
+							setActiveGroup(group.key);
+						}
+					});
+
+					node.addEventListener("pointerleave", () => {
+						if (activeGroupKey === group.key) {
+							setActiveGroup(null);
+						}
+					});
+
+					// Keyboard parity. :focus-visible keeps this off the click that
+					// precedes an activation, where the pointer has already said it.
+					node.addEventListener("focus", () => {
+						if (node.matches(":focus-visible")) {
+							setActiveGroup(group.key);
+						}
+					});
+
+					node.addEventListener("blur", () => {
+						if (activeGroupKey === group.key) {
+							setActiveGroup(null);
+						}
+					});
+
+					groupRects.push(node);
+					baseLayer.appendChild(node);
 				}
+
+				rectsByGroup.set(group.key, groupRects);
 			}
+
+			// Rebuilt from the fresh geometry, so a resize under the pointer moves the
+			// lit quote with everything else rather than leaving it behind.
+			paintActiveLayer();
 		};
 
 		const scheduleRender = () => {
