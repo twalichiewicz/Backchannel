@@ -260,11 +260,12 @@
 	let annotationController = null;
 	let activeCommentFilter = null;
 
-	// Where the reader was in the full list before a focused discussion replaced it.
-	// Leaving the focus puts every hidden comment back above them, so without this
-	// the list grows under the scroll position and drops them at the top, having to
-	// find their place again to carry on reading.
-	let preFilterAnchor = null;
+	// Where the reader was, in both the thread and the article, before a focused
+	// discussion moved them. Leaving the focus puts every hidden comment back above
+	// them, so without this the list grows under the scroll position and drops them
+	// at the top; and the article is left at the quoted passage the focus jumped to
+	// rather than at whatever they were reading.
+	let preFilterPosition = null;
 
 	// -------------------------
 	// Storage
@@ -7702,15 +7703,21 @@ ${settingsPanelHTML()}
 		return sidebarUI?.body?.closest("#comments") || null;
 	}
 
-	// The topmost comment still on screen, and how far its top sits from the
-	// container's. A comment rather than a raw scrollTop, because the offset that
-	// described this position stops meaning anything once the list is a different
-	// length -- which is exactly what entering and leaving a focus does to it.
-	function captureCommentScrollAnchor() {
+	// Both surfaces the reader was using, because entering a focus moves both: the
+	// thread jumps to the banner, and the article jumps to the quoted passage so the
+	// reader can see the context it was taken from.
+	//
+	// The thread is stored as a comment and how far down the panel it sat, since a
+	// raw offset stops describing anything once the list is a different length --
+	// which is what filtering does to it. The article is stored as a plain offset,
+	// because nothing reflows it: the sidebar is fixed, so the page it had is the
+	// page it will have.
+	function captureReadingPosition() {
+		const position = { pageScrollY: window.scrollY, commentId: null, offset: 0 };
 		const container = commentScrollContainer();
 
 		if (!container) {
-			return null;
+			return position;
 		}
 
 		const top = container.getBoundingClientRect().top;
@@ -7725,24 +7732,35 @@ ${settingsPanelHTML()}
 			// The first whose bottom edge has not yet passed the top of the viewport.
 			// That is what the reader is looking at, even part-scrolled.
 			if (rect.bottom > top) {
-				return { id: rendered.id, offset: rect.top - top };
+				position.commentId = rendered.id;
+				position.offset = rect.top - top;
+				break;
 			}
 		}
 
-		return null;
+		return position;
 	}
 
-	// Called once the list is whole again, so the measurement is against the layout
-	// the reader is about to see rather than the filtered one.
-	function restoreCommentScrollAnchor(anchor) {
+	// Called once the list is whole again, so the thread is measured against the
+	// layout the reader is about to see rather than the filtered one.
+	function restoreReadingPosition(position) {
+		if (!position) {
+			return;
+		}
+
+		window.scrollTo({
+			top: position.pageScrollY,
+			behavior: prefersReducedMotion() ? "auto" : "smooth",
+		});
+
 		const container = commentScrollContainer();
 
-		if (!container || !anchor) {
+		if (!container || position.commentId == null) {
 			return;
 		}
 
 		const rendered = renderedComments.find(
-			(comment) => comment.id === anchor.id,
+			(comment) => comment.id === position.commentId,
 		);
 
 		if (!rendered) {
@@ -7752,7 +7770,7 @@ ${settingsPanelHTML()}
 		container.scrollTop +=
 			rendered.element.getBoundingClientRect().top -
 			container.getBoundingClientRect().top -
-			anchor.offset;
+			position.offset;
 	}
 
 	function scrollFilterBannerToTop() {
@@ -7765,7 +7783,10 @@ ${settingsPanelHTML()}
 		const container = commentScrollContainer();
 
 		if (!container) {
-			banner.scrollIntoView({ behavior: "smooth", block: "start" });
+			banner.scrollIntoView({
+				behavior: prefersReducedMotion() ? "auto" : "smooth",
+				block: "start",
+			});
 			return;
 		}
 
@@ -7776,7 +7797,7 @@ ${settingsPanelHTML()}
 
 		container.scrollTo({
 			top: Math.max(0, offset - FILTER_BANNER_SCROLL_MARGIN),
-			behavior: "smooth",
+			behavior: prefersReducedMotion() ? "auto" : "smooth",
 		});
 	}
 
@@ -7808,12 +7829,12 @@ ${settingsPanelHTML()}
 		activeCommentFilter = null;
 
 		// Read out before the transition, which may run a beat later, and dropped
-		// here either way: an anchor kept past this point would describe a list that
+		// here either way: a position kept past this point would describe a list that
 		// no longer exists. Only an explicit "show all comments" restores -- the other
 		// callers are tearing the list down or refreshing annotations, where moving
 		// the reader would be an interruption rather than a return.
-		const anchor = options.restore ? preFilterAnchor : null;
-		preFilterAnchor = null;
+		const position = options.restore ? preFilterPosition : null;
+		preFilterPosition = null;
 
 		positionFilterBannerForComment(null);
 
@@ -7837,7 +7858,7 @@ ${settingsPanelHTML()}
 
 			// Last, with every comment back in the list and the banner gone, so the
 			// position it puts the reader at is the one they will actually see.
-			restoreCommentScrollAnchor(anchor);
+			restoreReadingPosition(position);
 		}, options);
 	}
 
@@ -8582,7 +8603,7 @@ ${settingsPanelHTML()}
 
 		window.scrollTo({
 			top: Math.max(0, rect.top + window.scrollY - window.innerHeight * 0.3),
-			behavior: "smooth",
+			behavior: prefersReducedMotion() ? "auto" : "smooth",
 		});
 	}
 
@@ -9205,7 +9226,7 @@ ${settingsPanelHTML()}
 		// already open, and a focus opened from inside another one should still return
 		// to where the reader started rather than to the focus they passed through.
 		if (!activeCommentFilter) {
-			preFilterAnchor = captureCommentScrollAnchor();
+			preFilterPosition = captureReadingPosition();
 		}
 
 		activeCommentFilter = groupKey;
