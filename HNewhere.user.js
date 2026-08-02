@@ -4886,6 +4886,30 @@ ${CHROME_CSS}
     margin-left:3px;
 }
 
+/* A comment focus has no quotation to mark. The ornaments say "these are somebody
+   else's words lifted from the article", which is exactly what this variant is
+   not -- it is the comment itself, named by its author. The box stays, because
+   what it separates from the thread below is unchanged. */
+.filter-banner-quote-comment::before,
+.filter-banner-quote-comment::after {
+    content:none;
+}
+
+.filter-banner-quote-comment {
+    font-style:normal;
+}
+
+/* The one piece of contrast in the line, the same job .filter-banner-title does in
+   the row above: without it the author reads as part of the sentence. */
+.filter-banner-author {
+    color:var(--text);
+}
+
+.filter-banner-author::after {
+    content:" — ";
+    color:var(--meta);
+}
+
 /* Unboxed, an empty quote was invisible. Boxed, it would render as a stray
    empty rectangle whenever a group carries no quote text. */
 .filter-banner-quote:empty {
@@ -8091,6 +8115,13 @@ ${settingsPanelHTML()}
 			sidebarUI?.filterBanner?.classList.add("hidden");
 			if (sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBannerQuote.textContent = "";
+				// Cleared with the text it belongs to. Left on, the next focus entered
+				// from a quoted passage would render without its quote marks -- a fault
+				// that only shows up on the second focus of a session, and only in one
+				// order.
+				sidebarUI.filterBannerQuote.classList.remove(
+					"filter-banner-quote-comment",
+				);
 			}
 
 			// Last, with every comment back in the list and the banner gone, so the
@@ -8210,6 +8241,25 @@ ${settingsPanelHTML()}
 			(lastSpace > maxLength * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd() +
 			"…"
 		);
+	}
+
+	// 200 rather than the banner quote's 220: this line carries an author in front
+	// of it, and the two together have to sit on the same one or two lines a pull
+	// quote does.
+	const COMMENT_FOCUS_PREVIEW_LENGTH = 200;
+
+	// The comment's own opening, not a quote from the article -- a comment focus is
+	// entered from the comment, so what identifies it is who wrote it and how it
+	// starts. Reads textContent rather than the HTML: the banner is one line of
+	// plain text, and a comment's markup is links, code and blockquotes.
+	function commentFocusPreview(comment) {
+		return {
+			author: comment?.author || "",
+			preview: truncateText(
+				comment?.textElement?.textContent || "",
+				COMMENT_FOCUS_PREVIEW_LENGTH,
+			),
+		};
 	}
 	// #endregion hnewhere-test-export
 
