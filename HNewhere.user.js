@@ -2758,6 +2758,44 @@
 		stories.forEach((story, index) => renderBrowseRow(story, view, index + 1));
 	}
 
+	const PANEL_FADE_MS = 160;
+
+	function panelElement(host) {
+		return host?.shadowRoot?.querySelector("#panel") || null;
+	}
+
+	// Two frames, not one. Setting the starting opacity and clearing it inside the
+	// same frame lets the browser coalesce them into no change at all, and the
+	// panel appears exactly as abruptly as before.
+	function fadePanelIn(host) {
+		const panel = panelElement(host);
+
+		if (!panel || prefersReducedMotion()) {
+			panel?.classList.remove("panel-hidden");
+			return;
+		}
+
+		panel.classList.add("panel-hidden");
+		requestAnimationFrame(() => {
+			requestAnimationFrame(() => panel.classList.remove("panel-hidden"));
+		});
+	}
+
+	// Awaited by its caller, which hides the host once this resolves -- the fade has
+	// to finish while the panel is still displayed or there is nothing to see. The
+	// class is left on so the next reveal starts from transparent rather than
+	// flashing at full opacity for a frame.
+	async function fadePanelOut(host) {
+		const panel = panelElement(host);
+
+		if (!panel || prefersReducedMotion()) {
+			return;
+		}
+
+		panel.classList.add("panel-hidden");
+		await new Promise((resolve) => window.setTimeout(resolve, PANEL_FADE_MS));
+	}
+
 	async function revealSidebar() {
 		if (!sidebar) {
 			return false;
@@ -2766,6 +2804,14 @@
 		const wasHidden = sidebar.style.display === "none";
 
 		sidebar.style.display = "";
+
+		// Only when it was actually away. Called on a panel already open -- which
+		// happens whenever a quote link opens a focused discussion -- this would
+		// blink the whole sidebar for no reason.
+		if (wasHidden) {
+			fadePanelIn(sidebar);
+		}
+
 		await saveSidebarState("open");
 
 		const restoreButton = document.getElementById("hn-restore-button");
@@ -5044,6 +5090,16 @@ Highlights the passages commenters quote, so you can jump between the article an
     /* Reading width for a single block of prose. Never applied to a container: a
        cap on any ancestor of .children narrows every reply nested under it. */
     --measure:1215px;
+    opacity:1;
+    transition:opacity .16s ease;
+}
+
+/* The starting and ending state of the fade. display cannot be transitioned, so
+   the panel is shown first and raised from here on a later frame, and lowered to
+   here before it is hidden. Short: this is a panel arriving, not an animation to
+   watch, and anything longer sits between the reader and the discussion. */
+#panel.panel-hidden {
+    opacity:0;
 }
 
 ${THEME_CSS}
@@ -6149,6 +6205,9 @@ ${settingsPanelHTML()}
 		};
 
 		shadow.querySelector("#minimize").onclick = async () => {
+			// Awaited before hiding: the panel has to still be on screen for the fade
+			// to be a fade. Everything after is bookkeeping and can follow.
+			await fadePanelOut(host);
 			host.style.display = "none";
 			await saveSidebarState("collapsed");
 			clearArticleAnnotations();
