@@ -3176,6 +3176,15 @@
 		// change asks to be watched; one that is simply there when it has something
 		// to offer does not.
 		tab.hidden = !queueHasItems;
+
+		// Emptied while it was the thing on screen. The tab it was under has just
+		// gone, so staying would leave the reader on a list with nothing in it
+		// beneath a tab that is no longer there -- and the front page is the only
+		// other place to be. Safe from looping: renderBrowseView sets the tab before
+		// it reaches this, so the pass it starts cannot come back through here.
+		if (!queueHasItems && browseTab === "queue" && sidebarUI) {
+			renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+		}
 	}
 
 	// Kept across a round trip to the discussion, the way the discussion's own
