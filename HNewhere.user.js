@@ -2834,9 +2834,37 @@
 	|
 	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
 	target="_blank" rel="noopener noreferrer">${escapeHTML(pluralize(story.descendants, "comment"))}</a>
+	|
+	<button class="browse-save-link" type="button">save</button>
 	</div>
 	</div>
 	`;
+
+		const saveButton = row.querySelector(".browse-save-link");
+
+		// Read once per row rather than passed in, so a row rendered after something
+		// was saved elsewhere still opens in the right state.
+		loadQueue()
+			.then((entries) => {
+				saveButton.textContent = entries.some((entry) => entry.id === story.id)
+					? "saved"
+					: "save";
+			})
+			.catch(console.error);
+
+		saveButton.onclick = async () => {
+			const entries = await loadQueue();
+			const already = entries.some((entry) => entry.id === story.id);
+
+			await saveQueue(
+				already
+					? removeFromQueue(entries, story.id)
+					: addToQueue(entries, story, Date.now()),
+			);
+
+			saveButton.textContent = already ? "save" : "saved";
+			refreshQueueCount(container.getRootNode());
+		};
 
 		row.querySelector(".browse-title-link").onclick = (event) => {
 			// The same record setupHNListener writes when you click a story on HN.
@@ -2870,6 +2898,10 @@
 		container.appendChild(row);
 		return row;
 	}
+
+	// Replaced in full once there is a tab carrying a count. Here so saving from a
+	// browse row stands on its own.
+	function refreshQueueCount() {}
 
 	// Kept across a round trip to the discussion, the way the discussion's own
 	// scroll position is: having paged three deep and gone to read something, coming
@@ -3965,6 +3997,32 @@ header {
     font-family:Verdana, Geneva, sans-serif;
     font-size:11px;
     color:var(--meta);
+}
+
+/* A control in a meta row, so it is set as one: the same text-link treatment
+   .browse-nav-link and .filter-banner-close get, not a button that looks like a
+   button. HN's own row actions are text links between pipes and this sits among
+   them. */
+.browse-save-link {
+    border:0;
+    padding:0;
+    background:none;
+    color:var(--meta);
+    cursor:pointer;
+    font-family:inherit;
+    font-size:inherit;
+    text-decoration:none;
+    text-underline-offset:2px;
+}
+
+@media (hover: hover) {
+    .browse-save-link:hover {
+        text-decoration:underline;
+    }
+}
+
+.browse-save-link:focus-visible {
+    text-decoration:underline;
 }
 
 /* Text links on a meta row, the same treatment .filter-banner-close gets: no
@@ -8437,6 +8495,56 @@ ${settingsPanelHTML()}
 		);
 	}
 
+	// Injected into HN's own rows, in HN's own vocabulary: a lowercase text link
+	// between pipes, beside hide and discuss. Anything more would announce itself as
+	// somebody else's furniture on a page that has a very settled idea of what a row
+	// looks like.
+	async function setupHNQueueLinks() {
+		const rows = [...document.querySelectorAll("tr.athing")];
+
+		if (!rows.length) {
+			return;
+		}
+
+		const queued = new Set((await loadQueue()).map((entry) => entry.id));
+
+		for (const row of rows) {
+			const story = parseFrontPageRow(row);
+			const subline = row.nextElementSibling?.querySelector(".subline, .subtext");
+
+			// A job post has no subline worth appending to and cannot be read later in
+			// any useful sense -- it is a listing, not an article.
+			if (!story || !subline || !story.by) {
+				continue;
+			}
+
+			const link = document.createElement("a");
+			link.href = "#";
+			link.className = "hnewhere-save-link";
+			link.textContent = queued.has(story.id) ? "saved" : "save";
+
+			link.onclick = async (event) => {
+				event.preventDefault();
+
+				const entries = await loadQueue();
+				const already = entries.some((entry) => entry.id === story.id);
+
+				// The same control both ways. A row is the only place this story
+				// appears, so making the reader hunt elsewhere to undo a misclick
+				// would be the wrong half of a pair.
+				await saveQueue(
+					already
+						? removeFromQueue(entries, story.id)
+						: addToQueue(entries, story, Date.now()),
+				);
+
+				link.textContent = already ? "save" : "saved";
+			};
+
+			subline.append(document.createTextNode(" | "), link);
+		}
+	}
+
 	// -------------------------
 	// URL helpers
 	// -------------------------
@@ -11148,9 +11256,15 @@ ${settingsPanelHTML()}
 	async function init() {
 		await migrateStorage();
 
-		// On HN, only record clicked stories and service popup bridge actions.
+		// On HN, only record clicked stories, offer the queue, and service popup
+		// bridge actions.
 		if (location.hostname === "news.ycombinator.com") {
 			setupHNListener();
+
+			// Deliberately not awaited and deliberately before the bridge checks: it
+			// touches only rows that exist, so a bridge page simply has none, and
+			// making the bridge wait on a storage read would slow every vote.
+			setupHNQueueLinks().catch(console.error);
 
 			// Order matters: after a bridge navigation the hash is gone and the payload
 			// is in sessionStorage, so every post-action report has to be checked before
