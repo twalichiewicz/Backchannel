@@ -3168,8 +3168,9 @@
 		const unread = unreadQueueCount(entries);
 
 		// The bare word when there is nothing waiting. A "(0)" is a number that says
-		// nothing and still asks to be read.
-		tab.textContent = unread ? `Queue (${unread})` : "Queue";
+		// nothing and still asks to be read. Lower case, the way HN sets the tabs on
+		// its own pages -- "submissions | comments" on a profile.
+		tab.textContent = unread ? `queue (${unread})` : "queue";
 
 		queueHasItems = entries.length > 0;
 
@@ -7252,8 +7253,8 @@ ${settingsPanelHTML()}
 <div id="comments-content">Loading...</div>
 <div id="browse-view" class="browse-view">
 <div class="browse-tabs" role="tablist">
-<button id="browse-tab-queue" class="browse-tab" type="button" role="tab" hidden>Queue</button>
-<button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">Front page</button>
+<button id="browse-tab-queue" class="browse-tab" type="button" role="tab" hidden>queue</button>
+<button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front page</button>
 </div>
 <div id="browse-list"></div>
 </div>
@@ -9727,21 +9728,23 @@ ${settingsPanelHTML()}
 				}
 			};
 
-			// Placed where it falls in the order a reader works through a row:
-			// decide whether you want to read it, flag it if it should not be there,
-			// hide it if it is not for you, open the comments if it is. So it goes in
-			// front of flag.
+			// First of the actions, wherever that group happens to begin. Every HN
+			// subline is the same shape -- score, submitter, age, then the actions,
+			// then the comment count -- so the age is the one thing that reliably
+			// marks where the actions start.
 			//
-			// Logged out there is no flag link at all and hide is the next thing to
-			// its right, which keeps the same relative position. With neither -- a
-			// row offering nothing but its comments -- the end of the line is all
-			// there is to append to.
-			const before =
-				subline.querySelector('a[href^="flag?"]') ||
-				subline.querySelector('a[href^="hide?"]');
+			// Anchoring on a particular action instead is what put this in the wrong
+			// place: the favorites list carries neither flag nor hide, so a rule
+			// written in terms of those had nothing to find and fell through to the
+			// end of the line, landing queue after the comment count.
+			//
+			// It also lands where the order says it should: decide whether you want
+			// to read it, flag it if it should not be there, hide it if it is not for
+			// you, open the comments if it is.
+			const age = subline.querySelector(".age");
 
-			if (before) {
-				before.before(link, document.createTextNode(" | "));
+			if (age) {
+				age.after(document.createTextNode(" | "), link);
 			} else {
 				subline.append(document.createTextNode(" | "), link);
 			}
