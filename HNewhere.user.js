@@ -196,6 +196,11 @@
 		// discussion rather than not appearing at all. Turning it on restores the
 		// pre-1.5.3 behaviour of staying hidden unless there is something to read.
 		hideWithoutDiscussion: false,
+		// Narrows the setting above, which was chosen before there was a queue to
+		// reach through that button. Off by default for the same reason
+		// autoOpenSidebarOnlyFromHN is: a reader who set the parent gets exactly
+		// what they set until they say otherwise.
+		showButtonWithQueue: false,
 		// "auto" reproduces the pre-1.5.4 behaviour of following the page.
 		theme: "auto",
 		buttonShape: "circle",
@@ -671,6 +676,30 @@
 		return rememberedItemActions[String(itemId)] || null;
 	}
 
+	// Kept under a key no story id can collide with, since it is not about a story.
+	const ITEM_ACTION_ACCOUNT_KEY = "account";
+
+	function rememberItemActionUnavailable(field) {
+		const account = rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY] || {};
+
+		rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY] = {
+			...account,
+			[field + "Unavailable"]: true,
+			at: Date.now(),
+		};
+
+		save(STORAGE.itemActions, rememberedItemActions).catch(console.error);
+	}
+
+	// Expires on the same 90-day clock as everything else in here, so an account
+	// that gains the karma to flag -- or a reader who simply logs in -- is offered
+	// the link again rather than having been written off for good.
+	function itemActionUnavailable(field) {
+		return Boolean(
+			rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY]?.[field + "Unavailable"],
+		);
+	}
+
 	// Rendered on every story and every comment, because the sidebar cannot know
 	// whether either applies: it reads HN logged out, where a favorite link never
 	// appears and a flag link never appears either. The popup is what finds out, and
@@ -714,7 +743,7 @@
 			// Hidden rather than disabled. A disabled control still says the action
 			// exists and invites the reader to work out why they cannot have it;
 			// this one does not apply to them at all.
-			button.hidden = Boolean(state[field + "Unavailable"]);
+			button.hidden = itemActionUnavailable(field);
 			button.textContent = ITEM_ACTION_LABEL[field][on ? "on" : "off"];
 			button.classList.toggle("item-action-on", on);
 		}
@@ -2619,8 +2648,16 @@
 				const field = data.action.endsWith("fave") ? "favorite" : "flagged";
 
 				if (data.reason === "action-unavailable") {
-					rememberItemAction(data.itemId, { [field + "Unavailable"]: true });
-				} else if (typeof data.applied === "boolean") {
+					// Remembered against the account rather than the story. Being logged
+					// out, or below the karma flagging asks for, is not a fact about the
+					// item -- so recording it per item meant discovering it again on
+					// every one, a popup at a time.
+					rememberItemActionUnavailable(field);
+					refreshAllItemActionControls();
+					return;
+				}
+
+				if (typeof data.applied === "boolean") {
 					rememberItemAction(data.itemId, { [field]: data.applied });
 				}
 
@@ -3470,10 +3507,24 @@
 	// Returns whether anything actually changed, so a redraw only happens when there
 	// is something new to show. Without that the refresh would redraw the list every
 	// time the tab is opened, and the redraw would start another refresh.
+	// A handful at a time rather than all at once. A queue is meant to be filled
+	// over days, so forty entries is an ordinary size and forty simultaneous
+	// requests is not -- getItem caches, so this is paid once a session, but paying
+	// it as one burst is how a reader ends up rate-limited for reading.
+	const QUEUE_REFRESH_BATCH = 6;
+
 	async function refreshQueueEntries(entries) {
-		const fetched = await Promise.all(
-			entries.map((entry) => getItem(entry.id).catch(() => null)),
-		);
+		const fetched = [];
+
+		for (let i = 0; i < entries.length; i += QUEUE_REFRESH_BATCH) {
+			fetched.push(
+				...(await Promise.all(
+					entries
+						.slice(i, i + QUEUE_REFRESH_BATCH)
+						.map((entry) => getItem(entry.id).catch(() => null)),
+				)),
+			);
+		}
 
 		let changed = false;
 
@@ -5790,6 +5841,12 @@ ${
 <input id="setting-hide-without-discussion" data-setting="hideWithoutDiscussion" type="checkbox">
 <span>Only show the HN button when a discussion exists</span>
 </label>
+<div class="settings-suboptions" data-suboptions-of="hideWithoutDiscussion">
+<label class="settings-option sub-option">
+<input id="setting-show-button-with-queue" data-setting="showButtonWithQueue" type="checkbox">
+<span>Except when something is waiting in your queue</span>
+</label>
+</div>
 <div class="settings-option-hint">
 When off, pages with no discussion get a greyed-out button that offers to submit them.
 </div>
@@ -5885,6 +5942,7 @@ Highlights the passages commenters quote, so you can jump between the article an
 			hideWithoutDiscussion: shadow.querySelector(
 				"#setting-hide-without-discussion",
 			),
+			showButtonWithQueue: shadow.querySelector("#setting-show-button-with-queue"),
 			annotations: shadow.querySelector("#setting-annotations"),
 			annotationsWhenSidebarClosed: shadow.querySelector(
 				"#setting-annotations-closed",
@@ -12519,6 +12577,13 @@ ${settingsPanelHTML()}
 
 			await maybeHandleHNCommentBridge();
 
+			// A queued Ask HN or a Show HN with no link resolves to an item page on
+			// this very host, so reading one is an arrival like any other -- but the
+			// arrival check lives in runPagePass, which this branch returns before.
+			// Without this they stay unread for good: the count never falls and the
+			// strip keeps offering something already read.
+			await markQueueArrival().catch(console.error);
+
 			// Last, so a bridge popup -- which returns above -- never grows a button
 			// on a window that exists to do one thing and close.
 			await offerQueueOnHN();
@@ -12577,14 +12642,19 @@ ${settingsPanelHTML()}
 			loadRememberedItemActions(),
 		]);
 
+		// "Only show the HN button when a discussion exists" was chosen before there
+		// was a queue to reach through that button, and taken literally it now hides
+		// the only way to something the reader put there themselves. Its sub-option
+		// says so: hide it, except when something is waiting.
+		const hideButton =
+			settings.hideWithoutDiscussion &&
+			!(settings.showButtonWithQueue && unreadQueueCount(await loadQueue()));
+
 		// Drawn before the lookup, so the page shows something immediately and the
 		// ring covers whatever comes next. Skipped when the reader has asked for no
 		// button without a discussion, because then it might correctly never appear
-		// and would flicker in and back out. The setting is already in hand, so the
-		// decision costs nothing.
-		const pendingButton = settings.hideWithoutDiscussion
-			? null
-			: await createCheckingButton();
+		// and would flicker in and back out.
+		const pendingButton = hideButton ? null : await createCheckingButton();
 
 		// Vote memory is only read once something renders, so it no longer sits in
 		// front of the first paint -- but it must still land before it does.
@@ -12661,7 +12731,7 @@ ${settingsPanelHTML()}
 
 		// Offer to put it there, unless the reader has asked for the button to stay
 		// out of the way when there is nothing to read.
-		if (!settings.hideWithoutDiscussion) {
+		if (!hideButton) {
 			await createSubmitButton();
 		}
 
