@@ -3055,6 +3055,7 @@
 	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
 	|
 	<button class="browse-save-link" type="button">queue</button>
+	${itemActionLinksHTML(story.id)}
 	|
 	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
 	target="_blank" rel="noopener noreferrer">${escapeHTML(pluralize(story.descendants, "comment"))}</a>`;
@@ -3538,6 +3539,8 @@
 			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
 		});
 
+		refreshAllItemActionControls();
+
 		// Scores and comment counts move while something sits in a queue, and a
 		// queue is read days after it was filled. Refreshed from the item API rather
 		// than trusted as stored, after the rows are already up so nothing waits on
@@ -3594,6 +3597,11 @@
 		stories.forEach((story, index) =>
 			renderBrowseRow(story, list, (page - 1) * FRONT_PAGE_SIZE + index + 1),
 		);
+
+		// These rows never pass through the vote hydration, which is what carries
+		// remembered favorite and flag state onto a discussion. Put on here instead,
+		// once the list exists.
+		refreshAllItemActionControls();
 
 		renderBrowseNav(list, { page, nextPage }, (target) => {
 			// Back to the top: the reader asked for a different page, not for the same
