@@ -2977,7 +2977,7 @@
 			panel.classList.toggle("browsing", on);
 			toggle.title = on
 				? "Back to this page's discussion"
-				: "Browse Hacker News";
+				: "Hacker News and your queue";
 
 			if (comments) {
 				// Assigning scrollTop forces the layout it depends on, so the list is
@@ -3031,7 +3031,7 @@
 			? `<span class="item-age">${escapeHTML(
 					entry.readAt
 						? "read " + timeAgo(entry.readAt / 1000)
-						: "saved " + timeAgo(entry.addedAt / 1000),
+						: "queued " + timeAgo(entry.addedAt / 1000),
 				)}</span>
 	|
 	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
@@ -3045,7 +3045,7 @@
 	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
 	target="_blank" rel="noopener noreferrer">${escapeHTML(pluralize(story.descendants, "comment"))}</a>
 	|
-	<button class="browse-save-link" type="button">save</button>`;
+	<button class="browse-save-link" type="button">queue</button>`;
 
 		const row = document.createElement("div");
 		row.className = "story browse-row";
@@ -3081,8 +3081,8 @@
 			loadQueue()
 				.then((entries) => {
 					saveButton.textContent = entries.some((e) => e.id === story.id)
-						? "saved"
-						: "save";
+						? "queued"
+						: "queue";
 				})
 				.catch(console.error);
 
@@ -3096,7 +3096,7 @@
 						: addToQueue(entries, story, Date.now()),
 				);
 
-				saveButton.textContent = already ? "save" : "saved";
+				saveButton.textContent = already ? "queue" : "queued";
 				refreshQueueCount(container.getRootNode());
 				refreshNextUp(container.getRootNode());
 			};
@@ -3270,9 +3270,9 @@
 			const empty = document.createElement("div");
 			empty.className = "browse-empty";
 			// Names the control rather than describing the feature: the tab is here
-			// from the start, so the one thing a reader needs is where "save" lives.
+			// from the start, so the one thing a reader needs is where "queue" lives.
 			empty.textContent =
-				"Nothing saved yet. Use save on any story, here or on Hacker News, to read it later.";
+				"Nothing queued yet. Use queue on any story, here or on Hacker News, to read it later.";
 			list.appendChild(empty);
 			return;
 		}
@@ -4284,6 +4284,30 @@ header {
     color:var(--subtitle-stage);
 }
 
+/* The one thing saying the title is pressable. A wordmark that is also a control
+   has nothing else to announce it -- there is no border, no background, and on a
+   touch screen no hover to discover -- so the ellipsis stands in for all of that
+   and says there is more behind it.
+
+   It goes when the trail arrives: by then the chevron is doing the same job in
+   the other direction, and "HNewhere ⋯ / Read more" would be two affordances for
+   one control. Collapsed the same way the chevron is, so the swap is a movement
+   rather than a flicker. */
+.wordmark-more {
+    flex:0 0 auto;
+    width:auto;
+    margin-left:4px;
+    overflow:hidden;
+    color:var(--subtitle-stage);
+    transition:width .2s ease, margin-left .2s ease, opacity .2s ease;
+}
+
+#panel.browsing .wordmark-more {
+    width:0;
+    margin-left:0;
+    opacity:0;
+}
+
 /* Always in flow, faded and nudged rather than display:none, so it can animate in
    both directions. Laying it out while invisible costs nothing here for the same
    reason it costs nothing in the settings head: the title is left-aligned, so a
@@ -4356,10 +4380,18 @@ header {
 .browse-tabs {
     display:flex;
     align-items:baseline;
-    gap:12px;
     margin:0 0 10px 30px;
     font-family:Verdana, Geneva, sans-serif;
     font-size:11px;
+}
+
+/* Pipe-separated, the way HN separates every set of links it has, and the way
+   .filter-banner-close already does it here. No gap on the row: the separator
+   carries its own spacing, so the two cannot drift apart. */
+.browse-tab + .browse-tab::before {
+    content:"|";
+    margin:0 6px;
+    color:var(--meta);
 }
 
 .browse-tab {
@@ -5334,9 +5366,9 @@ header button svg {
 ${
 	browse
 		? `<button id="browse-toggle" class="header-wordmark" type="button"
-title="Browse Hacker News"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
-class="wordmark-root"><b>HN</b>ewhere</span><span class="wordmark-tail"><span
-class="wordmark-sep">/</span>Hacker News</span></button>`
+title="Hacker News and your queue"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
+class="wordmark-root"><b>HN</b>ewhere</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
+class="wordmark-tail"><span class="wordmark-sep">/</span>Read more</span></button>`
 		: `<span><b>HN</b>ewhere</span>`
 }
 ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
@@ -9215,7 +9247,7 @@ ${settingsPanelHTML()}
 			const link = document.createElement("a");
 			link.href = "#";
 			link.className = "hnewhere-save-link";
-			link.textContent = queued.has(story.id) ? "saved" : "save";
+			link.textContent = queued.has(story.id) ? "queued" : "queue";
 
 			link.onclick = async (event) => {
 				event.preventDefault();
@@ -9232,7 +9264,7 @@ ${settingsPanelHTML()}
 						: addToQueue(entries, story, Date.now()),
 				);
 
-				link.textContent = already ? "save" : "saved";
+				link.textContent = already ? "queue" : "queued";
 			};
 
 			subline.append(document.createTextNode(" | "), link);
