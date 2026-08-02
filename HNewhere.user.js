@@ -3043,7 +3043,7 @@
 	// leads to the article here instead of to the discussion, there is no composer
 	// and no story text, and a rank sits in front. Same classes, so a browse row
 	// and the story at the top of a discussion read as the same kind of object.
-	function renderBrowseRow(story, container, rank) {
+	function renderBrowseRow(story, container, rank, options = {}) {
 		// HN's own order and HN's own punctuation: the age follows the author on a
 		// bare space, the actions come next, and the comment count closes the line.
 		// `75 points by AlexeyBrin 3 hours ago | hide | 11 comments`.
@@ -3078,12 +3078,18 @@
 		const saveButton = row.querySelector(".browse-save-link");
 
 		{
+			// A text link on these rows says what pressing it will do, the way every
+			// one of HN's own does -- favorite becomes un-favorite, not favorited. In
+			// the queue the thing it will do is take the story out of the list, and
+			// "remove" is what that is called there.
+			const queuedLabel = options.inQueue ? "remove" : "queued";
+
 			// Read once per row rather than passed in, so a row rendered after
 			// something was queued elsewhere still opens in the right state.
 			loadQueue()
 				.then((entries) => {
 					saveButton.textContent = entries.some((e) => e.id === story.id)
-						? "queued"
+						? queuedLabel
 						: "queue";
 				})
 				.catch(console.error);
@@ -3102,7 +3108,7 @@
 						: addToQueue(entries, story, Date.now()),
 				);
 
-				saveButton.textContent = already ? "queue" : "queued";
+				saveButton.textContent = already ? "queue" : queuedLabel;
 
 				if (already && row.parentElement?.closest("#browse-list") && browseTab === "queue") {
 					row.remove();
@@ -3148,46 +3154,6 @@
 
 	let queueHasItems = false;
 
-	// The queue leads once there is something in it, because that is then the
-	// reason the panel is being opened at all. Reordered in the DOM rather than
-	// with flex order: the bar between the tabs is a `+` rule, so visual reordering
-	// alone would leave it hanging off the outside edge.
-	function orderBrowseTabs(root) {
-		const tabs = root?.querySelector?.(".browse-tabs");
-		const front = root?.querySelector?.("#browse-tab-front");
-		const queue = root?.querySelector?.("#browse-tab-queue");
-
-		if (!tabs || !front || !queue || queueHasItems === (tabs.firstElementChild === queue)) {
-			return;
-		}
-
-		// Where they are, then where they end up, then the difference animated away.
-		// There is no property between two positions in a list to transition, so the
-		// move itself is instant and what is animated is the distance it covered.
-		const from = [front, queue].map((tab) => tab.getBoundingClientRect().left);
-
-		if (queueHasItems) {
-			tabs.prepend(queue);
-		} else {
-			tabs.append(queue);
-		}
-
-		if (prefersReducedMotion() || typeof front.animate !== "function") {
-			return;
-		}
-
-		[front, queue].forEach((tab, index) => {
-			const dx = from[index] - tab.getBoundingClientRect().left;
-
-			if (Math.abs(dx) > 0.5) {
-				tab.animate(
-					[{ transform: `translateX(${dx}px)` }, { transform: "none" }],
-					{ duration: 220, easing: "ease" },
-				);
-			}
-		});
-	}
-
 	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
 	// rather than the ui object because a browse row only knows the tree it is in.
 	async function refreshQueueCount(root) {
@@ -3205,7 +3171,11 @@
 		tab.textContent = unread ? `Queue (${unread})` : "Queue";
 
 		queueHasItems = entries.length > 0;
-		orderBrowseTabs(root);
+
+		// Present or absent, never moved. A tab that slides about as its contents
+		// change asks to be watched; one that is simply there when it has something
+		// to offer does not.
+		tab.hidden = !queueHasItems;
 	}
 
 	// Kept across a round trip to the discussion, the way the discussion's own
@@ -3385,7 +3355,38 @@
 			return;
 		}
 
-		tail.replaceChildren(sep, document.createTextNode(label));
+		const swap = () => tail.replaceChildren(sep, document.createTextNode(label));
+
+		// Nothing to announce if it already says this, and animating it anyway would
+		// blink the trail every time the same tab is re-rendered.
+		if (tail.textContent.endsWith(label)) {
+			return;
+		}
+
+		if (prefersReducedMotion() || typeof tail.animate !== "function") {
+			swap();
+			return;
+		}
+
+		// Out, changed, back in. The word is swapped at the bottom of the fade
+		// rather than at either end, so the trail is never seen mid-change -- what
+		// reads as one thing becoming another rather than as text being edited.
+		const out = tail.animate([{ opacity: 1 }, { opacity: 0 }], {
+			duration: 110,
+			easing: "ease",
+			fill: "forwards",
+		});
+
+		out.finished
+			.then(() => {
+				swap();
+				out.cancel();
+				tail.animate([{ opacity: 0 }, { opacity: 1 }], {
+					duration: 110,
+					easing: "ease",
+				});
+			})
+			.catch(() => swap());
 	}
 
 	// The panel on Hacker News itself, offered only once there is a queue to work
@@ -3517,7 +3518,7 @@
 		// unread first, oldest saved at the top, the read greyed and beneath them --
 		// not a different way of describing a story.
 		entries.forEach((entry, index) => {
-			const row = renderBrowseRow(entry, list, index + 1);
+			const row = renderBrowseRow(entry, list, index + 1, { inQueue: true });
 			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
 		});
 
@@ -4626,6 +4627,11 @@ header {
    instead of by rewriting its markup on every toggle. */
 .browse-view {
     display:none;
+    /* Where .browse-main begins: the rank column's 22px plus the row's 6px gap.
+       Named because four things line up on it -- the tabs, the More link, the
+       empty state and the rows themselves -- and a number repeated four times is
+       a number three of them will eventually disagree about. */
+    --browse-indent:28px;
 }
 
 /* Both views fade, all the way out, where a filter change fades only the list to
@@ -4647,24 +4653,32 @@ header {
 /* Two tabs set as a meta row rather than as a control: the same 11px Verdana the
    filter banner and the story lines use, so the front page reads as part of the
    panel rather than as a widget dropped into it. */
+/* Starts exactly where every title beneath it does. */
 .browse-tabs {
     display:flex;
     align-items:baseline;
-    margin:0 0 10px 30px;
+    margin:0 0 10px var(--browse-indent);
     font-family:Verdana, Geneva, sans-serif;
     font-size:11px;
 }
 
-/* Pipe-separated, the way HN separates every set of links it has, and the way
-   .filter-banner-close already does it here. No gap on the row: the separator
-   carries its own spacing, so the two cannot drift apart. */
-.browse-tab + .browse-tab::before {
+/* The bar hangs off the queue rather than sitting between the two as a sibling
+   rule, so that hiding the queue takes the bar with it. As `+` it would stay
+   attached to whichever tab came second and leave a leading bar in front of
+   Front page on its own. */
+#browse-tab-queue::after {
     content:"|";
     /* HN's own ratio, measured off it: 3.28px each side of the bar at 9.33px
        type, which is .35em. Given in em rather than pixels so it holds at the
        11px these are set in. */
     margin:0 .35em;
     color:var(--meta);
+}
+
+/* Nothing queued, nothing to show. The queue keeps its place on the left for
+   when there is -- it does not move, it arrives. */
+.browse-tab[hidden] {
+    display:none;
 }
 
 .browse-tab {
@@ -4693,7 +4707,7 @@ header {
 }
 
 .browse-empty {
-    margin:4px 0 0 30px;
+    margin:4px 0 0 var(--browse-indent);
     max-width:var(--measure);
     color:var(--meta);
     line-height:1.5;
@@ -4766,7 +4780,7 @@ header {
     display:flex;
     align-items:baseline;
     gap:10px;
-    margin:14px 0 8px 30px;
+    margin:14px 0 8px var(--browse-indent);
     font-family:Verdana, Geneva, sans-serif;
     font-size:11px;
     color:var(--meta);
@@ -4790,12 +4804,10 @@ header {
     display:none;
 }
 
-/* Once it has been done, the label already says so -- "un-favorite" is not
-   ambiguous. The colour is what makes it findable again in a long thread without
-   reading every row. */
-.item-action-on {
-    color:var(--text);
-}
+/* Deliberately no colour of its own. The label already says what pressing it
+   will do, and every other link on these rows is meta grey -- darkening this one
+   made it the loudest thing on a comment, which is not what having flagged
+   something means. */
 
 .item-action-link:disabled {
     opacity:.5;
@@ -7207,8 +7219,8 @@ ${settingsPanelHTML()}
 <div id="comments-content">Loading...</div>
 <div id="browse-view" class="browse-view">
 <div class="browse-tabs" role="tablist">
+<button id="browse-tab-queue" class="browse-tab" type="button" role="tab" hidden>Queue</button>
 <button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">Front page</button>
-<button id="browse-tab-queue" class="browse-tab" type="button" role="tab">Queue</button>
 </div>
 <div id="browse-list"></div>
 </div>
@@ -9030,22 +9042,16 @@ ${settingsPanelHTML()}
 	// Runs on the page HN redirects to after the vote is committed. The hash is
 	// gone by now, so the payload comes back out of sessionStorage.
 	function reportItemActionAfterReload() {
-		// HN's /vote response is itself a page this script runs on, and at that
-		// point the redirect has not landed yet so the document carries no vote
-		// links. Reporting from there would consume the payload, post a null
-		// voteInfo and close the popup before the real state was ever read.
-		// Only report once the redirect has arrived at the item page.
-		if (location.pathname !== "/item") {
-			return false;
-		}
+		const forget = () => {
+			try {
+				window.sessionStorage.removeItem(ITEM_ACTION_BRIDGE_STORAGE_KEY);
+			} catch {}
+		};
 
 		let stored = null;
 
 		try {
 			stored = window.sessionStorage.getItem(ITEM_ACTION_BRIDGE_STORAGE_KEY);
-			// Cleared immediately: if anything below throws, a stale payload must
-			// not make the next HN page load try to report again.
-			window.sessionStorage.removeItem(ITEM_ACTION_BRIDGE_STORAGE_KEY);
 		} catch {
 			return false;
 		}
@@ -9059,24 +9065,53 @@ ${settingsPanelHTML()}
 		try {
 			payload = JSON.parse(stored);
 		} catch {
+			forget();
 			return false;
 		}
 
 		if (!payload?.itemId || !payload?.nonce) {
+			forget();
 			return false;
 		}
 
+		const isFaveOrFlag = Boolean(ITEM_ACTION_PATHS[payload.action]);
+
+		// A vote has to wait for the item page. HN's /vote response is itself a page
+		// this script runs on, and the redirect has not landed yet, so the document
+		// carries no vote links -- reporting from there would post a null voteInfo
+		// and close the popup before the real state was ever read.
+		//
+		// Favorite must not wait for it, because it never arrives: /fave ignores
+		// goto and redirects to the favorites list instead. Waiting for /item there
+		// meant waiting forever, which is precisely what left the popup sitting
+		// open on a page of favorites with nothing reported back.
+		if (!isFaveOrFlag && location.pathname !== "/item") {
+			return false;
+		}
+
+		// Read out only once it is going to be acted on. Cleared here so that if
+		// anything below throws, a stale payload cannot make the next page load try
+		// to report all over again.
+		forget();
+
 		// Favorite and flag are read back the way they were found: by which link HN
-		// is now offering. If the undo is on the page the action took, which is a
-		// stronger answer than trusting that the navigation did what it was asked.
-		if (ITEM_ACTION_PATHS[payload.action]) {
+		// is now offering, on whichever page it chose to land on. Both the item page
+		// and the favorites list carry the undo link for a story that is favorited,
+		// so finding it is an answer either way.
+		if (isFaveOrFlag) {
 			const undoAction = payload.action.startsWith("un")
 				? payload.action.slice(2)
 				: "un" + payload.action;
-			const applied = Boolean(
-				findItemActionAnchor(document, undoAction, payload.itemId),
-			);
 			const wanted = !payload.action.startsWith("un");
+			const undone = findItemActionAnchor(document, undoAction, payload.itemId);
+			const pending = findItemActionAnchor(document, payload.action, payload.itemId);
+
+			// Neither link on the page says nothing about the story rather than
+			// something negative -- a list that simply does not mention it. What was
+			// asked for is the better answer there: the navigation went to HN's own
+			// action URL carrying HN's own auth token, and HN does not quietly
+			// decline those.
+			const applied = undone ? true : pending ? false : wanted;
 
 			postItemActionResult(payload, {
 				ok: applied === wanted,
