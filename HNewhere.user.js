@@ -2984,6 +2984,12 @@
 			discussionScrollTop = comments.scrollTop;
 		}
 
+		// What the panel opens on. A queue with something in it is what the reader
+		// came for -- they put it there -- so it leads until they say otherwise.
+		if (on && !browseTabChosen) {
+			browseTab = queueHasItems ? "queue" : "front";
+		}
+
 		const swap = () => {
 			panel.classList.toggle("browsing", on);
 			toggle.title = on
@@ -3136,6 +3142,48 @@
 		return row;
 	}
 
+	let queueHasItems = false;
+
+	// The queue leads once there is something in it, because that is then the
+	// reason the panel is being opened at all. Reordered in the DOM rather than
+	// with flex order: the bar between the tabs is a `+` rule, so visual reordering
+	// alone would leave it hanging off the outside edge.
+	function orderBrowseTabs(root) {
+		const tabs = root?.querySelector?.(".browse-tabs");
+		const front = root?.querySelector?.("#browse-tab-front");
+		const queue = root?.querySelector?.("#browse-tab-queue");
+
+		if (!tabs || !front || !queue || queueHasItems === (tabs.firstElementChild === queue)) {
+			return;
+		}
+
+		// Where they are, then where they end up, then the difference animated away.
+		// There is no property between two positions in a list to transition, so the
+		// move itself is instant and what is animated is the distance it covered.
+		const from = [front, queue].map((tab) => tab.getBoundingClientRect().left);
+
+		if (queueHasItems) {
+			tabs.prepend(queue);
+		} else {
+			tabs.append(queue);
+		}
+
+		if (prefersReducedMotion() || typeof front.animate !== "function") {
+			return;
+		}
+
+		[front, queue].forEach((tab, index) => {
+			const dx = from[index] - tab.getBoundingClientRect().left;
+
+			if (Math.abs(dx) > 0.5) {
+				tab.animate(
+					[{ transform: `translateX(${dx}px)` }, { transform: "none" }],
+					{ duration: 220, easing: "ease" },
+				);
+			}
+		});
+	}
+
 	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
 	// rather than the ui object because a browse row only knows the tree it is in.
 	async function refreshQueueCount(root) {
@@ -3145,11 +3193,15 @@
 			return;
 		}
 
-		const unread = unreadQueueCount(await loadQueue());
+		const entries = await loadQueue();
+		const unread = unreadQueueCount(entries);
 
 		// The bare word when there is nothing waiting. A "(0)" is a number that says
 		// nothing and still asks to be read.
 		tab.textContent = unread ? `Queue (${unread})` : "Queue";
+
+		queueHasItems = entries.length > 0;
+		orderBrowseTabs(root);
 	}
 
 	// Kept across a round trip to the discussion, the way the discussion's own
@@ -3157,6 +3209,11 @@
 	// back to the first page again would be the panel forgetting where you were.
 	let browsePage = 1;
 	let browseTab = "front";
+
+	// Set the moment a tab is pressed. Until then the panel picks which to open on,
+	// and a queue with something in it wins -- but once the reader has said which
+	// they wanted, choosing for them again would be the panel arguing.
+	let browseTabChosen = false;
 
 	// HN numbers its rows continuously across pages -- page 2 starts at 31 -- and
 	// the rank is only useful if it says the same thing.
@@ -3315,6 +3372,52 @@
 			],
 			{ duration: PANEL_ENTER_MS, easing: "ease" },
 		);
+	}
+
+	// The trail's destination, which is not always the same place. Off an article it
+	// leads to Read more -- the front page and the queue together. On Hacker News
+	// the front page is already underneath the panel, so the only thing it can be
+	// offering is the queue, and it says so.
+	function setWordmarkDestination(ui, label) {
+		const tail = ui?.shadow?.querySelector(".wordmark-tail");
+		const sep = tail?.querySelector(".wordmark-sep");
+
+		if (!tail || !sep) {
+			return;
+		}
+
+		tail.replaceChildren(sep, document.createTextNode(label));
+	}
+
+	// The panel on Hacker News itself, offered only once there is a queue to work
+	// through. HN is where a queue gets filled, often across several pages, and
+	// what you do next is read it -- which until now meant remembering what you
+	// had put in.
+	async function offerQueueOnHN() {
+		if (document.getElementById("hn-queue-button") || !(await loadQueue()).length) {
+			return;
+		}
+
+		const button = createFloatingHNButton("hn-queue-button");
+
+		if (!button._dragController) {
+			button._dragController = makeButtonDraggable(button);
+		}
+
+		if (!isMobile()) {
+			await applyButtonPosition(button);
+		}
+
+		button.onclick = async () => {
+			if (button._dragController.wasMoved()) {
+				return;
+			}
+
+			destroyFloatingButton(button);
+			await openSidebar([], { browseOnly: true, queueOnly: true });
+		};
+
+		return button;
 	}
 
 	function scrollBrowseToTop(ui) {
@@ -4414,6 +4517,19 @@ header {
 
 #panel.browsing .wordmark-root {
     color:var(--subtitle-stage);
+}
+
+/* On Hacker News the trail has nothing behind it, so the wordmark is a label
+   rather than a control: no chevron, and none of the treatment a disabled button
+   would otherwise pick up. It is not unavailable, it simply does not lead
+   anywhere from here. */
+#panel.queue-only .wordmark-chevron {
+    display:none;
+}
+
+#panel.queue-only .header-wordmark {
+    cursor:default;
+    opacity:1;
 }
 
 /* The one thing saying the title is pressable. A wordmark that is also a control
@@ -7298,6 +7414,10 @@ ${settingsPanelHTML()}
 			if (sidebarHasDiscussion) {
 				await saveSidebarState("collapsed");
 				await createRestoreButton();
+			} else if (location.hostname === "news.ycombinator.com") {
+				// Back to the button that opened it. A submit button here would be
+				// offering to submit Hacker News to Hacker News.
+				await offerQueueOnHN();
 			} else {
 				await createSubmitButton();
 			}
@@ -7343,6 +7463,7 @@ ${settingsPanelHTML()}
 
 			if (button) {
 				button.onclick = () => {
+					browseTabChosen = true;
 					scrollBrowseToTop(ui);
 					renderBrowseView(ui, { tab }).catch(console.error);
 				};
@@ -8677,6 +8798,23 @@ ${settingsPanelHTML()}
 			if (options.browseOnly) {
 				sidebarHasDiscussion = false;
 				renderNoDiscussion(ui);
+
+				// On Hacker News there is nothing behind the trail: the front page is
+				// already the page underneath. So the wordmark stops being a way back
+				// and becomes a label, the chevron goes, and the panel has one job.
+				if (options.queueOnly) {
+					const toggle = ui.shadow.querySelector("#browse-toggle");
+
+					ui.shadow.querySelector("#panel")?.classList.add("queue-only");
+					setWordmarkDestination(ui, "Queue");
+					browseTab = "queue";
+					browseTabChosen = true;
+
+					if (toggle) {
+						toggle.disabled = true;
+						toggle.title = "Your queue";
+					}
+				}
 
 				// Put into browse without the cross-fade, then slid in. The panel is not
 				// on screen yet, so fading between two views inside it would only be a
@@ -12252,6 +12390,10 @@ ${settingsPanelHTML()}
 			}
 
 			await maybeHandleHNCommentBridge();
+
+			// Last, so a bridge popup -- which returns above -- never grows a button
+			// on a window that exists to do one thing and close.
+			await offerQueueOnHN();
 			return;
 		}
 
