@@ -5295,6 +5295,16 @@ header button svg {
     line-height:1.35;
 }
 
+/* That hint describes what happens with the setting off. Switched on, it is
+   explaining a state the reader is not in, directly above the sub-option that
+   now applies -- so it goes. Written as a selector rather than wired in
+   applySettingsPanelState so it tracks the checkbox itself, with no second
+   place to keep in step. The hint is the last thing in its group, so the
+   sibling combinator reaches nothing else. */
+.settings-option:has(#setting-hide-without-discussion:checked) ~ .settings-option-hint {
+    display:none;
+}
+
 .settings-option.sub-option + .settings-option-hint {
     margin-left:41px;
 }
