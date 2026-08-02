@@ -663,6 +663,46 @@
 		return sorted;
 	}
 
+	const FRONT_PAGE_CACHE_KEY = "HNewhere:frontpage_cache";
+
+	// Five minutes, where findHN caches an hour. What findHN stores is which
+	// submissions exist for a URL, and that does not change; a ranking is the one
+	// thing on HN that changes continuously, and a front page half an hour old is
+	// a different front page.
+	const FRONT_PAGE_TTL = 5 * 60 * 1000;
+
+	// Fetched anonymously like everything else the sidebar reads -- the browser
+	// strips HN's SameSite cookie from a cross-site GM request -- which for this
+	// page costs nothing. The front page is the same for everyone; only the vote
+	// arrows would differ, and those are replayed from vote memory anyway.
+	async function loadFrontPage(options = {}) {
+		const cached = await load(FRONT_PAGE_CACHE_KEY, null);
+
+		if (
+			!options.force &&
+			cached?.stories?.length &&
+			Date.now() - cached.timestamp < FRONT_PAGE_TTL
+		) {
+			return cached.stories;
+		}
+
+		const html = await requestText(HN_ORIGIN + "/news");
+		const stories = html
+			? parseFrontPage(new DOMParser().parseFromString(html, "text/html"))
+			: [];
+
+		// A failed fetch, or markup we could not read, falls back to whatever is
+		// stored however old. Yesterday's front page is a worse answer than today's
+		// and a far better one than an empty panel that does not say why.
+		if (!stories.length) {
+			return cached?.stories || [];
+		}
+
+		await save(FRONT_PAGE_CACHE_KEY, { timestamp: Date.now(), stories });
+
+		return stories;
+	}
+
 	// -------------------------
 	// Helpers
 	// -------------------------
