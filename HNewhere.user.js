@@ -402,12 +402,21 @@
 			return list;
 		}
 
+		// Everything a row displays is kept, not just what identifies the story. The
+		// queue is the same list as the front page with most of it filtered out, so
+		// a row in it has to be able to say the same things -- and a queue entry is
+		// read days after it was made, long after the page it came from is gone.
 		return [
 			...list,
 			{
 				id: story.id,
 				url: story.url,
 				title: story.title,
+				by: story.by || "",
+				score: story.score || 0,
+				time: story.time || 0,
+				descendants: story.descendants || 0,
+				site: story.site || "",
 				addedAt: now,
 				readAt: null,
 			},
@@ -3024,28 +3033,15 @@
 	// leads to the article here instead of to the discussion, there is no composer
 	// and no story text, and a rank sits in front. Same classes, so a browse row
 	// and the story at the top of a discussion read as the same kind of object.
-	function renderBrowseRow(story, container, rank, options = {}) {
-		const entry = options.entry;
-
-		// A queue entry knows only what was saved: its id, url, title and when. It
-		// does not know a score, an author or a comment count, and rendering zeroes
-		// for those would state three things we have not been told. The line says
-		// what it does know instead.
-		const meta = entry
-			? `<span class="item-age">${escapeHTML(
-					entry.readAt
-						? "read " + timeAgo(entry.readAt / 1000)
-						: "queued " + timeAgo(entry.addedAt / 1000),
-				)}</span>
-	|
-	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
-	target="_blank" rel="noopener noreferrer">discussion</a>
-	|
-	<button class="browse-save-link" type="button">remove</button>`
-			: // HN's own order and HN's own punctuation: the age follows the author on
-				// a bare space, the actions come next, and the comment count closes the
-				// line. `75 points by AlexeyBrin 3 hours ago | hide | 11 comments`.
-				`${escapeHTML(pluralize(story.score, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}
+	function renderBrowseRow(story, container, rank) {
+		// HN's own order and HN's own punctuation: the age follows the author on a
+		// bare space, the actions come next, and the comment count closes the line.
+		// `75 points by AlexeyBrin 3 hours ago | hide | 11 comments`.
+		//
+		// One shape for both lists. The queue is the front page with most of it
+		// filtered out, so a story in it is described the same way -- what differs
+		// is which stories are there and what order they are in.
+		const meta = `${escapeHTML(pluralize(story.score, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}
 	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
 	|
 	<button class="browse-save-link" type="button">queue</button>
@@ -3071,19 +3067,9 @@
 
 		const saveButton = row.querySelector(".browse-save-link");
 
-		if (entry) {
-			// In the queue itself the control only ever removes -- the row would not
-			// be there otherwise -- and takes the row with it rather than waiting for
-			// a re-render, so the list answers immediately.
-			saveButton.onclick = async () => {
-				await saveQueue(removeFromQueue(await loadQueue(), story.id));
-				row.remove();
-				refreshQueueCount(container.getRootNode());
-				refreshNextUp(container.getRootNode());
-			};
-		} else {
+		{
 			// Read once per row rather than passed in, so a row rendered after
-			// something was saved elsewhere still opens in the right state.
+			// something was queued elsewhere still opens in the right state.
 			loadQueue()
 				.then((entries) => {
 					saveButton.textContent = entries.some((e) => e.id === story.id)
@@ -3092,6 +3078,10 @@
 				})
 				.catch(console.error);
 
+			// The same toggle in both lists. Un-queueing from inside the queue takes
+			// the row out with it rather than waiting for a redraw, so the list
+			// answers at once; on the front page the row stays and only the word
+			// changes, because the story is still on the front page either way.
 			saveButton.onclick = async () => {
 				const entries = await loadQueue();
 				const already = entries.some((e) => e.id === story.id);
@@ -3103,6 +3093,11 @@
 				);
 
 				saveButton.textContent = already ? "queue" : "queued";
+
+				if (already && row.parentElement?.closest("#browse-list") && browseTab === "queue") {
+					row.remove();
+				}
+
 				refreshQueueCount(container.getRootNode());
 				refreshNextUp(container.getRootNode());
 			};
@@ -3321,6 +3316,54 @@
 	// The queue rendered as rows, reusing the front page's row exactly -- it is the
 	// same object in the same list, and giving it a second appearance would say the
 	// two were different kinds of thing.
+	// Returns whether anything actually changed, so a redraw only happens when there
+	// is something new to show. Without that the refresh would redraw the list every
+	// time the tab is opened, and the redraw would start another refresh.
+	async function refreshQueueEntries(entries) {
+		const fetched = await Promise.all(
+			entries.map((entry) => getItem(entry.id).catch(() => null)),
+		);
+
+		let changed = false;
+
+		const next = entries.map((entry, index) => {
+			const item = fetched[index];
+
+			// A dead or deleted story returns nothing useful. What was stored is then
+			// the best record there is, and is left alone.
+			if (!item?.id) {
+				return entry;
+			}
+
+			const fresh = {
+				...entry,
+				by: item.by || entry.by || "",
+				score: item.score ?? entry.score ?? 0,
+				time: item.time || entry.time || 0,
+				descendants: item.descendants ?? entry.descendants ?? 0,
+				title: item.title || entry.title,
+			};
+
+			if (
+				fresh.by !== entry.by ||
+				fresh.score !== entry.score ||
+				fresh.descendants !== entry.descendants ||
+				fresh.title !== entry.title ||
+				fresh.time !== entry.time
+			) {
+				changed = true;
+			}
+
+			return fresh;
+		});
+
+		if (changed) {
+			await saveQueue(next);
+		}
+
+		return changed;
+	}
+
 	async function renderQueueView(ui, list) {
 		const entries = sortQueue(await loadQueue());
 
@@ -3337,24 +3380,24 @@
 			return;
 		}
 
+		// The same row the front page draws, from the same function. What makes this
+		// the queue is which stories are in it and what order they are in -- the
+		// unread first, oldest saved at the top, the read greyed and beneath them --
+		// not a different way of describing a story.
 		entries.forEach((entry, index) => {
-			const row = renderBrowseRow(
-				{
-					id: entry.id,
-					url: entry.url,
-					title: entry.title,
-					by: "",
-					score: 0,
-					time: entry.addedAt / 1000,
-					descendants: 0,
-					site: "",
-				},
-				list,
-				index + 1,
-				{ queue: true, entry },
-			);
-
+			const row = renderBrowseRow(entry, list, index + 1);
 			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
+		});
+
+		// Scores and comment counts move while something sits in a queue, and a
+		// queue is read days after it was filled. Refreshed from the item API rather
+		// than trusted as stored, after the rows are already up so nothing waits on
+		// it, and through getItem so a story is fetched once a session however many
+		// times it is drawn.
+		refreshQueueEntries(entries).then((refreshed) => {
+			if (refreshed && isBrowsing(ui) && browseTab === "queue") {
+				renderQueueView(ui, list).catch(console.error);
+			}
 		});
 
 		if (entries.some((entry) => entry.readAt)) {
