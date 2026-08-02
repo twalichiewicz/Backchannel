@@ -3166,28 +3166,40 @@
 		const nav = document.createElement("div");
 		nav.className = "browse-nav";
 
-		// Both ends are stated rather than left blank. A row that reads "page 1 of
-		// more" is a different thing from one that has simply run out, and a reader
-		// deep in the list needs to know which end they are at.
-		const prev = document.createElement("button");
-		prev.type = "button";
-		prev.className = "browse-nav-link";
-		prev.textContent = "‹ prev";
-		prev.disabled = page <= 1;
-		prev.onclick = () => onNavigate(page - 1);
+		const link = (text, target, disabled = false) => {
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = "browse-nav-link";
+			button.textContent = text;
+			button.disabled = disabled;
+			button.onclick = () => onNavigate(target);
+			return button;
+		};
 
+		// On the first page there is only one direction to go, and Hacker News calls
+		// it More -- capitalised, as it writes it. Saying "page 1" and offering a
+		// disabled way back is the panel describing a position nobody is lost in.
+		if (page <= 1) {
+			if (nextPage) {
+				nav.appendChild(link("More", nextPage));
+				view.appendChild(nav);
+			}
+
+			return;
+		}
+
+		// Deeper in there is a way back as well, and then which end you are at is
+		// worth stating: a list that has run out is a different thing from one that
+		// has more, and both ends stay visible rather than vanishing.
 		const label = document.createElement("span");
 		label.className = "browse-nav-page";
 		label.textContent = "page " + page;
 
-		const next = document.createElement("button");
-		next.type = "button";
-		next.className = "browse-nav-link";
-		next.textContent = "next ›";
-		next.disabled = !nextPage;
-		next.onclick = () => onNavigate(nextPage);
-
-		nav.append(prev, label, next);
+		nav.append(
+			link("‹ prev", page - 1),
+			label,
+			link("next ›", nextPage, !nextPage),
+		);
 		view.appendChild(nav);
 	}
 
