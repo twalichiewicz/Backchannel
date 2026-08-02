@@ -15,8 +15,8 @@ use to detect updates, so every release bumps it.
 - **The sidebar can show the Hacker News front page.** Reading an article with
   HNewhere open, you could reach its discussion and nothing else; deciding what
   to read next still meant going back to Hacker News. The wordmark in the panel
-  header is now the way there, and the way back, with prev and next for paging
-  through the list.
+  header is now the way there, and the way back, with the list paged the way
+  Hacker News pages its own.
 
   It leads to **Read more** rather than to Hacker News, because Hacker News is
   only one of the two things behind it. Your queue is the other, and it is the
@@ -40,9 +40,14 @@ use to detect updates, so every release bumps it.
 
   It is reachable from pages that have no discussion at all, which is where the
   question is asked most sharply: the wordmark is in the submit popover's header
-  too, and opens the panel straight into browsing. A panel opened that way leaves
-  the page as it found it — minimizing gives back the grey submit button and
-  records no preference about a discussion that does not exist.
+  too, and opens the panel straight into browsing — sliding in from the edge it
+  is docked to, since it is replacing a small box beside the button with a
+  full-height panel and the movement is what connects the two. A panel opened
+  that way leaves the page as it found it: minimizing gives back the grey submit
+  button and records no preference about a discussion that does not exist.
+
+  The first page offers *More*, which is what Hacker News offers. Deeper in, where
+  there is a way back as well, the row says which page you are on.
 
 - **A reading queue.** *queue* on any story — on Hacker News itself, in its own
   row in front of *flag*, or on any row in the sidebar's front page — puts it in
@@ -55,6 +60,23 @@ use to detect updates, so every release bumps it.
   does not defeat it — but a URL match can still be wrong, and something quietly
   eaten cannot be corrected, so read entries dim and sink beneath the unread ones
   until you clear them.
+
+  **The queue is offered on Hacker News itself**, once there is something in it.
+  That is where a queue gets filled, often across several pages, and what you do
+  next is read it — which otherwise meant remembering what you had put in. The
+  button appears there and opens the panel on the queue. Nothing sits behind the
+  trail there, the front page being the page underneath, so the wordmark reads
+  *HNewhere / Queue* and stops being a way back.
+
+  Everywhere else the queue leads as soon as it has entries: the *Queue* tab
+  moves in front of *Front page* and is what the panel opens on. Switching tabs
+  lasts as long as the panel is open and no longer, so one press cannot quietly
+  turn that off. The trail names whichever you are looking at — *Queue*, or
+  *Read more* on the front page.
+
+  A queued story is described the same way a front-page one is, because the queue
+  is the same list with most of it filtered out. Scores and comment counts are
+  refreshed when you open it, since a queue is read days after it was filled.
 
 - **A focused discussion can now be built around any comment.** The sidebar
   could already filter a thread down to one conversation, but only through a
@@ -89,6 +111,13 @@ use to detect updates, so every release bumps it.
   retires rather than being offered again on every comment.
 
 ### Changed
+
+- **A hatched band marks where the panel changes subject.** An article submitted
+  to Hacker News more than once shows each submission in turn, and the break
+  between them was a hairline — which says "and" where it means "different thing
+  now". It is diagonal hatching now, running the full width of the panel rather
+  than stopping short of its edges, and the same band separates a finished thread
+  from what to read next.
 
 - **The line under a story title follows Hacker News' order and punctuation.**
   It reads `214 points by someone 2 hours ago | flag | favorite | 21 comments`,
