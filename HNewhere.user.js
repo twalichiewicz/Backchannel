@@ -667,16 +667,18 @@
 	// appears and a flag link never appears either. The popup is what finds out, and
 	// what it finds is remembered here -- so a link discovered to be unavailable
 	// retires instead of being offered again on every comment in the thread.
+	// flag before favorite, which is the order HN lists them in:
+	// `… 6 hours ago | flag | hide | past | favorite | 17 comments`.
 	function itemActionLinksHTML(itemId) {
 		const id = escapeHTML(String(itemId));
 
 		return `
       |
       <button class="item-action-link" type="button"
-      data-item-action="fave" data-item-action-id="${id}">favorite</button>
+      data-item-action="flag" data-item-action-id="${id}">flag</button>
       |
       <button class="item-action-link" type="button"
-      data-item-action="flag" data-item-action-id="${id}">flag</button>`;
+      data-item-action="fave" data-item-action-id="${id}">favorite</button>`;
 	}
 
 	const ITEM_ACTION_FIELD = { fave: "favorite", flag: "flagged" };
@@ -3038,14 +3040,16 @@
 	target="_blank" rel="noopener noreferrer">discussion</a>
 	|
 	<button class="browse-save-link" type="button">remove</button>`
-			: `${escapeHTML(pluralize(story.score, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}
-	|
+			: // HN's own order and HN's own punctuation: the age follows the author on
+				// a bare space, the actions come next, and the comment count closes the
+				// line. `75 points by AlexeyBrin 3 hours ago | hide | 11 comments`.
+				`${escapeHTML(pluralize(story.score, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}
 	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
 	|
-	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
-	target="_blank" rel="noopener noreferrer">${escapeHTML(pluralize(story.descendants, "comment"))}</a>
+	<button class="browse-save-link" type="button">queue</button>
 	|
-	<button class="browse-save-link" type="button">queue</button>`;
+	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
+	target="_blank" rel="noopener noreferrer">${escapeHTML(pluralize(story.descendants, "comment"))}</a>`;
 
 		const row = document.createElement("div");
 		row.className = "story browse-row";
@@ -4390,7 +4394,10 @@ header {
    carries its own spacing, so the two cannot drift apart. */
 .browse-tab + .browse-tab::before {
     content:"|";
-    margin:0 6px;
+    /* HN's own ratio, measured off it: 3.28px each side of the bar at 9.33px
+       type, which is .35em. Given in em rather than pixels so it holds at the
+       11px these are set in. */
+    margin:0 .35em;
     color:var(--meta);
 }
 
@@ -7238,11 +7245,10 @@ ${settingsPanelHTML()}
 	href="https://news.ycombinator.com/user?id=${encodeURIComponent(story.by)}">${escapeHTML(story.by)}</a>`
 			: ""
 	}
-	|
 	<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(story.time)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
+	${itemActionLinksHTML(storyID)}
 	|
 	${story.descendants || 0} comments
-	${itemActionLinksHTML(storyID)}
 	</div>
 	${
 		story.text
