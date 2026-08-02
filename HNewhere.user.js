@@ -6787,6 +6787,12 @@ ${settingsPanelHTML()}
       reply
       </a>
 
+      |
+
+      <a class="focus-link" href="#">
+      focus
+      </a>
+
       <span class="toggle">
       [–]
       </span>
@@ -6866,6 +6872,7 @@ ${settingsPanelHTML()}
 		};
 
 		const replyButton = div.querySelector(".reply-link");
+		const focusButton = div.querySelector(".focus-link");
 		const replyComposer = div.querySelector(".reply-composer");
 
 		// Wired lazily. A thread can render hundreds of comments, and wiring every
@@ -6902,6 +6909,11 @@ ${settingsPanelHTML()}
 			);
 
 			composerAPI?.focus();
+		};
+
+		focusButton.onclick = function (event) {
+			event.preventDefault();
+			applyCommentFocus(comment.id);
 		};
 
 		if (replies.length) {
@@ -9658,14 +9670,14 @@ ${settingsPanelHTML()}
 		return visibleCommentIdsFromGraph(getCommentGraph(), commentIds);
 	}
 
-	function applyCommentFilter(groupKey, options = {}) {
-		const group = annotationController?.groupsByKey.get(groupKey);
-
-		if (!group) {
-			clearCommentFilter(options);
-			return;
-		}
-
+	// The half both entry points share. Everything that differs -- which comments are
+	// direct matches, what the banner says, what else has to change once the list has
+	// been filtered -- arrives as arguments, so neither caller has to know how the
+	// list transitions or where the reader was standing when they left it.
+	function applyFocusedDiscussion(
+		{ filter, directMatchIds, anchorElement, paintBanner, onFiltered },
+		options = {},
+	) {
 		// Only when entering from the full list. A refresh re-applies a filter that is
 		// already open, and a focus opened from inside another one should still return
 		// to where the reader started rather than to the focus they passed through.
@@ -9673,15 +9685,11 @@ ${settingsPanelHTML()}
 			preFilterPosition = captureReadingPosition();
 		}
 
-		activeCommentFilter = { type: "quote", key: groupKey };
+		activeCommentFilter = filter;
 
-		const targetMatch =
-			group.comments.find((match) => match.commentId === options.commentId) ||
-			group.comments[0];
-		const directMatchIds = new Set(group.comments.map((comment) => comment.commentId));
 		const visibleCommentIds = getVisibleCommentIds([...directMatchIds]);
 
-		positionFilterBannerForComment(targetMatch?.element);
+		positionFilterBannerForComment(anchorElement);
 
 		transitionCommentList(() => {
 			for (const rendered of renderedComments) {
@@ -9700,15 +9708,16 @@ ${settingsPanelHTML()}
 				}
 			}
 
-			setQuoteRedundancy(group, true);
+			// Inside the transition, where the quote branch's redundancy pass has always
+			// run. Hoisting it out to the caller would apply it 110ms early, while the
+			// list is still faded, so a mark would come off a comment the reader can
+			// still see rather than under the cover of the change.
+			onFiltered?.();
 			updateSubmissionVisibility(visibleCommentIds);
 
 			if (sidebarUI?.filterBanner && sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBanner.classList.remove("hidden");
-				sidebarUI.filterBannerQuote.textContent = truncateText(
-					group.fullQuoteText || group.quoteText,
-					220,
-				);
+				paintBanner(sidebarUI.filterBannerQuote);
 			}
 
 		}, options);
@@ -9720,6 +9729,78 @@ ${settingsPanelHTML()}
 		if (options.scroll !== false) {
 			scrollFilterBannerToTop();
 		}
+	}
+
+	function applyCommentFilter(groupKey, options = {}) {
+		const group = annotationController?.groupsByKey.get(groupKey);
+
+		if (!group) {
+			clearCommentFilter(options);
+			return;
+		}
+
+		const targetMatch =
+			group.comments.find((match) => match.commentId === options.commentId) ||
+			group.comments[0];
+
+		applyFocusedDiscussion(
+			{
+				filter: { type: "quote", key: groupKey },
+				directMatchIds: new Set(
+					group.comments.map((comment) => comment.commentId),
+				),
+				anchorElement: targetMatch?.element,
+				paintBanner: (quote) => {
+					quote.classList.remove("filter-banner-quote-comment");
+					quote.textContent = truncateText(
+						group.fullQuoteText || group.quoteText,
+						220,
+					);
+				},
+				onFiltered: () => setQuoteRedundancy(group, true),
+			},
+			options,
+		);
+	}
+
+	// The second way into a focused discussion. It asks getVisibleCommentIds for the
+	// same ancestors-and-subtree rule a quoted passage gets, so what the reader sees
+	// is one kind of view reached two ways rather than two views that resemble each
+	// other. No redundancy pass: nothing has been restated, because the banner is
+	// showing the comment itself rather than words quoted from the article.
+	function applyCommentFocus(commentId, options = {}) {
+		const comment = getCommentGraph().byId.get(commentId);
+
+		// Same bail-out as a missing quote group. An annotation refresh re-applies
+		// whatever filter is open, and a re-render in between can leave it pointing at
+		// a comment that is no longer in the list.
+		if (!comment) {
+			clearCommentFilter(options);
+			return;
+		}
+
+		const { author, preview } = commentFocusPreview(comment);
+
+		applyFocusedDiscussion(
+			{
+				filter: { type: "comment", id: commentId },
+				directMatchIds: new Set([commentId]),
+				anchorElement: comment.element,
+				paintBanner: (quote) => {
+					quote.classList.add("filter-banner-quote-comment");
+
+					// replaceChildren over innerHTML: the preview is a reader's prose and
+					// the author is a name they chose, and neither goes anywhere near an
+					// HTML parser on its way to the banner.
+					const byline = document.createElement("span");
+					byline.className = "filter-banner-author";
+					byline.textContent = author;
+
+					quote.replaceChildren(byline, document.createTextNode(preview));
+				},
+			},
+			options,
+		);
 	}
 
 	// #region hnewhere-test-export
@@ -10203,6 +10284,11 @@ ${settingsPanelHTML()}
 		// refresh would otherwise yank the reader back to the banner.
 		if (activeCommentFilter?.type === "quote") {
 			applyCommentFilter(activeCommentFilter.key, {
+				scroll: false,
+				animate: false,
+			});
+		} else if (activeCommentFilter?.type === "comment") {
+			applyCommentFocus(activeCommentFilter.id, {
 				scroll: false,
 				animate: false,
 			});
