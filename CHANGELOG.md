@@ -156,6 +156,16 @@ use to detect updates, so every release bumps it.
   already there and stopped. The two walks are asking different questions, and
   they now keep separate answers.
 
+- **Discussions on X are found again.** X renamed itself and Hacker News did
+  not. HN holds years of submissions under `twitter.com` while the site now
+  serves `x.com`, and the lookup asked for the address it was standing on — so a
+  tweet with a couple of hundred comments waiting on it came up empty and got a
+  grey button.
+
+  The two names are read as one now, on both sides of the comparison: the
+  address in hand and every submission it is measured against. Which of the two
+  a given link happens to use therefore stops mattering, in either direction.
+
 - **A page's own text styling no longer reaches into the sidebar.** Shadow DOM
   keeps a page's selectors out but not its inheritance, and the panel pinned its
   font and its colours without pinning anything that moves text about. A site
