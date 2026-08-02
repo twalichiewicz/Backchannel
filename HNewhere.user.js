@@ -9678,13 +9678,29 @@ ${settingsPanelHTML()}
 				// The same control both ways. A row is the only place this story
 				// appears, so making the reader hunt elsewhere to undo a misclick
 				// would be the wrong half of a pair.
-				await saveQueue(
-					already
-						? removeFromQueue(entries, story.id)
-						: addToQueue(entries, story, Date.now()),
-				);
+				const next = already
+					? removeFromQueue(entries, story.id)
+					: addToQueue(entries, story, Date.now());
+
+				await saveQueue(next);
 
 				link.textContent = already ? "queue" : "queued";
+
+				// The button is offered once, when the page loads. A queue filled
+				// after that -- which is the ordinary way of filling one, a row at a
+				// time while reading down the page -- would otherwise have nowhere to
+				// be opened from until the next page load. It follows the queue now
+				// rather than whatever the queue happened to be on arrival, and goes
+				// again when the last entry does.
+				if (next.length) {
+					await offerQueueOnHN();
+				} else {
+					const existing = document.getElementById("hn-queue-button");
+
+					if (existing) {
+						destroyFloatingButton(existing);
+					}
+				}
 			};
 
 			// Placed where it falls in the order a reader works through a row:
