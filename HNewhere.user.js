@@ -3393,7 +3393,25 @@
 	// what you do next is read it -- which until now meant remembering what you
 	// had put in.
 	async function offerQueueOnHN() {
-		if (document.getElementById("hn-queue-button") || !(await loadQueue()).length) {
+		if (document.getElementById("hn-queue-button")) {
+			return;
+		}
+
+		// The Hacker News branch returns long before runPagePass, which is where
+		// every other page reads these. Without them the button is drawn from the
+		// declared defaults -- a 44px circle on the automatic theme -- whatever the
+		// reader actually chose, and a site they had hidden HNewhere on would put
+		// one there regardless.
+		//
+		// loadSettings is called for its effect rather than its answer: it syncs the
+		// appearance preferences the button is built from.
+		const [blocked, , entries] = await Promise.all([
+			isSiteBlocked(),
+			loadSettings(),
+			loadQueue(),
+		]);
+
+		if (blocked || !entries.length) {
 			return;
 		}
 
