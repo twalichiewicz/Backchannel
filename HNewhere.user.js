@@ -694,6 +694,18 @@
 	// Expires on the same 90-day clock as everything else in here, so an account
 	// that gains the karma to flag -- or a reader who simply logs in -- is offered
 	// the link again rather than having been written off for good.
+	function clearItemActionUnavailable(field) {
+		const account = rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY];
+
+		if (!account?.[field + "Unavailable"]) {
+			return;
+		}
+
+		delete account[field + "Unavailable"];
+		save(STORAGE.itemActions, rememberedItemActions).catch(console.error);
+		refreshAllItemActionControls();
+	}
+
 	function itemActionUnavailable(field) {
 		return Boolean(
 			rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY]?.[field + "Unavailable"],
@@ -2677,6 +2689,12 @@
 
 				if (typeof data.applied === "boolean") {
 					rememberItemAction(data.itemId, { [field]: data.applied });
+
+					// HN just answered for this action, so whatever made it look
+					// unavailable no longer holds. Self-healing matters here because
+					// the record is account-wide: without it a single wrong answer
+					// would keep every one of these links hidden until it expired.
+					clearItemActionUnavailable(field);
 				}
 
 				refreshItemActionControls(data.itemId);
@@ -9242,19 +9260,32 @@ ${settingsPanelHTML()}
 		// and the favorites list carry the undo link for a story that is favorited,
 		// so finding it is an answer either way.
 		if (isFaveOrFlag) {
-			const undoAction = payload.action.startsWith("un")
+			const base = payload.action.startsWith("un")
 				? payload.action.slice(2)
-				: "un" + payload.action;
+				: payload.action;
 			const wanted = !payload.action.startsWith("un");
-			const undone = findItemActionAnchor(document, undoAction, payload.itemId);
-			const pending = findItemActionAnchor(document, payload.action, payload.itemId);
+
+			// Read the state HN is now in, not the action that was asked for. The
+			// undo link is only ever offered for something already done, so its
+			// presence *is* the state: "unflag" showing means flagged, "flag"
+			// showing means not.
+			//
+			// Deriving it from the action instead is what broke unflagging. The
+			// check was "is the opposite link here" -- true after flagging, because
+			// unflag appears; but also true after unflagging, because flag appears.
+			// So a successful unflag recorded itself as flagged and the label never
+			// changed back. Favorite escaped it by luck: /fave lands on the
+			// favorites list, where a story just un-favorited is no longer named, so
+			// neither link was found and the fallback happened to be right.
+			const onLink = findItemActionAnchor(document, "un" + base, payload.itemId);
+			const offLink = findItemActionAnchor(document, base, payload.itemId);
 
 			// Neither link on the page says nothing about the story rather than
 			// something negative -- a list that simply does not mention it. What was
 			// asked for is the better answer there: the navigation went to HN's own
 			// action URL carrying HN's own auth token, and HN does not quietly
 			// decline those.
-			const applied = undone ? true : pending ? false : wanted;
+			const applied = onLink ? true : offLink ? false : wanted;
 
 			postItemActionResult(payload, {
 				ok: applied === wanted,
@@ -9295,10 +9326,28 @@ ${settingsPanelHTML()}
 		// by looking at a page served to the real account and seeing nothing there.
 		// Logged out, or below the karma flagging needs, and the answer is the same.
 		if (!anchor) {
+			const base = payload.action.startsWith("un")
+				? payload.action.slice(2)
+				: payload.action;
+			const opposite = payload.action.startsWith("un") ? base : "un" + base;
+
+			// A missing link has two very different meanings and they were being
+			// treated as one. If the opposite link is here, the action plainly does
+			// apply to this reader -- it is simply already done, and the panel is
+			// the thing that is out of date. Only when neither is on the page has HN
+			// declined to offer it at all.
+			//
+			// Conflating them is how one stale label took every flag link on the
+			// page down with it: a second press on something already unflagged found
+			// no unflag link, was read as "you cannot flag", and that answer is
+			// remembered against the whole account.
+			const already = findItemActionAnchor(document, opposite, payload.itemId);
+
 			postItemActionResult(payload, {
-				ok: false,
-				reason: "action-unavailable",
+				ok: Boolean(already),
+				reason: already ? "already" : "action-unavailable",
 				action: payload.action,
+				...(already ? { applied: !payload.action.startsWith("un") } : {}),
 			});
 			window.setTimeout(() => window.close(), 80);
 			return true;
