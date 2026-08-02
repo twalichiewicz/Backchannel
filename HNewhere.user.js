@@ -2962,7 +2962,7 @@
 	// One class toggle and a title. Both labels are already in the button and CSS
 	// picks between them, so nothing here rewrites markup on a control the reader
 	// is pointing at.
-	function setBrowseMode(ui, on) {
+	function setBrowseMode(ui, on, options = {}) {
 		const panel = ui?.shadow?.querySelector("#panel");
 		const toggle = ui?.shadow?.querySelector("#browse-toggle");
 		const comments = ui?.shadow?.querySelector("#comments");
@@ -2993,7 +2993,9 @@
 			}
 		};
 
-		if (!comments || prefersReducedMotion()) {
+		// animate:false is for a panel that is not on screen yet. Cross-fading two
+		// views nobody can see would only delay the one they are about to.
+		if (!comments || options.animate === false || prefersReducedMotion()) {
 			swap();
 			return;
 		}
@@ -3277,6 +3279,35 @@
 			"No Hacker News discussion for this page yet. Minimize to submit it, or read something else.";
 
 		body.appendChild(message);
+	}
+
+	const PANEL_ENTER_MS = 180;
+
+	function slidePanelIn(ui) {
+		const panel = ui?.shadow?.querySelector("#panel");
+
+		if (!panel || prefersReducedMotion() || typeof panel.animate !== "function") {
+			return;
+		}
+
+		// Animated outright rather than by adding a class and taking it away. A CSS
+		// transition needs a start the browser has actually resolved, and this panel
+		// is created, classed and un-classed inside a single task -- so there is
+		// never a resolved off-screen state to leave, and both states collapse into
+		// "already arrived". Neither a pair of animation frames nor a forced layout
+		// read shook that loose.
+		//
+		// An animation carries its own first keyframe, so there is nothing to
+		// coalesce and nothing to time. It is also how the rest of the file animates
+		// -- the button's spinner and the submit fill are both done this way -- and
+		// it leaves no styles behind to clean up afterwards.
+		panel.animate(
+			[
+				{ transform: "translateX(100%)", opacity: 0 },
+				{ transform: "none", opacity: 1 },
+			],
+			{ duration: PANEL_ENTER_MS, easing: "ease" },
+		);
 	}
 
 	function scrollBrowseToTop(ui) {
@@ -6062,6 +6093,7 @@ Highlights the passages commenters quote, so you can jump between the article an
     --measure:1215px;
 }
 
+
 ${THEME_CSS}
 ${CHROME_CSS}
 
@@ -8562,7 +8594,12 @@ ${settingsPanelHTML()}
 			if (options.browseOnly) {
 				sidebarHasDiscussion = false;
 				renderNoDiscussion(ui);
-				setBrowseMode(ui, true);
+
+				// Put into browse without the cross-fade, then slid in. The panel is not
+				// on screen yet, so fading between two views inside it would only be a
+				// delay in front of the one movement there is to see.
+				setBrowseMode(ui, true, { animate: false });
+				slidePanelIn(ui);
 				return;
 			}
 
