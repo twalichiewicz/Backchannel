@@ -8,6 +8,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.5.8] — 2026-08-02
+
+### Added
+
+- **The sidebar can show the Hacker News front page.** Reading an article with
+  HNewhere open, you could reach its discussion and nothing else; deciding what
+  to read next still meant going back to Hacker News. The wordmark in the panel
+  header is now the way there, and the way back, with prev and next for paging
+  through the list.
+
+  A story opened from that list is opened the way one clicked on Hacker News is.
+  The panel records the click exactly as it does while you are on HN, so the page
+  you land on reads it as an arrival — which means automatic opening applies, and
+  so does *Only when arriving from Hacker News*, without either of them knowing
+  this path exists.
+
+  The discussion you were reading is hidden while you browse rather than thrown
+  away, so coming back puts you where you were, part-scrolled, with any focused
+  discussion still open.
+
+- **A reading queue.** *save* on any story — on Hacker News itself, in its own
+  row beside *hide* and *discuss*, or on any row in the sidebar's front page —
+  puts it in a list, and the list is waiting under *Queue* when you want it. At
+  the foot of a finished discussion, where the question actually gets asked, a
+  strip offers whatever is next.
+
+  Arriving at something you saved marks it read rather than removing it. The
+  match is on the normalised URL, so a tracking parameter picked up on the way in
+  does not defeat it — but a URL match can still be wrong, and something quietly
+  eaten cannot be corrected, so read entries dim and sink beneath the unread ones
+  until you clear them.
+
+- **A focused discussion can now be built around any comment.** The sidebar
+  could already filter a thread down to one conversation, but only through a
+  quoted passage — which meant the feature was unavailable on the great majority
+  of comments, the ones that quote nothing. *focus*, beside *reply*, shows a
+  comment's chain up to the root and everything below it.
+
+  That is Hacker News' own `parent`, `root` and `context` in a single view, and
+  it is the same view a quoted passage opens rather than one that resembles it:
+  both ask for a comment's ancestors and its whole subtree, and both return you
+  to where you were reading when you leave.
+
+  The banner says which it is. A quoted passage is shown between quote marks,
+  because they are somebody else's words lifted from the article; a comment is
+  named by its author, because it is the comment itself.
+
+- **Favorite and flag, on stories and on comments.** The sidebar offered one of
+  Hacker News' actions and read as though it offered them all.
+
+  These take a different route from the rest of the panel. Everything HNewhere
+  reads, it reads over a cross-site request, and the browser strips Hacker News'
+  session cookie from those — so the page that comes back is a logged-out one,
+  which renders no favorite link and no flag link at all. There is no state to
+  read and nothing to act with. Both therefore travel the same way a vote does,
+  through a brief popup on Hacker News itself, which is the only place the truth
+  is visible; what it reports is what the panel remembers.
+
+  Both links appear everywhere, because the panel cannot know in advance whether
+  either applies to you. The popup finds out — being logged out and being below
+  the karma flagging asks for look identical from here, which is to say the link
+  simply is not there — and the answer is kept, so a link that cannot work
+  retires rather than being offered again on every comment.
+
+### Fixed
+
+- **A focused discussion was leaving out the replies to the comments it
+  focused.** It was meant to show a matching comment's chain up to the root and
+  everything below it, and it showed the chain alone — so the thread you were
+  handed stopped exactly where the conversation started. Focusing a thread's own
+  root comment showed that comment by itself.
+
+  The walk climbs and it descends, and the descent was refusing to start. It
+  declined to walk any comment already on screen, which is a sensible guard
+  against covering the same ground twice — except that the climb ran first and
+  put the focused comment on screen, so the descent found its own starting point
+  already there and stopped. The two walks are asking different questions, and
+  they now keep separate answers.
+
+- **A page's own text styling no longer reaches into the sidebar.** Shadow DOM
+  keeps a page's selectors out but not its inheritance, and the panel pinned its
+  font and its colours without pinning anything that moves text about. A site
+  that centres its body centred the entire panel, comments and all.
+
+  `text-align` is only the one that turned up. The same door was open for
+  `text-transform`, `letter-spacing`, `word-spacing`, `font-style`,
+  `font-variant`, `text-indent` and `white-space`, each of them waiting for the
+  site that happens to set it, so they are all shut now.
+
 ## [1.5.7] — 2026-07-31
 
 ### Added
