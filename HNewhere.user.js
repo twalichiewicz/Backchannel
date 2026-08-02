@@ -3641,9 +3641,10 @@ header {
 .header-wordmark {
     /* .header-title is a flex column, so a button placed in it is stretched to
        the header's full width and stops reading as a word. Hugging its content
-       is also what lets the two labels size it themselves -- they are different
-       lengths, and the box should be whichever one is showing. */
+       is what keeps it a word. */
     align-self:flex-start;
+    display:flex;
+    align-items:baseline;
     border:0;
     padding:0;
     margin:0;
@@ -3652,6 +3653,69 @@ header {
     font:inherit;
     cursor:pointer;
     text-align:left;
+}
+
+/* The trail into Hacker News, built the way the settings panel builds its trail
+   into hidden sites, because it is the same movement: a level opening inside the
+   panel, with the way back left in place behind it.
+
+   Collapsed to zero width rather than hidden, so arriving slides the chevron open
+   and pushes the trail across instead of snapping it into place. */
+.wordmark-chevron {
+    flex:0 0 auto;
+    width:0;
+    margin-right:0;
+    overflow:hidden;
+    opacity:0;
+    color:var(--subtitle-stage);
+    transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
+}
+
+#panel.browsing .wordmark-chevron {
+    width:9px;
+    margin-right:5px;
+    opacity:1;
+}
+
+/* Emphasis comes off the wordmark once it stops being the title and becomes the
+   way back, as the settings crumb's root does. Colour only, not weight: the
+   settings crumb is the only thing moving in its row, where this one has a
+   chevron and a trail carrying the change, and lightening part of a bold header
+   title reads as a rendering fault rather than as a de-emphasis. Dark orange
+   rather than the panel's grey, because this sits on the header's own bar. */
+.wordmark-root {
+    transition:color .2s ease;
+}
+
+#panel.browsing .wordmark-root {
+    color:var(--subtitle-stage);
+}
+
+/* Always in flow, faded and nudged rather than display:none, so it can animate in
+   both directions. Laying it out while invisible costs nothing here for the same
+   reason it costs nothing in the settings head: the title is left-aligned, so a
+   trail nobody can see shifts nothing. */
+.wordmark-tail {
+    display:flex;
+    align-items:baseline;
+    gap:5px;
+    margin-left:5px;
+    white-space:nowrap;
+    opacity:0;
+    transform:translateX(-4px);
+    pointer-events:none;
+    transition:opacity .2s ease, transform .2s ease;
+}
+
+#panel.browsing .wordmark-tail {
+    opacity:1;
+    transform:none;
+    pointer-events:auto;
+}
+
+.wordmark-sep {
+    font-weight:400;
+    color:var(--subtitle-stage);
 }
 
 .header-wordmark:focus-visible {
@@ -3728,11 +3792,6 @@ header {
 
 #panel.browsing #comments-content,
 #panel.browsing .filter-banner {
-    display:none;
-}
-
-#panel.browsing .wordmark-home,
-#panel:not(.browsing) .wordmark-back {
     display:none;
 }
 
@@ -4473,8 +4532,9 @@ header button svg {
 ${
 	browse
 		? `<button id="browse-toggle" class="header-wordmark" type="button"
-title="Browse Hacker News"><span class="wordmark-home"><b>HN</b>ewhere</span><span
-class="wordmark-back">&lsaquo; Hacker News</span></button>`
+title="Browse Hacker News"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
+class="wordmark-root"><b>HN</b>ewhere</span><span class="wordmark-tail"><span
+class="wordmark-sep">/</span>Hacker News</span></button>`
 		: `<span><b>HN</b>ewhere</span>`
 }
 ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
