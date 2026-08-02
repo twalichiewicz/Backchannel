@@ -8,6 +8,174 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.5.8] — 2026-08-02
+
+### Added
+
+- **The sidebar can show the Hacker News front page.** Reading an article with
+  HNewhere open, you could reach its discussion and nothing else; deciding what
+  to read next still meant going back to Hacker News. The wordmark in the panel
+  header is now the way there, and the way back, with the list paged the way
+  Hacker News pages its own.
+
+  It leads to **Read more** rather than to Hacker News, because Hacker News is
+  only one of the two things behind it. Your queue is the other, and it is the
+  half you put there yourself. An ellipsis after the wordmark says the title can
+  be pressed at all — it has no border, no background, and on a touch screen no
+  hover to discover it with.
+
+  A story opened from that list is opened the way one clicked on Hacker News is.
+  The panel records the click exactly as it does while you are on HN, so the page
+  you land on reads it as an arrival — which means automatic opening applies, and
+  so does *Only when arriving from Hacker News*, without either of them knowing
+  this path exists.
+
+  The discussion you were reading is hidden while you browse rather than thrown
+  away, so coming back puts you where you were, part-scrolled, with any focused
+  discussion still open. The two cross-fade, and the header opens into the trail
+  the same way the settings panel opens into its hidden-sites list: a chevron
+  sliding out from nothing, the trail fading into place behind it. It is the same
+  movement — a level opening inside the panel with the way back left behind — so
+  it is built from the same parts.
+
+  It is reachable from pages that have no discussion at all, which is where the
+  question is asked most sharply: the wordmark is in the submit popover's header
+  too, and opens the panel straight into browsing — sliding in from the edge it
+  is docked to, since it is replacing a small box beside the button with a
+  full-height panel and the movement is what connects the two. A panel opened
+  that way leaves the page as it found it: minimizing gives back the grey submit
+  button and records no preference about a discussion that does not exist.
+
+  The first page offers *More*, which is what Hacker News offers. Deeper in, where
+  there is a way back as well, the row says which page you are on.
+
+- **A reading queue.** *queue* on any story — on Hacker News itself, in its own
+  row in front of *flag*, or on any row in the sidebar's front page — puts it in
+  a list, and the list is waiting under *Queue* when you want it. At the foot of
+  a finished discussion, where the question actually gets asked, a strip offers
+  whatever is next.
+
+  Arriving at something you queued marks it read rather than removing it. The
+  match is on the normalised URL, so a tracking parameter picked up on the way in
+  does not defeat it — but a URL match can still be wrong, and something quietly
+  eaten cannot be corrected, so read entries dim and sink beneath the unread ones
+  until you clear them.
+
+  **The queue is offered on Hacker News itself**, once there is something in it.
+  That is where a queue gets filled, often across several pages, and what you do
+  next is read it — which otherwise meant remembering what you had put in. The
+  button appears there and opens the panel on the queue. Nothing sits behind the
+  trail there, the front page being the page underneath, so the wordmark reads
+  *HNewhere / Queue* and stops being a way back.
+
+  Everywhere else the queue leads as soon as it has entries: the *Queue* tab
+  moves in front of *Front page* and is what the panel opens on. Switching tabs
+  lasts as long as the panel is open and no longer, so one press cannot quietly
+  turn that off. The trail names whichever you are looking at — *Queue*, or
+  *Read more* on the front page.
+
+  A queued story is described the same way a front-page one is, because the queue
+  is the same list with most of it filtered out. Scores and comment counts are
+  refreshed when you open it, since a queue is read days after it was filled.
+
+- **A focused discussion can now be built around any comment.** The sidebar
+  could already filter a thread down to one conversation, but only through a
+  quoted passage — which meant the feature was unavailable on the great majority
+  of comments, the ones that quote nothing. *focus*, beside *reply*, shows a
+  comment's chain up to the root and everything below it.
+
+  That is Hacker News' own `parent`, `root` and `context` in a single view, and
+  it is the same view a quoted passage opens rather than one that resembles it:
+  both ask for a comment's ancestors and its whole subtree, and both return you
+  to where you were reading when you leave.
+
+  The banner says which it is. A quoted passage is shown between quote marks,
+  because they are somebody else's words lifted from the article; a comment is
+  named by its author, because it is the comment itself.
+
+- **Favorite and flag, on stories and on comments.** The sidebar offered one of
+  Hacker News' actions and read as though it offered them all.
+
+  These take a different route from the rest of the panel. Everything HNewhere
+  reads, it reads over a cross-site request, and the browser strips Hacker News'
+  session cookie from those — so the page that comes back is a logged-out one,
+  which renders no favorite link and no flag link at all. There is no state to
+  read and nothing to act with. Both therefore travel the same way a vote does,
+  through a brief popup on Hacker News itself, which is the only place the truth
+  is visible; what it reports is what the panel remembers.
+
+  Both links appear everywhere, because the panel cannot know in advance whether
+  either applies to you. The popup finds out — being logged out and being below
+  the karma flagging asks for look identical from here, which is to say the link
+  simply is not there — and the answer is kept, so a link that cannot work
+  retires rather than being offered again on every comment.
+
+### Changed
+
+- **A hatched band marks where the panel changes subject.** An article submitted
+  to Hacker News more than once shows each submission in turn, and the break
+  between them was a hairline — which says "and" where it means "different thing
+  now". It is diagonal hatching now, running the full width of the panel rather
+  than stopping short of its edges, and the same band separates a finished thread
+  from what to read next.
+
+- **The line under a story title follows Hacker News' order and punctuation.**
+  It reads `214 points by someone 2 hours ago | flag | favorite | 21 comments`,
+  where HN reads `118 points by eniac111 6 hours ago | flag | hide | past |
+  favorite | 17 comments`. Ours had a bar between the author and the age, where
+  HN uses a bare space, and put the comment count in the middle of the actions
+  rather than at the end of the line. The same corrections apply to comments,
+  where *flag* now precedes *favorite*.
+
+  This is a change to a line that was already there — the story header at the
+  top of every discussion — rather than only to the new front page.
+
+- **The front page is set to Hacker News' own measure.** A story there runs 35px
+  from one title to the next: a title line, a subtext line, and a five-pixel
+  spacer. Ours ran 65. Most of the difference was that the story header's type is
+  sized for the top of a discussion, where the story is the headline and the only
+  one on screen; thirty of them in a list is a different job. A single-line row
+  now measures 35.4px, and the separator between links carries HN's own spacing
+  rather than twice it.
+
+  Titles still wrap where Hacker News' would not. That is a 420px panel against a
+  1200px page, and it is the panel's width rather than its spacing.
+
+### Fixed
+
+- **A focused discussion was leaving out the replies to the comments it
+  focused.** It was meant to show a matching comment's chain up to the root and
+  everything below it, and it showed the chain alone — so the thread you were
+  handed stopped exactly where the conversation started. Focusing a thread's own
+  root comment showed that comment by itself.
+
+  The walk climbs and it descends, and the descent was refusing to start. It
+  declined to walk any comment already on screen, which is a sensible guard
+  against covering the same ground twice — except that the climb ran first and
+  put the focused comment on screen, so the descent found its own starting point
+  already there and stopped. The two walks are asking different questions, and
+  they now keep separate answers.
+
+- **Discussions on X are found again.** X renamed itself and Hacker News did
+  not. HN holds years of submissions under `twitter.com` while the site now
+  serves `x.com`, and the lookup asked for the address it was standing on — so a
+  tweet with a couple of hundred comments waiting on it came up empty and got a
+  grey button.
+
+  The two names are read as one now, on both sides of the comparison: the
+  address in hand and every submission it is measured against. Which of the two
+  a given link happens to use therefore stops mattering, in either direction.
+
+- **A page's own text styling no longer reaches into the sidebar.** Shadow DOM
+  keeps a page's selectors out but not its inheritance, and the panel pinned its
+  font and its colours without pinning anything that moves text about. A site
+  that centres its body centred the entire panel, comments and all.
+
+  `text-align` is only the one that turned up. The same door was open for
+  `text-transform`, `letter-spacing`, `word-spacing`, `font-style`,
+  `font-variant`, `text-indent` and `white-space`, each of them waiting for the
+  site that happens to set it, so they are all shut now.
+
 ## [1.5.7] — 2026-07-31
 
 ### Added

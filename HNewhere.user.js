@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         HNewhere
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.5.7
+// @version      1.5.8
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
@@ -103,6 +103,8 @@
 		state: "HNewhere:sidebar_state",
 		votes: "HNewhere:votes",
 		blocked: "HNewhere:blocked_sites",
+		queue: "HNewhere:queue",
+		itemActions: "HNewhere:item_actions",
 	};
 
 	// Votes have to be remembered locally. The sidebar reads HN over a cross-site
@@ -194,6 +196,11 @@
 		// discussion rather than not appearing at all. Turning it on restores the
 		// pre-1.5.3 behaviour of staying hidden unless there is something to read.
 		hideWithoutDiscussion: false,
+		// Narrows the setting above, which was chosen before there was a queue to
+		// reach through that button. Off by default for the same reason
+		// autoOpenSidebarOnlyFromHN is: a reader who set the parent gets exactly
+		// what they set until they say otherwise.
+		showButtonWithQueue: false,
 		// "auto" reproduces the pre-1.5.4 behaviour of following the page.
 		theme: "auto",
 		buttonShape: "circle",
@@ -218,17 +225,22 @@
 		}
 	})();
 
-	const VOTE_BRIDGE_MESSAGE_SOURCE = "HNewhereVoteBridge";
+	// The wire value stays "HNewhereVoteBridge" though the mechanism no longer only
+	// votes. It is the protocol between a popup and the page that opened it, and a
+	// reader who updates the script mid-session can have one of each live at once --
+	// renaming the string would leave that popup unable to report what it did.
+	const ITEM_ACTION_BRIDGE_MESSAGE_SOURCE = "HNewhereVoteBridge";
 	const SUBMIT_BRIDGE_MESSAGE_SOURCE = "HNewhereSubmitBridge";
 	const COMMENT_BRIDGE_MESSAGE_SOURCE = "HNewhereCommentBridge";
 
 	// HN truncates submission titles at 80 characters.
 	const HN_TITLE_LIMIT = 80;
 
-	// The popup votes by navigating to the vote URL, and HN's goto redirect drops
-	// the URL fragment, so the bridge payload cannot ride the hash across it.
+	// The popup acts by navigating to HN's own action URL, and HN's goto redirect
+	// drops the URL fragment, so the bridge payload cannot ride the hash across it.
 	// sessionStorage is per-tab and per-origin, which is exactly the popup's life.
-	const VOTE_BRIDGE_STORAGE_KEY = "hnewhere-vote-bridge";
+	// The key keeps its old name for the same reason the message source does.
+	const ITEM_ACTION_BRIDGE_STORAGE_KEY = "hnewhere-vote-bridge";
 	const SUBMIT_BRIDGE_STORAGE_KEY = "hnewhere-submit-bridge";
 	const COMMENT_BRIDGE_STORAGE_KEY = "hnewhere-comment-bridge";
 
@@ -258,6 +270,10 @@
 	let sidebarGeneration = 0;
 	let renderedComments = [];
 	let annotationController = null;
+	// Tagged rather than a bare group key: a focused discussion can now be entered
+	// two ways -- through a quoted passage, or through a comment -- and everything
+	// that re-applies or tears down a filter has to know which it is holding.
+	// { type: "quote", key } | { type: "comment", id }
 	let activeCommentFilter = null;
 
 	// Where the reader was, in both the thread and the article, before a focused
@@ -373,6 +389,140 @@
 		return (await loadBlockedSites()).has(siteKey());
 	}
 
+	// #region hnewhere-test-export
+
+	// The reading queue is a list rather than a set, because its order is the
+	// feature: what you saved first is what you are offered next. Every rule below
+	// is a pure transform of that list so the ordering can be argued about without
+	// a browser. The URL comparison arrives as an argument for the same reason
+	// referrerIsHN takes its referrer -- the real one normalizes, and normalizeURL
+	// lives outside this region.
+	function addToQueue(entries, story, now) {
+		const list = Array.isArray(entries) ? entries : [];
+
+		// Saving something twice is not an error and not a second copy, and it does
+		// not move it: a story saved an hour ago keeps its place in the line, which
+		// is what having a line is for.
+		if (list.some((entry) => entry.id === story.id)) {
+			return list;
+		}
+
+		// Everything a row displays is kept, not just what identifies the story. The
+		// queue is the same list as the front page with most of it filtered out, so
+		// a row in it has to be able to say the same things -- and a queue entry is
+		// read days after it was made, long after the page it came from is gone.
+		return [
+			...list,
+			{
+				id: story.id,
+				url: story.url,
+				title: story.title,
+				by: story.by || "",
+				score: story.score || 0,
+				time: story.time || 0,
+				descendants: story.descendants || 0,
+				site: story.site || "",
+				addedAt: now,
+				readAt: null,
+			},
+		];
+	}
+
+	function removeFromQueue(entries, id) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => entry.id !== id,
+		);
+	}
+
+	// Unread first and oldest-saved at the top, so nothing starves at the bottom of
+	// a list that keeps growing. Read entries sink below them, most recently read
+	// first, which is the order you would look in for something you just finished.
+	function sortQueue(entries) {
+		return [...(Array.isArray(entries) ? entries : [])].sort((a, b) => {
+			const aRead = a.readAt ? 1 : 0;
+			const bRead = b.readAt ? 1 : 0;
+
+			if (aRead !== bRead) {
+				return aRead - bRead;
+			}
+
+			return aRead ? b.readAt - a.readAt : a.addedAt - b.addedAt;
+		});
+	}
+
+	// Stamped, never removed. Arrival is matched by URL and URLs drift -- a
+	// redirect, a paywall bounce, a canonical form the site prefers -- so a wrong
+	// match has to be visible and undoable rather than silently eating an entry the
+	// reader never got to.
+	function markQueueRead(entries, url, now, matches = sameURL) {
+		return (Array.isArray(entries) ? entries : []).map((entry) =>
+			!entry.readAt && matches(entry.url, url)
+				? { ...entry, readAt: now }
+				: entry,
+		);
+	}
+
+	function clearReadFromQueue(entries) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => !entry.readAt,
+		);
+	}
+
+	function nextUnreadInQueue(entries) {
+		return sortQueue(entries).find((entry) => !entry.readAt) || null;
+	}
+
+	function unreadQueueCount(entries) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => !entry.readAt,
+		).length;
+	}
+
+	// #endregion hnewhere-test-export
+
+	// Matched with sameURL, which normalizes both sides -- the same comparison
+	// findHN uses to decide two addresses are the same submission -- so a tracking
+	// parameter added on the way in, or a fragment, does not stop the queue
+	// recognising where you have got to.
+	//
+	// Writes only when something actually changed. A page pass runs on every load
+	// and on every soft navigation, and storing an identical list each time would
+	// be a write per navigation for nothing.
+	async function markQueueArrival(url = location.href, now = Date.now()) {
+		const entries = await loadQueue();
+
+		if (!entries.length) {
+			return false;
+		}
+
+		const marked = markQueueRead(entries, url, now);
+
+		if (marked.every((entry, index) => entry === entries[index])) {
+			return false;
+		}
+
+		await saveQueue(marked);
+
+		// The strip is showing what comes next, and what comes next has just changed.
+		if (sidebarUI?.shadow) {
+			refreshQueueCount(sidebarUI.shadow).catch(console.error);
+			refreshNextUp(sidebarUI.shadow).catch(console.error);
+		}
+
+		return true;
+	}
+
+	async function loadQueue() {
+		const stored = await load(STORAGE.queue, []);
+
+		return Array.isArray(stored) ? stored.filter((entry) => entry?.id) : [];
+	}
+
+	async function saveQueue(entries) {
+		await save(STORAGE.queue, entries);
+		return entries;
+	}
+
 	async function loadSiteWidth() {
 		const widths = await load(STORAGE.widths, {});
 		const perSiteWidth =
@@ -447,6 +597,9 @@
 	// at startup by loadRememberedVotes().
 	let rememberedVotes = {};
 
+	// { [itemId]: { favorite?: bool, flagged?: bool, flagUnavailable?: bool, at } }
+	let rememberedItemActions = {};
+
 	async function loadRememberedVotes() {
 		const stored = await load(STORAGE.votes, {});
 		const now = Date.now();
@@ -472,6 +625,181 @@
 
 		if (expired) {
 			await save(STORAGE.votes, kept);
+		}
+	}
+
+	// Favorite and flag have to be remembered for exactly the reason votes do, and
+	// it is worth saying plainly: an anonymously fetched page shows neither. The
+	// browser strips HN's SameSite cookie from a cross-site GM request, so the item
+	// page the sidebar reads is a logged-out one -- it renders no favorite link at
+	// all, and no flag link either. Only the popup ever sees the truth, so what the
+	// popup reports is what gets kept.
+	async function loadRememberedItemActions() {
+		const stored = await load(STORAGE.itemActions, {});
+		const now = Date.now();
+		const kept = {};
+		let expired = 0;
+
+		if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+			for (const [itemId, record] of Object.entries(stored)) {
+				if (!record || typeof record !== "object") {
+					continue;
+				}
+
+				if (Number.isFinite(record.at) && now - record.at > VOTE_MEMORY_TTL) {
+					expired++;
+					continue;
+				}
+
+				kept[itemId] = record;
+			}
+		}
+
+		rememberedItemActions = kept;
+
+		if (expired) {
+			await save(STORAGE.itemActions, kept);
+		}
+	}
+
+	function rememberItemAction(itemId, patch) {
+		const key = String(itemId);
+		const next = { ...(rememberedItemActions[key] || {}), ...patch, at: Date.now() };
+
+		rememberedItemActions[key] = next;
+		save(STORAGE.itemActions, rememberedItemActions).catch(console.error);
+
+		return next;
+	}
+
+	function itemActionState(itemId) {
+		return rememberedItemActions[String(itemId)] || null;
+	}
+
+	// Kept under a key no story id can collide with, since it is not about a story.
+	const ITEM_ACTION_ACCOUNT_KEY = "account";
+
+	function rememberItemActionUnavailable(field) {
+		const account = rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY] || {};
+
+		rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY] = {
+			...account,
+			[field + "Unavailable"]: true,
+			at: Date.now(),
+		};
+
+		save(STORAGE.itemActions, rememberedItemActions).catch(console.error);
+	}
+
+	// Expires on the same 90-day clock as everything else in here, so an account
+	// that gains the karma to flag -- or a reader who simply logs in -- is offered
+	// the link again rather than having been written off for good.
+	function clearItemActionUnavailable(field) {
+		const account = rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY];
+
+		if (!account?.[field + "Unavailable"]) {
+			return;
+		}
+
+		delete account[field + "Unavailable"];
+		save(STORAGE.itemActions, rememberedItemActions).catch(console.error);
+		refreshAllItemActionControls();
+	}
+
+	function itemActionUnavailable(field) {
+		return Boolean(
+			rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY]?.[field + "Unavailable"],
+		);
+	}
+
+	// Rendered on every story and every comment, because the sidebar cannot know
+	// whether either applies: it reads HN logged out, where a favorite link never
+	// appears and a flag link never appears either. The popup is what finds out, and
+	// what it finds is remembered here -- so a link discovered to be unavailable
+	// retires instead of being offered again on every comment in the thread.
+	// flag before favorite, which is the order HN lists them in:
+	// `… 6 hours ago | flag | hide | past | favorite | 17 comments`.
+	function itemActionLinksHTML(itemId) {
+		const id = escapeHTML(String(itemId));
+
+		return `
+      |
+      <button class="item-action-link" type="button"
+      data-item-action="flag" data-item-action-id="${id}">flag</button>
+      |
+      <button class="item-action-link" type="button"
+      data-item-action="fave" data-item-action-id="${id}">favorite</button>`;
+	}
+
+	const ITEM_ACTION_FIELD = { fave: "favorite", flag: "flagged" };
+
+	const ITEM_ACTION_LABEL = {
+		favorite: { on: "un-favorite", off: "favorite" },
+		flagged: { on: "unflag", off: "flag" },
+	};
+
+	function refreshItemActionControls(itemId) {
+		const root = sidebarUI?.shadow;
+
+		if (!root) {
+			return;
+		}
+
+		const state = itemActionState(itemId) || {};
+		const selector = `[data-item-action-id="${CSS.escape(String(itemId))}"]`;
+
+		for (const button of root.querySelectorAll(selector)) {
+			const field = ITEM_ACTION_FIELD[button.dataset.itemAction];
+			const on = Boolean(state[field]);
+
+			// Hidden rather than disabled. A disabled control still says the action
+			// exists and invites the reader to work out why they cannot have it;
+			// this one does not apply to them at all.
+			button.hidden = itemActionUnavailable(field);
+			button.textContent = ITEM_ACTION_LABEL[field][on ? "on" : "off"];
+			button.classList.toggle("item-action-on", on);
+		}
+	}
+
+	function refreshAllItemActionControls() {
+		const root = sidebarUI?.shadow;
+
+		if (!root) {
+			return;
+		}
+
+		const seen = new Set();
+
+		for (const button of root.querySelectorAll("[data-item-action-id]")) {
+			seen.add(button.dataset.itemActionId);
+		}
+
+		seen.forEach(refreshItemActionControls);
+	}
+
+	async function submitItemAction(button) {
+		const itemId = button.dataset.itemActionId;
+		const kind = button.dataset.itemAction;
+		const field = ITEM_ACTION_FIELD[kind];
+
+		if (!itemId || !field || button.disabled) {
+			return;
+		}
+
+		// Whether this is the doing or the undoing is decided from what is
+		// remembered, which is the only record there is -- a fetched page would say
+		// "not favorited" about everything.
+		const action = itemActionState(itemId)?.[field] ? "un" + kind : kind;
+
+		button.disabled = true;
+
+		try {
+			// No URL to pass: unlike a vote there is no client-injected link to hand
+			// over, so the popup finds the anchor on the page it lands on.
+			await openItemActionPopup(itemId, itemId, action, null);
+		} finally {
+			button.disabled = false;
+			refreshItemActionControls(itemId);
 		}
 	}
 
@@ -569,7 +897,7 @@
 	const itemCache = new Map();
 	const voteLinkCache = new Map();
 	const displayAgeCache = new Map();
-	const voteBridgeRequests = new Map();
+	const itemActionRequests = new Map();
 
 	async function getItem(id) {
 		if (itemCache.has(id)) {
@@ -659,9 +987,77 @@
 		return sorted;
 	}
 
+	const FRONT_PAGE_CACHE_KEY = "HNewhere:frontpage_cache";
+
+	// Five minutes, where findHN caches an hour. What findHN stores is which
+	// submissions exist for a URL, and that does not change; a ranking is the one
+	// thing on HN that changes continuously, and a front page half an hour old is
+	// a different front page.
+	const FRONT_PAGE_TTL = 5 * 60 * 1000;
+
+	// Fetched anonymously like everything else the sidebar reads -- the browser
+	// strips HN's SameSite cookie from a cross-site GM request -- which for this
+	// page costs nothing. The front page is the same for everyone; only the vote
+	// arrows would differ, and those are replayed from vote memory anyway.
+	async function loadFrontPage(options = {}) {
+		// Cached a page at a time, the way findHN caches a URL at a time. One entry
+		// holding every page would expire the whole run together, so paging back to
+		// where you were would refetch a page you read a moment ago.
+		const page = Math.max(1, Number(options.page) || 1);
+		const cacheKey = FRONT_PAGE_CACHE_KEY + ":" + page;
+		const cached = await load(cacheKey, null);
+
+		if (
+			!options.force &&
+			cached?.stories?.length &&
+			Date.now() - cached.timestamp < FRONT_PAGE_TTL
+		) {
+			return { stories: cached.stories, nextPage: cached.nextPage ?? null, page };
+		}
+
+		const html = await requestText(HN_ORIGIN + "/news?p=" + page);
+		const doc = html
+			? new DOMParser().parseFromString(html, "text/html")
+			: null;
+		const stories = doc ? parseFrontPage(doc) : [];
+
+		// A failed fetch, or markup we could not read, falls back to whatever is
+		// stored however old. Yesterday's front page is a worse answer than today's
+		// and a far better one than an empty panel that does not say why.
+		if (!stories.length) {
+			return {
+				stories: cached?.stories || [],
+				nextPage: cached?.nextPage ?? null,
+				page,
+			};
+		}
+
+		const nextPage = parseFrontPageNextPage(doc);
+
+		await save(cacheKey, { timestamp: Date.now(), stories, nextPage });
+
+		return { stories, nextPage, page };
+	}
+
 	// -------------------------
 	// Helpers
 	// -------------------------
+
+	// Hosts that renamed under Hacker News' feet. HN holds years of submissions
+	// under the old name while the site now serves the new one, so a reader on
+	// x.com looking at something submitted as twitter.com finds nothing at all --
+	// 179 comments, and a grey button.
+	//
+	// Folded onto one name rather than searched for twice, and because normalizeURL
+	// is applied to both sides -- the address in hand and every hit it is measured
+	// against -- it does not matter which way round the two arrive.
+	const HOST_ALIASES = new Map([
+		["x.com", "twitter.com"],
+		["www.x.com", "twitter.com"],
+		["mobile.x.com", "twitter.com"],
+		["www.twitter.com", "twitter.com"],
+		["mobile.twitter.com", "twitter.com"],
+	]);
 
 	function normalizeURL(url) {
 		try {
@@ -678,8 +1074,10 @@
 				u.searchParams.delete(key);
 			}
 
+			const host = u.hostname.toLowerCase();
+
 			return (
-				u.hostname.toLowerCase() +
+				(HOST_ALIASES.get(host) || host) +
 				u.pathname.replace(/\/$/, "") +
 				u.search
 			);
@@ -1646,7 +2044,7 @@
 	}
 
 	// One-shot listener per bridge kind, resolving whichever request matches the
-	// nonce the popup reports back. Modelled on setupVoteBridgeListener.
+	// nonce the popup reports back. Modelled on setupItemActionListener.
 	function createBridgeChannel(source) {
 		const pending = new Map();
 		let installed = false;
@@ -2220,7 +2618,7 @@
 		return descriptors;
 	}
 
-	function voteBridgePageURL(storyID, itemId, action, voteURL, nonce) {
+	function itemActionPageURL(storyID, itemId, action, voteURL, nonce) {
 		const url = new URL(commentURL(itemId));
 		const hash = new URLSearchParams();
 		hash.set("hnewhere-vote", "1");
@@ -2241,12 +2639,12 @@
 		return url.href;
 	}
 
-	function setupVoteBridgeListener() {
-		if (window.__hnewhereVoteBridgeListenerInstalled) {
+	function setupItemActionListener() {
+		if (window.__hnewhereItemActionListenerInstalled) {
 			return;
 		}
 
-		window.__hnewhereVoteBridgeListenerInstalled = true;
+		window.__hnewhereItemActionListenerInstalled = true;
 		window.addEventListener("message", (event) => {
 			if (event.origin !== HN_ORIGIN) {
 				return;
@@ -2254,7 +2652,7 @@
 
 			const data = event.data;
 
-			if (!data || data.source !== VOTE_BRIDGE_MESSAGE_SOURCE || !data.nonce) {
+			if (!data || data.source !== ITEM_ACTION_BRIDGE_MESSAGE_SOURCE || !data.nonce) {
 				return;
 			}
 
@@ -2272,14 +2670,44 @@
 				);
 			}
 
-			const pending = voteBridgeRequests.get(data.nonce);
+			// Favorite and flag are remembered the same way and for the same reason:
+			// the popup is the only place the truth was visible. An unavailable action
+			// is remembered too, so the sidebar stops offering a link that cannot
+			// work rather than asking again on every comment.
+			if (data.itemId && ITEM_ACTION_PATHS[data.action]) {
+				const field = data.action.endsWith("fave") ? "favorite" : "flagged";
+
+				if (data.reason === "action-unavailable") {
+					// Remembered against the account rather than the story. Being logged
+					// out, or below the karma flagging asks for, is not a fact about the
+					// item -- so recording it per item meant discovering it again on
+					// every one, a popup at a time.
+					rememberItemActionUnavailable(field);
+					refreshAllItemActionControls();
+					return;
+				}
+
+				if (typeof data.applied === "boolean") {
+					rememberItemAction(data.itemId, { [field]: data.applied });
+
+					// HN just answered for this action, so whatever made it look
+					// unavailable no longer holds. Self-healing matters here because
+					// the record is account-wide: without it a single wrong answer
+					// would keep every one of these links hidden until it expired.
+					clearItemActionUnavailable(field);
+				}
+
+				refreshItemActionControls(data.itemId);
+			}
+
+			const pending = itemActionRequests.get(data.nonce);
 
 			if (!pending) {
 				return;
 			}
 
 			clearTimeout(pending.timeoutId);
-			voteBridgeRequests.delete(data.nonce);
+			itemActionRequests.delete(data.nonce);
 
 			try {
 				pending.popup?.close();
@@ -2289,13 +2717,13 @@
 		});
 	}
 
-	function openVoteBridgePopup(storyID, itemId, action, voteURL) {
-		setupVoteBridgeListener();
+	function openItemActionPopup(storyID, itemId, action, voteURL) {
+		setupItemActionListener();
 
 		return new Promise((resolve) => {
 			const nonce =
 				String(Date.now()) + Math.random().toString(36).slice(2, 10);
-			const bridgeURL = voteBridgePageURL(
+			const bridgeURL = itemActionPageURL(
 				storyID,
 				itemId,
 				action,
@@ -2319,11 +2747,11 @@
 			// finish and close itself. The window covers two page loads (the vote
 			// and HN's redirect back), so it is generous.
 			const timeoutId = window.setTimeout(() => {
-				voteBridgeRequests.delete(nonce);
+				itemActionRequests.delete(nonce);
 				resolve({ ok: false, reason: "timeout" });
 			}, 12000);
 
-			voteBridgeRequests.set(nonce, {
+			itemActionRequests.set(nonce, {
 				resolve,
 				timeoutId,
 				popup,
@@ -2343,7 +2771,7 @@
 		});
 
 		try {
-			const result = await openVoteBridgePopup(
+			const result = await openItemActionPopup(
 				storyID,
 				itemId,
 				descriptor.action,
@@ -2433,7 +2861,17 @@
 		}
 	}
 
+	// Ridden along with the vote hydration rather than given a pass of its own: both
+	// are "put the state we remember onto the rows that have just rendered", and
+	// they are wanted at exactly the same moments -- a first render, a re-render, a
+	// blended view gaining a submission.
+	function hydrateItemActionsForRoot() {
+		refreshAllItemActionControls();
+	}
+
 	function hydrateVoteControlsForStory(storyID, voteLinks = new Map()) {
+		hydrateItemActionsForRoot();
+
 		const containers = sidebarUI?.body?.querySelectorAll(
 			`[data-hn-vote-story-id="${String(storyID)}"]`,
 		);
@@ -2581,6 +3019,723 @@
 		button.remove();
 	}
 
+	function isBrowsing(ui) {
+		return Boolean(
+			ui?.shadow?.querySelector("#panel")?.classList.contains("browsing"),
+		);
+	}
+
+	// Hiding the discussion keeps every reference into it alive, but it does not
+	// keep the reader's place: #comments is the scroll container for both views, so
+	// hiding one collapses its height and the browser clamps scrollTop to zero long
+	// before anyone comes back. The position is carried across by hand for the same
+	// reason preFilterPosition exists -- leaving a surface should put you back where
+	// you left it.
+	let discussionScrollTop = 0;
+
+	// Matches the .16s the two views transition over, so the outgoing one is gone
+	// before the swap rather than being cut off partway down.
+	const VIEW_SWAP_FADE_MS = 160;
+
+	// The wordmark carries both states rather than a second control appearing
+	// beside it: it is the same affordance in both directions -- go to Hacker News,
+	// come back to this page -- and the header's action row already holds three.
+	//
+	// One class toggle and a title. Both labels are already in the button and CSS
+	// picks between them, so nothing here rewrites markup on a control the reader
+	// is pointing at.
+	function setBrowseMode(ui, on, options = {}) {
+		const panel = ui?.shadow?.querySelector("#panel");
+		const toggle = ui?.shadow?.querySelector("#browse-toggle");
+		const comments = ui?.shadow?.querySelector("#comments");
+
+		if (!panel || !toggle) {
+			return;
+		}
+
+		if (on && comments) {
+			discussionScrollTop = comments.scrollTop;
+		}
+
+		// What the panel opens on, decided fresh each time it is opened. A queue
+		// with something in it is what the reader came for -- they put it there --
+		// so it leads. Switching tabs while the panel is open lasts as long as the
+		// panel is open, and no longer: a latch that survived would mean one
+		// incidental press turning this off for good, invisibly, which is the fault
+		// the auto-open setting was already fixed for once.
+		if (on) {
+			browseTab = options.tab || (queueHasItems ? "queue" : "front");
+		}
+
+		const swap = () => {
+			panel.classList.toggle("browsing", on);
+			toggle.title = on
+				? "Back to this page's discussion"
+				: "Hacker News and your queue";
+
+			if (comments) {
+				// Assigning scrollTop forces the layout it depends on, so the list is
+				// measured in the state the class change has just put it in rather
+				// than the one before.
+				comments.scrollTop = on ? 0 : discussionScrollTop;
+			}
+
+			if (on) {
+				renderBrowseView(ui).catch(console.error);
+			}
+		};
+
+		// animate:false is for a panel that is not on screen yet. Cross-fading two
+		// views nobody can see would only delay the one they are about to.
+		if (!comments || options.animate === false || prefersReducedMotion()) {
+			swap();
+			return;
+		}
+
+		// The outgoing view fades, then the swap happens behind it, then the
+		// incoming one fades up. The class has to survive one frame past the swap:
+		// the view arriving was display:none until that moment, and a browser given
+		// its display and its opacity in the same frame settles both at once with
+		// nothing to transition -- the same reason the panel's own fade waits a
+		// frame.
+		if (comments._hnewhereSwapTimer) {
+			clearTimeout(comments._hnewhereSwapTimer);
+		}
+
+		comments.classList.add("views-swapping");
+		comments._hnewhereSwapTimer = window.setTimeout(() => {
+			swap();
+			requestAnimationFrame(() => {
+				comments.classList.remove("views-swapping");
+				comments._hnewhereSwapTimer = null;
+			});
+		}, VIEW_SWAP_FADE_MS);
+	}
+
+	// Borrowing the story vocabulary rather than renderStory itself: the title
+	// leads to the article here instead of to the discussion, there is no composer
+	// and no story text, and a rank sits in front. Same classes, so a browse row
+	// and the story at the top of a discussion read as the same kind of object.
+	function renderBrowseRow(story, container, rank, options = {}) {
+		// HN's own order and HN's own punctuation: the age follows the author on a
+		// bare space, the actions come next, and the comment count closes the line.
+		// `75 points by AlexeyBrin 3 hours ago | hide | 11 comments`.
+		//
+		// One shape for both lists. The queue is the front page with most of it
+		// filtered out, so a story in it is described the same way -- what differs
+		// is which stories are there and what order they are in.
+		const meta = `${escapeHTML(pluralize(story.score, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}
+	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
+	|
+	<button class="browse-save-link" type="button">queue</button>
+	${itemActionLinksHTML(story.id)}
+	|
+	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
+	target="_blank" rel="noopener noreferrer">${escapeHTML(pluralize(story.descendants, "comment"))}</a>`;
+
+		const row = document.createElement("div");
+		row.className = "story browse-row";
+		row.dataset.storyId = String(story.id);
+		row.innerHTML = `
+	<div class="browse-rank">${rank}.</div>
+	<div class="browse-main">
+	<div class="story-title">
+	<a class="browse-title-link" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
+	${story.site ? `<span class="browse-site">(${escapeHTML(story.site)})</span>` : ""}
+	</div>
+	<div class="story-meta">
+	${meta}
+	</div>
+	</div>
+	`;
+
+		const saveButton = row.querySelector(".browse-save-link");
+
+		{
+			// A text link on these rows says what pressing it will do, the way every
+			// one of HN's own does -- favorite becomes un-favorite, not favorited. In
+			// the queue the thing it will do is take the story out of the list, and
+			// "remove" is what that is called there.
+			const queuedLabel = options.inQueue ? "remove" : "queued";
+
+			// Read once per row rather than passed in, so a row rendered after
+			// something was queued elsewhere still opens in the right state.
+			loadQueue()
+				.then((entries) => {
+					saveButton.textContent = entries.some((e) => e.id === story.id)
+						? queuedLabel
+						: "queue";
+				})
+				.catch(console.error);
+
+			// The same toggle in both lists. Un-queueing from inside the queue takes
+			// the row out with it rather than waiting for a redraw, so the list
+			// answers at once; on the front page the row stays and only the word
+			// changes, because the story is still on the front page either way.
+			saveButton.onclick = async () => {
+				const entries = await loadQueue();
+				const already = entries.some((e) => e.id === story.id);
+
+				await saveQueue(
+					already
+						? removeFromQueue(entries, story.id)
+						: addToQueue(entries, story, Date.now()),
+				);
+
+				saveButton.textContent = already ? "queue" : queuedLabel;
+
+				if (already && row.parentElement?.closest("#browse-list") && browseTab === "queue") {
+					row.remove();
+				}
+
+				refreshQueueCount(container.getRootNode());
+				refreshNextUp(container.getRootNode());
+			};
+		}
+
+		row.querySelector(".browse-title-link").onclick = (event) => {
+			// The same record setupHNListener writes when you click a story on HN.
+			// Written before navigating, so the page you land on reads the arrival it
+			// would have read coming from HN itself -- which is what makes automatic
+			// opening, and "only when arriving from Hacker News", apply to a story
+			// opened from here without either of them knowing this path exists.
+			const record = save(STORAGE.last, {
+				url: story.url,
+				ids: [String(story.id)],
+				timestamp: Date.now(),
+			});
+
+			// A modified or middle click means "open it somewhere else" everywhere on
+			// the web, and it means that here too, so the default is left alone. The
+			// record is still made and simply not waited on: the browser is already
+			// opening the tab, and a GM write lands well inside a page load.
+			if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+				return;
+			}
+
+			event.preventDefault();
+
+			// Navigates either way. A storage error is not a reason to refuse to open
+			// the article -- it costs the arrival, not the click.
+			record.catch(() => {}).then(() => {
+				location.href = story.url;
+			});
+		};
+
+		container.appendChild(row);
+		return row;
+	}
+
+	let queueHasItems = false;
+
+	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
+	// rather than the ui object because a browse row only knows the tree it is in.
+	async function refreshQueueCount(root) {
+		const tab = root?.querySelector?.("#browse-tab-queue");
+
+		if (!tab) {
+			return;
+		}
+
+		const entries = await loadQueue();
+		const unread = unreadQueueCount(entries);
+
+		// The bare word when there is nothing waiting. A "(0)" is a number that says
+		// nothing and still asks to be read. Lower case, the way HN sets the tabs on
+		// its own pages -- "submissions | comments" on a profile.
+		tab.textContent = unread ? `queue (${unread})` : "queue";
+
+		queueHasItems = entries.length > 0;
+
+		// Present or absent, never moved. A tab that slides about as its contents
+		// change asks to be watched; one that is simply there when it has something
+		// to offer does not.
+		tab.hidden = !queueHasItems;
+
+		// Emptied while it was the thing on screen. The tab it was under has just
+		// gone, so staying would leave the reader on a list with nothing in it
+		// beneath a tab that is no longer there -- and the front page is the only
+		// other place to be. Safe from looping: renderBrowseView sets the tab before
+		// it reaches this, so the pass it starts cannot come back through here.
+		if (!queueHasItems && browseTab === "queue" && sidebarUI) {
+			renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+		}
+	}
+
+	// Kept across a round trip to the discussion, the way the discussion's own
+	// scroll position is: having paged three deep and gone to read something, coming
+	// back to the first page again would be the panel forgetting where you were.
+	let browsePage = 1;
+	let browseTab = "front";
+
+	// HN numbers its rows continuously across pages -- page 2 starts at 31 -- and
+	// the rank is only useful if it says the same thing.
+	const FRONT_PAGE_SIZE = 30;
+
+	function renderBrowseNav(view, { page, nextPage }, onNavigate) {
+		const nav = document.createElement("div");
+		nav.className = "browse-nav";
+
+		const link = (text, target, disabled = false) => {
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = "browse-nav-link";
+			button.textContent = text;
+			button.disabled = disabled;
+			button.onclick = () => onNavigate(target);
+			return button;
+		};
+
+		// On the first page there is only one direction to go, and Hacker News calls
+		// it More -- capitalised, as it writes it. Saying "page 1" and offering a
+		// disabled way back is the panel describing a position nobody is lost in.
+		if (page <= 1) {
+			if (nextPage) {
+				nav.appendChild(link("More", nextPage));
+				view.appendChild(nav);
+			}
+
+			return;
+		}
+
+		// Deeper in there is a way back as well, and then which end you are at is
+		// worth stating: a list that has run out is a different thing from one that
+		// has more, and both ends stay visible rather than vanishing.
+		const label = document.createElement("span");
+		label.className = "browse-nav-page";
+		label.textContent = "page " + page;
+
+		nav.append(
+			link("‹ prev", page - 1),
+			label,
+			link("next ›", nextPage, !nextPage),
+		);
+		view.appendChild(nav);
+	}
+
+	// At the foot of a finished discussion, which is where the question it answers
+	// gets asked. Rendered only when something is actually waiting: a strip that
+	// says "nothing next" is furniture.
+	async function refreshNextUp(root) {
+		const strip = root?.querySelector?.("#next-up");
+
+		if (!strip) {
+			return;
+		}
+
+		const entries = await loadQueue();
+		const next = nextUnreadInQueue(entries);
+
+		if (!next) {
+			strip.classList.add("hidden");
+			strip.replaceChildren();
+			return;
+		}
+
+		const remaining = unreadQueueCount(entries);
+
+		const label = document.createElement("span");
+		label.className = "next-up-label";
+		label.textContent = "Next in queue ›";
+
+		const title = document.createElement("a");
+		title.className = "next-up-title";
+		title.href = next.url;
+		title.textContent = next.title;
+
+		const count = document.createElement("span");
+		count.className = "next-up-count";
+		// The one still to be read is included, so this counts what is left rather
+		// than what is left after this one -- "1 left" on the last article reads as
+		// there being another.
+		count.textContent = pluralize(remaining, "left", "left");
+
+		title.onclick = (event) => {
+			// Same record and same rules as a browse row: this is a story being opened
+			// from HNewhere, and the page it lands on should read it as an arrival.
+			const record = save(STORAGE.last, {
+				url: next.url,
+				ids: [String(next.id)],
+				timestamp: Date.now(),
+			});
+
+			if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+				return;
+			}
+
+			event.preventDefault();
+			record.catch(() => {}).then(() => {
+				location.href = next.url;
+			});
+		};
+
+		// The contents go in a row of their own so the strip itself can carry the
+		// band as a ::before. As a flex container it could not: a pseudo-element
+		// there becomes another item in the row rather than a block above it.
+		const row = document.createElement("div");
+		row.className = "next-up-row";
+		row.append(label, title, count);
+
+		strip.replaceChildren(row);
+		strip.classList.remove("hidden");
+	}
+
+	// True while the panel is showing a discussion. False when it was opened purely
+	// to browse, from a page that has none -- which decides what the chevron goes
+	// back to and which button minimizing leaves behind.
+	let sidebarHasDiscussion = true;
+
+	// What sits behind the chevron when there is no discussion. It has to say
+	// something: a back arrow leading to an empty panel reads as a fault, and the
+	// reason it is empty is the one thing worth saying here.
+	function renderNoDiscussion(ui) {
+		const body = ui?.body;
+
+		if (!body) {
+			return;
+		}
+
+		body.replaceChildren();
+
+		const message = document.createElement("div");
+		message.className = "browse-empty no-discussion";
+		message.textContent =
+			"No Hacker News discussion for this page yet. Minimize to submit it, or read something else.";
+
+		body.appendChild(message);
+	}
+
+	const PANEL_ENTER_MS = 180;
+
+	function slidePanelIn(ui) {
+		const panel = ui?.shadow?.querySelector("#panel");
+
+		if (!panel || prefersReducedMotion() || typeof panel.animate !== "function") {
+			return;
+		}
+
+		// Animated outright rather than by adding a class and taking it away. A CSS
+		// transition needs a start the browser has actually resolved, and this panel
+		// is created, classed and un-classed inside a single task -- so there is
+		// never a resolved off-screen state to leave, and both states collapse into
+		// "already arrived". Neither a pair of animation frames nor a forced layout
+		// read shook that loose.
+		//
+		// An animation carries its own first keyframe, so there is nothing to
+		// coalesce and nothing to time. It is also how the rest of the file animates
+		// -- the button's spinner and the submit fill are both done this way -- and
+		// it leaves no styles behind to clean up afterwards.
+		panel.animate(
+			[
+				{ transform: "translateX(100%)", opacity: 0 },
+				{ transform: "none", opacity: 1 },
+			],
+			{ duration: PANEL_ENTER_MS, easing: "ease" },
+		);
+	}
+
+	// The trail's destination, which is not always the same place. Off an article it
+	// leads to Read more -- the front page and the queue together. On Hacker News
+	// the front page is already underneath the panel, so the only thing it can be
+	// offering is the queue, and it says so.
+	function setWordmarkDestination(ui, label) {
+		const tail = ui?.shadow?.querySelector(".wordmark-tail");
+		const sep = tail?.querySelector(".wordmark-sep");
+
+		if (!tail || !sep) {
+			return;
+		}
+
+		const swap = () => tail.replaceChildren(sep, document.createTextNode(label));
+
+		// Nothing to announce if it already says this, and animating it anyway would
+		// blink the trail every time the same tab is re-rendered.
+		if (tail.textContent.endsWith(label)) {
+			return;
+		}
+
+		if (prefersReducedMotion() || typeof tail.animate !== "function") {
+			swap();
+			return;
+		}
+
+		// Out, changed, back in. The word is swapped at the bottom of the fade
+		// rather than at either end, so the trail is never seen mid-change -- what
+		// reads as one thing becoming another rather than as text being edited.
+		const out = tail.animate([{ opacity: 1 }, { opacity: 0 }], {
+			duration: 110,
+			easing: "ease",
+			fill: "forwards",
+		});
+
+		out.finished
+			.then(() => {
+				swap();
+				out.cancel();
+				tail.animate([{ opacity: 0 }, { opacity: 1 }], {
+					duration: 110,
+					easing: "ease",
+				});
+			})
+			.catch(() => swap());
+	}
+
+	// The panel on Hacker News itself, offered only once there is a queue to work
+	// through. HN is where a queue gets filled, often across several pages, and
+	// what you do next is read it -- which until now meant remembering what you
+	// had put in.
+	async function offerQueueOnHN() {
+		if (document.getElementById("hn-queue-button")) {
+			return;
+		}
+
+		// The Hacker News branch returns long before runPagePass, which is where
+		// every other page reads these. Without them the button is drawn from the
+		// declared defaults -- a 44px circle on the automatic theme -- whatever the
+		// reader actually chose, and a site they had hidden HNewhere on would put
+		// one there regardless.
+		//
+		// loadSettings is called for its effect rather than its answer: it syncs the
+		// appearance preferences the button is built from.
+		const [blocked, , entries] = await Promise.all([
+			isSiteBlocked(),
+			loadSettings(),
+			loadQueue(),
+		]);
+
+		if (blocked || !entries.length) {
+			return;
+		}
+
+		const button = createFloatingHNButton("hn-queue-button");
+
+		if (!button._dragController) {
+			button._dragController = makeButtonDraggable(button);
+		}
+
+		if (!isMobile()) {
+			await applyButtonPosition(button);
+		}
+
+		button.onclick = async () => {
+			if (button._dragController.wasMoved()) {
+				return;
+			}
+
+			destroyFloatingButton(button);
+			await openSidebar([], { browseOnly: true, queueOnly: true });
+		};
+
+		return button;
+	}
+
+	function scrollBrowseToTop(ui) {
+		const comments = ui?.shadow?.querySelector("#comments");
+
+		if (comments) {
+			comments.scrollTop = 0;
+		}
+	}
+
+	// The queue rendered as rows, reusing the front page's row exactly -- it is the
+	// same object in the same list, and giving it a second appearance would say the
+	// two were different kinds of thing.
+	// Returns whether anything actually changed, so a redraw only happens when there
+	// is something new to show. Without that the refresh would redraw the list every
+	// time the tab is opened, and the redraw would start another refresh.
+	// A handful at a time rather than all at once. A queue is meant to be filled
+	// over days, so forty entries is an ordinary size and forty simultaneous
+	// requests is not -- getItem caches, so this is paid once a session, but paying
+	// it as one burst is how a reader ends up rate-limited for reading.
+	const QUEUE_REFRESH_BATCH = 6;
+
+	async function refreshQueueEntries(entries) {
+		const fetched = [];
+
+		for (let i = 0; i < entries.length; i += QUEUE_REFRESH_BATCH) {
+			fetched.push(
+				...(await Promise.all(
+					entries
+						.slice(i, i + QUEUE_REFRESH_BATCH)
+						.map((entry) => getItem(entry.id).catch(() => null)),
+				)),
+			);
+		}
+
+		let changed = false;
+
+		const next = entries.map((entry, index) => {
+			const item = fetched[index];
+
+			// A dead or deleted story returns nothing useful. What was stored is then
+			// the best record there is, and is left alone.
+			if (!item?.id) {
+				return entry;
+			}
+
+			const fresh = {
+				...entry,
+				by: item.by || entry.by || "",
+				score: item.score ?? entry.score ?? 0,
+				time: item.time || entry.time || 0,
+				descendants: item.descendants ?? entry.descendants ?? 0,
+				title: item.title || entry.title,
+			};
+
+			if (
+				fresh.by !== entry.by ||
+				fresh.score !== entry.score ||
+				fresh.descendants !== entry.descendants ||
+				fresh.title !== entry.title ||
+				fresh.time !== entry.time
+			) {
+				changed = true;
+			}
+
+			return fresh;
+		});
+
+		if (changed) {
+			await saveQueue(next);
+		}
+
+		return changed;
+	}
+
+	async function renderQueueView(ui, list) {
+		const entries = sortQueue(await loadQueue());
+
+		list.replaceChildren();
+
+		if (!entries.length) {
+			const empty = document.createElement("div");
+			empty.className = "browse-empty";
+			// Names the control rather than describing the feature: the tab is here
+			// from the start, so the one thing a reader needs is where "queue" lives.
+			empty.textContent =
+				"Nothing queued yet. Use queue on any story, here or on Hacker News, to read it later.";
+			list.appendChild(empty);
+			return;
+		}
+
+		// The same row the front page draws, from the same function. What makes this
+		// the queue is which stories are in it and what order they are in -- the
+		// unread first, oldest saved at the top, the read greyed and beneath them --
+		// not a different way of describing a story.
+		entries.forEach((entry, index) => {
+			const row = renderBrowseRow(entry, list, index + 1, { inQueue: true });
+			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
+		});
+
+		refreshAllItemActionControls();
+
+		// Scores and comment counts move while something sits in a queue, and a
+		// queue is read days after it was filled. Refreshed from the item API rather
+		// than trusted as stored, after the rows are already up so nothing waits on
+		// it, and through getItem so a story is fetched once a session however many
+		// times it is drawn.
+		refreshQueueEntries(entries).then((refreshed) => {
+			if (refreshed && isBrowsing(ui) && browseTab === "queue") {
+				renderQueueView(ui, list).catch(console.error);
+			}
+		});
+
+		if (entries.some((entry) => entry.readAt)) {
+			const clear = document.createElement("button");
+			clear.type = "button";
+			clear.className = "browse-nav-link browse-clear-read";
+			clear.textContent = "clear read";
+			clear.onclick = async () => {
+				await saveQueue(clearReadFromQueue(await loadQueue()));
+				await renderQueueView(ui, list);
+				refreshQueueCount(ui.shadow);
+				refreshNextUp(ui.shadow);
+			};
+
+			const nav = document.createElement("div");
+			nav.className = "browse-nav";
+			nav.appendChild(clear);
+			list.appendChild(nav);
+		}
+	}
+
+	async function renderFrontPageView(ui, list) {
+		// Only on a first paint. Re-entering with rows already up leaves them in
+		// place until the new ones are ready, so switching back and forth does not
+		// blank the list each time.
+		if (!list.childElementCount) {
+			list.textContent = "Loading Hacker News…";
+		}
+
+		const requested = browsePage;
+		const { stories, nextPage, page } = await loadFrontPage({ page: requested });
+
+		// A second click while the first was still in flight, so this answer is for
+		// a page nobody is waiting for any more.
+		if (browsePage !== requested || browseTab !== "front") {
+			return;
+		}
+
+		if (!stories.length) {
+			list.textContent = "Could not reach Hacker News.";
+			return;
+		}
+
+		list.replaceChildren();
+		stories.forEach((story, index) =>
+			renderBrowseRow(story, list, (page - 1) * FRONT_PAGE_SIZE + index + 1),
+		);
+
+		// These rows never pass through the vote hydration, which is what carries
+		// remembered favorite and flag state onto a discussion. Put on here instead,
+		// once the list exists.
+		refreshAllItemActionControls();
+
+		renderBrowseNav(list, { page, nextPage }, (target) => {
+			// Back to the top: the reader asked for a different page, not for the same
+			// place in a new one.
+			scrollBrowseToTop(ui);
+			renderBrowseView(ui, { page: target }).catch(console.error);
+		});
+	}
+
+	async function renderBrowseView(ui, options = {}) {
+		const list = ui?.shadow?.querySelector("#browse-list");
+
+		if (!list) {
+			return;
+		}
+
+		if (Number.isFinite(options.page)) {
+			browsePage = Math.max(1, options.page);
+		}
+
+		if (options.tab) {
+			browseTab = options.tab;
+		}
+
+		for (const tab of ui.shadow.querySelectorAll(".browse-tab")) {
+			const isCurrent =
+				tab.id === (browseTab === "queue" ? "browse-tab-queue" : "browse-tab-front");
+			tab.classList.toggle("is-current", isCurrent);
+			tab.setAttribute("aria-selected", String(isCurrent));
+		}
+
+		// The trail names where you actually are, not where the door led. Read more
+		// is the pair of them; once you are standing in one of the two, saying so is
+		// the more useful thing for it to say.
+		setWordmarkDestination(ui, browseTab === "queue" ? "Queue" : "Read more");
+
+		refreshQueueCount(ui.shadow);
+
+		if (browseTab === "queue") {
+			await renderQueueView(ui, list);
+			return;
+		}
+
+		await renderFrontPageView(ui, list);
+	}
+
 	async function revealSidebar() {
 		if (!sidebar) {
 			return false;
@@ -2647,9 +3802,20 @@
 	}
 
 	// Drawn before the discussion lookup answers, so the page shows something at
-	// once. It is inert on purpose: there is nothing to open yet, and a click that
-	// did nothing would read as broken. createFloatingHNButton adopts it as soon as
-	// the real button is asked for.
+	// once. createFloatingHNButton adopts it as soon as the real button is asked
+	// for, which is also when it gains that button's behaviour.
+	// Pressed while the lookup was still running. The button spins for as long as
+	// that takes and used to do nothing at all when pressed, which is the one thing
+	// a button must not do -- so the press is remembered and honoured the moment
+	// there is an answer to honour it with.
+	let openRequestedWhileChecking = false;
+
+	function takeRequestedOpen() {
+		const requested = openRequestedWhileChecking;
+		openRequestedWhileChecking = false;
+		return requested;
+	}
+
 	async function createCheckingButton() {
 		const button = createFloatingHNButton(BUTTON_PENDING_ID, "checking");
 
@@ -2660,6 +3826,14 @@
 		if (!isMobile()) {
 			await applyButtonPosition(button);
 		}
+
+		button.onclick = () => {
+			if (button._dragController?.wasMoved()) {
+				return;
+			}
+
+			openRequestedWhileChecking = true;
+		};
 
 		startButtonSpinner(button);
 
@@ -2739,6 +3913,17 @@ ${CHROME_CSS}
     font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-size:12px;
     line-height:1.4;
+    /* The same inheritance the panel has to close off, for the same reason: this
+       is a second shadow root on the same page, and it reads whatever the host
+       inherited. See #panel for the full account. */
+    text-align:left;
+    text-indent:0;
+    text-transform:none;
+    letter-spacing:normal;
+    word-spacing:normal;
+    font-style:normal;
+    font-variant:normal;
+    white-space:normal;
 }
 
 /* Same inset the sidebar's #comments uses, so the two read as one product. */
@@ -2899,7 +4084,7 @@ ${CHROME_CSS}
 </style>
 
 <div id="popover" role="dialog" aria-label="Submit to Hacker News">
-${headerHTML()}
+${headerHTML({ browse: true })}
 ${settingsPanelHTML()}
 
 <div class="popover-body">
@@ -2948,6 +4133,23 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 		// dropdown the sidebar does. No annotation refresh is passed: there is no
 		// sidebar to refresh when this is on screen.
 		wireSettingsPanel(shadow).catch(console.error);
+
+		// The wordmark is the way out of this page and into the rest of HN, which is
+		// as true here as it is in the sidebar -- more so, since this page has no
+		// discussion of its own to read. It opens the panel rather than trying to
+		// fit thirty stories into a 320px popover.
+		const browseToggle = shadow.querySelector("#browse-toggle");
+
+		if (browseToggle) {
+			browseToggle.onclick = () => {
+				// close(), not onClose(): the latter only tells the button its popover
+				// has gone, which would leave the popover itself sitting on the page
+				// behind the panel. Declared further down, which is fine -- nothing
+				// runs this until it has been clicked.
+				close();
+				openSidebar([], { browseOnly: true }).catch(console.error);
+			};
+		}
 
 		const titleInput = shadow.querySelector("#submit-title");
 		const countLabel = shadow.querySelector("#submit-count");
@@ -3377,7 +4579,13 @@ header {
     font-weight:bold;
 }
 
-header button {
+/* Scoped to the action row rather than to every button in the header. It
+   describes a 36px icon box -- fixed square, centred glyph, 20px -- which is
+   right for the three controls on the right and wrong for anything else. The
+   wordmark on the left is a button too, and while this was written as
+   "header button" the rule sized it to 36 square and left its text hanging
+   outside the box. */
+.header-actions button {
     background:none;
     border:0;
     color:var(--header-text);
@@ -3397,7 +4605,7 @@ header button {
    tapped, so the settings and minimize buttons stayed highlighted. Only apply it
    where a real pointer can hover. */
 @media (hover: hover) {
-    header button:hover {
+    .header-actions button:hover {
         background:var(--hover-tint);
     }
 }
@@ -3406,6 +4614,466 @@ header button {
     display:flex;
     align-items:center;
     gap:0;
+}
+
+/* The wordmark is the way back, so it has to look like the wordmark and behave
+   like a control. Button chrome is removed rather than restyled -- what belongs
+   in the header is the title, and the only thing that should say "pressable" is
+   what happens under the pointer. */
+.header-wordmark {
+    /* .header-title is a flex column, so a button placed in it is stretched to
+       the header's full width and stops reading as a word. Hugging its content
+       is what keeps it a word. */
+    align-self:flex-start;
+    display:flex;
+    align-items:baseline;
+    border:0;
+    padding:0;
+    margin:0;
+    background:none;
+    color:inherit;
+    font:inherit;
+    cursor:pointer;
+    text-align:left;
+}
+
+/* The trail into Hacker News, built the way the settings panel builds its trail
+   into hidden sites, because it is the same movement: a level opening inside the
+   panel, with the way back left in place behind it.
+
+   Collapsed to zero width rather than hidden, so arriving slides the chevron open
+   and pushes the trail across instead of snapping it into place. */
+.wordmark-chevron {
+    flex:0 0 auto;
+    width:0;
+    margin-right:0;
+    overflow:hidden;
+    opacity:0;
+    color:var(--subtitle-stage);
+    transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
+}
+
+#panel.browsing .wordmark-chevron {
+    width:9px;
+    margin-right:5px;
+    opacity:1;
+}
+
+/* Emphasis comes off the wordmark once it stops being the title and becomes the
+   way back, as the settings crumb's root does. Colour only, not weight: the
+   settings crumb is the only thing moving in its row, where this one has a
+   chevron and a trail carrying the change, and lightening part of a bold header
+   title reads as a rendering fault rather than as a de-emphasis. Dark orange
+   rather than the panel's grey, because this sits on the header's own bar. */
+.wordmark-root {
+    transition:color .2s ease;
+}
+
+#panel.browsing .wordmark-root {
+    color:var(--subtitle-stage);
+}
+
+/* On Hacker News the trail has nothing behind it, so the wordmark is a label
+   rather than a control: no chevron, and none of the treatment a disabled button
+   would otherwise pick up. It is not unavailable, it simply does not lead
+   anywhere from here. */
+#panel.queue-only .wordmark-chevron {
+    display:none;
+}
+
+#panel.queue-only .header-wordmark {
+    cursor:default;
+    opacity:1;
+}
+
+/* The one thing saying the title is pressable. A wordmark that is also a control
+   has nothing else to announce it -- there is no border, no background, and on a
+   touch screen no hover to discover -- so the ellipsis stands in for all of that
+   and says there is more behind it.
+
+   It goes when the trail arrives: by then the chevron is doing the same job in
+   the other direction, and "HNewhere ⋯ / Read more" would be two affordances for
+   one control. Collapsed the same way the chevron is, so the swap is a movement
+   rather than a flicker. */
+.wordmark-more {
+    flex:0 0 auto;
+    width:auto;
+    margin-left:4px;
+    overflow:hidden;
+    color:var(--subtitle-stage);
+    transition:width .2s ease, margin-left .2s ease, opacity .2s ease;
+}
+
+#panel.browsing .wordmark-more {
+    width:0;
+    margin-left:0;
+    opacity:0;
+}
+
+/* Always in flow, faded and nudged rather than display:none, so it can animate in
+   both directions. Laying it out while invisible costs nothing here for the same
+   reason it costs nothing in the settings head: the title is left-aligned, so a
+   trail nobody can see shifts nothing. */
+.wordmark-tail {
+    display:flex;
+    align-items:baseline;
+    gap:5px;
+    margin-left:5px;
+    white-space:nowrap;
+    opacity:0;
+    transform:translateX(-4px);
+    pointer-events:none;
+    transition:opacity .2s ease, transform .2s ease;
+}
+
+#panel.browsing .wordmark-tail {
+    opacity:1;
+    transform:none;
+    pointer-events:auto;
+}
+
+.wordmark-sep {
+    font-weight:400;
+    color:var(--subtitle-stage);
+}
+
+.header-wordmark:focus-visible {
+    outline:1px solid var(--link);
+    outline-offset:2px;
+}
+
+@media (hover: hover) {
+    .header-wordmark:hover {
+        opacity:.75;
+    }
+}
+
+/* Hidden rather than emptied. The discussion subtree is what renderedComments,
+   the annotation controller and any open filter all point into, so tearing it
+   down to make room would invalidate every one of them and cost a full
+   re-render, re-annotate and vote re-hydration on the way back.
+
+   One state class, on the panel rather than on #comments, because it has to
+   reach the header too -- which is what lets the wordmark swap labels by CSS
+   instead of by rewriting its markup on every toggle. */
+.browse-view {
+    display:none;
+    /* Where .browse-main begins: the rank column's 22px plus the row's 6px gap.
+       Named because four things line up on it -- the tabs, the More link, the
+       empty state and the rows themselves -- and a number repeated four times is
+       a number three of them will eventually disagree about. */
+    --browse-indent:28px;
+}
+
+/* Both views fade, all the way out, where a filter change fades only the list to
+   12% and leaves the frame alone. The distinction is what is actually changing:
+   filtering is an edit to the list under a header that stays put, and swapping
+   views replaces everything below the header at once. Fading only part of that
+   would leave whichever part stayed put looking like it belonged to both. */
+#comments-content,
+.browse-view {
+    transition:opacity .16s ease;
+}
+
+#comments.views-swapping > #comments-content,
+#comments.views-swapping > .browse-view,
+#comments.views-swapping > .filter-banner {
+    opacity:0;
+}
+
+/* Two tabs set as a meta row rather than as a control: the same 11px Verdana the
+   filter banner and the story lines use, so the front page reads as part of the
+   panel rather than as a widget dropped into it. */
+/* Starts exactly where every title beneath it does. */
+.browse-tabs {
+    display:flex;
+    align-items:baseline;
+    margin:0 0 10px var(--browse-indent);
+    font-family:Verdana, Geneva, sans-serif;
+    font-size:11px;
+}
+
+/* The bar hangs off the queue rather than sitting between the two as a sibling
+   rule, so that hiding the queue takes the bar with it. As `+` it would stay
+   attached to whichever tab came second and leave a leading bar in front of
+   Front page on its own. */
+#browse-tab-queue::after {
+    content:"|";
+    /* HN's own ratio, measured off it: 3.28px each side of the bar at 9.33px
+       type, which is .35em. Given in em rather than pixels so it holds at the
+       11px these are set in. */
+    margin:0 .35em;
+    color:var(--meta);
+}
+
+/* Nothing queued, nothing to show. The queue keeps its place on the left for
+   when there is -- it does not move, it arrives. */
+.browse-tab[hidden] {
+    display:none;
+}
+
+.browse-tab {
+    border:0;
+    padding:0;
+    background:none;
+    color:var(--meta);
+    cursor:pointer;
+    font-family:inherit;
+    font-size:inherit;
+}
+
+/* The current one carries the panel's text colour, the way .filter-banner-title
+   does against its own grey row. Weight is left alone -- at 11px a bold and a
+   regular Verdana differ more in colour than in shape, and the colour is already
+   saying it. */
+.browse-tab.is-current {
+    color:var(--text);
+}
+
+@media (hover: hover) {
+    .browse-tab:not(.is-current):hover {
+        text-decoration:underline;
+        text-underline-offset:2px;
+    }
+}
+
+.browse-empty {
+    margin:4px 0 0 var(--browse-indent);
+    max-width:var(--measure);
+    color:var(--meta);
+    line-height:1.5;
+}
+
+/* Read entries stay in the list, dimmed. Which is the point: the queue has to be
+   able to be wrong about what you finished, and something invisible cannot be
+   corrected. */
+.browse-row-read {
+    opacity:.5;
+}
+
+/* A rank column wide enough for two digits and the stop after them, which is
+   every row on a thirty-story page. */
+/* HN's own rhythm, measured off news.ycombinator.com rather than guessed at: a
+   story runs 35px from one title to the next -- a 19px title line, an 11px
+   subtext line, and a 5px spacer between. Ours came to 65.5.
+
+   Most of the difference was that .story-title and .story-meta are set for the
+   header at the top of a discussion, where the story is the headline and the
+   only one on screen. Thirty of them in a list is a different job, so the sizes
+   are scoped down here and left alone there.
+
+   Titles still wrap where HN's would not -- a 420px panel is not a 1200px page --
+   so a wrapped row is taller than 35px. That is the panel's width, not its
+   spacing. */
+.browse-row {
+    display:flex;
+    gap:6px;
+    align-items:baseline;
+    padding:0 0 5px;
+}
+
+.browse-row .story-title {
+    font-size:13px;
+    line-height:1.3;
+}
+
+/* HN leaves about a pixel and a half between the title and the subtext under it,
+   which reads as none at all. The 2px this normally carries is there to separate
+   the header from a story's own text below it, and there is no text here. */
+.browse-row .story-meta {
+    line-height:1.15;
+    padding-top:1px;
+}
+
+.browse-rank {
+    flex:0 0 auto;
+    min-width:22px;
+    text-align:right;
+    color:var(--meta);
+    font-size:11px;
+}
+
+.browse-main {
+    flex:1 1 auto;
+    min-width:0;
+}
+
+/* Beside the title at meta weight, the way HN sets it: it qualifies the link
+   rather than competing with it. */
+.browse-site {
+    color:var(--meta);
+    font-size:11px;
+}
+
+/* Indented to the rank column's right edge, so it starts where every title above
+   it starts rather than at the panel's edge. */
+.browse-nav {
+    display:flex;
+    align-items:baseline;
+    gap:10px;
+    margin:14px 0 8px var(--browse-indent);
+    font-family:Verdana, Geneva, sans-serif;
+    font-size:11px;
+    color:var(--meta);
+}
+
+/* Set as a meta-row text link, like every other action on these rows. HN writes
+   favorite and flag exactly this way and puts them in exactly this company. */
+.item-action-link {
+    border:0;
+    padding:0;
+    background:none;
+    color:var(--meta);
+    cursor:pointer;
+    font-family:inherit;
+    font-size:inherit;
+    text-decoration:none;
+    text-underline-offset:2px;
+}
+
+.item-action-link[hidden] {
+    display:none;
+}
+
+/* Deliberately no colour of its own. The label already says what pressing it
+   will do, and every other link on these rows is meta grey -- darkening this one
+   made it the loudest thing on a comment, which is not what having flagged
+   something means. */
+
+.item-action-link:disabled {
+    opacity:.5;
+    cursor:default;
+}
+
+.item-action-link:enabled:focus-visible {
+    text-decoration:underline;
+}
+
+@media (hover: hover) {
+    .item-action-link:enabled:hover {
+        text-decoration:underline;
+    }
+}
+
+/* A control in a meta row, so it is set as one: the same text-link treatment
+   .browse-nav-link and .filter-banner-close get, not a button that looks like a
+   button. HN's own row actions are text links between pipes and this sits among
+   them. */
+.browse-save-link {
+    border:0;
+    padding:0;
+    background:none;
+    color:var(--meta);
+    cursor:pointer;
+    font-family:inherit;
+    font-size:inherit;
+    text-decoration:none;
+    text-underline-offset:2px;
+}
+
+@media (hover: hover) {
+    .browse-save-link:hover {
+        text-decoration:underline;
+    }
+}
+
+.browse-save-link:focus-visible {
+    text-decoration:underline;
+}
+
+/* Text links on a meta row, the same treatment .filter-banner-close gets: no
+   underline until hover, no colour shift. */
+.browse-nav-link {
+    border:0;
+    padding:0;
+    background:none;
+    color:var(--meta);
+    cursor:pointer;
+    font-family:inherit;
+    font-size:inherit;
+    text-decoration:none;
+    text-underline-offset:2px;
+}
+
+/* Dimmed and inert rather than removed. Which end of the list you are at is
+   information, and a control that vanishes makes the reader work out why. */
+.browse-nav-link:disabled {
+    opacity:.4;
+    cursor:default;
+}
+
+.browse-nav-link:enabled:focus-visible {
+    text-decoration:underline;
+}
+
+/* Sits under the last comment, separated by a rule rather than by space alone:
+   the thread has ended, and what follows is a different question. Indented to the
+   same 14px the filter banner uses, so it lines up with the story above it rather
+   than with the scroll container. */
+.next-up {
+    display:block;
+    margin:18px -12px 24px;
+    font-family:Verdana, Geneva, sans-serif;
+    font-size:11px;
+    color:var(--meta);
+}
+
+/* The inset lives on the row rather than on the strip, so the band above it can
+   run the full width without having to be pulled back out again. The 26px is the
+   panel's own 12px plus the 14px every story and banner is indented by, so the
+   text lines up with the thread above it. */
+.next-up-row {
+    display:flex;
+    flex-wrap:wrap;
+    align-items:baseline;
+    gap:6px;
+    padding:0 12px 0 26px;
+}
+
+.next-up.hidden {
+    display:none;
+}
+
+.next-up-label {
+    color:var(--meta);
+}
+
+/* The title carries the panel's own text colour and the panel's own size: it is
+   the thing being offered, and the row around it is the label. */
+.next-up-title {
+    flex:1 1 auto;
+    min-width:0;
+    color:var(--text);
+    font-family:inherit;
+    font-size:13px;
+    text-decoration:none;
+}
+
+@media (hover: hover) {
+    .next-up-title:hover {
+        text-decoration:underline;
+        text-underline-offset:2px;
+    }
+}
+
+.next-up-count {
+    flex:0 0 auto;
+}
+
+@media (hover: hover) {
+    .browse-nav-link:enabled:hover {
+        text-decoration:underline;
+    }
+}
+
+#panel.browsing .browse-view {
+    display:block;
+}
+
+#panel.browsing #comments-content,
+#panel.browsing .filter-banner,
+#panel.browsing .next-up {
+    display:none;
 }
 
 /* The 36px buttons already centre their glyphs, so the visual inset on the right
@@ -3420,8 +5088,13 @@ header button {
 
 /* Only the two-line case needs tightening, and the subtitle exists only in the
    sidebar -- the popover header has none. Default leading put most of a line's
-   worth of air between the title and the status under it. */
-.header-title:has(.header-subtitle) > span:first-child {
+   worth of air between the title and the status under it.
+
+   Matched on :first-child rather than span:first-child so it holds whatever
+   element carries the title: a span in the popover's header, a button in the
+   sidebar's. Typed as a span it silently stopped applying the moment the
+   wordmark became a control, and the air came back. */
+.header-title:has(.header-subtitle) > :first-child {
     line-height:1.25;
 }
 
@@ -3655,6 +5328,16 @@ header button svg {
     color:var(--muted);
     font-size:11px;
     line-height:1.35;
+}
+
+/* That hint describes what happens with the setting off. Switched on, it is
+   explaining a state the reader is not in, directly above the sub-option that
+   now applies -- so it goes. Written as a selector rather than wired in
+   applySettingsPanelState so it tracks the checkbox itself, with no second
+   place to keep in step. The hint is the last thing in its group, so the
+   sibling combinator reaches nothing else. */
+.settings-option:has(#setting-hide-without-discussion:checked) ~ .settings-option-hint {
+    display:none;
 }
 
 .settings-option.sub-option + .settings-option-hint {
@@ -4132,12 +5815,19 @@ header button svg {
 }
 `;
 
-	function headerHTML({ subtitle = false, minimize = false } = {}) {
+	function headerHTML({ subtitle = false, minimize = false, browse = false } = {}) {
 		return `
 <header>
 
 <span class="header-title">
-<span><b>HN</b>ewhere</span>
+${
+	browse
+		? `<button id="browse-toggle" class="header-wordmark" type="button"
+title="Hacker News and your queue"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
+class="wordmark-root"><b>HN</b>ewhere</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
+class="wordmark-tail"><span class="wordmark-sep">/</span>Read more</span></button>`
+		: `<span><b>HN</b>ewhere</span>`
+}
 ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </span>
 
@@ -4196,6 +5886,12 @@ ${
 <input id="setting-hide-without-discussion" data-setting="hideWithoutDiscussion" type="checkbox">
 <span>Only show the HN button when a discussion exists</span>
 </label>
+<div class="settings-suboptions" data-suboptions-of="hideWithoutDiscussion">
+<label class="settings-option sub-option">
+<input id="setting-show-button-with-queue" data-setting="showButtonWithQueue" type="checkbox">
+<span>Except when something is waiting in your queue</span>
+</label>
+</div>
 <div class="settings-option-hint">
 When off, pages with no discussion get a greyed-out button that offers to submit them.
 </div>
@@ -4291,6 +5987,7 @@ Highlights the passages commenters quote, so you can jump between the article an
 			hideWithoutDiscussion: shadow.querySelector(
 				"#setting-hide-without-discussion",
 			),
+			showButtonWithQueue: shadow.querySelector("#setting-show-button-with-queue"),
 			annotations: shadow.querySelector("#setting-annotations"),
 			annotationsWhenSidebarClosed: shadow.querySelector(
 				"#setting-annotations-closed",
@@ -4728,10 +6425,33 @@ Highlights the passages commenters quote, so you can jump between the article an
     font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     font-size:13px;
     overflow:visible;
+    /* Shadow DOM encapsulates selectors, not inheritance. Every inherited property
+       flows in from the host unless the shadow tree sets its own, so a page that
+       centres its body -- victoriametrics.com does -- centres the entire panel,
+       comments and all. The same hole is open for everything else that moves text
+       about, and each one is a bug report waiting for the site that trips it.
+
+       Pinned on #panel rather than on :host, because a rule in the page that
+       happens to match the host element outranks a :host rule from inside. Nothing
+       in the page can reach this one.
+
+       line-height and direction are deliberately absent. The panel has never set a
+       line-height and the components that care carry their own, so pinning one now
+       would restyle every site rather than fix one; and direction says something
+       real about a reader's language, which is not ours to overrule. */
+    text-align:left;
+    text-indent:0;
+    text-transform:none;
+    letter-spacing:normal;
+    word-spacing:normal;
+    font-style:normal;
+    font-variant:normal;
+    white-space:normal;
     /* Reading width for a single block of prose. Never applied to a container: a
        cap on any ancestor of .children narrows every reply nested under it. */
     --measure:1215px;
 }
+
 
 ${THEME_CSS}
 ${CHROME_CSS}
@@ -4780,10 +6500,41 @@ ${CHROME_CSS}
     padding-top:0;
 }
 
-.submission + .submission {
-    margin-top:16px;
-    padding-top:12px;
+/* A hatched band rather than a rule, in the two places where the panel changes
+   subject instead of merely continuing: from one submission of this article to
+   the next, and from the end of a thread to what to read after it. A hairline
+   says "and"; this says "different thing now".
+
+   Ruled top and bottom in the same colour the strokes are drawn in, so the band
+   is a closed thing rather than hatching that fades out at the edges. The
+   strokes repeat on a 6px square, which is what keeps them at 45 degrees however
+   tall the band is -- a tile stretched to fit would shear them.
+
+   Full bleed. #comments insets its contents by 12px, and a divider stopping
+   short of the panel edge reads as part of the column rather than as a break
+   across it, which is the one thing it is for. */
+.next-up::before,
+.submission + .submission::before {
+    content:"";
+    display:block;
+    height:15px;
+    box-sizing:content-box;
+    margin:0 -12px 12px;
     border-top:1px solid var(--border);
+    border-bottom:1px solid var(--border);
+    background-image:repeating-linear-gradient(
+        315deg,
+        var(--border) 0,
+        var(--border) 1px,
+        transparent 0,
+        transparent 50%
+    );
+    background-size:6px 6px;
+}
+
+.submission + .submission {
+    margin:16px -12px 0;
+    padding:0 12px;
 }
 
 #comments {
@@ -4880,6 +6631,30 @@ ${CHROME_CSS}
 .filter-banner-quote::after {
     content:"❜";
     margin-left:3px;
+}
+
+/* A comment focus has no quotation to mark. The ornaments say "these are somebody
+   else's words lifted from the article", which is exactly what this variant is
+   not -- it is the comment itself, named by its author. The box stays, because
+   what it separates from the thread below is unchanged. */
+.filter-banner-quote-comment::before,
+.filter-banner-quote-comment::after {
+    content:none;
+}
+
+.filter-banner-quote-comment {
+    font-style:normal;
+}
+
+/* The one piece of contrast in the line, the same job .filter-banner-title does in
+   the row above: without it the author reads as part of the sentence. */
+.filter-banner-author {
+    color:var(--text);
+}
+
+.filter-banner-author::after {
+    content:" — ";
+    color:var(--meta);
 }
 
 /* Unboxed, an empty quote was invisible. Boxed, it would render as a stray
@@ -5589,7 +7364,7 @@ blockquote.comment-quote-redundant {
 
 <div id="resize-handle" aria-hidden="true"></div>
 
-${headerHTML({ subtitle: true, minimize: true })}
+${headerHTML({ subtitle: true, minimize: true, browse: true })}
 ${settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
@@ -5599,6 +7374,14 @@ ${settingsPanelHTML()}
 <div id="filter-banner-quote" class="filter-banner-quote"></div>
 </div>
 <div id="comments-content">Loading...</div>
+<div id="browse-view" class="browse-view">
+<div class="browse-tabs" role="tablist">
+<button id="browse-tab-queue" class="browse-tab" type="button" role="tab" hidden>queue</button>
+<button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front page</button>
+</div>
+<div id="browse-list"></div>
+</div>
+<div id="next-up" class="next-up hidden"></div>
 </div>
 
 </div>
@@ -5812,12 +7595,27 @@ ${settingsPanelHTML()}
 
 		shadow.querySelector("#minimize").onclick = async () => {
 			host.style.display = "none";
-			await saveSidebarState("collapsed");
 			clearArticleAnnotations();
 			setSettingsOpen(false);
-			await createRestoreButton();
+
+			// A panel opened only to browse leaves the page exactly as it found it: a
+			// grey button offering to submit, and no recorded preference. Recording
+			// "collapsed" would be a preference about a discussion that does not
+			// exist, and it would suppress automatic opening once one does.
+			if (sidebarHasDiscussion) {
+				await saveSidebarState("collapsed");
+				await createRestoreButton();
+			} else if (location.hostname === "news.ycombinator.com") {
+				// Back to the button that opened it. A submit button here would be
+				// offering to submit Hacker News to Hacker News.
+				await offerQueueOnHN();
+			} else {
+				await createSubmitButton();
+			}
+
 			await refreshArticleAnnotations();
 		};
+
 
 		document
 			.querySelectorAll(
@@ -5827,13 +7625,57 @@ ${settingsPanelHTML()}
 
 		sidebar = host;
 
-		return {
+		const ui = {
 			shadow,
 			body: shadow.querySelector("#comments-content"),
 			headerSubtitle: shadow.querySelector("#header-subtitle"),
 			filterBanner,
 			filterBannerQuote,
 		};
+
+		// Named and wired here rather than alongside the other header buttons: this
+		// is the one control that needs the ui object, and the object is not built
+		// until the panel is finished.
+		const browseToggle = shadow.querySelector("#browse-toggle");
+
+		if (browseToggle) {
+			browseToggle.onclick = () => {
+				// Read off the panel rather than kept in a flag of its own, so a
+				// teardown that rebuilds the panel cannot leave the two disagreeing.
+				setBrowseMode(ui, !isBrowsing(ui));
+			};
+		}
+
+		for (const [id, tab] of [
+			["#browse-tab-front", "front"],
+			["#browse-tab-queue", "queue"],
+		]) {
+			const button = shadow.querySelector(id);
+
+			if (button) {
+				button.onclick = () => {
+					scrollBrowseToTop(ui);
+					renderBrowseView(ui, { tab }).catch(console.error);
+				};
+			}
+		}
+
+		refreshQueueCount(shadow).catch(console.error);
+		refreshNextUp(shadow).catch(console.error);
+
+		// Delegated rather than wired per row: a thread renders hundreds of comments
+		// and each one carries two of these, so binding them individually would be
+		// hundreds of listeners for controls most readers never touch.
+		shadow.addEventListener("click", (event) => {
+			const button = event.target?.closest?.("[data-item-action-id]");
+
+			if (button) {
+				event.preventDefault();
+				submitItemAction(button).catch(console.error);
+			}
+		});
+
+		return ui;
 	}
 
 	// -------------------------
@@ -5881,8 +7723,8 @@ ${settingsPanelHTML()}
 	href="https://news.ycombinator.com/user?id=${encodeURIComponent(story.by)}">${escapeHTML(story.by)}</a>`
 			: ""
 	}
-	|
 	<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(story.time)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
+	${itemActionLinksHTML(storyID)}
 	|
 	${story.descendants || 0} comments
 	</div>
@@ -6759,6 +8601,13 @@ ${settingsPanelHTML()}
       reply
       </a>
 
+      |
+
+      <a class="focus-link" href="#">
+      focus
+      </a>
+      ${itemActionLinksHTML(commentID)}
+
       <span class="toggle">
       [–]
       </span>
@@ -6838,6 +8687,7 @@ ${settingsPanelHTML()}
 		};
 
 		const replyButton = div.querySelector(".reply-link");
+		const focusButton = div.querySelector(".focus-link");
 		const replyComposer = div.querySelector(".reply-composer");
 
 		// Wired lazily. A thread can render hundreds of comments, and wiring every
@@ -6874,6 +8724,11 @@ ${settingsPanelHTML()}
 			);
 
 			composerAPI?.focus();
+		};
+
+		focusButton.onclick = function (event) {
+			event.preventDefault();
+			applyCommentFocus(comment.id);
 		};
 
 		if (replies.length) {
@@ -7125,6 +8980,42 @@ ${settingsPanelHTML()}
 				return;
 			}
 
+			// Opened for the front page and the queue rather than for a discussion,
+			// from a page that has none. Nothing below applies: there are no stories
+			// to load, nothing to annotate, and no per-site state worth recording --
+			// writing "collapsed" here would suppress automatic opening later, on a
+			// page that has since been submitted, for a panel the reader never shut.
+			if (options.browseOnly) {
+				sidebarHasDiscussion = false;
+				renderNoDiscussion(ui);
+
+				// On Hacker News there is nothing behind the trail: the front page is
+				// already the page underneath. So the wordmark stops being a way back
+				// and becomes a label, the chevron goes, and the panel has one job.
+				if (options.queueOnly) {
+					const toggle = ui.shadow.querySelector("#browse-toggle");
+
+					ui.shadow.querySelector("#panel")?.classList.add("queue-only");
+
+					if (toggle) {
+						toggle.disabled = true;
+						toggle.title = "Your queue";
+					}
+				}
+
+				// Put into browse without the cross-fade, then slid in. The panel is not
+				// on screen yet, so fading between two views inside it would only be a
+				// delay in front of the one movement there is to see.
+				setBrowseMode(ui, true, {
+					animate: false,
+					tab: options.queueOnly ? "queue" : undefined,
+				});
+				slidePanelIn(ui);
+				return;
+			}
+
+			sidebarHasDiscussion = true;
+
 			if (options.startHidden && sidebar) {
 				// Deliberately records nothing. This branch is the annotation preload:
 				// the panel is built hidden so highlights can be drawn, which is the
@@ -7134,6 +9025,14 @@ ${settingsPanelHTML()}
 				// no-op when it is already "collapsed" -- and the fabricated one
 				// outranks the auto-open setting, silently killing it for the site.
 				sidebar.style.display = "none";
+
+				// Given its real handler now rather than after the render and the
+				// annotation pass. Those are the slow part, the ring spins across all
+				// of it, and until this ran the button on screen still carried the
+				// placeholder's -- so the whole time it looked busiest, pressing it
+				// did nothing. createFloatingHNButton adopts the placeholder, so the
+				// ring carries on spinning through the swap.
+				await createRestoreButton();
 			} else if (options.remember !== false) {
 				// Skipped only for an open the HN-arrival rule granted. The per-site
 				// memory outranks the global setting, so recording one would turn the
@@ -7172,10 +9071,6 @@ ${settingsPanelHTML()}
 				}
 
 				await refreshArticleAnnotations();
-
-				if (options.startHidden) {
-					await createRestoreButton();
-				}
 			}
 		} catch (e) {
 			console.error(e);
@@ -7189,7 +9084,7 @@ ${settingsPanelHTML()}
 	// Hacker News click tracking / vote bridge
 	// -------------------------
 
-	function parseVoteBridgePayload() {
+	function parseItemActionPayload() {
 		const hash = location.hash.replace(/^#/, "");
 
 		if (!hash) {
@@ -7212,7 +9107,7 @@ ${settingsPanelHTML()}
 			return null;
 		}
 
-		if (!["up", "down", "un"].includes(action)) {
+		if (!ITEM_ACTIONS.includes(action)) {
 			return null;
 		}
 
@@ -7224,11 +9119,60 @@ ${settingsPanelHTML()}
 			nonce,
 			// Re-validated rather than trusted: this arrives via the URL fragment
 			// and is about to be navigated to, so it must be a real HN vote URL.
+			// Only votes carry one -- favorite and flag have no client-injected link
+			// to pass along, so the popup finds those itself.
 			voteURL: normalizeVoteURL(params.get("voteURL")),
 		};
 	}
 
-	function postVoteBridgeResult(payload, result) {
+	// #region hnewhere-test-export
+
+	// The path HN serves each action from, which is also how the popup finds the
+	// anchor once it is there. Votes are keyed by element id because hn.js gives
+	// them one; favorite and flag are not, so they are found by where they point.
+	const ITEM_ACTION_PATHS = {
+		fave: { path: "fave", params: {} },
+		unfave: { path: "fave", params: { un: "t" } },
+		flag: { path: "flag", params: {} },
+		unflag: { path: "flag", params: { un: "t" } },
+	};
+
+	const ITEM_ACTIONS = ["up", "down", "un", ...Object.keys(ITEM_ACTION_PATHS)];
+
+	// Favorite and flag both render as a plain link on a logged-in item page, with
+	// no id to look them up by. Matched on the path and the item they name, and on
+	// whether the link is the doing or the undoing of it -- HN marks the undo with
+	// un=t, and the two are otherwise identical.
+	function findItemActionAnchor(root, action, itemId) {
+		const shape = ITEM_ACTION_PATHS[action];
+
+		if (!shape) {
+			return null;
+		}
+
+		const wantsUndo = "un" in shape.params;
+
+		return (
+			[...root.querySelectorAll("a[href]")].find((anchor) => {
+				const href = anchor.getAttribute("href") || "";
+
+				if (!href.startsWith(shape.path + "?")) {
+					return false;
+				}
+
+				const params = new URL(href, HN_ORIGIN + "/").searchParams;
+
+				return (
+					params.get("id") === String(itemId) &&
+					(params.get("un") === "t") === wantsUndo
+				);
+			}) || null
+		);
+	}
+
+	// #endregion hnewhere-test-export
+
+	function postItemActionResult(payload, result) {
 		if (!window.opener) {
 			return;
 		}
@@ -7236,7 +9180,7 @@ ${settingsPanelHTML()}
 		try {
 			window.opener.postMessage(
 				{
-					source: VOTE_BRIDGE_MESSAGE_SOURCE,
+					source: ITEM_ACTION_BRIDGE_MESSAGE_SOURCE,
 					storyID: payload.storyID,
 					itemId: payload.itemId,
 					action: payload.action,
@@ -7258,23 +9202,17 @@ ${settingsPanelHTML()}
 
 	// Runs on the page HN redirects to after the vote is committed. The hash is
 	// gone by now, so the payload comes back out of sessionStorage.
-	function reportVoteResultAfterReload() {
-		// HN's /vote response is itself a page this script runs on, and at that
-		// point the redirect has not landed yet so the document carries no vote
-		// links. Reporting from there would consume the payload, post a null
-		// voteInfo and close the popup before the real state was ever read.
-		// Only report once the redirect has arrived at the item page.
-		if (location.pathname !== "/item") {
-			return false;
-		}
+	function reportItemActionAfterReload() {
+		const forget = () => {
+			try {
+				window.sessionStorage.removeItem(ITEM_ACTION_BRIDGE_STORAGE_KEY);
+			} catch {}
+		};
 
 		let stored = null;
 
 		try {
-			stored = window.sessionStorage.getItem(VOTE_BRIDGE_STORAGE_KEY);
-			// Cleared immediately: if anything below throws, a stale payload must
-			// not make the next HN page load try to report again.
-			window.sessionStorage.removeItem(VOTE_BRIDGE_STORAGE_KEY);
+			stored = window.sessionStorage.getItem(ITEM_ACTION_BRIDGE_STORAGE_KEY);
 		} catch {
 			return false;
 		}
@@ -7288,18 +9226,83 @@ ${settingsPanelHTML()}
 		try {
 			payload = JSON.parse(stored);
 		} catch {
+			forget();
 			return false;
 		}
 
 		if (!payload?.itemId || !payload?.nonce) {
+			forget();
 			return false;
+		}
+
+		const isFaveOrFlag = Boolean(ITEM_ACTION_PATHS[payload.action]);
+
+		// A vote has to wait for the item page. HN's /vote response is itself a page
+		// this script runs on, and the redirect has not landed yet, so the document
+		// carries no vote links -- reporting from there would post a null voteInfo
+		// and close the popup before the real state was ever read.
+		//
+		// Favorite must not wait for it, because it never arrives: /fave ignores
+		// goto and redirects to the favorites list instead. Waiting for /item there
+		// meant waiting forever, which is precisely what left the popup sitting
+		// open on a page of favorites with nothing reported back.
+		if (!isFaveOrFlag && location.pathname !== "/item") {
+			return false;
+		}
+
+		// Read out only once it is going to be acted on. Cleared here so that if
+		// anything below throws, a stale payload cannot make the next page load try
+		// to report all over again.
+		forget();
+
+		// Favorite and flag are read back the way they were found: by which link HN
+		// is now offering, on whichever page it chose to land on. Both the item page
+		// and the favorites list carry the undo link for a story that is favorited,
+		// so finding it is an answer either way.
+		if (isFaveOrFlag) {
+			const base = payload.action.startsWith("un")
+				? payload.action.slice(2)
+				: payload.action;
+			const wanted = !payload.action.startsWith("un");
+
+			// Read the state HN is now in, not the action that was asked for. The
+			// undo link is only ever offered for something already done, so its
+			// presence *is* the state: "unflag" showing means flagged, "flag"
+			// showing means not.
+			//
+			// Deriving it from the action instead is what broke unflagging. The
+			// check was "is the opposite link here" -- true after flagging, because
+			// unflag appears; but also true after unflagging, because flag appears.
+			// So a successful unflag recorded itself as flagged and the label never
+			// changed back. Favorite escaped it by luck: /fave lands on the
+			// favorites list, where a story just un-favorited is no longer named, so
+			// neither link was found and the fallback happened to be right.
+			const onLink = findItemActionAnchor(document, "un" + base, payload.itemId);
+			const offLink = findItemActionAnchor(document, base, payload.itemId);
+
+			// Neither link on the page says nothing about the story rather than
+			// something negative -- a list that simply does not mention it. What was
+			// asked for is the better answer there: the navigation went to HN's own
+			// action URL carrying HN's own auth token, and HN does not quietly
+			// decline those.
+			const applied = onLink ? true : offLink ? false : wanted;
+
+			postItemActionResult(payload, {
+				ok: applied === wanted,
+				reason: applied === wanted ? "updated" : "unchanged",
+				action: payload.action,
+				applied,
+			});
+
+			window.setTimeout(() => window.close(), 60);
+			return true;
 		}
 
 		// Server-rendered state, so this is the vote HN actually holds.
 		const voteInfo = currentVoteInfoFor(payload.itemId);
 		const changed = voteInfo?.state !== payload.beforeState;
 
-		postVoteBridgeResult(payload, {
+		postItemActionResult(payload, {
 			ok: changed,
 			reason: changed ? "updated" : "unchanged",
 			voteInfo,
@@ -7311,11 +9314,81 @@ ${settingsPanelHTML()}
 		return true;
 	}
 
-	function maybeHandleHNVoteBridge() {
-		const payload = parseVoteBridgePayload();
+	// Favorite and flag take the same route a vote does -- navigate, let HN commit
+	// it, come back on the redirect -- but they are found differently and they
+	// report differently, so they branch off before the vote machinery.
+	function handleFaveFlagAction(payload) {
+		const anchor = findItemActionAnchor(document, payload.action, payload.itemId);
+
+		// The sidebar cannot know whether an action applies: it reads HN logged out,
+		// where a favorite link never renders and a flag link never renders either.
+		// So the popup is what finds out, and it finds out the only way available --
+		// by looking at a page served to the real account and seeing nothing there.
+		// Logged out, or below the karma flagging needs, and the answer is the same.
+		if (!anchor) {
+			const base = payload.action.startsWith("un")
+				? payload.action.slice(2)
+				: payload.action;
+			const opposite = payload.action.startsWith("un") ? base : "un" + base;
+
+			// A missing link has two very different meanings and they were being
+			// treated as one. If the opposite link is here, the action plainly does
+			// apply to this reader -- it is simply already done, and the panel is
+			// the thing that is out of date. Only when neither is on the page has HN
+			// declined to offer it at all.
+			//
+			// Conflating them is how one stale label took every flag link on the
+			// page down with it: a second press on something already unflagged found
+			// no unflag link, was read as "you cannot flag", and that answer is
+			// remembered against the whole account.
+			const already = findItemActionAnchor(document, opposite, payload.itemId);
+
+			postItemActionResult(payload, {
+				ok: Boolean(already),
+				reason: already ? "already" : "action-unavailable",
+				action: payload.action,
+				...(already ? { applied: !payload.action.startsWith("un") } : {}),
+			});
+			window.setTimeout(() => window.close(), 80);
+			return true;
+		}
+
+		const target = new URL(anchor.getAttribute("href"), HN_ORIGIN + "/");
+
+		// Same rule as the vote path, for the same reason: HN's own handler would
+		// fire this in the background and closing the popup would abort it. A
+		// top-level navigation cannot be cancelled that way.
+		target.searchParams.set("goto", "item?id=" + payload.itemId);
+
+		try {
+			window.sessionStorage.setItem(
+				ITEM_ACTION_BRIDGE_STORAGE_KEY,
+				JSON.stringify(payload),
+			);
+		} catch (error) {
+			console.error("HNewhere: could not stage item action payload", error);
+			postItemActionResult(payload, {
+				ok: false,
+				reason: "storage-unavailable",
+				action: payload.action,
+			});
+			window.setTimeout(() => window.close(), 80);
+			return true;
+		}
+
+		location.href = target.href;
+		return true;
+	}
+
+	function maybeHandleHNItemAction() {
+		const payload = parseItemActionPayload();
 
 		if (!payload) {
 			return false;
+		}
+
+		if (ITEM_ACTION_PATHS[payload.action]) {
+			return handleFaveFlagAction(payload);
 		}
 
 		const before = currentVoteInfoFor(payload.itemId);
@@ -7337,7 +9410,7 @@ ${settingsPanelHTML()}
 			payload.voteURL;
 
 		if (!voteURL) {
-			postVoteBridgeResult(payload, {
+			postItemActionResult(payload, {
 				ok: false,
 				reason: "vote-url-missing",
 				voteInfo: before,
@@ -7356,7 +9429,7 @@ ${settingsPanelHTML()}
 
 		try {
 			window.sessionStorage.setItem(
-				VOTE_BRIDGE_STORAGE_KEY,
+				ITEM_ACTION_BRIDGE_STORAGE_KEY,
 				JSON.stringify({
 					...payload,
 					beforeState: before?.state ?? "none",
@@ -7364,7 +9437,7 @@ ${settingsPanelHTML()}
 			);
 		} catch (error) {
 			console.error("HNewhere: could not stage vote payload", error);
-			postVoteBridgeResult(payload, {
+			postItemActionResult(payload, {
 				ok: false,
 				reason: "storage-unavailable",
 				voteInfo: before,
@@ -7751,6 +9824,91 @@ ${settingsPanelHTML()}
 		);
 	}
 
+	// Injected into HN's own rows, in HN's own vocabulary: a lowercase text link
+	// between pipes, beside hide and discuss. Anything more would announce itself as
+	// somebody else's furniture on a page that has a very settled idea of what a row
+	// looks like.
+	async function setupHNQueueLinks() {
+		const rows = [...document.querySelectorAll("tr.athing")];
+
+		if (!rows.length) {
+			return;
+		}
+
+		const queued = new Set((await loadQueue()).map((entry) => entry.id));
+
+		for (const row of rows) {
+			const story = parseFrontPageRow(row);
+			const subline = row.nextElementSibling?.querySelector(".subline, .subtext");
+
+			// A job post has no subline worth appending to and cannot be read later in
+			// any useful sense -- it is a listing, not an article.
+			if (!story || !subline || !story.by) {
+				continue;
+			}
+
+			const link = document.createElement("a");
+			link.href = "#";
+			link.className = "hnewhere-save-link";
+			link.textContent = queued.has(story.id) ? "queued" : "queue";
+
+			link.onclick = async (event) => {
+				event.preventDefault();
+
+				const entries = await loadQueue();
+				const already = entries.some((entry) => entry.id === story.id);
+
+				// The same control both ways. A row is the only place this story
+				// appears, so making the reader hunt elsewhere to undo a misclick
+				// would be the wrong half of a pair.
+				const next = already
+					? removeFromQueue(entries, story.id)
+					: addToQueue(entries, story, Date.now());
+
+				await saveQueue(next);
+
+				link.textContent = already ? "queue" : "queued";
+
+				// The button is offered once, when the page loads. A queue filled
+				// after that -- which is the ordinary way of filling one, a row at a
+				// time while reading down the page -- would otherwise have nowhere to
+				// be opened from until the next page load. It follows the queue now
+				// rather than whatever the queue happened to be on arrival, and goes
+				// again when the last entry does.
+				if (next.length) {
+					await offerQueueOnHN();
+				} else {
+					const existing = document.getElementById("hn-queue-button");
+
+					if (existing) {
+						destroyFloatingButton(existing);
+					}
+				}
+			};
+
+			// First of the actions, wherever that group happens to begin. Every HN
+			// subline is the same shape -- score, submitter, age, then the actions,
+			// then the comment count -- so the age is the one thing that reliably
+			// marks where the actions start.
+			//
+			// Anchoring on a particular action instead is what put this in the wrong
+			// place: the favorites list carries neither flag nor hide, so a rule
+			// written in terms of those had nothing to find and fell through to the
+			// end of the line, landing queue after the comment count.
+			//
+			// It also lands where the order says it should: decide whether you want
+			// to read it, flag it if it should not be there, hide it if it is not for
+			// you, open the comments if it is.
+			const age = subline.querySelector(".age");
+
+			if (age) {
+				age.after(document.createTextNode(" | "), link);
+			} else {
+				subline.append(document.createTextNode(" | "), link);
+			}
+		}
+	}
+
 	// -------------------------
 	// URL helpers
 	// -------------------------
@@ -7758,6 +9916,101 @@ ${settingsPanelHTML()}
 	function sameURL(a, b) {
 		return normalizeURL(a) === normalizeURL(b);
 	}
+
+	// #region hnewhere-test-export
+
+	// HN's front page is two rows per story: the title row carries the id and the
+	// link, the row after it carries everything else. Read outwards by selector
+	// rather than by column, because a job post has no votelinks cell and counting
+	// positions puts every one of its fields one to the left.
+	function parseFrontPageRow(row) {
+		const id = Number(row.id);
+		const link = row.querySelector(".titleline > a");
+
+		// Both are real rows on a real page: HN pads the list with `pagespace` and
+		// `morespace` rows carrying no title, and their ids are words.
+		if (!Number.isFinite(id) || !id || !link) {
+			return null;
+		}
+
+		const subtext = row.nextElementSibling?.querySelector(".subtext");
+
+		// Ask HN, Show HN without a link, and polls point at their own item page
+		// with a relative href, so the "article" for those is the discussion.
+		// Resolved against HN rather than against whatever page the sidebar is on.
+		const parsed = new URL(link.getAttribute("href") || "", HN_ORIGIN + "/");
+
+		// Then held to http(s). A `javascript:` or `data:` href survives the URL
+		// constructor intact -- the base is ignored once a scheme is present -- and
+		// escapeHTML does nothing to it either, since it carries no quotes or angle
+		// brackets to escape. It would be live in both the row's href and the
+		// assignment the click handler makes.
+		//
+		// HN would not accept such a submission today, which is exactly the sort of
+		// assumption not to depend on: this is markup fetched from somewhere else
+		// and rendered into every page the reader visits. A story whose URL cannot
+		// be used still has a discussion, so it falls back to that rather than
+		// disappearing -- built from HN_ORIGIN rather than through commentURL,
+		// which lives outside the exported region this has to run inside.
+		const url = /^https?:$/.test(parsed.protocol)
+			? parsed.href
+			: HN_ORIGIN + "/item?id=" + id;
+
+		// title="2026-08-02T11:34:41 1785670481". The second field is the unix time
+		// timeAgo wants; parsing the first would be the same answer by way of a date
+		// parser and a time zone.
+		const time = Number(
+			(subtext?.querySelector(".age")?.getAttribute("title") || "").split(/\s+/)[1],
+		);
+
+		// By its words, not its href or its position. A job post's only `item?id=`
+		// anchor is its age, so taking the last of those reads "3 hours ago" as
+		// three comments. "discuss" is how HN writes none.
+		const commentLink = [...(subtext?.querySelectorAll("a") || [])].find((anchor) =>
+			/\bcomments?\b|\bdiscuss\b/i.test(anchor.textContent || ""),
+		);
+
+		return {
+			id,
+			title: (link.textContent || "").trim(),
+			url,
+			by: subtext?.querySelector(".hnuser")?.textContent || "",
+			// Job posts carry no score. Absent is not zero, but every consumer here
+			// displays it, and a displayed zero is honest about there being none.
+			score: parseInt(subtext?.querySelector(".score")?.textContent || "", 10) || 0,
+			time: Number.isFinite(time) ? time : 0,
+			// \D+ rather than a split: the separator is a non-breaking space.
+			descendants:
+				parseInt((commentLink?.textContent || "").replace(/\D+/g, ""), 10) || 0,
+			site: row.querySelector(".sitestr")?.textContent || "",
+		};
+	}
+
+	function parseFrontPage(doc) {
+		return [...doc.querySelectorAll("tr.athing")]
+			.map(parseFrontPageRow)
+			.filter(Boolean);
+	}
+
+	// HN paginates with a single "More" link carrying ?p=N, and offers nothing
+	// pointing backwards -- the page you came from is simply N-1, which is why only
+	// this direction has to be read off the page. Its absence is how the last page
+	// announces itself, so a missing link is the answer rather than a parse failure.
+	function parseFrontPageNextPage(doc) {
+		const href = doc.querySelector("a.morelink")?.getAttribute("href");
+
+		if (!href) {
+			return null;
+		}
+
+		const page = Number(
+			new URL(href, HN_ORIGIN + "/news").searchParams.get("p"),
+		);
+
+		return Number.isFinite(page) && page > 1 ? page : null;
+	}
+
+	// #endregion hnewhere-test-export
 
 	// #region hnewhere-test-export
 	// True when this document was reached by clicking a link on HN. HN serves
@@ -8087,6 +10340,13 @@ ${settingsPanelHTML()}
 			sidebarUI?.filterBanner?.classList.add("hidden");
 			if (sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBannerQuote.textContent = "";
+				// Cleared with the text it belongs to. Left on, the next focus entered
+				// from a quoted passage would render without its quote marks -- a fault
+				// that only shows up on the second focus of a session, and only in one
+				// order.
+				sidebarUI.filterBannerQuote.classList.remove(
+					"filter-banner-quote-comment",
+				);
 			}
 
 			// Last, with every comment back in the list and the banner gone, so the
@@ -8206,6 +10466,25 @@ ${settingsPanelHTML()}
 			(lastSpace > maxLength * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd() +
 			"…"
 		);
+	}
+
+	// 200 rather than the banner quote's 220: this line carries an author in front
+	// of it, and the two together have to sit on the same one or two lines a pull
+	// quote does.
+	const COMMENT_FOCUS_PREVIEW_LENGTH = 200;
+
+	// The comment's own opening, not a quote from the article -- a comment focus is
+	// entered from the comment, so what identifies it is who wrote it and how it
+	// starts. Reads textContent rather than the HTML: the banner is one line of
+	// plain text, and a comment's markup is links, code and blockquotes.
+	function commentFocusPreview(comment) {
+		return {
+			author: comment?.author || "",
+			preview: truncateText(
+				comment?.textElement?.textContent || "",
+				COMMENT_FOCUS_PREVIEW_LENGTH,
+			),
+		};
 	}
 	// #endregion hnewhere-test-export
 
@@ -9517,11 +11796,16 @@ ${settingsPanelHTML()}
 
 	// #endregion hnewhere-test-export
 
-	function getCommentGraph() {
-		const byId = new Map(renderedComments.map((comment) => [comment.id, comment]));
+	// #region hnewhere-test-export
+
+	// Split from the module state it used to read so the rule a focus follows can
+	// be tested without booting a sidebar. Takes anything with `id` and `parentId`;
+	// the renderer's own entries carry a good deal more, and none of it matters here.
+	function buildCommentGraph(comments) {
+		const byId = new Map(comments.map((comment) => [comment.id, comment]));
 		const childrenByParent = new Map();
 
-		for (const comment of renderedComments) {
+		for (const comment of comments) {
 			if (comment.parentId == null) {
 				continue;
 			}
@@ -9534,15 +11818,36 @@ ${settingsPanelHTML()}
 		return { byId, childrenByParent };
 	}
 
-	function getVisibleCommentIds(commentIds) {
-		const { byId, childrenByParent } = getCommentGraph();
+	// What "focused" means: the chain up to the root, so the reader can see what is
+	// being replied to, and everything below, so they get the conversation rather
+	// than one turn of it.
+	//
+	// The descent keeps its own visited set. Guarding it on `visible` instead is
+	// what stopped it working at all: the climb below used to run first and add the
+	// seed, so the descent found its own starting point already visible and
+	// returned before adding a single reply -- and a focus on a thread's root
+	// showed the root alone. The two walks ask different questions. "Have I already
+	// walked this subtree" is not "is this comment on screen".
+	//
+	// Descending first is what makes a seed that is also another seed's ancestor
+	// come out whole: reached as an ancestor it is only added to `visible`, and its
+	// own turn as a seed still has a descent left to make.
+	//
+	// Neither walk can assume the ids it follows are present. HN returns dead and
+	// deleted comments the renderer skips, so a parent chain can point at something
+	// that was never rendered; `byId.get(...)?.parentId ?? null` is what ends the
+	// climb there rather than throwing.
+	function visibleCommentIdsFromGraph(graph, commentIds) {
+		const { byId, childrenByParent } = graph;
 		const visible = new Set();
+		const descended = new Set();
 
 		const addDescendants = (commentId) => {
-			if (visible.has(commentId)) {
+			if (descended.has(commentId)) {
 				return;
 			}
 
+			descended.add(commentId);
 			visible.add(commentId);
 
 			for (const childId of childrenByParent.get(commentId) || []) {
@@ -9551,7 +11856,9 @@ ${settingsPanelHTML()}
 		};
 
 		for (const commentId of commentIds) {
-			let currentId = commentId;
+			addDescendants(commentId);
+
+			let currentId = byId.get(commentId)?.parentId ?? null;
 
 			while (currentId != null) {
 				if (visible.has(currentId)) {
@@ -9561,21 +11868,29 @@ ${settingsPanelHTML()}
 				visible.add(currentId);
 				currentId = byId.get(currentId)?.parentId ?? null;
 			}
-
-			addDescendants(commentId);
 		}
 
 		return visible;
 	}
 
-	function applyCommentFilter(groupKey, options = {}) {
-		const group = annotationController?.groupsByKey.get(groupKey);
+	// #endregion hnewhere-test-export
 
-		if (!group) {
-			clearCommentFilter(options);
-			return;
-		}
+	function getCommentGraph() {
+		return buildCommentGraph(renderedComments);
+	}
 
+	function getVisibleCommentIds(commentIds) {
+		return visibleCommentIdsFromGraph(getCommentGraph(), commentIds);
+	}
+
+	// The half both entry points share. Everything that differs -- which comments are
+	// direct matches, what the banner says, what else has to change once the list has
+	// been filtered -- arrives as arguments, so neither caller has to know how the
+	// list transitions or where the reader was standing when they left it.
+	function applyFocusedDiscussion(
+		{ filter, directMatchIds, anchorElement, paintBanner, onFiltered },
+		options = {},
+	) {
 		// Only when entering from the full list. A refresh re-applies a filter that is
 		// already open, and a focus opened from inside another one should still return
 		// to where the reader started rather than to the focus they passed through.
@@ -9583,15 +11898,11 @@ ${settingsPanelHTML()}
 			preFilterPosition = captureReadingPosition();
 		}
 
-		activeCommentFilter = groupKey;
+		activeCommentFilter = filter;
 
-		const targetMatch =
-			group.comments.find((match) => match.commentId === options.commentId) ||
-			group.comments[0];
-		const directMatchIds = new Set(group.comments.map((comment) => comment.commentId));
 		const visibleCommentIds = getVisibleCommentIds([...directMatchIds]);
 
-		positionFilterBannerForComment(targetMatch?.element);
+		positionFilterBannerForComment(anchorElement);
 
 		transitionCommentList(() => {
 			for (const rendered of renderedComments) {
@@ -9610,15 +11921,16 @@ ${settingsPanelHTML()}
 				}
 			}
 
-			setQuoteRedundancy(group, true);
+			// Inside the transition, where the quote branch's redundancy pass has always
+			// run. Hoisting it out to the caller would apply it 110ms early, while the
+			// list is still faded, so a mark would come off a comment the reader can
+			// still see rather than under the cover of the change.
+			onFiltered?.();
 			updateSubmissionVisibility(visibleCommentIds);
 
 			if (sidebarUI?.filterBanner && sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBanner.classList.remove("hidden");
-				sidebarUI.filterBannerQuote.textContent = truncateText(
-					group.fullQuoteText || group.quoteText,
-					220,
-				);
+				paintBanner(sidebarUI.filterBannerQuote);
 			}
 
 		}, options);
@@ -9630,6 +11942,78 @@ ${settingsPanelHTML()}
 		if (options.scroll !== false) {
 			scrollFilterBannerToTop();
 		}
+	}
+
+	function applyCommentFilter(groupKey, options = {}) {
+		const group = annotationController?.groupsByKey.get(groupKey);
+
+		if (!group) {
+			clearCommentFilter(options);
+			return;
+		}
+
+		const targetMatch =
+			group.comments.find((match) => match.commentId === options.commentId) ||
+			group.comments[0];
+
+		applyFocusedDiscussion(
+			{
+				filter: { type: "quote", key: groupKey },
+				directMatchIds: new Set(
+					group.comments.map((comment) => comment.commentId),
+				),
+				anchorElement: targetMatch?.element,
+				paintBanner: (quote) => {
+					quote.classList.remove("filter-banner-quote-comment");
+					quote.textContent = truncateText(
+						group.fullQuoteText || group.quoteText,
+						220,
+					);
+				},
+				onFiltered: () => setQuoteRedundancy(group, true),
+			},
+			options,
+		);
+	}
+
+	// The second way into a focused discussion. It asks getVisibleCommentIds for the
+	// same ancestors-and-subtree rule a quoted passage gets, so what the reader sees
+	// is one kind of view reached two ways rather than two views that resemble each
+	// other. No redundancy pass: nothing has been restated, because the banner is
+	// showing the comment itself rather than words quoted from the article.
+	function applyCommentFocus(commentId, options = {}) {
+		const comment = getCommentGraph().byId.get(commentId);
+
+		// Same bail-out as a missing quote group. An annotation refresh re-applies
+		// whatever filter is open, and a re-render in between can leave it pointing at
+		// a comment that is no longer in the list.
+		if (!comment) {
+			clearCommentFilter(options);
+			return;
+		}
+
+		const { author, preview } = commentFocusPreview(comment);
+
+		applyFocusedDiscussion(
+			{
+				filter: { type: "comment", id: commentId },
+				directMatchIds: new Set([commentId]),
+				anchorElement: comment.element,
+				paintBanner: (quote) => {
+					quote.classList.add("filter-banner-quote-comment");
+
+					// replaceChildren over innerHTML: the preview is a reader's prose and
+					// the author is a name they chose, and neither goes anywhere near an
+					// HTML parser on its way to the banner.
+					const byline = document.createElement("span");
+					byline.className = "filter-banner-author";
+					byline.textContent = author;
+
+					quote.replaceChildren(byline, document.createTextNode(preview));
+				},
+			},
+			options,
+		);
 	}
 
 	// #region hnewhere-test-export
@@ -10111,8 +12495,13 @@ ${settingsPanelHTML()}
 		// Re-applying a filter that is already open, not entering one. Must not
 		// scroll: annotations refresh on resize and on setting changes, and each
 		// refresh would otherwise yank the reader back to the banner.
-		if (activeCommentFilter) {
-			applyCommentFilter(activeCommentFilter, {
+		if (activeCommentFilter?.type === "quote") {
+			applyCommentFilter(activeCommentFilter.key, {
+				scroll: false,
+				animate: false,
+			});
+		} else if (activeCommentFilter?.type === "comment") {
+			applyCommentFocus(activeCommentFilter.id, {
 				scroll: false,
 				animate: false,
 			});
@@ -10231,14 +12620,20 @@ ${settingsPanelHTML()}
 	async function init() {
 		await migrateStorage();
 
-		// On HN, only record clicked stories and service popup bridge actions.
+		// On HN, only record clicked stories, offer the queue, and service popup
+		// bridge actions.
 		if (location.hostname === "news.ycombinator.com") {
 			setupHNListener();
+
+			// Deliberately not awaited and deliberately before the bridge checks: it
+			// touches only rows that exist, so a bridge page simply has none, and
+			// making the bridge wait on a storage read would slow every vote.
+			setupHNQueueLinks().catch(console.error);
 
 			// Order matters: after a bridge navigation the hash is gone and the payload
 			// is in sessionStorage, so every post-action report has to be checked before
 			// treating this page as a fresh bridge request.
-			if (reportVoteResultAfterReload()) {
+			if (reportItemActionAfterReload()) {
 				return;
 			}
 
@@ -10250,7 +12645,7 @@ ${settingsPanelHTML()}
 				return;
 			}
 
-			if (maybeHandleHNVoteBridge()) {
+			if (maybeHandleHNItemAction()) {
 				return;
 			}
 
@@ -10261,6 +12656,17 @@ ${settingsPanelHTML()}
 			}
 
 			await maybeHandleHNCommentBridge();
+
+			// A queued Ask HN or a Show HN with no link resolves to an item page on
+			// this very host, so reading one is an arrival like any other -- but the
+			// arrival check lives in runPagePass, which this branch returns before.
+			// Without this they stay unread for good: the count never falls and the
+			// strip keeps offering something already read.
+			await markQueueArrival().catch(console.error);
+
+			// Last, so a bridge popup -- which returns above -- never grows a button
+			// on a window that exists to do one thing and close.
+			await offerQueueOnHN();
 			return;
 		}
 
@@ -10302,19 +12708,33 @@ ${settingsPanelHTML()}
 		// A popup closed before it finished leaves its staged draft behind.
 		sweepBridgePayloads().catch(console.error);
 
+		// Arriving somewhere the queue was holding marks it read. Below the blocked
+		// and hidden checks with everything else that writes, and not awaited: this
+		// is bookkeeping about a list the reader is not currently looking at, and
+		// nothing on this page waits on the answer.
+		markQueueArrival().catch(console.error);
+
 		// Deliberately not in the batch above: this one prunes expired votes and
 		// therefore writes, which a blocked site must never trigger. Started here and
 		// awaited below, so it overlaps the button rather than delaying it.
-		const votesReady = loadRememberedVotes();
+		const votesReady = Promise.all([
+			loadRememberedVotes(),
+			loadRememberedItemActions(),
+		]);
+
+		// "Only show the HN button when a discussion exists" was chosen before there
+		// was a queue to reach through that button, and taken literally it now hides
+		// the only way to something the reader put there themselves. Its sub-option
+		// says so: hide it, except when something is waiting.
+		const hideButton =
+			settings.hideWithoutDiscussion &&
+			!(settings.showButtonWithQueue && unreadQueueCount(await loadQueue()));
 
 		// Drawn before the lookup, so the page shows something immediately and the
 		// ring covers whatever comes next. Skipped when the reader has asked for no
 		// button without a discussion, because then it might correctly never appear
-		// and would flicker in and back out. The setting is already in hand, so the
-		// decision costs nothing.
-		const pendingButton = settings.hideWithoutDiscussion
-			? null
-			: await createCheckingButton();
+		// and would flicker in and back out.
+		const pendingButton = hideButton ? null : await createCheckingButton();
 
 		// Vote memory is only read once something renders, so it no longer sits in
 		// front of the first paint -- but it must still land before it does.
@@ -10357,8 +12777,19 @@ ${settingsPanelHTML()}
 		// page rather than one per visit.
 		const stories = await findHN(location.href);
 
+		const requestedOpen = takeRequestedOpen();
+
 		if (stories.length) {
 			settleButtonToDiscussion(pendingButton);
+
+			// A press outranks every automatic rule, including the per-site memory --
+			// that is about what the reader did here last time, and this is what they
+			// are doing now. Recorded like any other open they asked for.
+			if (requestedOpen) {
+				destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
+				await openSidebar(stories.map((story) => ({ objectID: story.objectID })));
+				return;
+			}
 
 			await presentDiscussion(
 				stories.map((story) => ({ objectID: story.objectID })),
@@ -10369,9 +12800,18 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		// Nothing on HN for this page. Offer to put it there, unless the reader has
-		// asked for the button to stay out of the way when there is nothing to read.
-		if (!settings.hideWithoutDiscussion) {
+		// Nothing on HN for this page, but the panel has not been only about this
+		// page since the front page and the queue went behind it -- and that is what
+		// a reader who pressed the button while it was still looking asked to see.
+		if (requestedOpen) {
+			destroyFloatingButton(pendingButton);
+			await openSidebar([], { browseOnly: true });
+			return;
+		}
+
+		// Offer to put it there, unless the reader has asked for the button to stay
+		// out of the way when there is nothing to read.
+		if (!hideButton) {
 			await createSubmitButton();
 		}
 
