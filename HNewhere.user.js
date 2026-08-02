@@ -3718,6 +3718,18 @@
 	// once. It is inert on purpose: there is nothing to open yet, and a click that
 	// did nothing would read as broken. createFloatingHNButton adopts it as soon as
 	// the real button is asked for.
+	// Pressed while the lookup was still running. The button spins for as long as
+	// that takes and used to do nothing at all when pressed, which is the one thing
+	// a button must not do -- so the press is remembered and honoured the moment
+	// there is an answer to honour it with.
+	let openRequestedWhileChecking = false;
+
+	function takeRequestedOpen() {
+		const requested = openRequestedWhileChecking;
+		openRequestedWhileChecking = false;
+		return requested;
+	}
+
 	async function createCheckingButton() {
 		const button = createFloatingHNButton(BUTTON_PENDING_ID, "checking");
 
@@ -3728,6 +3740,14 @@
 		if (!isMobile()) {
 			await applyButtonPosition(button);
 		}
+
+		button.onclick = () => {
+			if (button._dragController?.wasMoved()) {
+				return;
+			}
+
+			openRequestedWhileChecking = true;
+		};
 
 		startButtonSpinner(button);
 
@@ -12607,8 +12627,19 @@ ${settingsPanelHTML()}
 		// page rather than one per visit.
 		const stories = await findHN(location.href);
 
+		const requestedOpen = takeRequestedOpen();
+
 		if (stories.length) {
 			settleButtonToDiscussion(pendingButton);
+
+			// A press outranks every automatic rule, including the per-site memory --
+			// that is about what the reader did here last time, and this is what they
+			// are doing now. Recorded like any other open they asked for.
+			if (requestedOpen) {
+				destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
+				await openSidebar(stories.map((story) => ({ objectID: story.objectID })));
+				return;
+			}
 
 			await presentDiscussion(
 				stories.map((story) => ({ objectID: story.objectID })),
@@ -12619,8 +12650,17 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		// Nothing on HN for this page. Offer to put it there, unless the reader has
-		// asked for the button to stay out of the way when there is nothing to read.
+		// Nothing on HN for this page, but the panel has not been only about this
+		// page since the front page and the queue went behind it -- and that is what
+		// a reader who pressed the button while it was still looking asked to see.
+		if (requestedOpen) {
+			destroyFloatingButton(pendingButton);
+			await openSidebar([], { browseOnly: true });
+			return;
+		}
+
+		// Offer to put it there, unless the reader has asked for the button to stay
+		// out of the way when there is nothing to read.
 		if (!settings.hideWithoutDiscussion) {
 			await createSubmitButton();
 		}
