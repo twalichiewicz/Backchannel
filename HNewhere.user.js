@@ -3294,7 +3294,14 @@
 			});
 		};
 
-		strip.replaceChildren(label, title, count);
+		// The contents go in a row of their own so the strip itself can carry the
+		// band as a ::before. As a flex container it could not: a pseudo-element
+		// there becomes another item in the row rather than a block above it.
+		const row = document.createElement("div");
+		row.className = "next-up-row";
+		row.append(label, title, count);
+
+		strip.replaceChildren(row);
 		strip.classList.remove("hidden");
 	}
 
@@ -4889,18 +4896,23 @@ header {
    same 14px the filter banner uses, so it lines up with the story above it rather
    than with the scroll container. */
 .next-up {
+    display:block;
+    margin:18px -12px 24px;
+    font-family:Verdana, Geneva, sans-serif;
+    font-size:11px;
+    color:var(--meta);
+}
+
+/* The inset lives on the row rather than on the strip, so the band above it can
+   run the full width without having to be pulled back out again. The 26px is the
+   panel's own 12px plus the 14px every story and banner is indented by, so the
+   text lines up with the thread above it. */
+.next-up-row {
     display:flex;
     flex-wrap:wrap;
     align-items:baseline;
     gap:6px;
-    /* The 26px left inset is the panel's own 12px plus the 14px every story and
-       banner is indented by, so the text still lines up with the thread above
-       while the band behind it runs edge to edge. */
-    margin:18px -12px 24px;
-    padding:20px 12px 0 26px;
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
-    color:var(--meta);
+    padding:0 12px 0 26px;
 }
 
 .next-up.hidden {
@@ -6361,17 +6373,23 @@ ${CHROME_CSS}
    the next, and from the end of a thread to what to read after it. A hairline
    says "and"; this says "different thing now".
 
-   Diagonal strokes on a 6px repeat, drawn in the border colour so it reads as
-   the same family as the rules elsewhere rather than as decoration. Painted as a
-   background on the top edge rather than as a ::before, because .next-up is a
-   flex row and a pseudo-element there becomes another item in the row instead of
-   a band above it.
+   Ruled top and bottom in the same colour the strokes are drawn in, so the band
+   is a closed thing rather than hatching that fades out at the edges. The
+   strokes repeat on a 6px square, which is what keeps them at 45 degrees however
+   tall the band is -- a tile stretched to fit would shear them.
 
    Full bleed. #comments insets its contents by 12px, and a divider stopping
    short of the panel edge reads as part of the column rather than as a break
    across it, which is the one thing it is for. */
-.next-up,
-.submission + .submission {
+.next-up::before,
+.submission + .submission::before {
+    content:"";
+    display:block;
+    height:15px;
+    box-sizing:content-box;
+    margin:0 -12px 12px;
+    border-top:1px solid var(--border);
+    border-bottom:1px solid var(--border);
     background-image:repeating-linear-gradient(
         315deg,
         var(--border) 0,
@@ -6380,13 +6398,11 @@ ${CHROME_CSS}
         transparent 50%
     );
     background-size:6px 6px;
-    background-repeat:repeat-x;
-    background-position:top left;
 }
 
 .submission + .submission {
     margin:16px -12px 0;
-    padding:20px 12px 0;
+    padding:0 12px;
 }
 
 #comments {
