@@ -2639,6 +2639,10 @@
 	// you left it.
 	let discussionScrollTop = 0;
 
+	// Matches the .16s the two views transition over, so the outgoing one is gone
+	// before the swap rather than being cut off partway down.
+	const VIEW_SWAP_FADE_MS = 160;
+
 	// The wordmark carries both states rather than a second control appearing
 	// beside it: it is the same affordance in both directions -- go to Hacker News,
 	// come back to this page -- and the header's action row already holds three.
@@ -2659,19 +2663,47 @@
 			discussionScrollTop = comments.scrollTop;
 		}
 
-		panel.classList.toggle("browsing", on);
-		toggle.title = on ? "Back to this page's discussion" : "Browse Hacker News";
+		const swap = () => {
+			panel.classList.toggle("browsing", on);
+			toggle.title = on
+				? "Back to this page's discussion"
+				: "Browse Hacker News";
 
-		if (comments) {
-			// Assigning scrollTop forces the layout it depends on, so the list is
-			// measured in the state the class change has just put it in rather than
-			// the one before.
-			comments.scrollTop = on ? 0 : discussionScrollTop;
+			if (comments) {
+				// Assigning scrollTop forces the layout it depends on, so the list is
+				// measured in the state the class change has just put it in rather
+				// than the one before.
+				comments.scrollTop = on ? 0 : discussionScrollTop;
+			}
+
+			if (on) {
+				renderBrowseView(ui).catch(console.error);
+			}
+		};
+
+		if (!comments || prefersReducedMotion()) {
+			swap();
+			return;
 		}
 
-		if (on) {
-			renderBrowseView(ui).catch(console.error);
+		// The outgoing view fades, then the swap happens behind it, then the
+		// incoming one fades up. The class has to survive one frame past the swap:
+		// the view arriving was display:none until that moment, and a browser given
+		// its display and its opacity in the same frame settles both at once with
+		// nothing to transition -- the same reason the panel's own fade waits a
+		// frame.
+		if (comments._hnewhereSwapTimer) {
+			clearTimeout(comments._hnewhereSwapTimer);
 		}
+
+		comments.classList.add("views-swapping");
+		comments._hnewhereSwapTimer = window.setTimeout(() => {
+			swap();
+			requestAnimationFrame(() => {
+				comments.classList.remove("views-swapping");
+				comments._hnewhereSwapTimer = null;
+			});
+		}, VIEW_SWAP_FADE_MS);
 	}
 
 	// Borrowing the story vocabulary rather than renderStory itself: the title
@@ -3689,6 +3721,22 @@ header {
    instead of by rewriting its markup on every toggle. */
 .browse-view {
     display:none;
+}
+
+/* Both views fade, all the way out, where a filter change fades only the list to
+   12% and leaves the frame alone. The distinction is what is actually changing:
+   filtering is an edit to the list under a header that stays put, and swapping
+   views replaces everything below the header at once. Fading only part of that
+   would leave whichever part stayed put looking like it belonged to both. */
+#comments-content,
+.browse-view {
+    transition:opacity .16s ease;
+}
+
+#comments.views-swapping > #comments-content,
+#comments.views-swapping > .browse-view,
+#comments.views-swapping > .filter-banner {
+    opacity:0;
 }
 
 /* A rank column wide enough for two digits and the stop after them, which is
