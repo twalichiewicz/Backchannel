@@ -7800,6 +7800,67 @@ ${settingsPanelHTML()}
 	}
 
 	// #region hnewhere-test-export
+
+	// HN's front page is two rows per story: the title row carries the id and the
+	// link, the row after it carries everything else. Read outwards by selector
+	// rather than by column, because a job post has no votelinks cell and counting
+	// positions puts every one of its fields one to the left.
+	function parseFrontPageRow(row) {
+		const id = Number(row.id);
+		const link = row.querySelector(".titleline > a");
+
+		// Both are real rows on a real page: HN pads the list with `pagespace` and
+		// `morespace` rows carrying no title, and their ids are words.
+		if (!Number.isFinite(id) || !id || !link) {
+			return null;
+		}
+
+		const subtext = row.nextElementSibling?.querySelector(".subtext");
+
+		// Ask HN, Show HN without a link, and polls point at their own item page
+		// with a relative href, so the "article" for those is the discussion.
+		// Resolved against HN rather than against whatever page the sidebar is on.
+		const url = new URL(link.getAttribute("href") || "", HN_ORIGIN + "/").href;
+
+		// title="2026-08-02T11:34:41 1785670481". The second field is the unix time
+		// timeAgo wants; parsing the first would be the same answer by way of a date
+		// parser and a time zone.
+		const time = Number(
+			(subtext?.querySelector(".age")?.getAttribute("title") || "").split(/\s+/)[1],
+		);
+
+		// By its words, not its href or its position. A job post's only `item?id=`
+		// anchor is its age, so taking the last of those reads "3 hours ago" as
+		// three comments. "discuss" is how HN writes none.
+		const commentLink = [...(subtext?.querySelectorAll("a") || [])].find((anchor) =>
+			/\bcomments?\b|\bdiscuss\b/i.test(anchor.textContent || ""),
+		);
+
+		return {
+			id,
+			title: (link.textContent || "").trim(),
+			url,
+			by: subtext?.querySelector(".hnuser")?.textContent || "",
+			// Job posts carry no score. Absent is not zero, but every consumer here
+			// displays it, and a displayed zero is honest about there being none.
+			score: parseInt(subtext?.querySelector(".score")?.textContent || "", 10) || 0,
+			time: Number.isFinite(time) ? time : 0,
+			// \D+ rather than a split: the separator is a non-breaking space.
+			descendants:
+				parseInt((commentLink?.textContent || "").replace(/\D+/g, ""), 10) || 0,
+			site: row.querySelector(".sitestr")?.textContent || "",
+		};
+	}
+
+	function parseFrontPage(doc) {
+		return [...doc.querySelectorAll("tr.athing")]
+			.map(parseFrontPageRow)
+			.filter(Boolean);
+	}
+
+	// #endregion hnewhere-test-export
+
+	// #region hnewhere-test-export
 	// True when this document was reached by clicking a link on HN. HN serves
 	// <meta name="referrer" content="origin">, so the value arrives as the bare
 	// origin rather than the item URL; comparing origins accepts that and a
