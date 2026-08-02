@@ -9517,11 +9517,16 @@ ${settingsPanelHTML()}
 
 	// #endregion hnewhere-test-export
 
-	function getCommentGraph() {
-		const byId = new Map(renderedComments.map((comment) => [comment.id, comment]));
+	// #region hnewhere-test-export
+
+	// Split from the module state it used to read so the rule a focus follows can
+	// be tested without booting a sidebar. Takes anything with `id` and `parentId`;
+	// the renderer's own entries carry a good deal more, and none of it matters here.
+	function buildCommentGraph(comments) {
+		const byId = new Map(comments.map((comment) => [comment.id, comment]));
 		const childrenByParent = new Map();
 
-		for (const comment of renderedComments) {
+		for (const comment of comments) {
 			if (comment.parentId == null) {
 				continue;
 			}
@@ -9534,15 +9539,36 @@ ${settingsPanelHTML()}
 		return { byId, childrenByParent };
 	}
 
-	function getVisibleCommentIds(commentIds) {
-		const { byId, childrenByParent } = getCommentGraph();
+	// What "focused" means: the chain up to the root, so the reader can see what is
+	// being replied to, and everything below, so they get the conversation rather
+	// than one turn of it.
+	//
+	// The descent keeps its own visited set. Guarding it on `visible` instead is
+	// what stopped it working at all: the climb below used to run first and add the
+	// seed, so the descent found its own starting point already visible and
+	// returned before adding a single reply -- and a focus on a thread's root
+	// showed the root alone. The two walks ask different questions. "Have I already
+	// walked this subtree" is not "is this comment on screen".
+	//
+	// Descending first is what makes a seed that is also another seed's ancestor
+	// come out whole: reached as an ancestor it is only added to `visible`, and its
+	// own turn as a seed still has a descent left to make.
+	//
+	// Neither walk can assume the ids it follows are present. HN returns dead and
+	// deleted comments the renderer skips, so a parent chain can point at something
+	// that was never rendered; `byId.get(...)?.parentId ?? null` is what ends the
+	// climb there rather than throwing.
+	function visibleCommentIdsFromGraph(graph, commentIds) {
+		const { byId, childrenByParent } = graph;
 		const visible = new Set();
+		const descended = new Set();
 
 		const addDescendants = (commentId) => {
-			if (visible.has(commentId)) {
+			if (descended.has(commentId)) {
 				return;
 			}
 
+			descended.add(commentId);
 			visible.add(commentId);
 
 			for (const childId of childrenByParent.get(commentId) || []) {
@@ -9551,7 +9577,9 @@ ${settingsPanelHTML()}
 		};
 
 		for (const commentId of commentIds) {
-			let currentId = commentId;
+			addDescendants(commentId);
+
+			let currentId = byId.get(commentId)?.parentId ?? null;
 
 			while (currentId != null) {
 				if (visible.has(currentId)) {
@@ -9561,11 +9589,19 @@ ${settingsPanelHTML()}
 				visible.add(currentId);
 				currentId = byId.get(currentId)?.parentId ?? null;
 			}
-
-			addDescendants(commentId);
 		}
 
 		return visible;
+	}
+
+	// #endregion hnewhere-test-export
+
+	function getCommentGraph() {
+		return buildCommentGraph(renderedComments);
+	}
+
+	function getVisibleCommentIds(commentIds) {
+		return visibleCommentIdsFromGraph(getCommentGraph(), commentIds);
 	}
 
 	function applyCommentFilter(groupKey, options = {}) {
