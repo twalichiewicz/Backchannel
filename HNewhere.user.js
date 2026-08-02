@@ -2625,6 +2625,65 @@
 		button.remove();
 	}
 
+	function isBrowsing(ui) {
+		return Boolean(
+			ui?.shadow?.querySelector("#panel")?.classList.contains("browsing"),
+		);
+	}
+
+	// Hiding the discussion keeps every reference into it alive, but it does not
+	// keep the reader's place: #comments is the scroll container for both views, so
+	// hiding one collapses its height and the browser clamps scrollTop to zero long
+	// before anyone comes back. The position is carried across by hand for the same
+	// reason preFilterPosition exists -- leaving a surface should put you back where
+	// you left it.
+	let discussionScrollTop = 0;
+
+	// The wordmark carries both states rather than a second control appearing
+	// beside it: it is the same affordance in both directions -- go to Hacker News,
+	// come back to this page -- and the header's action row already holds three.
+	//
+	// One class toggle and a title. Both labels are already in the button and CSS
+	// picks between them, so nothing here rewrites markup on a control the reader
+	// is pointing at.
+	function setBrowseMode(ui, on) {
+		const panel = ui?.shadow?.querySelector("#panel");
+		const toggle = ui?.shadow?.querySelector("#browse-toggle");
+		const comments = ui?.shadow?.querySelector("#comments");
+
+		if (!panel || !toggle) {
+			return;
+		}
+
+		if (on && comments) {
+			discussionScrollTop = comments.scrollTop;
+		}
+
+		panel.classList.toggle("browsing", on);
+		toggle.title = on ? "Back to this page's discussion" : "Browse Hacker News";
+
+		if (comments) {
+			// Assigning scrollTop forces the layout it depends on, so the list is
+			// measured in the state the class change has just put it in rather than
+			// the one before.
+			comments.scrollTop = on ? 0 : discussionScrollTop;
+		}
+
+		if (on) {
+			renderBrowseView(ui).catch(console.error);
+		}
+	}
+
+	// Replaced in full once there are rows to draw. Here so this change stands on
+	// its own: the view opens, and says so.
+	async function renderBrowseView(ui) {
+		const view = ui?.shadow?.querySelector("#browse-view");
+
+		if (view) {
+			view.textContent = "Loading…";
+		}
+	}
+
 	async function revealSidebar() {
 		if (!sidebar) {
 			return false;
@@ -3455,6 +3514,58 @@ header button {
 /* The 36px buttons already centre their glyphs, so the visual inset on the right
    is the 8px header padding plus roughly half the leftover button width. This
    mirrors that on the left rather than letting the title hug the edge. */
+/* The wordmark is the way back, so it has to look like the wordmark and behave
+   like a control. Button chrome is removed rather than restyled -- what belongs
+   in the header is the title, and the only thing that should say "pressable" is
+   what happens under the pointer. */
+.header-wordmark {
+    border:0;
+    padding:0;
+    margin:0;
+    background:none;
+    color:inherit;
+    font:inherit;
+    cursor:pointer;
+    text-align:left;
+}
+
+.header-wordmark:focus-visible {
+    outline:1px solid var(--link);
+    outline-offset:2px;
+}
+
+@media (hover: hover) {
+    .header-wordmark:hover {
+        opacity:.75;
+    }
+}
+
+/* Hidden rather than emptied. The discussion subtree is what renderedComments,
+   the annotation controller and any open filter all point into, so tearing it
+   down to make room would invalidate every one of them and cost a full
+   re-render, re-annotate and vote re-hydration on the way back.
+
+   One state class, on the panel rather than on #comments, because it has to
+   reach the header too -- which is what lets the wordmark swap labels by CSS
+   instead of by rewriting its markup on every toggle. */
+.browse-view {
+    display:none;
+}
+
+#panel.browsing .browse-view {
+    display:block;
+}
+
+#panel.browsing #comments-content,
+#panel.browsing .filter-banner {
+    display:none;
+}
+
+#panel.browsing .wordmark-home,
+#panel:not(.browsing) .wordmark-back {
+    display:none;
+}
+
 .header-title {
     display:flex;
     flex-direction:column;
@@ -4176,12 +4287,18 @@ header button svg {
 }
 `;
 
-	function headerHTML({ subtitle = false, minimize = false } = {}) {
+	function headerHTML({ subtitle = false, minimize = false, browse = false } = {}) {
 		return `
 <header>
 
 <span class="header-title">
-<span><b>HN</b>ewhere</span>
+${
+	browse
+		? `<button id="browse-toggle" class="header-wordmark" type="button"
+title="Browse Hacker News"><span class="wordmark-home"><b>HN</b>ewhere</span><span
+class="wordmark-back">&lsaquo; Hacker News</span></button>`
+		: `<span><b>HN</b>ewhere</span>`
+}
 ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </span>
 
@@ -5657,7 +5774,7 @@ blockquote.comment-quote-redundant {
 
 <div id="resize-handle" aria-hidden="true"></div>
 
-${headerHTML({ subtitle: true, minimize: true })}
+${headerHTML({ subtitle: true, minimize: true, browse: true })}
 ${settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
@@ -5667,6 +5784,7 @@ ${settingsPanelHTML()}
 <div id="filter-banner-quote" class="filter-banner-quote"></div>
 </div>
 <div id="comments-content">Loading...</div>
+<div id="browse-view" class="browse-view"></div>
 </div>
 
 </div>
@@ -5887,6 +6005,7 @@ ${settingsPanelHTML()}
 			await refreshArticleAnnotations();
 		};
 
+
 		document
 			.querySelectorAll(
 				"#hn-restore-button, #hn-collapse-button, #hn-submit-button",
@@ -5895,13 +6014,28 @@ ${settingsPanelHTML()}
 
 		sidebar = host;
 
-		return {
+		const ui = {
 			shadow,
 			body: shadow.querySelector("#comments-content"),
 			headerSubtitle: shadow.querySelector("#header-subtitle"),
 			filterBanner,
 			filterBannerQuote,
 		};
+
+		// Named and wired here rather than alongside the other header buttons: this
+		// is the one control that needs the ui object, and the object is not built
+		// until the panel is finished.
+		const browseToggle = shadow.querySelector("#browse-toggle");
+
+		if (browseToggle) {
+			browseToggle.onclick = () => {
+				// Read off the panel rather than kept in a flag of its own, so a
+				// teardown that rebuilds the panel cannot leave the two disagreeing.
+				setBrowseMode(ui, !isBrowsing(ui));
+			};
+		}
+
+		return ui;
 	}
 
 	// -------------------------
