@@ -3554,7 +3554,13 @@ header {
     font-weight:bold;
 }
 
-header button {
+/* Scoped to the action row rather than to every button in the header. It
+   describes a 36px icon box -- fixed square, centred glyph, 20px -- which is
+   right for the three controls on the right and wrong for anything else. The
+   wordmark on the left is a button too, and while this was written as
+   "header button" the rule sized it to 36 square and left its text hanging
+   outside the box. */
+.header-actions button {
     background:none;
     border:0;
     color:var(--header-text);
@@ -3574,7 +3580,7 @@ header button {
    tapped, so the settings and minimize buttons stayed highlighted. Only apply it
    where a real pointer can hover. */
 @media (hover: hover) {
-    header button:hover {
+    .header-actions button:hover {
         background:var(--hover-tint);
     }
 }
@@ -3585,14 +3591,16 @@ header button {
     gap:0;
 }
 
-/* The 36px buttons already centre their glyphs, so the visual inset on the right
-   is the 8px header padding plus roughly half the leftover button width. This
-   mirrors that on the left rather than letting the title hug the edge. */
 /* The wordmark is the way back, so it has to look like the wordmark and behave
    like a control. Button chrome is removed rather than restyled -- what belongs
    in the header is the title, and the only thing that should say "pressable" is
    what happens under the pointer. */
 .header-wordmark {
+    /* .header-title is a flex column, so a button placed in it is stretched to
+       the header's full width and stops reading as a word. Hugging its content
+       is also what lets the two labels size it themselves -- they are different
+       lengths, and the box should be whichever one is showing. */
+    align-self:flex-start;
     border:0;
     padding:0;
     margin:0;
@@ -3669,6 +3677,9 @@ header button {
     display:none;
 }
 
+/* The 36px buttons already centre their glyphs, so the visual inset on the right
+   is the 8px header padding plus roughly half the leftover button width. This
+   mirrors that on the left rather than letting the title hug the edge. */
 .header-title {
     display:flex;
     flex-direction:column;
@@ -3678,8 +3689,13 @@ header button {
 
 /* Only the two-line case needs tightening, and the subtitle exists only in the
    sidebar -- the popover header has none. Default leading put most of a line's
-   worth of air between the title and the status under it. */
-.header-title:has(.header-subtitle) > span:first-child {
+   worth of air between the title and the status under it.
+
+   Matched on :first-child rather than span:first-child so it holds whatever
+   element carries the title: a span in the popover's header, a button in the
+   sidebar's. Typed as a span it silently stopped applying the moment the
+   wordmark became a control, and the air came back. */
+.header-title:has(.header-subtitle) > :first-child {
     line-height:1.25;
 }
 
