@@ -103,6 +103,7 @@
 		state: "HNewhere:sidebar_state",
 		votes: "HNewhere:votes",
 		blocked: "HNewhere:blocked_sites",
+		queue: "HNewhere:queue",
 	};
 
 	// Votes have to be remembered locally. The sidebar reads HN over a cross-site
@@ -375,6 +376,99 @@
 
 	async function isSiteBlocked() {
 		return (await loadBlockedSites()).has(siteKey());
+	}
+
+	// #region hnewhere-test-export
+
+	// The reading queue is a list rather than a set, because its order is the
+	// feature: what you saved first is what you are offered next. Every rule below
+	// is a pure transform of that list so the ordering can be argued about without
+	// a browser. The URL comparison arrives as an argument for the same reason
+	// referrerIsHN takes its referrer -- the real one normalizes, and normalizeURL
+	// lives outside this region.
+	function addToQueue(entries, story, now) {
+		const list = Array.isArray(entries) ? entries : [];
+
+		// Saving something twice is not an error and not a second copy, and it does
+		// not move it: a story saved an hour ago keeps its place in the line, which
+		// is what having a line is for.
+		if (list.some((entry) => entry.id === story.id)) {
+			return list;
+		}
+
+		return [
+			...list,
+			{
+				id: story.id,
+				url: story.url,
+				title: story.title,
+				addedAt: now,
+				readAt: null,
+			},
+		];
+	}
+
+	function removeFromQueue(entries, id) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => entry.id !== id,
+		);
+	}
+
+	// Unread first and oldest-saved at the top, so nothing starves at the bottom of
+	// a list that keeps growing. Read entries sink below them, most recently read
+	// first, which is the order you would look in for something you just finished.
+	function sortQueue(entries) {
+		return [...(Array.isArray(entries) ? entries : [])].sort((a, b) => {
+			const aRead = a.readAt ? 1 : 0;
+			const bRead = b.readAt ? 1 : 0;
+
+			if (aRead !== bRead) {
+				return aRead - bRead;
+			}
+
+			return aRead ? b.readAt - a.readAt : a.addedAt - b.addedAt;
+		});
+	}
+
+	// Stamped, never removed. Arrival is matched by URL and URLs drift -- a
+	// redirect, a paywall bounce, a canonical form the site prefers -- so a wrong
+	// match has to be visible and undoable rather than silently eating an entry the
+	// reader never got to.
+	function markQueueRead(entries, url, now, matches = sameURL) {
+		return (Array.isArray(entries) ? entries : []).map((entry) =>
+			!entry.readAt && matches(entry.url, url)
+				? { ...entry, readAt: now }
+				: entry,
+		);
+	}
+
+	function clearReadFromQueue(entries) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => !entry.readAt,
+		);
+	}
+
+	function nextUnreadInQueue(entries) {
+		return sortQueue(entries).find((entry) => !entry.readAt) || null;
+	}
+
+	function unreadQueueCount(entries) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => !entry.readAt,
+		).length;
+	}
+
+	// #endregion hnewhere-test-export
+
+	async function loadQueue() {
+		const stored = await load(STORAGE.queue, []);
+
+		return Array.isArray(stored) ? stored.filter((entry) => entry?.id) : [];
+	}
+
+	async function saveQueue(entries) {
+		await save(STORAGE.queue, entries);
+		return entries;
 	}
 
 	async function loadSiteWidth() {
