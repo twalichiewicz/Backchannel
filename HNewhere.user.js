@@ -2984,10 +2984,14 @@
 			discussionScrollTop = comments.scrollTop;
 		}
 
-		// What the panel opens on. A queue with something in it is what the reader
-		// came for -- they put it there -- so it leads until they say otherwise.
-		if (on && !browseTabChosen) {
-			browseTab = queueHasItems ? "queue" : "front";
+		// What the panel opens on, decided fresh each time it is opened. A queue
+		// with something in it is what the reader came for -- they put it there --
+		// so it leads. Switching tabs while the panel is open lasts as long as the
+		// panel is open, and no longer: a latch that survived would mean one
+		// incidental press turning this off for good, invisibly, which is the fault
+		// the auto-open setting was already fixed for once.
+		if (on) {
+			browseTab = options.tab || (queueHasItems ? "queue" : "front");
 		}
 
 		const swap = () => {
@@ -3209,11 +3213,6 @@
 	// back to the first page again would be the panel forgetting where you were.
 	let browsePage = 1;
 	let browseTab = "front";
-
-	// Set the moment a tab is pressed. Until then the panel picks which to open on,
-	// and a queue with something in it wins -- but once the reader has said which
-	// they wanted, choosing for them again would be the panel arguing.
-	let browseTabChosen = false;
 
 	// HN numbers its rows continuously across pages -- page 2 starts at 31 -- and
 	// the rank is only useful if it says the same thing.
@@ -3590,6 +3589,11 @@
 			tab.classList.toggle("is-current", isCurrent);
 			tab.setAttribute("aria-selected", String(isCurrent));
 		}
+
+		// The trail names where you actually are, not where the door led. Read more
+		// is the pair of them; once you are standing in one of the two, saying so is
+		// the more useful thing for it to say.
+		setWordmarkDestination(ui, browseTab === "queue" ? "Queue" : "Read more");
 
 		refreshQueueCount(ui.shadow);
 
@@ -7463,7 +7467,6 @@ ${settingsPanelHTML()}
 
 			if (button) {
 				button.onclick = () => {
-					browseTabChosen = true;
 					scrollBrowseToTop(ui);
 					renderBrowseView(ui, { tab }).catch(console.error);
 				};
@@ -8806,9 +8809,6 @@ ${settingsPanelHTML()}
 					const toggle = ui.shadow.querySelector("#browse-toggle");
 
 					ui.shadow.querySelector("#panel")?.classList.add("queue-only");
-					setWordmarkDestination(ui, "Queue");
-					browseTab = "queue";
-					browseTabChosen = true;
 
 					if (toggle) {
 						toggle.disabled = true;
@@ -8819,7 +8819,10 @@ ${settingsPanelHTML()}
 				// Put into browse without the cross-fade, then slid in. The panel is not
 				// on screen yet, so fading between two views inside it would only be a
 				// delay in front of the one movement there is to see.
-				setBrowseMode(ui, true, { animate: false });
+				setBrowseMode(ui, true, {
+					animate: false,
+					tab: options.queueOnly ? "queue" : undefined,
+				});
 				slidePanelIn(ui);
 				return;
 			}
