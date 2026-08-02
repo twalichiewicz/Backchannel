@@ -460,6 +460,38 @@
 
 	// #endregion hnewhere-test-export
 
+	// Matched with sameURL, which normalizes both sides -- the same comparison
+	// findHN uses to decide two addresses are the same submission -- so a tracking
+	// parameter added on the way in, or a fragment, does not stop the queue
+	// recognising where you have got to.
+	//
+	// Writes only when something actually changed. A page pass runs on every load
+	// and on every soft navigation, and storing an identical list each time would
+	// be a write per navigation for nothing.
+	async function markQueueArrival(url = location.href, now = Date.now()) {
+		const entries = await loadQueue();
+
+		if (!entries.length) {
+			return false;
+		}
+
+		const marked = markQueueRead(entries, url, now);
+
+		if (marked.every((entry, index) => entry === entries[index])) {
+			return false;
+		}
+
+		await saveQueue(marked);
+
+		// The strip is showing what comes next, and what comes next has just changed.
+		if (sidebarUI?.shadow) {
+			refreshQueueCount(sidebarUI.shadow).catch(console.error);
+			refreshNextUp(sidebarUI.shadow).catch(console.error);
+		}
+
+		return true;
+	}
+
 	async function loadQueue() {
 		const stored = await load(STORAGE.queue, []);
 
@@ -11644,6 +11676,12 @@ ${settingsPanelHTML()}
 
 		// A popup closed before it finished leaves its staged draft behind.
 		sweepBridgePayloads().catch(console.error);
+
+		// Arriving somewhere the queue was holding marks it read. Below the blocked
+		// and hidden checks with everything else that writes, and not awaited: this
+		// is bookkeeping about a list the reader is not currently looking at, and
+		// nothing on this page waits on the answer.
+		markQueueArrival().catch(console.error);
 
 		// Deliberately not in the batch above: this one prunes expired votes and
 		// therefore writes, which a blocked site must never trigger. Started here and
