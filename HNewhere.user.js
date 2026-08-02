@@ -4435,11 +4435,36 @@ header {
 
 /* A rank column wide enough for two digits and the stop after them, which is
    every row on a thirty-story page. */
+/* HN's own rhythm, measured off news.ycombinator.com rather than guessed at: a
+   story runs 35px from one title to the next -- a 19px title line, an 11px
+   subtext line, and a 5px spacer between. Ours came to 65.5.
+
+   Most of the difference was that .story-title and .story-meta are set for the
+   header at the top of a discussion, where the story is the headline and the
+   only one on screen. Thirty of them in a list is a different job, so the sizes
+   are scoped down here and left alone there.
+
+   Titles still wrap where HN's would not -- a 420px panel is not a 1200px page --
+   so a wrapped row is taller than 35px. That is the panel's width, not its
+   spacing. */
 .browse-row {
     display:flex;
-    gap:8px;
+    gap:6px;
     align-items:baseline;
-    padding:6px 0;
+    padding:0 0 5px;
+}
+
+.browse-row .story-title {
+    font-size:13px;
+    line-height:1.3;
+}
+
+/* HN leaves about a pixel and a half between the title and the subtext under it,
+   which reads as none at all. The 2px this normally carries is there to separate
+   the header from a story's own text below it, and there is no text here. */
+.browse-row .story-meta {
+    line-height:1.15;
+    padding-top:1px;
 }
 
 .browse-rank {
@@ -9267,7 +9292,24 @@ ${settingsPanelHTML()}
 				link.textContent = already ? "queue" : "queued";
 			};
 
-			subline.append(document.createTextNode(" | "), link);
+			// Placed where it falls in the order a reader works through a row:
+			// decide whether you want to read it, flag it if it should not be there,
+			// hide it if it is not for you, open the comments if it is. So it goes in
+			// front of flag.
+			//
+			// Logged out there is no flag link at all and hide is the next thing to
+			// its right, which keeps the same relative position. With neither -- a
+			// row offering nothing but its comments -- the end of the line is all
+			// there is to append to.
+			const before =
+				subline.querySelector('a[href^="flag?"]') ||
+				subline.querySelector('a[href^="hide?"]');
+
+			if (before) {
+				before.before(link, document.createTextNode(" | "));
+			} else {
+				subline.append(document.createTextNode(" | "), link);
+			}
 		}
 	}
 
