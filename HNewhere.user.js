@@ -2816,7 +2816,33 @@
 	// leads to the article here instead of to the discussion, there is no composer
 	// and no story text, and a rank sits in front. Same classes, so a browse row
 	// and the story at the top of a discussion read as the same kind of object.
-	function renderBrowseRow(story, container, rank) {
+	function renderBrowseRow(story, container, rank, options = {}) {
+		const entry = options.entry;
+
+		// A queue entry knows only what was saved: its id, url, title and when. It
+		// does not know a score, an author or a comment count, and rendering zeroes
+		// for those would state three things we have not been told. The line says
+		// what it does know instead.
+		const meta = entry
+			? `<span class="item-age">${escapeHTML(
+					entry.readAt
+						? "read " + timeAgo(entry.readAt / 1000)
+						: "saved " + timeAgo(entry.addedAt / 1000),
+				)}</span>
+	|
+	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
+	target="_blank" rel="noopener noreferrer">discussion</a>
+	|
+	<button class="browse-save-link" type="button">remove</button>`
+			: `${escapeHTML(pluralize(story.score, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}
+	|
+	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
+	|
+	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
+	target="_blank" rel="noopener noreferrer">${escapeHTML(pluralize(story.descendants, "comment"))}</a>
+	|
+	<button class="browse-save-link" type="button">save</button>`;
+
 		const row = document.createElement("div");
 		row.className = "story browse-row";
 		row.dataset.storyId = String(story.id);
@@ -2828,43 +2854,49 @@
 	${story.site ? `<span class="browse-site">(${escapeHTML(story.site)})</span>` : ""}
 	</div>
 	<div class="story-meta">
-	${escapeHTML(pluralize(story.score, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}
-	|
-	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
-	|
-	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
-	target="_blank" rel="noopener noreferrer">${escapeHTML(pluralize(story.descendants, "comment"))}</a>
-	|
-	<button class="browse-save-link" type="button">save</button>
+	${meta}
 	</div>
 	</div>
 	`;
 
 		const saveButton = row.querySelector(".browse-save-link");
 
-		// Read once per row rather than passed in, so a row rendered after something
-		// was saved elsewhere still opens in the right state.
-		loadQueue()
-			.then((entries) => {
-				saveButton.textContent = entries.some((entry) => entry.id === story.id)
-					? "saved"
-					: "save";
-			})
-			.catch(console.error);
+		if (entry) {
+			// In the queue itself the control only ever removes -- the row would not
+			// be there otherwise -- and takes the row with it rather than waiting for
+			// a re-render, so the list answers immediately.
+			saveButton.onclick = async () => {
+				await saveQueue(removeFromQueue(await loadQueue(), story.id));
+				row.remove();
+				refreshQueueCount(container.getRootNode());
+				refreshNextUp(container.getRootNode());
+			};
+		} else {
+			// Read once per row rather than passed in, so a row rendered after
+			// something was saved elsewhere still opens in the right state.
+			loadQueue()
+				.then((entries) => {
+					saveButton.textContent = entries.some((e) => e.id === story.id)
+						? "saved"
+						: "save";
+				})
+				.catch(console.error);
 
-		saveButton.onclick = async () => {
-			const entries = await loadQueue();
-			const already = entries.some((entry) => entry.id === story.id);
+			saveButton.onclick = async () => {
+				const entries = await loadQueue();
+				const already = entries.some((e) => e.id === story.id);
 
-			await saveQueue(
-				already
-					? removeFromQueue(entries, story.id)
-					: addToQueue(entries, story, Date.now()),
-			);
+				await saveQueue(
+					already
+						? removeFromQueue(entries, story.id)
+						: addToQueue(entries, story, Date.now()),
+				);
 
-			saveButton.textContent = already ? "save" : "saved";
-			refreshQueueCount(container.getRootNode());
-		};
+				saveButton.textContent = already ? "save" : "saved";
+				refreshQueueCount(container.getRootNode());
+				refreshNextUp(container.getRootNode());
+			};
+		}
 
 		row.querySelector(".browse-title-link").onclick = (event) => {
 			// The same record setupHNListener writes when you click a story on HN.
@@ -2899,14 +2931,27 @@
 		return row;
 	}
 
-	// Replaced in full once there is a tab carrying a count. Here so saving from a
-	// browse row stands on its own.
-	function refreshQueueCount() {}
+	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
+	// rather than the ui object because a browse row only knows the tree it is in.
+	async function refreshQueueCount(root) {
+		const tab = root?.querySelector?.("#browse-tab-queue");
+
+		if (!tab) {
+			return;
+		}
+
+		const unread = unreadQueueCount(await loadQueue());
+
+		// The bare word when there is nothing waiting. A "(0)" is a number that says
+		// nothing and still asks to be read.
+		tab.textContent = unread ? `Queue (${unread})` : "Queue";
+	}
 
 	// Kept across a round trip to the discussion, the way the discussion's own
 	// scroll position is: having paged three deep and gone to read something, coming
 	// back to the first page again would be the panel forgetting where you were.
 	let browsePage = 1;
+	let browseTab = "front";
 
 	// HN numbers its rows continuously across pages -- page 2 starts at 31 -- and
 	// the rank is only useful if it says the same thing.
@@ -2941,22 +2986,138 @@
 		view.appendChild(nav);
 	}
 
-	async function renderBrowseView(ui, options = {}) {
-		const view = ui?.shadow?.querySelector("#browse-view");
+	// At the foot of a finished discussion, which is where the question it answers
+	// gets asked. Rendered only when something is actually waiting: a strip that
+	// says "nothing next" is furniture.
+	async function refreshNextUp(root) {
+		const strip = root?.querySelector?.("#next-up");
 
-		if (!view) {
+		if (!strip) {
 			return;
 		}
 
-		if (Number.isFinite(options.page)) {
-			browsePage = Math.max(1, options.page);
+		const entries = await loadQueue();
+		const next = nextUnreadInQueue(entries);
+
+		if (!next) {
+			strip.classList.add("hidden");
+			strip.replaceChildren();
+			return;
 		}
 
+		const remaining = unreadQueueCount(entries);
+
+		const label = document.createElement("span");
+		label.className = "next-up-label";
+		label.textContent = "Next in queue ›";
+
+		const title = document.createElement("a");
+		title.className = "next-up-title";
+		title.href = next.url;
+		title.textContent = next.title;
+
+		const count = document.createElement("span");
+		count.className = "next-up-count";
+		// The one still to be read is included, so this counts what is left rather
+		// than what is left after this one -- "1 left" on the last article reads as
+		// there being another.
+		count.textContent = pluralize(remaining, "left", "left");
+
+		title.onclick = (event) => {
+			// Same record and same rules as a browse row: this is a story being opened
+			// from HNewhere, and the page it lands on should read it as an arrival.
+			const record = save(STORAGE.last, {
+				url: next.url,
+				ids: [String(next.id)],
+				timestamp: Date.now(),
+			});
+
+			if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+				return;
+			}
+
+			event.preventDefault();
+			record.catch(() => {}).then(() => {
+				location.href = next.url;
+			});
+		};
+
+		strip.replaceChildren(label, title, count);
+		strip.classList.remove("hidden");
+	}
+
+	function scrollBrowseToTop(ui) {
+		const comments = ui?.shadow?.querySelector("#comments");
+
+		if (comments) {
+			comments.scrollTop = 0;
+		}
+	}
+
+	// The queue rendered as rows, reusing the front page's row exactly -- it is the
+	// same object in the same list, and giving it a second appearance would say the
+	// two were different kinds of thing.
+	async function renderQueueView(ui, list) {
+		const entries = sortQueue(await loadQueue());
+
+		list.replaceChildren();
+
+		if (!entries.length) {
+			const empty = document.createElement("div");
+			empty.className = "browse-empty";
+			// Names the control rather than describing the feature: the tab is here
+			// from the start, so the one thing a reader needs is where "save" lives.
+			empty.textContent =
+				"Nothing saved yet. Use save on any story, here or on Hacker News, to read it later.";
+			list.appendChild(empty);
+			return;
+		}
+
+		entries.forEach((entry, index) => {
+			const row = renderBrowseRow(
+				{
+					id: entry.id,
+					url: entry.url,
+					title: entry.title,
+					by: "",
+					score: 0,
+					time: entry.addedAt / 1000,
+					descendants: 0,
+					site: "",
+				},
+				list,
+				index + 1,
+				{ queue: true, entry },
+			);
+
+			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
+		});
+
+		if (entries.some((entry) => entry.readAt)) {
+			const clear = document.createElement("button");
+			clear.type = "button";
+			clear.className = "browse-nav-link browse-clear-read";
+			clear.textContent = "clear read";
+			clear.onclick = async () => {
+				await saveQueue(clearReadFromQueue(await loadQueue()));
+				await renderQueueView(ui, list);
+				refreshQueueCount(ui.shadow);
+				refreshNextUp(ui.shadow);
+			};
+
+			const nav = document.createElement("div");
+			nav.className = "browse-nav";
+			nav.appendChild(clear);
+			list.appendChild(nav);
+		}
+	}
+
+	async function renderFrontPageView(ui, list) {
 		// Only on a first paint. Re-entering with rows already up leaves them in
 		// place until the new ones are ready, so switching back and forth does not
 		// blank the list each time.
-		if (!view.childElementCount) {
-			view.textContent = "Loading Hacker News…";
+		if (!list.childElementCount) {
+			list.textContent = "Loading Hacker News…";
 		}
 
 		const requested = browsePage;
@@ -2964,31 +3125,58 @@
 
 		// A second click while the first was still in flight, so this answer is for
 		// a page nobody is waiting for any more.
-		if (browsePage !== requested) {
+		if (browsePage !== requested || browseTab !== "front") {
 			return;
 		}
 
 		if (!stories.length) {
-			view.textContent = "Could not reach Hacker News.";
+			list.textContent = "Could not reach Hacker News.";
 			return;
 		}
 
-		view.replaceChildren();
+		list.replaceChildren();
 		stories.forEach((story, index) =>
-			renderBrowseRow(story, view, (page - 1) * FRONT_PAGE_SIZE + index + 1),
+			renderBrowseRow(story, list, (page - 1) * FRONT_PAGE_SIZE + index + 1),
 		);
 
-		renderBrowseNav(view, { page, nextPage }, (target) => {
+		renderBrowseNav(list, { page, nextPage }, (target) => {
 			// Back to the top: the reader asked for a different page, not for the same
 			// place in a new one.
-			const comments = ui.shadow.querySelector("#comments");
-
-			if (comments) {
-				comments.scrollTop = 0;
-			}
-
+			scrollBrowseToTop(ui);
 			renderBrowseView(ui, { page: target }).catch(console.error);
 		});
+	}
+
+	async function renderBrowseView(ui, options = {}) {
+		const list = ui?.shadow?.querySelector("#browse-list");
+
+		if (!list) {
+			return;
+		}
+
+		if (Number.isFinite(options.page)) {
+			browsePage = Math.max(1, options.page);
+		}
+
+		if (options.tab) {
+			browseTab = options.tab;
+		}
+
+		for (const tab of ui.shadow.querySelectorAll(".browse-tab")) {
+			const isCurrent =
+				tab.id === (browseTab === "queue" ? "browse-tab-queue" : "browse-tab-front");
+			tab.classList.toggle("is-current", isCurrent);
+			tab.setAttribute("aria-selected", String(isCurrent));
+		}
+
+		refreshQueueCount(ui.shadow);
+
+		if (browseTab === "queue") {
+			await renderQueueView(ui, list);
+			return;
+		}
+
+		await renderFrontPageView(ui, list);
 	}
 
 	async function revealSidebar() {
@@ -3958,6 +4146,57 @@ header {
     opacity:0;
 }
 
+/* Two tabs set as a meta row rather than as a control: the same 11px Verdana the
+   filter banner and the story lines use, so the front page reads as part of the
+   panel rather than as a widget dropped into it. */
+.browse-tabs {
+    display:flex;
+    align-items:baseline;
+    gap:12px;
+    margin:0 0 10px 30px;
+    font-family:Verdana, Geneva, sans-serif;
+    font-size:11px;
+}
+
+.browse-tab {
+    border:0;
+    padding:0;
+    background:none;
+    color:var(--meta);
+    cursor:pointer;
+    font-family:inherit;
+    font-size:inherit;
+}
+
+/* The current one carries the panel's text colour, the way .filter-banner-title
+   does against its own grey row. Weight is left alone -- at 11px a bold and a
+   regular Verdana differ more in colour than in shape, and the colour is already
+   saying it. */
+.browse-tab.is-current {
+    color:var(--text);
+}
+
+@media (hover: hover) {
+    .browse-tab:not(.is-current):hover {
+        text-decoration:underline;
+        text-underline-offset:2px;
+    }
+}
+
+.browse-empty {
+    margin:4px 0 0 30px;
+    max-width:var(--measure);
+    color:var(--meta);
+    line-height:1.5;
+}
+
+/* Read entries stay in the list, dimmed. Which is the point: the queue has to be
+   able to be wrong about what you finished, and something invisible cannot be
+   corrected. */
+.browse-row-read {
+    opacity:.5;
+}
+
 /* A rank column wide enough for two digits and the stop after them, which is
    every row on a thirty-story page. */
 .browse-row {
@@ -4050,6 +4289,54 @@ header {
     text-decoration:underline;
 }
 
+/* Sits under the last comment, separated by a rule rather than by space alone:
+   the thread has ended, and what follows is a different question. Indented to the
+   same 14px the filter banner uses, so it lines up with the story above it rather
+   than with the scroll container. */
+.next-up {
+    display:flex;
+    flex-wrap:wrap;
+    align-items:baseline;
+    gap:6px;
+    margin:18px 0 24px 14px;
+    padding-top:12px;
+    max-width:720px;
+    border-top:1px solid var(--border);
+    font-family:Verdana, Geneva, sans-serif;
+    font-size:11px;
+    color:var(--meta);
+}
+
+.next-up.hidden {
+    display:none;
+}
+
+.next-up-label {
+    color:var(--meta);
+}
+
+/* The title carries the panel's own text colour and the panel's own size: it is
+   the thing being offered, and the row around it is the label. */
+.next-up-title {
+    flex:1 1 auto;
+    min-width:0;
+    color:var(--text);
+    font-family:inherit;
+    font-size:13px;
+    text-decoration:none;
+}
+
+@media (hover: hover) {
+    .next-up-title:hover {
+        text-decoration:underline;
+        text-underline-offset:2px;
+    }
+}
+
+.next-up-count {
+    flex:0 0 auto;
+}
+
 @media (hover: hover) {
     .browse-nav-link:enabled:hover {
         text-decoration:underline;
@@ -4061,7 +4348,8 @@ header {
 }
 
 #panel.browsing #comments-content,
-#panel.browsing .filter-banner {
+#panel.browsing .filter-banner,
+#panel.browsing .next-up {
     display:none;
 }
 
@@ -6314,7 +6602,14 @@ ${settingsPanelHTML()}
 <div id="filter-banner-quote" class="filter-banner-quote"></div>
 </div>
 <div id="comments-content">Loading...</div>
-<div id="browse-view" class="browse-view"></div>
+<div id="browse-view" class="browse-view">
+<div class="browse-tabs" role="tablist">
+<button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">Front page</button>
+<button id="browse-tab-queue" class="browse-tab" type="button" role="tab">Queue</button>
+</div>
+<div id="browse-list"></div>
+</div>
+<div id="next-up" class="next-up hidden"></div>
 </div>
 
 </div>
@@ -6564,6 +6859,23 @@ ${settingsPanelHTML()}
 				setBrowseMode(ui, !isBrowsing(ui));
 			};
 		}
+
+		for (const [id, tab] of [
+			["#browse-tab-front", "front"],
+			["#browse-tab-queue", "queue"],
+		]) {
+			const button = shadow.querySelector(id);
+
+			if (button) {
+				button.onclick = () => {
+					scrollBrowseToTop(ui);
+					renderBrowseView(ui, { tab }).catch(console.error);
+				};
+			}
+		}
+
+		refreshQueueCount(shadow).catch(console.error);
+		refreshNextUp(shadow).catch(console.error);
 
 		return ui;
 	}
