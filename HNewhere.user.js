@@ -4679,10 +4679,11 @@ header {
     flex-wrap:wrap;
     align-items:baseline;
     gap:6px;
-    margin:18px 0 24px 14px;
-    padding-top:12px;
-    max-width:720px;
-    border-top:1px solid var(--border);
+    /* The 26px left inset is the panel's own 12px plus the 14px every story and
+       banner is indented by, so the text still lines up with the thread above
+       while the band behind it runs edge to edge. */
+    margin:18px -12px 24px;
+    padding:20px 12px 0 26px;
     font-family:Verdana, Geneva, sans-serif;
     font-size:11px;
     color:var(--meta);
@@ -6141,10 +6142,37 @@ ${CHROME_CSS}
     padding-top:0;
 }
 
+/* A hatched band rather than a rule, in the two places where the panel changes
+   subject instead of merely continuing: from one submission of this article to
+   the next, and from the end of a thread to what to read after it. A hairline
+   says "and"; this says "different thing now".
+
+   Diagonal strokes on a 6px repeat, drawn in the border colour so it reads as
+   the same family as the rules elsewhere rather than as decoration. Painted as a
+   background on the top edge rather than as a ::before, because .next-up is a
+   flex row and a pseudo-element there becomes another item in the row instead of
+   a band above it.
+
+   Full bleed. #comments insets its contents by 12px, and a divider stopping
+   short of the panel edge reads as part of the column rather than as a break
+   across it, which is the one thing it is for. */
+.next-up,
 .submission + .submission {
-    margin-top:16px;
-    padding-top:12px;
-    border-top:1px solid var(--border);
+    background-image:repeating-linear-gradient(
+        315deg,
+        var(--border) 0,
+        var(--border) 1px,
+        transparent 0,
+        transparent 50%
+    );
+    background-size:6px 6px;
+    background-repeat:repeat-x;
+    background-position:top left;
+}
+
+.submission + .submission {
+    margin:16px -12px 0;
+    padding:20px 12px 0;
 }
 
 #comments {
