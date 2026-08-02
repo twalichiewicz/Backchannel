@@ -2674,14 +2674,88 @@
 		}
 	}
 
-	// Replaced in full once there are rows to draw. Here so this change stands on
-	// its own: the view opens, and says so.
+	// Borrowing the story vocabulary rather than renderStory itself: the title
+	// leads to the article here instead of to the discussion, there is no composer
+	// and no story text, and a rank sits in front. Same classes, so a browse row
+	// and the story at the top of a discussion read as the same kind of object.
+	function renderBrowseRow(story, container, rank) {
+		const row = document.createElement("div");
+		row.className = "story browse-row";
+		row.dataset.storyId = String(story.id);
+		row.innerHTML = `
+	<div class="browse-rank">${rank}.</div>
+	<div class="browse-main">
+	<div class="story-title">
+	<a class="browse-title-link" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
+	${story.site ? `<span class="browse-site">(${escapeHTML(story.site)})</span>` : ""}
+	</div>
+	<div class="story-meta">
+	${escapeHTML(pluralize(story.score, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}
+	|
+	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
+	|
+	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
+	target="_blank" rel="noopener noreferrer">${escapeHTML(pluralize(story.descendants, "comment"))}</a>
+	</div>
+	</div>
+	`;
+
+		row.querySelector(".browse-title-link").onclick = (event) => {
+			// The same record setupHNListener writes when you click a story on HN.
+			// Written before navigating, so the page you land on reads the arrival it
+			// would have read coming from HN itself -- which is what makes automatic
+			// opening, and "only when arriving from Hacker News", apply to a story
+			// opened from here without either of them knowing this path exists.
+			const record = save(STORAGE.last, {
+				url: story.url,
+				ids: [String(story.id)],
+				timestamp: Date.now(),
+			});
+
+			// A modified or middle click means "open it somewhere else" everywhere on
+			// the web, and it means that here too, so the default is left alone. The
+			// record is still made and simply not waited on: the browser is already
+			// opening the tab, and a GM write lands well inside a page load.
+			if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+				return;
+			}
+
+			event.preventDefault();
+
+			// Navigates either way. A storage error is not a reason to refuse to open
+			// the article -- it costs the arrival, not the click.
+			record.catch(() => {}).then(() => {
+				location.href = story.url;
+			});
+		};
+
+		container.appendChild(row);
+		return row;
+	}
+
 	async function renderBrowseView(ui) {
 		const view = ui?.shadow?.querySelector("#browse-view");
 
-		if (view) {
-			view.textContent = "Loading…";
+		if (!view) {
+			return;
 		}
+
+		// Only on a first paint. Re-entering with rows already up leaves them in
+		// place until the new ones are ready, so switching back and forth does not
+		// blank the list each time.
+		if (!view.childElementCount) {
+			view.textContent = "Loading Hacker News…";
+		}
+
+		const stories = await loadFrontPage();
+
+		if (!stories.length) {
+			view.textContent = "Could not reach Hacker News.";
+			return;
+		}
+
+		view.replaceChildren();
+		stories.forEach((story, index) => renderBrowseRow(story, view, index + 1));
 	}
 
 	async function revealSidebar() {
@@ -3550,6 +3624,35 @@ header button {
    instead of by rewriting its markup on every toggle. */
 .browse-view {
     display:none;
+}
+
+/* A rank column wide enough for two digits and the stop after them, which is
+   every row on a thirty-story page. */
+.browse-row {
+    display:flex;
+    gap:8px;
+    align-items:baseline;
+    padding:6px 0;
+}
+
+.browse-rank {
+    flex:0 0 auto;
+    min-width:22px;
+    text-align:right;
+    color:var(--meta);
+    font-size:11px;
+}
+
+.browse-main {
+    flex:1 1 auto;
+    min-width:0;
+}
+
+/* Beside the title at meta weight, the way HN sets it: it qualifies the link
+   rather than competing with it. */
+.browse-site {
+    color:var(--meta);
+    font-size:11px;
 }
 
 #panel.browsing .browse-view {
