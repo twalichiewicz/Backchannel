@@ -2916,6 +2916,17 @@ ${CHROME_CSS}
     font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-size:12px;
     line-height:1.4;
+    /* The same inheritance the panel has to close off, for the same reason: this
+       is a second shadow root on the same page, and it reads whatever the host
+       inherited. See #panel for the full account. */
+    text-align:left;
+    text-indent:0;
+    text-transform:none;
+    letter-spacing:normal;
+    word-spacing:normal;
+    font-style:normal;
+    font-variant:normal;
+    white-space:normal;
 }
 
 /* Same inset the sidebar's #comments uses, so the two read as one product. */
@@ -5008,6 +5019,28 @@ Highlights the passages commenters quote, so you can jump between the article an
     font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
     font-size:13px;
     overflow:visible;
+    /* Shadow DOM encapsulates selectors, not inheritance. Every inherited property
+       flows in from the host unless the shadow tree sets its own, so a page that
+       centres its body -- victoriametrics.com does -- centres the entire panel,
+       comments and all. The same hole is open for everything else that moves text
+       about, and each one is a bug report waiting for the site that trips it.
+
+       Pinned on #panel rather than on :host, because a rule in the page that
+       happens to match the host element outranks a :host rule from inside. Nothing
+       in the page can reach this one.
+
+       line-height and direction are deliberately absent. The panel has never set a
+       line-height and the components that care carry their own, so pinning one now
+       would restyle every site rather than fix one; and direction says something
+       real about a reader's language, which is not ours to overrule. */
+    text-align:left;
+    text-indent:0;
+    text-transform:none;
+    letter-spacing:normal;
+    word-spacing:normal;
+    font-style:normal;
+    font-variant:normal;
+    white-space:normal;
     /* Reading width for a single block of prose. Never applied to a container: a
        cap on any ancestor of .children narrows every reply nested under it. */
     --measure:1215px;
