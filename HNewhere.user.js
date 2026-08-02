@@ -676,31 +676,43 @@
 	// page costs nothing. The front page is the same for everyone; only the vote
 	// arrows would differ, and those are replayed from vote memory anyway.
 	async function loadFrontPage(options = {}) {
-		const cached = await load(FRONT_PAGE_CACHE_KEY, null);
+		// Cached a page at a time, the way findHN caches a URL at a time. One entry
+		// holding every page would expire the whole run together, so paging back to
+		// where you were would refetch a page you read a moment ago.
+		const page = Math.max(1, Number(options.page) || 1);
+		const cacheKey = FRONT_PAGE_CACHE_KEY + ":" + page;
+		const cached = await load(cacheKey, null);
 
 		if (
 			!options.force &&
 			cached?.stories?.length &&
 			Date.now() - cached.timestamp < FRONT_PAGE_TTL
 		) {
-			return cached.stories;
+			return { stories: cached.stories, nextPage: cached.nextPage ?? null, page };
 		}
 
-		const html = await requestText(HN_ORIGIN + "/news");
-		const stories = html
-			? parseFrontPage(new DOMParser().parseFromString(html, "text/html"))
-			: [];
+		const html = await requestText(HN_ORIGIN + "/news?p=" + page);
+		const doc = html
+			? new DOMParser().parseFromString(html, "text/html")
+			: null;
+		const stories = doc ? parseFrontPage(doc) : [];
 
 		// A failed fetch, or markup we could not read, falls back to whatever is
 		// stored however old. Yesterday's front page is a worse answer than today's
 		// and a far better one than an empty panel that does not say why.
 		if (!stories.length) {
-			return cached?.stories || [];
+			return {
+				stories: cached?.stories || [],
+				nextPage: cached?.nextPage ?? null,
+				page,
+			};
 		}
 
-		await save(FRONT_PAGE_CACHE_KEY, { timestamp: Date.now(), stories });
+		const nextPage = parseFrontPageNextPage(doc);
 
-		return stories;
+		await save(cacheKey, { timestamp: Date.now(), stories, nextPage });
+
+		return { stories, nextPage, page };
 	}
 
 	// -------------------------
@@ -2765,11 +2777,53 @@
 		return row;
 	}
 
-	async function renderBrowseView(ui) {
+	// Kept across a round trip to the discussion, the way the discussion's own
+	// scroll position is: having paged three deep and gone to read something, coming
+	// back to the first page again would be the panel forgetting where you were.
+	let browsePage = 1;
+
+	// HN numbers its rows continuously across pages -- page 2 starts at 31 -- and
+	// the rank is only useful if it says the same thing.
+	const FRONT_PAGE_SIZE = 30;
+
+	function renderBrowseNav(view, { page, nextPage }, onNavigate) {
+		const nav = document.createElement("div");
+		nav.className = "browse-nav";
+
+		// Both ends are stated rather than left blank. A row that reads "page 1 of
+		// more" is a different thing from one that has simply run out, and a reader
+		// deep in the list needs to know which end they are at.
+		const prev = document.createElement("button");
+		prev.type = "button";
+		prev.className = "browse-nav-link";
+		prev.textContent = "‹ prev";
+		prev.disabled = page <= 1;
+		prev.onclick = () => onNavigate(page - 1);
+
+		const label = document.createElement("span");
+		label.className = "browse-nav-page";
+		label.textContent = "page " + page;
+
+		const next = document.createElement("button");
+		next.type = "button";
+		next.className = "browse-nav-link";
+		next.textContent = "next ›";
+		next.disabled = !nextPage;
+		next.onclick = () => onNavigate(nextPage);
+
+		nav.append(prev, label, next);
+		view.appendChild(nav);
+	}
+
+	async function renderBrowseView(ui, options = {}) {
 		const view = ui?.shadow?.querySelector("#browse-view");
 
 		if (!view) {
 			return;
+		}
+
+		if (Number.isFinite(options.page)) {
+			browsePage = Math.max(1, options.page);
 		}
 
 		// Only on a first paint. Re-entering with rows already up leaves them in
@@ -2779,7 +2833,14 @@
 			view.textContent = "Loading Hacker News…";
 		}
 
-		const stories = await loadFrontPage();
+		const requested = browsePage;
+		const { stories, nextPage, page } = await loadFrontPage({ page: requested });
+
+		// A second click while the first was still in flight, so this answer is for
+		// a page nobody is waiting for any more.
+		if (browsePage !== requested) {
+			return;
+		}
 
 		if (!stories.length) {
 			view.textContent = "Could not reach Hacker News.";
@@ -2787,7 +2848,21 @@
 		}
 
 		view.replaceChildren();
-		stories.forEach((story, index) => renderBrowseRow(story, view, index + 1));
+		stories.forEach((story, index) =>
+			renderBrowseRow(story, view, (page - 1) * FRONT_PAGE_SIZE + index + 1),
+		);
+
+		renderBrowseNav(view, { page, nextPage }, (target) => {
+			// Back to the top: the reader asked for a different page, not for the same
+			// place in a new one.
+			const comments = ui.shadow.querySelector("#comments");
+
+			if (comments) {
+				comments.scrollTop = 0;
+			}
+
+			renderBrowseView(ui, { page: target }).catch(console.error);
+		});
 	}
 
 	async function revealSidebar() {
@@ -3784,6 +3859,49 @@ header {
 .browse-site {
     color:var(--meta);
     font-size:11px;
+}
+
+/* Indented to the rank column's right edge, so it starts where every title above
+   it starts rather than at the panel's edge. */
+.browse-nav {
+    display:flex;
+    align-items:baseline;
+    gap:10px;
+    margin:14px 0 8px 30px;
+    font-family:Verdana, Geneva, sans-serif;
+    font-size:11px;
+    color:var(--meta);
+}
+
+/* Text links on a meta row, the same treatment .filter-banner-close gets: no
+   underline until hover, no colour shift. */
+.browse-nav-link {
+    border:0;
+    padding:0;
+    background:none;
+    color:var(--meta);
+    cursor:pointer;
+    font-family:inherit;
+    font-size:inherit;
+    text-decoration:none;
+    text-underline-offset:2px;
+}
+
+/* Dimmed and inert rather than removed. Which end of the list you are at is
+   information, and a control that vanishes makes the reader work out why. */
+.browse-nav-link:disabled {
+    opacity:.4;
+    cursor:default;
+}
+
+.browse-nav-link:enabled:focus-visible {
+    text-decoration:underline;
+}
+
+@media (hover: hover) {
+    .browse-nav-link:enabled:hover {
+        text-decoration:underline;
+    }
 }
 
 #panel.browsing .browse-view {
@@ -8306,6 +8424,24 @@ ${settingsPanelHTML()}
 		return [...doc.querySelectorAll("tr.athing")]
 			.map(parseFrontPageRow)
 			.filter(Boolean);
+	}
+
+	// HN paginates with a single "More" link carrying ?p=N, and offers nothing
+	// pointing backwards -- the page you came from is simply N-1, which is why only
+	// this direction has to be read off the page. Its absence is how the last page
+	// announces itself, so a missing link is the answer rather than a parse failure.
+	function parseFrontPageNextPage(doc) {
+		const href = doc.querySelector("a.morelink")?.getAttribute("href");
+
+		if (!href) {
+			return null;
+		}
+
+		const page = Number(
+			new URL(href, HN_ORIGIN + "/news").searchParams.get("p"),
+		);
+
+		return Number.isFinite(page) && page > 1 ? page : null;
 	}
 
 	// #endregion hnewhere-test-export
