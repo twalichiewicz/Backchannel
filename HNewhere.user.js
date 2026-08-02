@@ -258,6 +258,10 @@
 	let sidebarGeneration = 0;
 	let renderedComments = [];
 	let annotationController = null;
+	// Tagged rather than a bare group key: a focused discussion can now be entered
+	// two ways -- through a quoted passage, or through a comment -- and everything
+	// that re-applies or tears down a filter has to know which it is holding.
+	// { type: "quote", key } | { type: "comment", id }
 	let activeCommentFilter = null;
 
 	// Where the reader was, in both the thread and the article, before a focused
@@ -9619,7 +9623,7 @@ ${settingsPanelHTML()}
 			preFilterPosition = captureReadingPosition();
 		}
 
-		activeCommentFilter = groupKey;
+		activeCommentFilter = { type: "quote", key: groupKey };
 
 		const targetMatch =
 			group.comments.find((match) => match.commentId === options.commentId) ||
@@ -10147,8 +10151,8 @@ ${settingsPanelHTML()}
 		// Re-applying a filter that is already open, not entering one. Must not
 		// scroll: annotations refresh on resize and on setting changes, and each
 		// refresh would otherwise yank the reader back to the banner.
-		if (activeCommentFilter) {
-			applyCommentFilter(activeCommentFilter, {
+		if (activeCommentFilter?.type === "quote") {
+			applyCommentFilter(activeCommentFilter.key, {
 				scroll: false,
 				animate: false,
 			});
