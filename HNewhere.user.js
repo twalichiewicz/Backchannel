@@ -219,17 +219,22 @@
 		}
 	})();
 
-	const VOTE_BRIDGE_MESSAGE_SOURCE = "HNewhereVoteBridge";
+	// The wire value stays "HNewhereVoteBridge" though the mechanism no longer only
+	// votes. It is the protocol between a popup and the page that opened it, and a
+	// reader who updates the script mid-session can have one of each live at once --
+	// renaming the string would leave that popup unable to report what it did.
+	const ITEM_ACTION_BRIDGE_MESSAGE_SOURCE = "HNewhereVoteBridge";
 	const SUBMIT_BRIDGE_MESSAGE_SOURCE = "HNewhereSubmitBridge";
 	const COMMENT_BRIDGE_MESSAGE_SOURCE = "HNewhereCommentBridge";
 
 	// HN truncates submission titles at 80 characters.
 	const HN_TITLE_LIMIT = 80;
 
-	// The popup votes by navigating to the vote URL, and HN's goto redirect drops
-	// the URL fragment, so the bridge payload cannot ride the hash across it.
+	// The popup acts by navigating to HN's own action URL, and HN's goto redirect
+	// drops the URL fragment, so the bridge payload cannot ride the hash across it.
 	// sessionStorage is per-tab and per-origin, which is exactly the popup's life.
-	const VOTE_BRIDGE_STORAGE_KEY = "hnewhere-vote-bridge";
+	// The key keeps its old name for the same reason the message source does.
+	const ITEM_ACTION_BRIDGE_STORAGE_KEY = "hnewhere-vote-bridge";
 	const SUBMIT_BRIDGE_STORAGE_KEY = "hnewhere-submit-bridge";
 	const COMMENT_BRIDGE_STORAGE_KEY = "hnewhere-comment-bridge";
 
@@ -699,7 +704,7 @@
 	const itemCache = new Map();
 	const voteLinkCache = new Map();
 	const displayAgeCache = new Map();
-	const voteBridgeRequests = new Map();
+	const itemActionRequests = new Map();
 
 	async function getItem(id) {
 		if (itemCache.has(id)) {
@@ -1828,7 +1833,7 @@
 	}
 
 	// One-shot listener per bridge kind, resolving whichever request matches the
-	// nonce the popup reports back. Modelled on setupVoteBridgeListener.
+	// nonce the popup reports back. Modelled on setupItemActionListener.
 	function createBridgeChannel(source) {
 		const pending = new Map();
 		let installed = false;
@@ -2402,7 +2407,7 @@
 		return descriptors;
 	}
 
-	function voteBridgePageURL(storyID, itemId, action, voteURL, nonce) {
+	function itemActionPageURL(storyID, itemId, action, voteURL, nonce) {
 		const url = new URL(commentURL(itemId));
 		const hash = new URLSearchParams();
 		hash.set("hnewhere-vote", "1");
@@ -2423,12 +2428,12 @@
 		return url.href;
 	}
 
-	function setupVoteBridgeListener() {
-		if (window.__hnewhereVoteBridgeListenerInstalled) {
+	function setupItemActionListener() {
+		if (window.__hnewhereItemActionListenerInstalled) {
 			return;
 		}
 
-		window.__hnewhereVoteBridgeListenerInstalled = true;
+		window.__hnewhereItemActionListenerInstalled = true;
 		window.addEventListener("message", (event) => {
 			if (event.origin !== HN_ORIGIN) {
 				return;
@@ -2436,7 +2441,7 @@
 
 			const data = event.data;
 
-			if (!data || data.source !== VOTE_BRIDGE_MESSAGE_SOURCE || !data.nonce) {
+			if (!data || data.source !== ITEM_ACTION_BRIDGE_MESSAGE_SOURCE || !data.nonce) {
 				return;
 			}
 
@@ -2454,14 +2459,14 @@
 				);
 			}
 
-			const pending = voteBridgeRequests.get(data.nonce);
+			const pending = itemActionRequests.get(data.nonce);
 
 			if (!pending) {
 				return;
 			}
 
 			clearTimeout(pending.timeoutId);
-			voteBridgeRequests.delete(data.nonce);
+			itemActionRequests.delete(data.nonce);
 
 			try {
 				pending.popup?.close();
@@ -2471,13 +2476,13 @@
 		});
 	}
 
-	function openVoteBridgePopup(storyID, itemId, action, voteURL) {
-		setupVoteBridgeListener();
+	function openItemActionPopup(storyID, itemId, action, voteURL) {
+		setupItemActionListener();
 
 		return new Promise((resolve) => {
 			const nonce =
 				String(Date.now()) + Math.random().toString(36).slice(2, 10);
-			const bridgeURL = voteBridgePageURL(
+			const bridgeURL = itemActionPageURL(
 				storyID,
 				itemId,
 				action,
@@ -2501,11 +2506,11 @@
 			// finish and close itself. The window covers two page loads (the vote
 			// and HN's redirect back), so it is generous.
 			const timeoutId = window.setTimeout(() => {
-				voteBridgeRequests.delete(nonce);
+				itemActionRequests.delete(nonce);
 				resolve({ ok: false, reason: "timeout" });
 			}, 12000);
 
-			voteBridgeRequests.set(nonce, {
+			itemActionRequests.set(nonce, {
 				resolve,
 				timeoutId,
 				popup,
@@ -2525,7 +2530,7 @@
 		});
 
 		try {
-			const result = await openVoteBridgePopup(
+			const result = await openItemActionPopup(
 				storyID,
 				itemId,
 				descriptor.action,
@@ -8277,7 +8282,7 @@ ${settingsPanelHTML()}
 	// Hacker News click tracking / vote bridge
 	// -------------------------
 
-	function parseVoteBridgePayload() {
+	function parseItemActionPayload() {
 		const hash = location.hash.replace(/^#/, "");
 
 		if (!hash) {
@@ -8316,7 +8321,7 @@ ${settingsPanelHTML()}
 		};
 	}
 
-	function postVoteBridgeResult(payload, result) {
+	function postItemActionResult(payload, result) {
 		if (!window.opener) {
 			return;
 		}
@@ -8324,7 +8329,7 @@ ${settingsPanelHTML()}
 		try {
 			window.opener.postMessage(
 				{
-					source: VOTE_BRIDGE_MESSAGE_SOURCE,
+					source: ITEM_ACTION_BRIDGE_MESSAGE_SOURCE,
 					storyID: payload.storyID,
 					itemId: payload.itemId,
 					action: payload.action,
@@ -8346,7 +8351,7 @@ ${settingsPanelHTML()}
 
 	// Runs on the page HN redirects to after the vote is committed. The hash is
 	// gone by now, so the payload comes back out of sessionStorage.
-	function reportVoteResultAfterReload() {
+	function reportItemActionAfterReload() {
 		// HN's /vote response is itself a page this script runs on, and at that
 		// point the redirect has not landed yet so the document carries no vote
 		// links. Reporting from there would consume the payload, post a null
@@ -8359,10 +8364,10 @@ ${settingsPanelHTML()}
 		let stored = null;
 
 		try {
-			stored = window.sessionStorage.getItem(VOTE_BRIDGE_STORAGE_KEY);
+			stored = window.sessionStorage.getItem(ITEM_ACTION_BRIDGE_STORAGE_KEY);
 			// Cleared immediately: if anything below throws, a stale payload must
 			// not make the next HN page load try to report again.
-			window.sessionStorage.removeItem(VOTE_BRIDGE_STORAGE_KEY);
+			window.sessionStorage.removeItem(ITEM_ACTION_BRIDGE_STORAGE_KEY);
 		} catch {
 			return false;
 		}
@@ -8387,7 +8392,7 @@ ${settingsPanelHTML()}
 		const voteInfo = currentVoteInfoFor(payload.itemId);
 		const changed = voteInfo?.state !== payload.beforeState;
 
-		postVoteBridgeResult(payload, {
+		postItemActionResult(payload, {
 			ok: changed,
 			reason: changed ? "updated" : "unchanged",
 			voteInfo,
@@ -8399,8 +8404,8 @@ ${settingsPanelHTML()}
 		return true;
 	}
 
-	function maybeHandleHNVoteBridge() {
-		const payload = parseVoteBridgePayload();
+	function maybeHandleHNItemAction() {
+		const payload = parseItemActionPayload();
 
 		if (!payload) {
 			return false;
@@ -8425,7 +8430,7 @@ ${settingsPanelHTML()}
 			payload.voteURL;
 
 		if (!voteURL) {
-			postVoteBridgeResult(payload, {
+			postItemActionResult(payload, {
 				ok: false,
 				reason: "vote-url-missing",
 				voteInfo: before,
@@ -8444,7 +8449,7 @@ ${settingsPanelHTML()}
 
 		try {
 			window.sessionStorage.setItem(
-				VOTE_BRIDGE_STORAGE_KEY,
+				ITEM_ACTION_BRIDGE_STORAGE_KEY,
 				JSON.stringify({
 					...payload,
 					beforeState: before?.state ?? "none",
@@ -8452,7 +8457,7 @@ ${settingsPanelHTML()}
 			);
 		} catch (error) {
 			console.error("HNewhere: could not stage vote payload", error);
-			postVoteBridgeResult(payload, {
+			postItemActionResult(payload, {
 				ok: false,
 				reason: "storage-unavailable",
 				voteInfo: before,
@@ -11613,7 +11618,7 @@ ${settingsPanelHTML()}
 			// Order matters: after a bridge navigation the hash is gone and the payload
 			// is in sessionStorage, so every post-action report has to be checked before
 			// treating this page as a fresh bridge request.
-			if (reportVoteResultAfterReload()) {
+			if (reportItemActionAfterReload()) {
 				return;
 			}
 
@@ -11625,7 +11630,7 @@ ${settingsPanelHTML()}
 				return;
 			}
 
-			if (maybeHandleHNVoteBridge()) {
+			if (maybeHandleHNItemAction()) {
 				return;
 			}
 
