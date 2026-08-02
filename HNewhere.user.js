@@ -104,6 +104,7 @@
 		votes: "HNewhere:votes",
 		blocked: "HNewhere:blocked_sites",
 		queue: "HNewhere:queue",
+		itemActions: "HNewhere:item_actions",
 	};
 
 	// Votes have to be remembered locally. The sidebar reads HN over a cross-site
@@ -582,6 +583,9 @@
 	// at startup by loadRememberedVotes().
 	let rememberedVotes = {};
 
+	// { [itemId]: { favorite?: bool, flagged?: bool, flagUnavailable?: bool, at } }
+	let rememberedItemActions = {};
+
 	async function loadRememberedVotes() {
 		const stored = await load(STORAGE.votes, {});
 		const now = Date.now();
@@ -607,6 +611,143 @@
 
 		if (expired) {
 			await save(STORAGE.votes, kept);
+		}
+	}
+
+	// Favorite and flag have to be remembered for exactly the reason votes do, and
+	// it is worth saying plainly: an anonymously fetched page shows neither. The
+	// browser strips HN's SameSite cookie from a cross-site GM request, so the item
+	// page the sidebar reads is a logged-out one -- it renders no favorite link at
+	// all, and no flag link either. Only the popup ever sees the truth, so what the
+	// popup reports is what gets kept.
+	async function loadRememberedItemActions() {
+		const stored = await load(STORAGE.itemActions, {});
+		const now = Date.now();
+		const kept = {};
+		let expired = 0;
+
+		if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+			for (const [itemId, record] of Object.entries(stored)) {
+				if (!record || typeof record !== "object") {
+					continue;
+				}
+
+				if (Number.isFinite(record.at) && now - record.at > VOTE_MEMORY_TTL) {
+					expired++;
+					continue;
+				}
+
+				kept[itemId] = record;
+			}
+		}
+
+		rememberedItemActions = kept;
+
+		if (expired) {
+			await save(STORAGE.itemActions, kept);
+		}
+	}
+
+	function rememberItemAction(itemId, patch) {
+		const key = String(itemId);
+		const next = { ...(rememberedItemActions[key] || {}), ...patch, at: Date.now() };
+
+		rememberedItemActions[key] = next;
+		save(STORAGE.itemActions, rememberedItemActions).catch(console.error);
+
+		return next;
+	}
+
+	function itemActionState(itemId) {
+		return rememberedItemActions[String(itemId)] || null;
+	}
+
+	// Rendered on every story and every comment, because the sidebar cannot know
+	// whether either applies: it reads HN logged out, where a favorite link never
+	// appears and a flag link never appears either. The popup is what finds out, and
+	// what it finds is remembered here -- so a link discovered to be unavailable
+	// retires instead of being offered again on every comment in the thread.
+	function itemActionLinksHTML(itemId) {
+		const id = escapeHTML(String(itemId));
+
+		return `
+      |
+      <button class="item-action-link" type="button"
+      data-item-action="fave" data-item-action-id="${id}">favorite</button>
+      |
+      <button class="item-action-link" type="button"
+      data-item-action="flag" data-item-action-id="${id}">flag</button>`;
+	}
+
+	const ITEM_ACTION_FIELD = { fave: "favorite", flag: "flagged" };
+
+	const ITEM_ACTION_LABEL = {
+		favorite: { on: "un-favorite", off: "favorite" },
+		flagged: { on: "unflag", off: "flag" },
+	};
+
+	function refreshItemActionControls(itemId) {
+		const root = sidebarUI?.shadow;
+
+		if (!root) {
+			return;
+		}
+
+		const state = itemActionState(itemId) || {};
+		const selector = `[data-item-action-id="${CSS.escape(String(itemId))}"]`;
+
+		for (const button of root.querySelectorAll(selector)) {
+			const field = ITEM_ACTION_FIELD[button.dataset.itemAction];
+			const on = Boolean(state[field]);
+
+			// Hidden rather than disabled. A disabled control still says the action
+			// exists and invites the reader to work out why they cannot have it;
+			// this one does not apply to them at all.
+			button.hidden = Boolean(state[field + "Unavailable"]);
+			button.textContent = ITEM_ACTION_LABEL[field][on ? "on" : "off"];
+			button.classList.toggle("item-action-on", on);
+		}
+	}
+
+	function refreshAllItemActionControls() {
+		const root = sidebarUI?.shadow;
+
+		if (!root) {
+			return;
+		}
+
+		const seen = new Set();
+
+		for (const button of root.querySelectorAll("[data-item-action-id]")) {
+			seen.add(button.dataset.itemActionId);
+		}
+
+		seen.forEach(refreshItemActionControls);
+	}
+
+	async function submitItemAction(button) {
+		const itemId = button.dataset.itemActionId;
+		const kind = button.dataset.itemAction;
+		const field = ITEM_ACTION_FIELD[kind];
+
+		if (!itemId || !field || button.disabled) {
+			return;
+		}
+
+		// Whether this is the doing or the undoing is decided from what is
+		// remembered, which is the only record there is -- a fetched page would say
+		// "not favorited" about everything.
+		const action = itemActionState(itemId)?.[field] ? "un" + kind : kind;
+
+		button.disabled = true;
+
+		try {
+			// No URL to pass: unlike a vote there is no client-injected link to hand
+			// over, so the popup finds the anchor on the page it lands on.
+			await openItemActionPopup(itemId, itemId, action, null);
+		} finally {
+			button.disabled = false;
+			refreshItemActionControls(itemId);
 		}
 	}
 
@@ -2459,6 +2600,22 @@
 				);
 			}
 
+			// Favorite and flag are remembered the same way and for the same reason:
+			// the popup is the only place the truth was visible. An unavailable action
+			// is remembered too, so the sidebar stops offering a link that cannot
+			// work rather than asking again on every comment.
+			if (data.itemId && ITEM_ACTION_PATHS[data.action]) {
+				const field = data.action.endsWith("fave") ? "favorite" : "flagged";
+
+				if (data.reason === "action-unavailable") {
+					rememberItemAction(data.itemId, { [field + "Unavailable"]: true });
+				} else if (typeof data.applied === "boolean") {
+					rememberItemAction(data.itemId, { [field]: data.applied });
+				}
+
+				refreshItemActionControls(data.itemId);
+			}
+
 			const pending = itemActionRequests.get(data.nonce);
 
 			if (!pending) {
@@ -2620,7 +2777,17 @@
 		}
 	}
 
+	// Ridden along with the vote hydration rather than given a pass of its own: both
+	// are "put the state we remember onto the rows that have just rendered", and
+	// they are wanted at exactly the same moments -- a first render, a re-render, a
+	// blended view gaining a submission.
+	function hydrateItemActionsForRoot() {
+		refreshAllItemActionControls();
+	}
+
 	function hydrateVoteControlsForStory(storyID, voteLinks = new Map()) {
+		hydrateItemActionsForRoot();
+
 		const containers = sidebarUI?.body?.querySelectorAll(
 			`[data-hn-vote-story-id="${String(storyID)}"]`,
 		);
@@ -4273,6 +4440,46 @@ header {
     font-family:Verdana, Geneva, sans-serif;
     font-size:11px;
     color:var(--meta);
+}
+
+/* Set as a meta-row text link, like every other action on these rows. HN writes
+   favorite and flag exactly this way and puts them in exactly this company. */
+.item-action-link {
+    border:0;
+    padding:0;
+    background:none;
+    color:var(--meta);
+    cursor:pointer;
+    font-family:inherit;
+    font-size:inherit;
+    text-decoration:none;
+    text-underline-offset:2px;
+}
+
+.item-action-link[hidden] {
+    display:none;
+}
+
+/* Once it has been done, the label already says so -- "un-favorite" is not
+   ambiguous. The colour is what makes it findable again in a long thread without
+   reading every row. */
+.item-action-on {
+    color:var(--text);
+}
+
+.item-action-link:disabled {
+    opacity:.5;
+    cursor:default;
+}
+
+.item-action-link:enabled:focus-visible {
+    text-decoration:underline;
+}
+
+@media (hover: hover) {
+    .item-action-link:enabled:hover {
+        text-decoration:underline;
+    }
 }
 
 /* A control in a meta row, so it is set as one: the same text-link treatment
@@ -6914,6 +7121,18 @@ ${settingsPanelHTML()}
 		refreshQueueCount(shadow).catch(console.error);
 		refreshNextUp(shadow).catch(console.error);
 
+		// Delegated rather than wired per row: a thread renders hundreds of comments
+		// and each one carries two of these, so binding them individually would be
+		// hundreds of listeners for controls most readers never touch.
+		shadow.addEventListener("click", (event) => {
+			const button = event.target?.closest?.("[data-item-action-id]");
+
+			if (button) {
+				event.preventDefault();
+				submitItemAction(button).catch(console.error);
+			}
+		});
+
 		return ui;
 	}
 
@@ -6966,6 +7185,7 @@ ${settingsPanelHTML()}
 	<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(story.time)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
 	|
 	${story.descendants || 0} comments
+	${itemActionLinksHTML(storyID)}
 	</div>
 	${
 		story.text
@@ -7845,6 +8065,7 @@ ${settingsPanelHTML()}
       <a class="focus-link" href="#">
       focus
       </a>
+      ${itemActionLinksHTML(commentID)}
 
       <span class="toggle">
       [–]
@@ -8305,7 +8526,7 @@ ${settingsPanelHTML()}
 			return null;
 		}
 
-		if (!["up", "down", "un"].includes(action)) {
+		if (!ITEM_ACTIONS.includes(action)) {
 			return null;
 		}
 
@@ -8317,9 +8538,58 @@ ${settingsPanelHTML()}
 			nonce,
 			// Re-validated rather than trusted: this arrives via the URL fragment
 			// and is about to be navigated to, so it must be a real HN vote URL.
+			// Only votes carry one -- favorite and flag have no client-injected link
+			// to pass along, so the popup finds those itself.
 			voteURL: normalizeVoteURL(params.get("voteURL")),
 		};
 	}
+
+	// #region hnewhere-test-export
+
+	// The path HN serves each action from, which is also how the popup finds the
+	// anchor once it is there. Votes are keyed by element id because hn.js gives
+	// them one; favorite and flag are not, so they are found by where they point.
+	const ITEM_ACTION_PATHS = {
+		fave: { path: "fave", params: {} },
+		unfave: { path: "fave", params: { un: "t" } },
+		flag: { path: "flag", params: {} },
+		unflag: { path: "flag", params: { un: "t" } },
+	};
+
+	const ITEM_ACTIONS = ["up", "down", "un", ...Object.keys(ITEM_ACTION_PATHS)];
+
+	// Favorite and flag both render as a plain link on a logged-in item page, with
+	// no id to look them up by. Matched on the path and the item they name, and on
+	// whether the link is the doing or the undoing of it -- HN marks the undo with
+	// un=t, and the two are otherwise identical.
+	function findItemActionAnchor(root, action, itemId) {
+		const shape = ITEM_ACTION_PATHS[action];
+
+		if (!shape) {
+			return null;
+		}
+
+		const wantsUndo = "un" in shape.params;
+
+		return (
+			[...root.querySelectorAll("a[href]")].find((anchor) => {
+				const href = anchor.getAttribute("href") || "";
+
+				if (!href.startsWith(shape.path + "?")) {
+					return false;
+				}
+
+				const params = new URL(href, HN_ORIGIN + "/").searchParams;
+
+				return (
+					params.get("id") === String(itemId) &&
+					(params.get("un") === "t") === wantsUndo
+				);
+			}) || null
+		);
+	}
+
+	// #endregion hnewhere-test-export
 
 	function postItemActionResult(payload, result) {
 		if (!window.opener) {
@@ -8388,6 +8658,29 @@ ${settingsPanelHTML()}
 			return false;
 		}
 
+		// Favorite and flag are read back the way they were found: by which link HN
+		// is now offering. If the undo is on the page the action took, which is a
+		// stronger answer than trusting that the navigation did what it was asked.
+		if (ITEM_ACTION_PATHS[payload.action]) {
+			const undoAction = payload.action.startsWith("un")
+				? payload.action.slice(2)
+				: "un" + payload.action;
+			const applied = Boolean(
+				findItemActionAnchor(document, undoAction, payload.itemId),
+			);
+			const wanted = !payload.action.startsWith("un");
+
+			postItemActionResult(payload, {
+				ok: applied === wanted,
+				reason: applied === wanted ? "updated" : "unchanged",
+				action: payload.action,
+				applied,
+			});
+
+			window.setTimeout(() => window.close(), 60);
+			return true;
+		}
+
 		// Server-rendered state, so this is the vote HN actually holds.
 		const voteInfo = currentVoteInfoFor(payload.itemId);
 		const changed = voteInfo?.state !== payload.beforeState;
@@ -8404,11 +8697,63 @@ ${settingsPanelHTML()}
 		return true;
 	}
 
+	// Favorite and flag take the same route a vote does -- navigate, let HN commit
+	// it, come back on the redirect -- but they are found differently and they
+	// report differently, so they branch off before the vote machinery.
+	function handleFaveFlagAction(payload) {
+		const anchor = findItemActionAnchor(document, payload.action, payload.itemId);
+
+		// The sidebar cannot know whether an action applies: it reads HN logged out,
+		// where a favorite link never renders and a flag link never renders either.
+		// So the popup is what finds out, and it finds out the only way available --
+		// by looking at a page served to the real account and seeing nothing there.
+		// Logged out, or below the karma flagging needs, and the answer is the same.
+		if (!anchor) {
+			postItemActionResult(payload, {
+				ok: false,
+				reason: "action-unavailable",
+				action: payload.action,
+			});
+			window.setTimeout(() => window.close(), 80);
+			return true;
+		}
+
+		const target = new URL(anchor.getAttribute("href"), HN_ORIGIN + "/");
+
+		// Same rule as the vote path, for the same reason: HN's own handler would
+		// fire this in the background and closing the popup would abort it. A
+		// top-level navigation cannot be cancelled that way.
+		target.searchParams.set("goto", "item?id=" + payload.itemId);
+
+		try {
+			window.sessionStorage.setItem(
+				ITEM_ACTION_BRIDGE_STORAGE_KEY,
+				JSON.stringify(payload),
+			);
+		} catch (error) {
+			console.error("HNewhere: could not stage item action payload", error);
+			postItemActionResult(payload, {
+				ok: false,
+				reason: "storage-unavailable",
+				action: payload.action,
+			});
+			window.setTimeout(() => window.close(), 80);
+			return true;
+		}
+
+		location.href = target.href;
+		return true;
+	}
+
 	function maybeHandleHNItemAction() {
 		const payload = parseItemActionPayload();
 
 		if (!payload) {
 			return false;
+		}
+
+		if (ITEM_ACTION_PATHS[payload.action]) {
+			return handleFaveFlagAction(payload);
 		}
 
 		const before = currentVoteInfoFor(payload.itemId);
@@ -11691,7 +12036,10 @@ ${settingsPanelHTML()}
 		// Deliberately not in the batch above: this one prunes expired votes and
 		// therefore writes, which a blocked site must never trigger. Started here and
 		// awaited below, so it overlaps the button rather than delaying it.
-		const votesReady = loadRememberedVotes();
+		const votesReady = Promise.all([
+			loadRememberedVotes(),
+			loadRememberedItemActions(),
+		]);
 
 		// Drawn before the lookup, so the page shows something immediately and the
 		// ring covers whatever comes next. Skipped when the reader has asked for no
