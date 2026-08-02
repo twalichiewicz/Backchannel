@@ -3254,6 +3254,31 @@
 		strip.classList.remove("hidden");
 	}
 
+	// True while the panel is showing a discussion. False when it was opened purely
+	// to browse, from a page that has none -- which decides what the chevron goes
+	// back to and which button minimizing leaves behind.
+	let sidebarHasDiscussion = true;
+
+	// What sits behind the chevron when there is no discussion. It has to say
+	// something: a back arrow leading to an empty panel reads as a fault, and the
+	// reason it is empty is the one thing worth saying here.
+	function renderNoDiscussion(ui) {
+		const body = ui?.body;
+
+		if (!body) {
+			return;
+		}
+
+		body.replaceChildren();
+
+		const message = document.createElement("div");
+		message.className = "browse-empty no-discussion";
+		message.textContent =
+			"No Hacker News discussion for this page yet. Minimize to submit it, or read something else.";
+
+		body.appendChild(message);
+	}
+
 	function scrollBrowseToTop(ui) {
 		const comments = ui?.shadow?.querySelector("#comments");
 
@@ -3716,7 +3741,7 @@ ${CHROME_CSS}
 </style>
 
 <div id="popover" role="dialog" aria-label="Submit to Hacker News">
-${headerHTML()}
+${headerHTML({ browse: true })}
 ${settingsPanelHTML()}
 
 <div class="popover-body">
@@ -3765,6 +3790,23 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 		// dropdown the sidebar does. No annotation refresh is passed: there is no
 		// sidebar to refresh when this is on screen.
 		wireSettingsPanel(shadow).catch(console.error);
+
+		// The wordmark is the way out of this page and into the rest of HN, which is
+		// as true here as it is in the sidebar -- more so, since this page has no
+		// discussion of its own to read. It opens the panel rather than trying to
+		// fit thirty stories into a 320px popover.
+		const browseToggle = shadow.querySelector("#browse-toggle");
+
+		if (browseToggle) {
+			browseToggle.onclick = () => {
+				// close(), not onClose(): the latter only tells the button its popover
+				// has gone, which would leave the popover itself sitting on the page
+				// behind the panel. Declared further down, which is fine -- nothing
+				// runs this until it has been clicked.
+				close();
+				openSidebar([], { browseOnly: true }).catch(console.error);
+			};
+		}
 
 		const titleInput = shadow.querySelector("#submit-title");
 		const countLabel = shadow.querySelector("#submit-count");
@@ -7131,10 +7173,20 @@ ${settingsPanelHTML()}
 
 		shadow.querySelector("#minimize").onclick = async () => {
 			host.style.display = "none";
-			await saveSidebarState("collapsed");
 			clearArticleAnnotations();
 			setSettingsOpen(false);
-			await createRestoreButton();
+
+			// A panel opened only to browse leaves the page exactly as it found it: a
+			// grey button offering to submit, and no recorded preference. Recording
+			// "collapsed" would be a preference about a discussion that does not
+			// exist, and it would suppress automatic opening once one does.
+			if (sidebarHasDiscussion) {
+				await saveSidebarState("collapsed");
+				await createRestoreButton();
+			} else {
+				await createSubmitButton();
+			}
+
 			await refreshArticleAnnotations();
 		};
 
@@ -8501,6 +8553,20 @@ ${settingsPanelHTML()}
 			if (generation !== sidebarGeneration) {
 				return;
 			}
+
+			// Opened for the front page and the queue rather than for a discussion,
+			// from a page that has none. Nothing below applies: there are no stories
+			// to load, nothing to annotate, and no per-site state worth recording --
+			// writing "collapsed" here would suppress automatic opening later, on a
+			// page that has since been submitted, for a panel the reader never shut.
+			if (options.browseOnly) {
+				sidebarHasDiscussion = false;
+				renderNoDiscussion(ui);
+				setBrowseMode(ui, true);
+				return;
+			}
+
+			sidebarHasDiscussion = true;
 
 			if (options.startHidden && sidebar) {
 				// Deliberately records nothing. This branch is the annotation preload:
