@@ -8097,7 +8097,23 @@ ${settingsPanelHTML()}
 		// Ask HN, Show HN without a link, and polls point at their own item page
 		// with a relative href, so the "article" for those is the discussion.
 		// Resolved against HN rather than against whatever page the sidebar is on.
-		const url = new URL(link.getAttribute("href") || "", HN_ORIGIN + "/").href;
+		const parsed = new URL(link.getAttribute("href") || "", HN_ORIGIN + "/");
+
+		// Then held to http(s). A `javascript:` or `data:` href survives the URL
+		// constructor intact -- the base is ignored once a scheme is present -- and
+		// escapeHTML does nothing to it either, since it carries no quotes or angle
+		// brackets to escape. It would be live in both the row's href and the
+		// assignment the click handler makes.
+		//
+		// HN would not accept such a submission today, which is exactly the sort of
+		// assumption not to depend on: this is markup fetched from somewhere else
+		// and rendered into every page the reader visits. A story whose URL cannot
+		// be used still has a discussion, so it falls back to that rather than
+		// disappearing -- built from HN_ORIGIN rather than through commentURL,
+		// which lives outside the exported region this has to run inside.
+		const url = /^https?:$/.test(parsed.protocol)
+			? parsed.href
+			: HN_ORIGIN + "/item?id=" + id;
 
 		// title="2026-08-02T11:34:41 1785670481". The second field is the unix time
 		// timeAgo wants; parsing the first would be the same answer by way of a date
