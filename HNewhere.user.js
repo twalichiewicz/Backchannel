@@ -1031,6 +1031,22 @@
 	// Helpers
 	// -------------------------
 
+	// Hosts that renamed under Hacker News' feet. HN holds years of submissions
+	// under the old name while the site now serves the new one, so a reader on
+	// x.com looking at something submitted as twitter.com finds nothing at all --
+	// 179 comments, and a grey button.
+	//
+	// Folded onto one name rather than searched for twice, and because normalizeURL
+	// is applied to both sides -- the address in hand and every hit it is measured
+	// against -- it does not matter which way round the two arrive.
+	const HOST_ALIASES = new Map([
+		["x.com", "twitter.com"],
+		["www.x.com", "twitter.com"],
+		["mobile.x.com", "twitter.com"],
+		["www.twitter.com", "twitter.com"],
+		["mobile.twitter.com", "twitter.com"],
+	]);
+
 	function normalizeURL(url) {
 		try {
 			const u = new URL(url);
@@ -1046,8 +1062,10 @@
 				u.searchParams.delete(key);
 			}
 
+			const host = u.hostname.toLowerCase();
+
 			return (
-				u.hostname.toLowerCase() +
+				(HOST_ALIASES.get(host) || host) +
 				u.pathname.replace(/\/$/, "") +
 				u.search
 			);
@@ -3766,9 +3784,8 @@
 	}
 
 	// Drawn before the discussion lookup answers, so the page shows something at
-	// once. It is inert on purpose: there is nothing to open yet, and a click that
-	// did nothing would read as broken. createFloatingHNButton adopts it as soon as
-	// the real button is asked for.
+	// once. createFloatingHNButton adopts it as soon as the real button is asked
+	// for, which is also when it gains that button's behaviour.
 	// Pressed while the lookup was still running. The button spins for as long as
 	// that takes and used to do nothing at all when pressed, which is the one thing
 	// a button must not do -- so the press is remembered and honoured the moment
@@ -8990,6 +9007,14 @@ ${settingsPanelHTML()}
 				// no-op when it is already "collapsed" -- and the fabricated one
 				// outranks the auto-open setting, silently killing it for the site.
 				sidebar.style.display = "none";
+
+				// Given its real handler now rather than after the render and the
+				// annotation pass. Those are the slow part, the ring spins across all
+				// of it, and until this ran the button on screen still carried the
+				// placeholder's -- so the whole time it looked busiest, pressing it
+				// did nothing. createFloatingHNButton adopts the placeholder, so the
+				// ring carries on spinning through the swap.
+				await createRestoreButton();
 			} else if (options.remember !== false) {
 				// Skipped only for an open the HN-arrival rule granted. The per-site
 				// memory outranks the global setting, so recording one would turn the
@@ -9028,10 +9053,6 @@ ${settingsPanelHTML()}
 				}
 
 				await refreshArticleAnnotations();
-
-				if (options.startHidden) {
-					await createRestoreButton();
-				}
 			}
 		} catch (e) {
 			console.error(e);
