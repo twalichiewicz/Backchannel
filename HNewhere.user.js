@@ -4782,6 +4782,10 @@ ${
 	// there is an answer to honour it with.
 	let openRequestedWhileChecking = false;
 
+	function requestOpenOnNextPass() {
+		openRequestedWhileChecking = true;
+	}
+
 	function takeRequestedOpen() {
 		const requested = openRequestedWhileChecking;
 		openRequestedWhileChecking = false;
@@ -14278,14 +14282,61 @@ title="Show only this discussion">
 		teardownSurfaces();
 	}
 
-	// Changing which sources are on changes what this page is, so the whole
+	// Changing which sources are on changes what this page is, so the whole page
 	// decision is re-run rather than the sidebar patched: a source switched on has
-	// never been looked up here, one switched off may be on screen, and init is the
-	// only place that knows how to choose between a discussion, a submit button and
-	// the picker. Same contract as teardownForBlockedSite -- persist first.
+	// never been looked up here, and one switched off may be on screen.
+	//
+	// runPagePass, not init. init installs the soft-navigation watcher, which wraps
+	// history.pushState, adds a popstate listener and starts an interval -- none of
+	// them guarded. Calling it again per toggle stacked a new poller every time,
+	// and several of them racing to tear down the same sidebar is what made this
+	// look like a crash. That split is why runPagePass exists.
+	//
+	// Same contract as teardownForBlockedSite: persist before calling.
 	async function refreshForSourceChange() {
+		// The panel was open, and the reader opened it. Re-running the pass would
+		// otherwise apply the automatic rules from scratch and leave them looking at
+		// a collapsed button, having lost their place for ticking a checkbox.
+		const wasOpen = isSidebarVisible();
+		const settingsWasOpen = Boolean(
+			sidebarUI?.shadow
+				?.querySelector("#settings-panel")
+				?.classList.contains("hidden") === false,
+		);
+		const pane = sidebarUI?.shadow
+			?.querySelector(".settings-panes.is-secondary .settings-pane-secondary.is-active")
+			?.dataset.pane;
+
 		teardownSurfaces();
-		await init();
+
+		if (wasOpen) {
+			requestOpenOnNextPass();
+		}
+
+		await runPagePass();
+
+		if (wasOpen && settingsWasOpen) {
+			restoreSettingsPane(pane);
+		}
+	}
+
+	// Puts the reader back where they were standing: the settings panel, on the
+	// pane they were using. Toggling a second source otherwise meant walking back
+	// in through the gear and the Sources entry every time.
+	function restoreSettingsPane(pane) {
+		const shadow = sidebarUI?.shadow;
+
+		if (!shadow) {
+			return;
+		}
+
+		shadow.querySelector("#settings-toggle")?.click();
+
+		if (pane) {
+			shadow
+				.querySelector(`.settings-link-button[data-pane="${CSS.escape(pane)}"]`)
+				?.click();
+		}
 	}
 
 	// Shared by both headers. Persists before tearing down, because the teardown
@@ -14391,7 +14442,19 @@ title="Show only this discussion">
 	// Three feeds because none is sufficient alone: patching history is instant but
 	// only lands where the manager's sandbox shares the page's History object,
 	// popstate covers only back and forward, and the poll catches the rest.
+	let softNavigationWatched = false;
+
 	function watchSoftNavigation() {
+		// Wraps history methods, adds a popstate listener and starts an interval,
+		// none of which can be undone. Installing it twice leaves two pollers racing
+		// on the same page, so it installs once per document however often it is
+		// asked for.
+		if (softNavigationWatched) {
+			return;
+		}
+
+		softNavigationWatched = true;
+
 		let currentHref = location.href;
 		let currentURL = normalizeURL(currentHref);
 		let timer = null;
