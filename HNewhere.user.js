@@ -15598,20 +15598,31 @@ title="Show only this discussion">
 			last = null;
 		}
 
-		if (
+		// Clicked through from Hacker News. That tells us how the reader arrived,
+		// which the referrer cannot be relied on for -- some browsers withhold it --
+		// but it does not tell us what to show. The recorded ids are the one
+		// submission they happened to click, and this page may have several: opening
+		// on that one alone showed a thread from 2024 for an article resubmitted this
+		// morning, and no sign that the rest existed.
+		//
+		// So the lookup still runs and the arrival is passed alongside it. The ids
+		// are the fallback for when it turns nothing up, which is what they were
+		// always good for: they are a discussion we know exists.
+		const arrivedFromClick = Boolean(
 			last &&
-			sameURL(last.url, location.href) &&
-			Date.now() - last.timestamp < 300000
-		) {
+				sameURL(last.url, location.href) &&
+				Date.now() - last.timestamp < 300000,
+		);
+
+		if (arrivedFromClick) {
 			await save(STORAGE.last, null);
+
+			const found = await discoverAll(location.href, settings);
 
 			settleButtonToDiscussion(pendingButton);
 
-			// Reaching this branch is itself an arrival from HN: the click that
-			// recorded it happened on HN, on a link to this URL. Stated rather than
-			// re-derived from the referrer, which some browsers withhold entirely.
 			await presentDiscussion(
-				last.ids.map((id) => ({ objectID: id })),
+				found.length ? found : last.ids.map((id) => ({ objectID: id })),
 				settings,
 				siteState,
 				true,
