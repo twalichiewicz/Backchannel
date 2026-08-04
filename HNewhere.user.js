@@ -14023,7 +14023,7 @@ title="Show only this discussion">
 	// been filtered -- arrives as arguments, so neither caller has to know how the
 	// list transitions or where the reader was standing when they left it.
 	function applyFocusedDiscussion(
-		{ filter, directMatchIds, anchorElement, paintBanner, onFiltered },
+		{ filter, directMatchIds, anchorElement, paintBanner, onFiltered, title },
 		options = {},
 	) {
 		// Only when entering from the full list. A refresh re-applies a filter that is
@@ -14065,6 +14065,17 @@ title="Show only this discussion">
 
 			if (sidebarUI?.filterBanner && sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBanner.classList.remove("hidden");
+
+				// "Focused discussion" describes a passage or a comment the reader
+				// picked out of the thread. Filtering to a source is not that -- it is
+				// the whole of one discussion, and the banner should say which.
+				const heading =
+					sidebarUI.filterBanner.querySelector(".filter-banner-title");
+
+				if (heading) {
+					heading.textContent = title ?? "Focused discussion";
+				}
+
 				paintBanner(sidebarUI.filterBannerQuote);
 			}
 
@@ -14144,9 +14155,13 @@ title="Show only this discussion">
 				// comment to pin the banner to -- it sits at the top, where entering
 				// this filter leaves the reader anyway.
 				anchorElement: null,
+				// Names the discussion in the heading rather than quoting it below,
+				// because there is nothing to quote: the whole of one source is
+				// showing, and "Showing r/programming" says that in one line.
+				title: "Showing " + discussionLabelForKey(discussionKey),
 				paintBanner: (quote) => {
-					quote.classList.add("filter-banner-quote-comment");
-					quote.textContent = discussionLabelForKey(discussionKey);
+					quote.classList.remove("filter-banner-quote-comment");
+					quote.textContent = "";
 				},
 			},
 			options,
