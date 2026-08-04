@@ -10567,7 +10567,14 @@ ${settingsPanelHTML()}
 		// true the moment a second one is enabled, and a header that miscounts where
 		// a conversation happened is worse than one that just counts it. The proper
 		// per-source breakdown is the source strip, which the blended thread brings.
-		setSidebarRestingSubtitle(ui, pluralize(stories.length, "discussion"));
+		// Only when there is a number worth reading. "1 discussion" under the
+		// wordmark is a count of something the page header directly beneath it
+		// already names in full, and it put a third line of heading above a
+		// conversation that had not started yet.
+		setSidebarRestingSubtitle(
+			ui,
+			stories.length > 1 ? pluralize(stories.length, "discussion") : "",
+		);
 
 		const generation = sidebarGeneration;
 
