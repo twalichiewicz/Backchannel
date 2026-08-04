@@ -2582,15 +2582,15 @@ ${
 	// In a region because the heat palette is built from ACCENT_RGB and is itself
 	// tested: the harness evaluates the regions alone, so an identifier one region
 	// borrows from another has to be inside one too.
-	const ACCENT = "#5b5bd6";
-	const ACCENT_DARK = "#8b8bf0";
+	const ACCENT = "#237140";
+	const ACCENT_DARK = "#3fa96a";
 
 	// The same accent as channels, for the places that cannot use a CSS variable at
 	// all: the annotation overlay is mounted in the page rather than in the panel's
 	// shadow root -- deliberately, so mix-blend-mode composites against the article
 	// -- and nothing there can see --accent. A var() reference would resolve to
 	// nothing and paint every highlight invisible.
-	const ACCENT_RGB = "91,91,214";
+	const ACCENT_RGB = "35,113,64";
 	// #endregion hnewhere-test-export
 
 	// "HN" was doing double duty as the product's mark and as the name of the only
@@ -5719,13 +5719,14 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 	--bg:#f6f6ef;
 	--text:#000;
 	--header-bg:var(--accent);
-	/* White, not black. Black carried itself on orange and does not on indigo --
-		the accent is a good deal darker than the colour it replaced. */
+	/* White, not black. Black carried itself on orange and does not on a green
+		this deep -- the accent is a good deal darker than the colour it replaced,
+		and white clears 6:1 against it. */
 	--header-text:#fff;
-	/* The relationship inverts with the title: a dimmed lavender on the header's
-		own indigo, clearly subordinate to the white title. The peak is the
-		travelling highlight. */
-	--subtitle-stage:#c6c6ef;
+	/* The relationship inverts with the title: a dimmed tint of the header's own
+		green, clearly subordinate to the white title. The peak is the travelling
+		highlight. */
+	--subtitle-stage:#c2e0cd;
 	--subtitle-stage-peak:#ffffff;
 	--border:#ccc;
 	--border-soft:#ddd;
@@ -5735,8 +5736,8 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 	/* Backchannel's accent. Deliberately not Hacker News orange and not Reddit's
 		orange-red: the panel now speaks for several sources and must not wear any
 		one of their colours. One token, so changing the brand is one line. */
-	--accent:#5b5bd6;
-	--accent-rgb:91,91,214;
+	--accent:#237140;
+	--accent-rgb:35,113,64;
 	--surface:#fff;
 	--surface-text:#222;
 	--surface-border:#d6d6d6;
@@ -5779,20 +5780,23 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 	/* Deliberately not var(--accent): the dark accent is lifted so it reads as a
 		foreground, which makes it far too bright behind a header. This is the
 		dimmed counterpart, the way #cc5200 was the dimmed counterpart of the old
-		orange. */
-	--header-bg:#3f3f9e;
-	--header-text:#f0f0ff;
+		orange -- about half the luminance of the light header, which is the
+		relationship the indigo pair had. */
+	--header-bg:#1b5732;
+	--header-text:#f0fff5;
 	/* Dimmer to hold the same relationship against the dimmer header. */
-	--subtitle-stage:#9a9ad4;
-	--subtitle-stage-peak:#e6e6ff;
+	--subtitle-stage:#8fbda2;
+	--subtitle-stage-peak:#e6fff0;
 	--border:#3d3d3d;
 	--border-soft:#383838;
 	--link:#8ab4f8;
 	--meta:#9a9a9a;
 	--muted:#a3a3a3;
-	/* Lifted a little for dark backgrounds, where the light value reads muddy. */
-	--accent:#8b8bf0;
-	--accent-rgb:139,139,240;
+	/* Lifted for dark backgrounds, where the light value reads muddy -- and it has
+		further to travel than the indigo did: #237140 sits at 29% lightness, which
+		against #1e1e1e is 2.8:1 and unreadable. This clears 5.6:1. */
+	--accent:#3fa96a;
+	--accent-rgb:63,169,106;
 	--surface:#2a2a2a;
 	--surface-text:#dcdcdc;
 	--surface-border:#454545;
