@@ -5378,9 +5378,38 @@ ${
 		SUBMIT_BRIDGE_MESSAGE_SOURCE,
 	);
 
+	// Which enabled source could actually take this page, or null if none can.
+	// Read from capabilities rather than checking for "hn" by name, so a later
+	// source that can submit needs no change here.
+	function submitTargetFor(settings) {
+		return (
+			enabledSourceIds(settings, registeredSourceIds())
+				.map(getSource)
+				.find((source) => source?.capabilities.submit) ?? null
+		);
+	}
+
+	// Said in the terms the rest of the panel uses for Reddit: not broken, not
+	// refused, just not built yet -- the same thing the BETA pill and the
+	// capability table are saying.
+	function unsubmittableMessage(settings) {
+		const enabled = enabledSourceIds(settings, registeredSourceIds())
+			.map((id) => getSource(id)?.label)
+			.filter(Boolean);
+
+		const names =
+			enabled.length > 1
+				? enabled.slice(0, -1).join(", ") + " and " + enabled.at(-1)
+				: enabled[0] || "your sources";
+
+		return `Submitting to ${names} is not supported yet. Turn on a source that accepts submissions in Settings → Sources to post this page.`;
+	}
+
 	// Its own shadow root for the same reason the sidebar has one: this renders over
 	// an arbitrary page whose CSS would otherwise reach in and restyle it.
-	function createSubmitPopover(button, onSubmit, onClose) {
+	function createSubmitPopover(button, onSubmit, onClose, options = {}) {
+		const submitTarget = options.submitTarget ?? null;
+		const unsubmittableMessageText = options.message ?? "";
 		const host = document.createElement("div");
 
 		host.setAttribute("data-hnewhere-submit-popover", "1");
@@ -5587,13 +5616,19 @@ ${CHROME_CSS}
 }
 </style>
 
-<div id="popover" role="dialog" aria-label="Submit to Hacker News">
+<div id="popover" role="dialog" aria-label="${escapeHTML(submitTarget ? "Submit to " + submitTarget.label : "Submitting not available")}">
 ${headerHTML({ browse: true })}
 ${settingsPanelHTML()}
 
 <div class="popover-body">
-<div class="popover-title">Submit</div>
-
+<div class="popover-title">${
+	// Named, not bare. "Submit" was unambiguous while one source could take a
+	// submission; with a picker in front of the reader it has to say where.
+	submitTarget ? "Submit to " + escapeHTML(submitTarget.label) : "Submit"
+}</div>
+${
+	submitTarget
+		? `
 <div class="popover-field">
 <div class="popover-field-head">
 <label for="submit-title">title</label>
@@ -5614,11 +5649,16 @@ ${settingsPanelHTML()}
 
 <div class="popover-note">
 Leave url blank to submit a question for discussion. If there is no url, text will appear at the top of the thread. If there is a url, text is optional.
-</div>
+</div>`
+		: `
+<div class="popover-note">
+${escapeHTML(unsubmittableMessageText)}
+</div>`
+}
 
 <div class="popover-actions">
-<button id="submit-cancel" type="button">Cancel</button>
-<button id="submit-go" type="button" class="primary">Submit</button>
+<button id="submit-cancel" type="button">${submitTarget ? "Cancel" : "Close"}</button>
+${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</button>` : ""}
 </div>
 
 <div id="submit-status" class="popover-status hidden" role="status"></div>
@@ -5663,28 +5703,33 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 		const cancelButton = shadow.querySelector("#submit-cancel");
 		const statusLine = shadow.querySelector("#submit-status");
 
-		// Same two values HN's own bookmarklet passes to /submitlink, both editable
-		// here because the bookmarklet's weakness is that they are not.
-		titleInput.value = suggestedSubmissionTitle();
-		urlInput.value = location.href;
+		// Only rendered when something can take the submission. With no such source
+		// the popover is a sentence and a close button, so there are no fields to
+		// fill or validate.
+		if (submitTarget) {
+			// Same two values HN's own bookmarklet passes to /submitlink, both editable
+			// here because the bookmarklet's weakness is that they are not.
+			titleInput.value = suggestedSubmissionTitle();
+			urlInput.value = location.href;
 
-		const updateCount = () => {
-			const remaining = HN_TITLE_LIMIT - titleInput.value.length;
+			const updateCount = () => {
+				const remaining = HN_TITLE_LIMIT - titleInput.value.length;
 
-			countLabel.textContent = remaining + " left";
-			countLabel.classList.toggle("over", remaining < 0);
+				countLabel.textContent = remaining + " left";
+				countLabel.classList.toggle("over", remaining < 0);
 
-			// HN requires a title, and requires at least one of url or text -- a
-			// submission with neither has nothing in it.
-			goButton.disabled =
-				!titleInput.value.trim() ||
-				(!urlInput.value.trim() && !textInput.value.trim());
-		};
+				// HN requires a title, and requires at least one of url or text -- a
+				// submission with neither has nothing in it.
+				goButton.disabled =
+					!titleInput.value.trim() ||
+					(!urlInput.value.trim() && !textInput.value.trim());
+			};
 
-		updateCount();
-		titleInput.addEventListener("input", updateCount);
-		urlInput.addEventListener("input", updateCount);
-		textInput.addEventListener("input", updateCount);
+			updateCount();
+			titleInput.addEventListener("input", updateCount);
+			urlInput.addEventListener("input", updateCount);
+			textInput.addEventListener("input", updateCount);
+		}
 
 		// Anchored to the button rather than a fixed corner, because the button is
 		// draggable and may be sitting anywhere along the edge.
@@ -5770,7 +5815,9 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 			}
 		};
 
-		goButton.onclick = async () => {
+		// Guarded for the same reason the fields are: with nothing able to take a
+		// submission this button was never rendered.
+		if (goButton) goButton.onclick = async () => {
 			const title = titleInput.value.trim();
 			const url = urlInput.value.trim();
 			// Not trimmed: HN reads two leading spaces as a code block, so the body has
@@ -5797,7 +5844,7 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 
 		// Enter submits from the single-line fields only. In the text area it has to
 		// stay a newline, since blank lines are how HN separates paragraphs.
-		for (const field of [titleInput, urlInput]) {
+		for (const field of [titleInput, urlInput].filter(Boolean)) {
 			field.addEventListener("keydown", (event) => {
 				if (event.key === "Enter") {
 					event.preventDefault();
@@ -5806,8 +5853,10 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 			});
 		}
 
-		titleInput.focus();
-		titleInput.select();
+		// Focus lands on the way out when there is no form to fill, so the popover
+		// still answers the keyboard rather than leaving focus behind on the page.
+		(titleInput ?? cancelButton)?.focus();
+		titleInput?.select();
 
 		return { close, host };
 	}
@@ -5939,7 +5988,7 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 			baseCleanup?.();
 		};
 
-		button.onclick = () => {
+		button.onclick = async () => {
 			if (button._dragController.wasMoved()) return;
 
 			if (popover) {
@@ -5947,6 +5996,11 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 				popover = null;
 				return;
 			}
+
+			// Read before the popover is built, because it decides whether there is a
+			// form to build at all.
+			const settings = await loadSettings();
+			const submitTarget = submitTargetFor(settings);
 
 			popover = createSubmitPopover(
 				button,
@@ -5983,6 +6037,10 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 				},
 				() => {
 					popover = null;
+				},
+				{
+					submitTarget,
+					message: submitTarget ? "" : unsubmittableMessage(settings),
 				},
 			);
 		};
