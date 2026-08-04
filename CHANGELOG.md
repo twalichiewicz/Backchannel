@@ -73,6 +73,18 @@ use to detect updates, so every release bumps it.
 - **Reply, flag and favourite no longer appear on comments that cannot take
   them.** They are offered where the source supports them and nowhere else; on
   Reddit they would have acted on an item id Hacker News never issued.
+- **A switched-off source stays off, whichever way the panel is opened.** The URL
+  lookup consulted your sources; arriving from Hacker News, opening something
+  from the queue and reopening a thread after commenting did not, so a source you
+  had turned off could still fill the sidebar. Every path goes through one check
+  now.
+- **The front page is only offered when Hacker News is on.** It is Hacker News'
+  own page, so with that source off the tab goes — and with an empty queue there
+  is nothing behind the wordmark at all, so the wordmark goes too rather than
+  opening onto an empty list.
+- **A single discussion gets a single heading.** The page header, a source pill
+  and the submission's own line were three headings saying one thing. With one
+  discussion the count stands alone and the source strip does not appear.
 - **A failed lookup is no longer cached as "no discussion".** `request()`
   resolves null on an error, a timeout or a bad response, so a moment offline
   stored an empty result for the full hour and left a page showing a grey button

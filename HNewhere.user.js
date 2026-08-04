@@ -4110,7 +4110,12 @@ ${
 		// incidental press turning this off for good, invisibly, which is the fault
 		// the auto-open setting was already fixed for once.
 		if (on) {
-			browseTab = options.tab || (queueHasItems ? "queue" : "front");
+			// Queue first when it has something, and always when there is no front
+			// page to fall back on -- otherwise turning Hacker News off and pressing
+			// the wordmark opened an empty front page for a source that is not on.
+			browseTab =
+				options.tab ||
+				(queueHasItems || !frontPageAvailable ? "queue" : "front");
 		}
 
 		const swap = () => {
@@ -4281,9 +4286,53 @@ ${
 	}
 
 	let queueHasItems = false;
+	// Whether there is a front page to show at all, which is Hacker News being on.
+	// Cached for the same reason queueHasItems is: renderBrowseView picks a tab
+	// synchronously and cannot wait on a settings read to do it.
+	let frontPageAvailable = true;
 
 	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
 	// rather than the ui object because a browse row only knows the tree it is in.
+	// The front page behind the wordmark is Hacker News' own, parsed from its
+	// markup. With Hacker News switched off there is no front page to show, so the
+	// tab goes -- and if the queue is empty too there is nothing behind the
+	// wordmark at all, so the wordmark goes with it rather than opening onto an
+	// empty list under a tab for a source the reader turned off.
+	async function refreshBrowseAffordances(root) {
+		const frontTab = root?.querySelector?.("#browse-tab-front");
+		const wordmark = root?.querySelector?.("#browse-toggle");
+
+		if (!frontTab && !wordmark) {
+			return;
+		}
+
+		const settings = await loadSettings();
+		frontPageAvailable = enabledSourceIds(
+			settings,
+			registeredSourceIds(),
+		).includes("hn");
+
+		if (frontTab) {
+			frontTab.hidden = !frontPageAvailable;
+		}
+
+		if (wordmark) {
+			wordmark.hidden = !frontPageAvailable && !queueHasItems;
+		}
+
+		// Standing on a page that has just become unavailable. The queue is the only
+		// other place to be, and if that is empty too the browse view has nothing
+		// left -- so it hands back to the discussion rather than sitting on a blank
+		// list. Guarded on browseTab so this cannot loop through renderBrowseView.
+		if (!frontPageAvailable && browseTab === "front" && sidebarUI) {
+			if (queueHasItems) {
+				renderBrowseView(sidebarUI, { tab: "queue" }).catch(console.error);
+			} else {
+				setBrowseMode(sidebarUI, false);
+			}
+		}
+	}
+
 	async function refreshQueueCount(root) {
 		const tab = root?.querySelector?.("#browse-tab-queue");
 
@@ -4314,6 +4363,10 @@ ${
 		if (!queueHasItems && browseTab === "queue" && sidebarUI) {
 			renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
 		}
+
+		// Reads the queue, so the wordmark's own availability is settled here where
+		// the answer is already known rather than by loading it a second time.
+		await refreshBrowseAffordances(root);
 	}
 
 	// Kept across a round trip to the discussion, the way the discussion's own
@@ -6499,6 +6552,13 @@ header button svg {
 /* No max-height here: it is set from the measured content when the strip opens,
 	so a page posted to two places and one posted to twelve both slide for the full
 	duration rather than snapping open against a ceiling. */
+/* Not merely collapsed: with one discussion the strip has nothing to say, so it
+   leaves the layout rather than sitting there as an empty row that could be
+   opened. */
+.source-strip-single {
+	display:none;
+}
+
 .source-strip.is-open {
 	opacity:1;
 	margin-top:8px;
@@ -10628,8 +10688,16 @@ ${settingsPanelHTML()}
 		wrapper.className = "page-header";
 		wrapper.innerHTML = `
 <div class="page-header-title">${escapeHTML(stories[0]?.title || "")}</div>
-<div class="page-header-meta">${escapeHTML(pluralize(total, "comment"))} across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button></div>
-<div class="source-strip" id="source-strip">
+<div class="page-header-meta">${
+	// With one discussion there is nothing to break down and nothing to switch
+	// between, so the count stands alone and the strip does not appear at all.
+	// "352 comments across 1 discussion", a pill reading "HN 87", and the
+	// submission's own line underneath were three headings saying one thing.
+	stories.length > 1
+		? `${escapeHTML(pluralize(total, "comment"))} across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button>`
+		: escapeHTML(pluralize(total, "comment"))
+}</div>
+<div class="source-strip${stories.length > 1 ? "" : " source-strip-single"}" id="source-strip">
 ${stories
 	.map(
 		(story, index) => `
@@ -10649,6 +10717,14 @@ title="Show only this discussion">
 		// permanently under the title.
 		const strip = wrapper.querySelector(".source-strip");
 		const disclosure = wrapper.querySelector(".page-header-disclosure");
+
+		// Nothing to disclose with a single discussion: no button was rendered, and
+		// the strip stays out of the layout entirely.
+		if (!disclosure) {
+			container.appendChild(wrapper);
+
+			return wrapper;
+		}
 
 		const setStripOpen = (open) => {
 			strip.classList.toggle("is-open", open);
@@ -10749,11 +10825,21 @@ title="Show only this discussion">
 	// so loading them through the HN adapter is not an assumption, it is what
 	// those ids are.
 	async function resolveDiscussions(items) {
-		if (items.some((item) => item && item.source)) {
-			return items;
-		}
+		const resolved = items.some((item) => item && item.source)
+			? items
+			: (await loadStories(items)).map(hnDiscussion);
 
-		return (await loadStories(items)).map(hnDiscussion);
+		// Filtered here rather than at the lookup, because the lookup is not the only
+		// way in. Arriving from Hacker News reuses the story ids recorded while the
+		// reader was on it, the queue and the reading list carry their own, and
+		// reopening after a comment names one directly -- none of which passed
+		// through discoverAll, so a switched-off source still rendered.
+		const settings = await loadSettings();
+		const enabled = new Set(
+			enabledSourceIds(settings, registeredSourceIds()),
+		);
+
+		return resolved.filter((discussion) => enabled.has(discussion.source));
 	}
 
 	async function loadStories(stories) {
@@ -14457,6 +14543,10 @@ title="Show only this discussion">
 			}
 
 			(async () => {
+				// Before the branching, because two of the three branches return early
+				// and the wordmark has to be told either way.
+				await refreshBrowseAffordances(ui.shadow);
+
 				// Nothing enabled is a state, not an error: the panel offers the
 				// picker rather than emptying and leaving the reader to guess.
 				if (!enabledSourceIds(settings, registeredSourceIds()).length) {
