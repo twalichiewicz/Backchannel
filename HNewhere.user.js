@@ -8185,6 +8185,7 @@ ${CHROME_CSS}
    short of the panel edge reads as part of the column rather than as a break
    across it, which is the one thing it is for. */
 .next-up::before,
+.submission-detail-banded::before,
 .submission + .submission::before {
 	content:"";
 	display:block;
@@ -8206,6 +8207,12 @@ ${CHROME_CSS}
 .submission + .submission {
 	margin:16px -12px 0;
 	padding:0 12px;
+}
+
+/* No negative margin of its own: the band's ::before already bleeds 12px each
+	side, which is exactly the inset #comments gives its contents. */
+.submission-detail-banded {
+	margin-top:16px;
 }
 
 #comments {
@@ -10934,6 +10941,12 @@ title="Show only this discussion">
 
 		for (const block of blocks) {
 			block.hidden = block.dataset.discussionKey !== active;
+
+			// Filtering to one source puts its submission -- score, author, and
+			// whatever it was posted with -- above a thread that a moment ago was
+			// every source blended together. That is the panel changing subject, which
+			// is the one thing the hatched band is for.
+			block.classList.toggle("submission-detail-banded", !block.hidden);
 		}
 	}
 
