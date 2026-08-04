@@ -14068,7 +14068,7 @@ title="Show only this discussion">
 	// been filtered -- arrives as arguments, so neither caller has to know how the
 	// list transitions or where the reader was standing when they left it.
 	function applyFocusedDiscussion(
-		{ filter, directMatchIds, anchorElement, paintBanner, onFiltered, title },
+		{ filter, directMatchIds, anchorElement, paintBanner, onFiltered, banner },
 		options = {},
 	) {
 		// Only when entering from the full list. A refresh re-applies a filter that is
@@ -14112,19 +14112,18 @@ title="Show only this discussion">
 			syncFilterAffordances();
 
 			if (sidebarUI?.filterBanner && sidebarUI?.filterBannerQuote) {
-				sidebarUI.filterBanner.classList.remove("hidden");
-
-				// "Focused discussion" describes a passage or a comment the reader
-				// picked out of the thread. Filtering to a source is not that -- it is
-				// the whole of one discussion, and the banner should say which.
-				const heading =
-					sidebarUI.filterBanner.querySelector(".filter-banner-title");
-
-				if (heading) {
-					heading.textContent = title ?? "Focused discussion";
+				// A filter reached from the strip needs no banner: the pill is lit, and
+				// pressing it again is the way out. Saying "Showing r/rust" underneath
+				// it, with its own undo, is the same state and the same control twice.
+				// A quoted passage or a focused comment has no such marker, so there
+				// the banner is the only thing that explains what happened.
+				if (banner === false) {
+					sidebarUI.filterBanner.classList.add("hidden");
+					sidebarUI.filterBannerQuote.textContent = "";
+				} else {
+					sidebarUI.filterBanner.classList.remove("hidden");
+					paintBanner(sidebarUI.filterBannerQuote);
 				}
-
-				paintBanner(sidebarUI.filterBannerQuote);
 			}
 
 		}, options);
@@ -14203,24 +14202,13 @@ title="Show only this discussion">
 				// comment to pin the banner to -- it sits at the top, where entering
 				// this filter leaves the reader anyway.
 				anchorElement: null,
-				// Names the discussion in the heading rather than quoting it below,
-				// because there is nothing to quote: the whole of one source is
-				// showing, and "Showing r/programming" says that in one line.
-				title: "Showing " + discussionLabelForKey(discussionKey),
-				paintBanner: (quote) => {
-					quote.classList.remove("filter-banner-quote-comment");
-					quote.textContent = "";
-				},
+				// No banner. The strip pill above is lit and clears on a second press,
+				// so a line repeating its name with its own "show all comments" is the
+				// same state and the same control a second time.
+				banner: false,
+				paintBanner: () => {},
 			},
 			options,
-		);
-	}
-
-	function discussionLabelForKey(discussionKey) {
-		return (
-			sidebarUI?.body
-				?.querySelector(`.source-strip-entry[data-discussion-key="${CSS.escape(discussionKey)}"] .source-strip-label`)
-				?.textContent?.trim() || "this discussion"
 		);
 	}
 
