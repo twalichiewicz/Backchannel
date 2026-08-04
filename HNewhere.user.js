@@ -7,7 +7,7 @@
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @homepageURL  https://github.com/twalichiewicz/HNewhere
 // @supportURL   https://github.com/twalichiewicz/HNewhere/issues
-// @description  Read what Hacker News and Reddit said about any page, in one thread
+// @description  See what everyone's talking about.
 // @include      http://*
 // @include      https://*
 // @exclude      http://localhost/*
