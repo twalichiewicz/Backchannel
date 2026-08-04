@@ -15598,16 +15598,16 @@ title="Show only this discussion">
 			last = null;
 		}
 
-		// Clicked through from Hacker News. That tells us how the reader arrived,
-		// which the referrer cannot be relied on for -- some browsers withhold it --
-		// but it does not tell us what to show. The recorded ids are the one
-		// submission they happened to click, and this page may have several: opening
-		// on that one alone showed a thread from 2024 for an article resubmitted this
-		// morning, and no sign that the rest existed.
+		// Clicking a story on Hacker News records its id. All that tells us is how
+		// the reader arrived -- which the referrer cannot be relied on for, since
+		// some browsers withhold it -- and arrival decides one thing only: whether
+		// the panel opens itself. It does not decide what the panel shows.
 		//
-		// So the lookup still runs and the arrival is passed alongside it. The ids
-		// are the fallback for when it turns nothing up, which is what they were
-		// always good for: they are a discussion we know exists.
+		// It used to. This branch opened the recorded id and skipped the lookup,
+		// which was invisible while a page had one discussion and wrong the moment
+		// it could have several: an article resubmitted this morning opened on a
+		// thread from 2024 or one from today depending on which link had been
+		// clicked, with no sign the rest existed.
 		const arrivedFromClick = Boolean(
 			last &&
 				sameURL(last.url, location.href) &&
@@ -15616,26 +15616,22 @@ title="Show only this discussion">
 
 		if (arrivedFromClick) {
 			await save(STORAGE.last, null);
-
-			const found = await discoverAll(location.href, settings);
-
-			settleButtonToDiscussion(pendingButton);
-
-			await presentDiscussion(
-				found.length ? found : last.ids.map((id) => ({ objectID: id })),
-				settings,
-				siteState,
-				true,
-			);
-
-			return;
 		}
 
-		// Otherwise look the URL up now rather than on click. 1.5.3 makes the button's
-		// colour mean "a discussion exists", which is only answerable before it is
-		// drawn. Each source caches per URL for an hour, so this is one request per
-		// source per new page rather than one per visit.
-		const stories = await discoverAll(location.href, settings);
+		// Looked up here rather than on click. 1.5.3 makes the button's colour mean
+		// "a discussion exists", which is only answerable before it is drawn. Each
+		// source caches per URL for an hour, so this is one request per source per
+		// new page rather than one per visit.
+		const found = await discoverAll(location.href, settings);
+
+		// The recorded ids stand in only when the lookup comes back with nothing.
+		// They are a discussion we know exists, and a network hiccup on a page the
+		// reader reached from Hacker News should not end in a button offering to
+		// submit it there.
+		const stories =
+			found.length || !arrivedFromClick
+				? found
+				: last.ids.map((id) => ({ objectID: id }));
 
 		const requestedOpen = takeRequestedOpen();
 
@@ -15654,11 +15650,14 @@ title="Show only this discussion">
 				return;
 			}
 
+			// Both signals mean the same thing to the auto-open rule, and neither is
+			// sufficient alone: the referrer is withheld by some browsers, and the
+			// recorded click is only kept for five minutes.
 			await presentDiscussion(
 				stories,
 				settings,
 				siteState,
-				arrivedFromHNReferrer,
+				arrivedFromClick || arrivedFromHNReferrer,
 			);
 			return;
 		}
