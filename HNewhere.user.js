@@ -6563,6 +6563,12 @@ header button svg {
 	font-size:11px;
 }
 
+/* One discussion leaves this empty, and an empty line still takes a line's
+	height plus its margin -- a gap under the title with nothing in it. */
+.page-header-meta:empty {
+	display:none;
+}
+
 /* The aggregate leads and this is what a reader reaches for, so it sits below the
 	count at metadata weight rather than above it as a masthead. */
 /* The same slide the settings sub-options use, down to the durations, because it
@@ -9332,11 +9338,6 @@ ${settingsPanelHTML()}
 		// it. It carries the only way out to the discussion though, so that link
 		// moves to the meta row rather than disappearing with it.
 		const showTitle = options.showTitle !== false;
-		// Dropped when the page header above already states it. With one discussion
-		// the header's total is this submission's own count, so the two lines were
-		// the same number twice, two lines apart. With several the header totals
-		// them and this is the breakdown the strip exists to reveal.
-		const showCommentCount = options.showCommentCount !== false;
 		const storyAuthor = story.author ?? story.by;
 		const storyCreatedAt = story.createdAt ?? story.time;
 		const storyCommentCount = story.commentCount ?? story.descendants ?? 0;
@@ -9382,12 +9383,8 @@ ${settingsPanelHTML()}
 			: `| <a class="story-open-link" target="_blank" rel="noopener noreferrer"
 	href="${escapeHTML(hnURL)}">open on ${escapeHTML(sourceShortLabel(story))}</a>`
 	}
-	${
-		showCommentCount
-			? `|
-	${storyCommentCount} comments`
-			: ""
-	}
+	|
+	${storyCommentCount} comments
 	</div>
 	${
 		storyBodyHTML
@@ -10622,7 +10619,6 @@ ${settingsPanelHTML()}
 			const block = renderStory(story, details, {
 				actions: canVote,
 				showTitle: story.title !== pageTitle,
-				showCommentCount: stories.length > 1,
 			});
 
 			if (block) {
@@ -10736,12 +10732,13 @@ ${settingsPanelHTML()}
 <div class="page-header-title">${escapeHTML(stories[0]?.title || "")}</div>
 <div class="page-header-meta">${
 	// With one discussion there is nothing to break down and nothing to switch
-	// between, so the count stands alone and the strip does not appear at all.
-	// "352 comments across 1 discussion", a pill reading "HN 87", and the
-	// submission's own line underneath were three headings saying one thing.
+	// between, so the header is the title and nothing else: the submission's own
+	// line below it already reads the way a Hacker News story line does, count
+	// and all. "352 comments across 1 discussion", a pill reading "HN 87", and
+	// that line underneath were three headings saying one thing.
 	stories.length > 1
 		? `${escapeHTML(pluralize(total, "comment"))} across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button>`
-		: escapeHTML(pluralize(total, "comment"))
+		: ""
 }</div>
 <div class="source-strip${stories.length > 1 ? "" : " source-strip-single"}" id="source-strip">
 ${stories
