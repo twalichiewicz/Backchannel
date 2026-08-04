@@ -379,9 +379,13 @@
 	let buttonShapePreference = "circle";
 	let buttonSizePreference = BUTTON_SIZE_DEFAULT;
 	let buttonMarkPreference = BUTTON_MARK_DEFAULT;
+	// The hex the reader typed, or null while they are on the built-in accent. Kept
+	// as the raw string rather than the derived pair, so this stays a plain cache
+	// and the derivation can memoise off it.
+	let accentPreference = null;
 
-	// The only writer of the three caches. Called by loadSettings and saveSettings
-	// so they cannot drift from stored settings, and directly by tests.
+	// The only writer of the caches. Called by loadSettings and saveSettings so they
+	// cannot drift from stored settings, and directly by tests.
 	function syncAppearancePreferences(settings) {
 		themePreference = settings.theme || "auto";
 		buttonShapePreference = BUTTON_SHAPES[settings.buttonShape]
@@ -389,6 +393,8 @@
 			: "circle";
 		buttonSizePreference = normalizeButtonSize(settings.buttonSize);
 		buttonMarkPreference = normalizeButtonMark(settings.buttonMark);
+		accentPreference =
+			typeof settings.accentColor === "string" ? settings.accentColor : null;
 	}
 	// #endregion hnewhere-test-export
 
@@ -420,6 +426,10 @@
 		buttonShape: "circle",
 		buttonSize: BUTTON_SIZE_DEFAULT,
 		buttonMark: BUTTON_MARK_DEFAULT,
+		// null rather than the built-in hex, so "never chosen" stays distinguishable
+		// from "chose the default colour" -- and a later change to the brand reaches
+		// everyone who has not picked their own.
+		accentColor: null,
 	};
 
 	// #region hnewhere-test-export
@@ -2485,11 +2495,91 @@ ${
 
 	const DARK_CLASS = "hnewhere-dark";
 
+	// The reader's accent split into its light and dark halves, or null while they
+	// are on the built-in one. Memoised on the stored string: activeAccent is asked
+	// once per highlight rect, and a page with a busy article asks hundreds of
+	// times for an answer that only changes when the setting does.
+	// #region hnewhere-test-export
+	let accentMemoKey = false;
+	let accentMemo = null;
+
+	function accentOverridePalette() {
+		if (accentMemoKey !== accentPreference) {
+			accentMemoKey = accentPreference;
+			accentMemo = accentPreference
+				? deriveAccentPalette(accentPreference)
+				: null;
+		}
+
+		return accentMemo;
+	}
+
+	// What the panel and the page-side overlay should actually paint, whichever of
+	// the two is in force. Everything that used to read ACCENT, ACCENT_DARK or
+	// ACCENT_RGB reads this instead, so the reader's colour reaches the button and
+	// the article highlights rather than only the panel.
+	function activeAccent(dark) {
+		const override = accentOverridePalette();
+
+		if (override) {
+			return dark ? override.dark : override.light;
+		}
+
+		return dark
+			? { accent: ACCENT_DARK, accentRgb: ACCENT_DARK_RGB }
+			: { accent: ACCENT, accentRgb: ACCENT_RGB };
+	}
+	// #endregion hnewhere-test-export
+
+	// loadSettings and saveSettings have already refreshed the cache the palette
+	// memoises off, so this only has to push the new colour out to what is mounted.
+	async function refreshAccentOverride() {
+		for (const apply of themeAppliers) {
+			apply();
+		}
+
+		await refreshButtonAppearance();
+		await refreshArticleAnnotations();
+	}
+
 	// The class goes on the host element rather than anything inside the shadow root,
 	// because that is what both the sidebar and the submit popover have in common --
 	// and custom properties set on a host inherit into its shadow tree.
 	function applyThemeToHost(host) {
-		host.classList.toggle(DARK_CLASS, detectDarkMode());
+		const dark = detectDarkMode();
+
+		host.classList.toggle(DARK_CLASS, dark);
+
+		// Set on the host, which beats the :host rules in the stylesheet, and
+		// cleared rather than overwritten when the reader goes back to the default
+		// -- otherwise the built-in accent could never come back.
+		const properties = {
+			"--accent": null,
+			"--accent-rgb": null,
+			"--header-bg": null,
+			"--subtitle-stage": null,
+		};
+
+		const override = accentOverridePalette();
+
+		if (override) {
+			const half = dark ? override.dark : override.light;
+
+			properties["--accent"] = half.accent;
+			properties["--accent-rgb"] = half.accentRgb;
+			properties["--subtitle-stage"] = half.subtitleStage;
+			// Light follows the accent through var(--header-bg:var(--accent)); dark
+			// is a literal in the stylesheet and has to be replaced outright.
+			properties["--header-bg"] = dark ? half.headerBg : null;
+		}
+
+		for (const [name, value] of Object.entries(properties)) {
+			if (value) {
+				host.style.setProperty(name, value);
+			} else {
+				host.style.removeProperty(name);
+			}
+		}
 	}
 
 	// Every mounted surface registers its applier here so a settings change can be
@@ -2591,6 +2681,192 @@ ${
 	// -- and nothing there can see --accent. A var() reference would resolve to
 	// nothing and paint every highlight invisible.
 	const ACCENT_RGB = "35,113,64";
+	// The dark half's channels, beside the hex they belong to rather than written
+	// out again wherever they are needed.
+	const ACCENT_DARK_RGB = "63,169,106";
+
+	// The panel background each theme's accent has to hold up against, and the
+	// ratio it has to clear. 4.5 is what body text is asked for; the accent paints
+	// links and marks, so it is held to the same bar rather than a decorative one.
+	const PANEL_BG_LIGHT = { r: 246, g: 246, b: 239 };
+	const PANEL_BG_DARK = { r: 30, g: 30, b: 30 };
+	const ACCENT_MIN_CONTRAST = 4.5;
+
+	function parseHexColor(value) {
+		const text = String(value ?? "").trim().replace(/^#/, "");
+
+		// Three digits is the shorthand every colour picker accepts, so a reader
+		// typing #0a0 means the same thing here as everywhere else.
+		const full =
+			text.length === 3
+				? text.replace(/./g, (character) => character + character)
+				: text;
+
+		if (!/^[0-9a-f]{6}$/i.test(full)) {
+			return null;
+		}
+
+		return {
+			r: parseInt(full.slice(0, 2), 16),
+			g: parseInt(full.slice(2, 4), 16),
+			b: parseInt(full.slice(4, 6), 16),
+		};
+	}
+
+	function rgbToHex({ r, g, b }) {
+		return (
+			"#" +
+			[r, g, b]
+				.map((channel) =>
+					Math.max(0, Math.min(255, Math.round(channel)))
+						.toString(16)
+						.padStart(2, "0"),
+				)
+				.join("")
+		);
+	}
+
+	function rgbToHsl({ r, g, b }) {
+		const red = r / 255;
+		const green = g / 255;
+		const blue = b / 255;
+		const max = Math.max(red, green, blue);
+		const min = Math.min(red, green, blue);
+		const delta = max - min;
+		const l = (max + min) / 2;
+
+		if (!delta) {
+			return { h: 0, s: 0, l };
+		}
+
+		const s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+		let h;
+
+		if (max === red) {
+			h = ((green - blue) / delta) % 6;
+		} else if (max === green) {
+			h = (blue - red) / delta + 2;
+		} else {
+			h = (red - green) / delta + 4;
+		}
+
+		return { h: (h * 60 + 360) % 360, s, l };
+	}
+
+	function hslToRgb({ h, s, l }) {
+		const c = (1 - Math.abs(2 * l - 1)) * s;
+		const x = c * (1 - Math.abs((((h % 360) + 360) % 360) / 60 % 2 - 1));
+		const m = l - c / 2;
+		const sector = Math.floor((((h % 360) + 360) % 360) / 60);
+		const [r, g, b] = [
+			[c, x, 0],
+			[x, c, 0],
+			[0, c, x],
+			[0, x, c],
+			[x, 0, c],
+			[c, 0, x],
+		][sector];
+
+		return {
+			r: Math.round((r + m) * 255),
+			g: Math.round((g + m) * 255),
+			b: Math.round((b + m) * 255),
+		};
+	}
+
+	function relativeLuminance({ r, g, b }) {
+		const [red, green, blue] = [r, g, b].map((channel) => {
+			const value = channel / 255;
+
+			return value <= 0.03928
+				? value / 12.92
+				: Math.pow((value + 0.055) / 1.055, 2.4);
+		});
+
+		return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+	}
+
+	function contrastRatio(a, b) {
+		const first = relativeLuminance(a);
+		const second = relativeLuminance(b);
+
+		return (
+			(Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
+		);
+	}
+
+	// Walks lightness towards `direction` until the colour clears `target` against
+	// `background`, keeping hue and saturation. A search rather than a fixed offset
+	// because the reader can type any hex: #237140 needs a 16-point lift to be
+	// readable on the dark panel, #90ee90 needs none, and #ffff00 has to come down.
+	function reachContrast(hsl, background, target, direction) {
+		let { l } = hsl;
+
+		for (let step = 0; step <= 100; step += 1) {
+			const candidate = { ...hsl, l };
+
+			if (contrastRatio(hslToRgb(candidate), background) >= target) {
+				return candidate;
+			}
+
+			l = Math.max(0, Math.min(1, l + direction * 0.01));
+
+			if (l === 0 || l === 1) {
+				return { ...hsl, l };
+			}
+		}
+
+		return { ...hsl, l };
+	}
+
+	// One hex in, every accent-derived value out. The panel keeps its accent as a
+	// pair -- lifted for dark backgrounds where the light value reads muddy, dimmed
+	// again behind a header where the lifted one is far too bright -- so a custom
+	// colour has to arrive as a pair too, or dark mode gets an unreadable link
+	// colour and a glaring header.
+	function deriveAccentPalette(hex) {
+		const rgb = parseHexColor(hex);
+
+		if (!rgb) {
+			return null;
+		}
+
+		const hsl = rgbToHsl(rgb);
+		const light = reachContrast(
+			hsl,
+			PANEL_BG_LIGHT,
+			ACCENT_MIN_CONTRAST,
+			-1,
+		);
+		const dark = reachContrast(hsl, PANEL_BG_DARK, ACCENT_MIN_CONTRAST, 1);
+
+		// The header is a field of colour behind white, not a foreground on the
+		// panel, so it is darkened rather than lifted: about three quarters of the
+		// accent's lightness, then far enough down to hold white text.
+		const headerDark = reachContrast(
+			{ ...hsl, l: Math.min(hsl.l, dark.l) * 0.75 },
+			{ r: 255, g: 255, b: 255 },
+			ACCENT_MIN_CONTRAST,
+			-1,
+		);
+
+		const tint = (source, lightness, saturation) =>
+			rgbToHex(hslToRgb({ h: source.h, s: source.s * saturation, l: lightness }));
+
+		return {
+			light: {
+				accent: rgbToHex(hslToRgb(light)),
+				accentRgb: Object.values(hslToRgb(light)).join(","),
+				subtitleStage: tint(hsl, 0.82, 0.45),
+			},
+			dark: {
+				accent: rgbToHex(hslToRgb(dark)),
+				accentRgb: Object.values(hslToRgb(dark)).join(","),
+				headerBg: rgbToHex(hslToRgb(headerDark)),
+				subtitleStage: tint(hsl, 0.65, 0.35),
+			},
+		};
+	}
 	// #endregion hnewhere-test-export
 
 	// "HN" was doing double duty as the product's mark and as the name of the only
@@ -2765,11 +3041,18 @@ ${
 		const style = BUTTON_VARIANTS[variant] || BUTTON_VARIANTS.active;
 
 		// The button sits in the page, not in a shadow root, so it cannot inherit the
-		// custom properties and resolves its own colour instead.
+		// custom properties and resolves its own colour instead. Only the active
+		// variant carries the accent -- the greys mean "nothing found here" and are
+		// not the reader's colour to set.
+		const dark = detectDarkMode();
+
 		button.dataset.hnewhereVariant = variant;
-		button.style.background = detectDarkMode()
-			? style.darkBackground
-			: style.background;
+		button.style.background =
+			variant === "active"
+				? activeAccent(dark).accent
+				: dark
+					? style.darkBackground
+					: style.background;
 		button.style.boxShadow = style.boxShadow;
 		button.title = style.title;
 	}
@@ -7206,6 +7489,9 @@ header button svg {
        wider -- the controls column is the constraint, and "Squircle" truncates
        before it. */
 	flex:0 0 88px;
+	/* The accent picker sits in the corner of the blueprint rather than in the
+		flow, so the drawing keeps its centred stage. */
+	position:relative;
 	display:flex;
 	flex-direction:column;
 	align-items:center;
@@ -7223,6 +7509,59 @@ header button svg {
 }
 
 /* Fixed so the panel does not jump as the button grows through its range. */
+/* Top left of the blueprint, where a drawing puts its colour key. Sized off the
+	swatch so the whole control is one pill that grows sideways rather than a
+	button with a field appearing beside it. */
+.accent-picker {
+	position:absolute;
+	top:8px;
+	left:8px;
+	z-index:1;
+	display:flex;
+	align-items:center;
+	height:20px;
+	padding:0;
+	border:1px solid var(--blueprint-line);
+	border-radius:10px;
+	background:var(--surface);
+	overflow:hidden;
+}
+
+.accent-swatch {
+	flex:0 0 auto;
+	width:18px;
+	height:18px;
+	margin:0;
+	padding:0;
+	border:0;
+	border-radius:9px;
+	background:var(--accent);
+	font-size:0;
+	color:transparent;
+	cursor:pointer;
+}
+
+/* Collapsed to nothing and opened by width, so the pill grows left to right out
+	of the swatch instead of the field popping in at full size. */
+.accent-input {
+	width:0;
+	min-width:0;
+	height:18px;
+	padding:0;
+	border:0;
+	background:transparent;
+	color:var(--surface-text);
+	font:11px/18px ui-monospace, Menlo, monospace;
+	opacity:0;
+	transition:width .18s ease, opacity .18s ease, padding .18s ease;
+}
+
+.accent-picker.is-open .accent-input {
+	width:70px;
+	padding:0 6px 0 4px;
+	opacity:1;
+}
+
 .button-preview-stage {
 	height:68px;
 	display:flex;
@@ -7485,6 +7824,13 @@ Highlights the passages commenters quote, so you can jump between the article an
 <button id="settings-reset-button" class="settings-reset" type="button">Reset</button>
 </div>
 <div class="button-preview">
+<div class="accent-picker" id="accent-picker">
+<button id="accent-swatch" class="accent-swatch" type="button" aria-expanded="false"
+title="Set the accent colour">Colour</button>
+<input id="accent-input" class="accent-input" type="text" spellcheck="false"
+autocomplete="off" maxlength="7" aria-label="Accent colour as a hex value"
+placeholder="#237140" tabindex="-1">
+</div>
 <div class="button-preview-stage">
 <div id="button-preview-shape" class="button-preview-shape"
 contenteditable="plaintext-only" spellcheck="false"
@@ -7903,6 +8249,78 @@ ${["read", "vote", "reply", "submit"]
 				previewShape.textContent = normalizeButtonMark(
 					event.clipboardData?.getData("text/plain"),
 				);
+			});
+		}
+
+		const accentPicker = shadow.querySelector("#accent-picker");
+		const accentSwatch = shadow.querySelector("#accent-swatch");
+		const accentInput = shadow.querySelector("#accent-input");
+
+		if (accentPicker && accentSwatch && accentInput) {
+			const closePicker = () => {
+				accentPicker.classList.remove("is-open");
+				accentSwatch.setAttribute("aria-expanded", "false");
+				accentInput.tabIndex = -1;
+			};
+
+			// Committed when the field is left, the same way the mark is: a hex is
+			// only meaningful once it is whole, and repainting every surface on the
+			// way through "#2", "#23", "#237" would be four wrong colours per typed
+			// one.
+			const commitAccent = async () => {
+				const typed = accentInput.value.trim();
+				// Empty means "back to the built-in one" rather than "invalid", which
+				// is the only way to undo a colour without knowing what it replaced.
+				const next = typed ? parseHexColor(typed) : null;
+
+				closePicker();
+
+				if (typed && !next) {
+					// Unparseable: say so by snapping back to what is actually in
+					// force, rather than saving something the panel cannot paint.
+					accentInput.value = (await loadSettings()).accentColor ?? "";
+					return;
+				}
+
+				const value = next ? rgbToHex(next) : null;
+
+				accentInput.value = value ?? "";
+				applySettingsPanelState(await saveSettings({ accentColor: value }));
+				await refreshAccentOverride();
+			};
+
+			accentSwatch.onclick = async () => {
+				if (accentPicker.classList.contains("is-open")) {
+					accentInput.blur();
+					return;
+				}
+
+				accentInput.value = (await loadSettings()).accentColor ?? "";
+				accentPicker.classList.add("is-open");
+				accentSwatch.setAttribute("aria-expanded", "true");
+				accentInput.tabIndex = 0;
+				accentInput.focus();
+				accentInput.select();
+			};
+
+			accentInput.addEventListener("keydown", (event) => {
+				if (event.key === "Enter") {
+					event.preventDefault();
+					accentInput.blur();
+					return;
+				}
+
+				// Escape abandons rather than commits, so a half-typed value does not
+				// become the accent just because the reader changed their mind.
+				if (event.key === "Escape") {
+					event.preventDefault();
+					accentInput.value = "";
+					closePicker();
+				}
+			});
+
+			accentInput.addEventListener("blur", () => {
+				commitAccent().catch(console.error);
 			});
 		}
 
@@ -13970,17 +14388,20 @@ title="Show only this discussion">
 	// Literal channels, not var(--accent-rgb): these paint into the page-side
 	// overlay, which cannot see the panel's variables. Keep them in step with
 	// ACCENT_RGB by hand -- there is no mechanism that can do it here.
-	const HEAT_FILL_LIGHT = {
-		light: `rgba(${ACCENT_RGB},.025)`,
-		medium: `rgba(${ACCENT_RGB},.045)`,
-		heavy: `rgba(${ACCENT_RGB},.07)`,
-	};
+	// Built per paint rather than once at load, so a reader who sets their own
+	// accent gets it on the article too and not only in the panel.
+	function heatFill(dark) {
+		const channels = activeAccent(dark).accentRgb;
+		const alphas = dark
+			? { light: ".035", medium: ".055", heavy: ".075" }
+			: { light: ".025", medium: ".045", heavy: ".07" };
 
-	const HEAT_FILL_DARK = {
-		light: `rgba(${ACCENT_RGB},.035)`,
-		medium: `rgba(${ACCENT_RGB},.055)`,
-		heavy: `rgba(${ACCENT_RGB},.075)`,
-	};
+		return {
+			light: `rgba(${channels},${alphas.light})`,
+			medium: `rgba(${channels},${alphas.medium})`,
+			heavy: `rgba(${channels},${alphas.heavy})`,
+		};
+	}
 
 	// Quote rects paint solid and their layer carries the strength. Painting them
 	// translucent instead made a passage's colour depend on how many people happened
@@ -13989,7 +14410,6 @@ title="Show only this discussion">
 	// layer that is itself partly transparent cannot compound, so every quote reads
 	// the same. How much a passage is discussed is the heat layer's job, and it was
 	// only ever being said twice.
-	const QUOTE_INK = ACCENT;
 	// Meant to read as a highlighter drawn over the line, not as a tint on it: half
 	// strength puts white paper at rgb(173,173,235). The overlay blends, so the accent
 	// cannot touch the glyphs however heavy it gets -- text on a highlight keeps a
@@ -14010,11 +14430,11 @@ title="Show only this discussion">
 			width: rect.width,
 			height: rect.height,
 			borderRadius: "3px",
-			background: QUOTE_INK,
+			background: activeAccent(options.dark).accent,
 		};
 
 		if (variant === "heat") {
-			const palette = options.dark ? HEAT_FILL_DARK : HEAT_FILL_LIGHT;
+			const palette = heatFill(options.dark);
 			style.background = palette[options.bucket] || palette.light;
 		}
 
