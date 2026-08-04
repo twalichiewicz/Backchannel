@@ -10695,17 +10695,13 @@ ${settingsPanelHTML()}
 		renderedComments = [];
 		ui.body.innerHTML = "";
 		// "submissions on HN" was true while HN was the only source. It stops being
-		// true the moment a second one is enabled, and a header that miscounts where
-		// a conversation happened is worse than one that just counts it. The proper
-		// per-source breakdown is the source strip, which the blended thread brings.
-		// Only when there is a number worth reading. "1 discussion" under the
-		// wordmark is a count of something the page header directly beneath it
-		// already names in full, and it put a third line of heading above a
-		// conversation that had not started yet.
-		setSidebarRestingSubtitle(
-			ui,
-			stories.length > 1 ? pluralize(stories.length, "discussion") : "",
-		);
+		// Nothing at rest. This counted submissions back when the panel had no other
+		// way to say there were several; the source strip now names each one and
+		// carries its own count, so a bare "7 discussions" under the wordmark is a
+		// worse version of the row directly beneath it. Still cleared on every
+		// render rather than left alone, because the subtitle carries the loading
+		// stages and must not keep a previous page's text behind them.
+		setSidebarRestingSubtitle(ui, "");
 
 		const generation = sidebarGeneration;
 
