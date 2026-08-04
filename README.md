@@ -8,7 +8,7 @@ See what everyone's talking about.
 
 <a href="https://trendshift.io/repositories/95983?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-95983" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/95983/daily?language=JavaScript" alt="twalichiewicz%2FBackchannel | Trendshift" width="250" height="55"/></a>
                                                
-<img width="1305" height="887" alt="SCR-20260804-jmlt" src="https://github.com/user-attachments/assets/f50131fc-fa6b-4e25-a5dd-9c44ceae1bc5" />
+<img width="1305" height="887" alt="A screenshot of Safari on macOS opened to https://www.seangoedecke.com/llms-reward-expertise/, with the HNewhere side bar open viewing the comments. The settings dropdown in the sidebar is also open, showing which settings the user currently has enabled." src="https://github.com/user-attachments/assets/f50131fc-fa6b-4e25-a5dd-9c44ceae1bc5" />
 
 
 ## What it does
