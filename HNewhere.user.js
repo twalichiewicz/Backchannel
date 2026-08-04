@@ -8192,7 +8192,7 @@ ${CHROME_CSS}
    short of the panel edge reads as part of the column rather than as a break
    across it, which is the one thing it is for. */
 .next-up::before,
-.submission-detail-banded::before,
+.submission-detail::before,
 .submission + .submission::before {
 	content:"";
 	display:block;
@@ -8217,9 +8217,42 @@ ${CHROME_CSS}
 }
 
 /* No negative margin of its own: the band's ::before already bleeds 12px each
-	side, which is exactly the inset #comments gives its contents. */
+	side, which is exactly the inset #comments gives its contents. The gap above
+	the band comes from the header's padding, so that both sides of it are 12px. */
 .submission-detail-banded {
-	margin-top:16px;
+	margin-top:0;
+}
+
+/* The band is always here and merely collapsed, so turning a filter on has
+	something to grow from rather than putting a rule on screen in one frame. */
+.submission-detail::before {
+	transition:
+		height .2s ease,
+		opacity .2s ease,
+		margin-bottom .2s ease,
+		border-top-width .2s ease,
+		border-bottom-width .2s ease;
+}
+
+.submission-detail:not(.submission-detail-banded)::before {
+	height:0;
+	opacity:0;
+	margin-bottom:0;
+	border-top-width:0;
+	border-bottom-width:0;
+}
+
+/* The band replaces the header's rule rather than joining it. Two lines between
+	the pills and the submission is one line too many, and the hatched one is the
+	one carrying the meaning. Faded rather than dropped, so it leaves at the same
+	speed the band arrives. */
+.page-header {
+	transition:border-bottom-color .2s ease, padding-bottom .2s ease;
+}
+
+.discussion-filtered .page-header {
+	border-bottom-color:transparent;
+	padding-bottom:12px;
 }
 
 #comments {
@@ -10946,13 +10979,33 @@ title="Show only this discussion">
 			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
 
 		for (const block of blocks) {
-			block.hidden = block.dataset.discussionKey !== active;
+			const show = block.dataset.discussionKey === active;
+			const wasHidden = block.hidden;
+
+			block.hidden = !show;
 
 			// Filtering to one source puts its submission -- score, author, and
 			// whatever it was posted with -- above a thread that a moment ago was
 			// every source blended together. That is the panel changing subject, which
 			// is the one thing the hatched band is for.
-			block.classList.toggle("submission-detail-banded", !block.hidden);
+			if (!show) {
+				block.classList.remove("submission-detail-banded");
+				continue;
+			}
+
+			if (!wasHidden) {
+				block.classList.add("submission-detail-banded");
+				continue;
+			}
+
+			// It was display:none a moment ago, and a transition has nothing to
+			// interpolate from across that. One forced read settles the collapsed
+			// band as a real start value, and the class lands on the next frame --
+			// so the band grows rather than arriving whole.
+			void block.offsetHeight;
+			requestAnimationFrame(() => {
+				block.classList.add("submission-detail-banded");
+			});
 		}
 	}
 
