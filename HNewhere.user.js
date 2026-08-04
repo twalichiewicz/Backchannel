@@ -3896,16 +3896,55 @@ ${
 	// Restore button
 	// -------------------------
 
+	// The visible viewport, which is not window.innerWidth: that includes the
+	// scrollbar, so clamping to it let the button sit underneath one. On a page
+	// with a vertical scrollbar the button landed 15px past the last visible pixel
+	// and had to be dragged back into view.
+	//
+	// The margin keeps it off the edge entirely. Flush against the boundary is
+	// where a button is hardest to grab and where a scrollbar, an overlay or a
+	// rounded display corner is most likely to cover it.
+	const BUTTON_EDGE_MARGIN = 4;
+
+	function buttonBounds(button) {
+		const doc = document.documentElement;
+		const width = doc.clientWidth || window.innerWidth;
+		const height = doc.clientHeight || window.innerHeight;
+
+		return {
+			minX: BUTTON_EDGE_MARGIN,
+			minY: BUTTON_EDGE_MARGIN,
+			// Never negative: a button wider than the viewport clamps to the margin
+			// rather than to a max below its min, which would pin it off-screen left.
+			maxX: Math.max(
+				BUTTON_EDGE_MARGIN,
+				width - button.offsetWidth - BUTTON_EDGE_MARGIN,
+			),
+			maxY: Math.max(
+				BUTTON_EDGE_MARGIN,
+				height - button.offsetHeight - BUTTON_EDGE_MARGIN,
+			),
+		};
+	}
+
+	function clampButtonToViewport(button, x, y) {
+		const bounds = buttonBounds(button);
+
+		return {
+			x: Math.min(Math.max(x, bounds.minX), bounds.maxX),
+			y: Math.min(Math.max(y, bounds.minY), bounds.maxY),
+		};
+	}
+
 	async function applyButtonPosition(button) {
 		const saved = await load(STORAGE.position, null);
 
 		if (!saved) return;
 
-		const maxX = window.innerWidth - button.offsetWidth;
-		const maxY = window.innerHeight - button.offsetHeight;
+		const { x, y } = clampButtonToViewport(button, saved.x, saved.y);
 
-		button.style.left = Math.max(0, Math.min(saved.x, maxX)) + "px";
-		button.style.top = Math.max(0, Math.min(saved.y, maxY)) + "px";
+		button.style.left = x + "px";
+		button.style.top = y + "px";
 		button.style.right = "auto";
 	}
 
@@ -3927,11 +3966,14 @@ ${
 		};
 
 		const clampPosition = () => {
-			const maxX = window.innerWidth - button.offsetWidth;
-			const maxY = window.innerHeight - button.offsetHeight;
+			const { x, y } = clampButtonToViewport(
+				button,
+				button.offsetLeft,
+				button.offsetTop,
+			);
 
-			button.style.left = Math.max(0, Math.min(button.offsetLeft, maxX)) + "px";
-			button.style.top = Math.max(0, Math.min(button.offsetTop, maxY)) + "px";
+			button.style.left = x + "px";
+			button.style.top = y + "px";
 			button.style.right = "auto";
 			notifyMoved();
 		};
@@ -3963,18 +4005,16 @@ ${
 				moved = true;
 			}
 
-			button.style.left =
-				Math.min(
-					Math.max(0, startLeft + deltaX),
-					window.innerWidth - button.offsetWidth,
-				) + "px";
+			// Same bounds as every other clamp: the visible viewport, not
+			// window.innerWidth, so a drag cannot park the button under a scrollbar.
+			const { x, y } = clampButtonToViewport(
+				button,
+				startLeft + deltaX,
+				startTop + deltaY,
+			);
 
-			button.style.top =
-				Math.min(
-					Math.max(0, startTop + deltaY),
-					window.innerHeight - button.offsetHeight,
-				) + "px";
-
+			button.style.left = x + "px";
+			button.style.top = y + "px";
 			button.style.right = "auto";
 			notifyMoved();
 		});
