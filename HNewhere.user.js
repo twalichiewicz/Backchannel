@@ -326,6 +326,22 @@
 	// Clamped to the range but deliberately NOT snapped to the step: a size typed
 	// into the field is the user's choice and is kept exactly, so any whole pixel
 	// from 24 to 64 is a valid stored value. Snapping belongs to the stepper alone.
+	// One or two characters, because that is what a 44px circle holds. Trimmed and
+	// upper-cased so "bc" and " Bc " settle on the same mark, and anything that
+	// normalises to nothing falls back rather than leaving a blank circle -- an
+	// unlabelled button is indistinguishable from a broken one.
+	const BUTTON_MARK_DEFAULT = "BC";
+	const BUTTON_MARK_MAX = 2;
+
+	function normalizeButtonMark(value) {
+		const text = String(value ?? "")
+			.trim()
+			.slice(0, BUTTON_MARK_MAX)
+			.toUpperCase();
+
+		return text || BUTTON_MARK_DEFAULT;
+	}
+
 	function normalizeButtonSize(value) {
 		const raw = typeof value === "string" ? LEGACY_BUTTON_SIZES[value] : value;
 		const numeric = Number.isFinite(raw)
@@ -362,6 +378,7 @@
 	let themePreference = "auto";
 	let buttonShapePreference = "circle";
 	let buttonSizePreference = BUTTON_SIZE_DEFAULT;
+	let buttonMarkPreference = BUTTON_MARK_DEFAULT;
 
 	// The only writer of the three caches. Called by loadSettings and saveSettings
 	// so they cannot drift from stored settings, and directly by tests.
@@ -371,6 +388,7 @@
 			? settings.buttonShape
 			: "circle";
 		buttonSizePreference = normalizeButtonSize(settings.buttonSize);
+		buttonMarkPreference = normalizeButtonMark(settings.buttonMark);
 	}
 	// #endregion hnewhere-test-export
 
@@ -401,6 +419,7 @@
 		theme: "auto",
 		buttonShape: "circle",
 		buttonSize: BUTTON_SIZE_DEFAULT,
+		buttonMark: BUTTON_MARK_DEFAULT,
 	};
 
 	// #region hnewhere-test-export
@@ -1548,7 +1567,7 @@
 				(source) => `
 <label class="settings-option">
 <input${idPrefix ? ` id="${escapeHTML(idPrefix + source.id)}"` : ""} data-source="${escapeHTML(source.id)}" type="checkbox">
-<span>${escapeHTML(source.label)}</span>
+<span>${escapeHTML(source.label)}${source.beta ? ` <span class="op-pill">BETA</span>` : ""}</span>
 </label>
 ${
 	source.caveat
@@ -1693,6 +1712,7 @@ ${
 	registerSource({
 		id: "reddit",
 		label: "Reddit",
+		beta: true,
 		// Measured, not assumed: signed in, a cross-site request from this script
 		// arrives at Reddit authenticated as that account -- reddit_session is
 		// SameSite=None and rides along. Signed out it carries only the device id.
@@ -2527,10 +2547,10 @@ ${
 	const ACCENT_RGB = "91,91,214";
 	// #endregion hnewhere-test-export
 
-	// Two characters, because that is what a 44px circle holds. "HN" was doing
-	// double duty as the product's mark and as the name of the only source; with
-	// several sources it would have been announcing one of them.
-	const BUTTON_MARK = "BC";
+	// "HN" was doing double duty as the product's mark and as the name of the only
+	// source; with several sources it would have been announcing one of them. The
+	// reader can set their own, so this reads the preference rather than a
+	// constant -- see normalizeButtonMark for what a valid one is.
 
 	// The two states the floating button can be in. "active" means a discussion is
 	// known to exist; "inactive" means the lookup came back empty and clicking offers
@@ -2650,13 +2670,19 @@ ${
 		}, 220);
 	}
 
-	// The only place these four properties are set. They used to be spelled out in
-	// both createFloatingHNButton's cssText and applyButtonMobileStyle, which
-	// re-asserts them on every resize -- so a value applied to only one of them was
-	// silently reverted the next time the window changed size.
+	// The only place these properties are set. They used to be spelled out in both
+	// createFloatingHNButton's cssText and applyButtonMobileStyle, which re-asserts
+	// them on every resize -- so a value applied to only one of them was silently
+	// reverted the next time the window changed size.
+	//
+	// The label belongs here for the same reason. createFloatingHNButton returns an
+	// existing button untouched and adopts a pending one by id, so neither path
+	// re-labels it: a mark changed while a button was already on the page stayed on
+	// the old one until a reload.
 	function applyButtonAppearance(button) {
 		const size = buttonSizePreference;
 
+		button.textContent = buttonMarkPreference;
 		button.style.width = `${size}px`;
 		button.style.height = `${size}px`;
 		button.style.fontSize = `${buttonFontSizeFor(size)}px`;
@@ -2728,7 +2754,10 @@ ${
 		function createFloatingHNButton(id, variant = "active") {
 			let button = document.getElementById(id);
 
-			if (button) return button;
+			if (button) {
+				button.textContent = buttonMarkPreference;
+				return button;
+			}
 
 			// A button drawn before the lookup answered becomes whichever button the
 			// answer calls for, rather than being torn down and rebuilt: rebuilding
@@ -2738,13 +2767,14 @@ ${
 
 			if (button) {
 				button.id = id;
+				button.textContent = buttonMarkPreference;
 				setFloatingButtonVariant(button, variant);
 				return button;
 			}
 
 			button = document.createElement("button");
 			button.id = id;
-			button.textContent = BUTTON_MARK;
+			button.textContent = buttonMarkPreference;
 
 			button.style.cssText = `
 					position:fixed;
@@ -2822,7 +2852,7 @@ ${
 	function animateButtonFill(button) {
 		const overlay = document.createElement("span");
 
-		overlay.textContent = BUTTON_MARK;
+		overlay.textContent = buttonMarkPreference;
 		overlay.style.cssText = `
 			position:absolute;
 			inset:0;
@@ -4767,7 +4797,7 @@ ${
 		button.style.color = "white";
 
 		window.setTimeout(() => {
-			button.textContent = BUTTON_MARK;
+			button.textContent = buttonMarkPreference;
 			applyButtonMobileStyle(button);
 		}, 900);
 	}
@@ -7005,6 +7035,12 @@ header button svg {
 	align-items:center;
 	justify-content:center;
 	border:0;
+	/* It is a text field now as well as a preview, so it says so on hover and
+	   focus -- an editable thing that looks exactly like an unedittable one is
+	   only discoverable by accident. */
+	cursor:text;
+	caret-color:#fff;
+	outline-offset:2px;
 	background:var(--accent);
 	box-shadow:0 1px 4px rgba(0,0,0,.25);
 	color:#fff;
@@ -7245,9 +7281,12 @@ Highlights the passages commenters quote, so you can jump between the article an
 </div>
 <button id="settings-reset-button" class="settings-reset" type="button">Reset</button>
 </div>
-<div class="button-preview" aria-hidden="true">
+<div class="button-preview">
 <div class="button-preview-stage">
-<div id="button-preview-shape" class="button-preview-shape">HN</div>
+<div id="button-preview-shape" class="button-preview-shape"
+contenteditable="plaintext-only" spellcheck="false"
+role="textbox" aria-label="Button label, one or two characters"
+title="Type one or two characters">BC</div>
 </div>
 <div class="button-preview-rule"><span id="button-preview-dim" class="button-preview-dim">44</span></div>
 </div>
@@ -7613,6 +7652,56 @@ ${["read", "vote", "reply", "submit"]
 				await onAnnotationChange?.();
 			}
 		});
+
+		if (previewShape) {
+			// Committed on blur and on Enter rather than per keystroke: one character
+			// is a valid mark, so saving as you type would apply "B" on the way to
+			// "BC" and repaint every button twice.
+			const commitMark = async () => {
+				const next = normalizeButtonMark(previewShape.textContent);
+
+				previewShape.textContent = next;
+				applySettingsPanelState(await saveSettings({ buttonMark: next }));
+				await refreshButtonAppearance();
+			};
+
+			previewShape.addEventListener("keydown", (event) => {
+				if (event.key === "Enter") {
+					event.preventDefault();
+					previewShape.blur();
+					return;
+				}
+
+				// contenteditable has no maxlength. Typing past the limit is stopped
+				// here rather than trimmed afterwards, so the field never shows a
+				// character that will not survive.
+				const selection = previewShape.ownerDocument.getSelection();
+				const replacing = selection && !selection.isCollapsed;
+
+				if (
+					event.key.length === 1 &&
+					!event.metaKey &&
+					!event.ctrlKey &&
+					!replacing &&
+					previewShape.textContent.trim().length >= BUTTON_MARK_MAX
+				) {
+					event.preventDefault();
+				}
+			});
+
+			previewShape.addEventListener("blur", () => {
+				commitMark().catch(console.error);
+			});
+
+			// Paste arrives as whatever was on the clipboard, including newlines and
+			// markup. Taken as text and normalised rather than inserted.
+			previewShape.addEventListener("paste", (event) => {
+				event.preventDefault();
+				previewShape.textContent = normalizeButtonMark(
+					event.clipboardData?.getData("text/plain"),
+				);
+			});
+		}
 
 		for (const button of stepperButtons) {
 			button.onclick = async () => {

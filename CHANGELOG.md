@@ -37,6 +37,9 @@ use to detect updates, so every release bumps it.
   than presented as two feeds. Each source is a checkbox, including Hacker News
   itself, so a reader who wants only one gets only one. A fresh install opens on
   the picker; an existing install keeps Hacker News on and sees no change.
+- **Reddit is marked BETA**, the way annotations are. It works, and there is more
+  of it to come — no front page, no writing, and long threads fill in on request
+  rather than arriving whole.
 - **Reddit is read-only and off by default.** Enabling it sends the pages you
   visit to reddit.com, and if you are signed in to Reddit those requests arrive
   as your account — Reddit sets a second session cookie, `reddit_session`, which
@@ -45,6 +48,11 @@ use to detect updates, so every release bumps it.
   stated where the checkbox is rather than in a document nobody opens. Nothing is ever posted to Reddit on your behalf.
   When reddit.com declines the request the sidebar falls back to a cookie-free
   archive mirror, so the comments still arrive.
+- **The floating button's label is yours.** It read `HN` when Hacker News was the
+  only source and `BC` after the rename, and neither is right for everyone. The
+  preview in the settings panel is now the field: click it and type one or two
+  characters. It is the preview precisely so the mark is edited on the thing it
+  applies to, at the size and colour it will actually be.
 - **A single blended thread.** Top-level comments from every discussion are
   interleaved by where each one ranks within its own discussion, so a big thread
   contributes proportionally more without an upvote ever being compared to a
