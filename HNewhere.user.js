@@ -6738,6 +6738,13 @@ header button svg {
 	margin-right:4px;
 }
 
+/* Filtered to one discussion, every comment on screen is from it -- so the label
+	is answering a question the reader has already settled, on every line. The
+	banner above says which one. */
+.discussion-filtered .comment-source {
+	display:none;
+}
+
 /* The picker is the first thing a new reader sees, so it borrows the settings
 	panel's spacing and type scale rather than inventing a form of its own. It sits
 	in the sidebar body, which is why it needs its own padding -- the settings panel
@@ -10905,8 +10912,7 @@ title="Show only this discussion">
 				applyDiscussionFilter(key);
 			}
 
-			syncSourceStripState(wrapper);
-			syncSubmissionDetails();
+			syncFilterAffordances();
 			// Left open on purpose: collapsing the strip out from under the press
 			// that just filtered would take away the control needed to undo it.
 			setStripOpen(true);
@@ -10948,6 +10954,32 @@ title="Show only this discussion">
 			// is the one thing the hatched band is for.
 			block.classList.toggle("submission-detail-banded", !block.hidden);
 		}
+	}
+
+	// Both of these read activeCommentFilter and nothing else, so they belong on
+	// the same trigger. Kept apart, the strip was synced only by its own click
+	// handler -- so focusing a comment inside a filtered discussion, then pressing
+	// "show all comments", cleared the filter while leaving the pill lit for a
+	// filter that was no longer on.
+	function syncFilterAffordances() {
+		const wrapper = sidebarUI?.body?.querySelector(".source-strip");
+
+		if (wrapper) {
+			syncSourceStripState(wrapper);
+		}
+
+		syncSubmissionDetails();
+		syncSourceBadges();
+	}
+
+	// The badge beside a root comment says which discussion it came from, which is
+	// worth saying in a blend and says nothing once the reader has filtered to one
+	// discussion -- there, every comment on screen is from it.
+	function syncSourceBadges() {
+		sidebarUI?.body?.classList.toggle(
+			"discussion-filtered",
+			activeCommentFilter?.type === "discussion",
+		);
 	}
 
 	function syncSourceStripState(wrapper) {
@@ -12481,7 +12513,7 @@ title="Show only this discussion">
 
 			setQuoteRedundancy(null, false);
 			updateSubmissionVisibility(null);
-			syncSubmissionDetails();
+			syncFilterAffordances();
 			sidebarUI?.filterBanner?.classList.add("hidden");
 			if (sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBannerQuote.textContent = "";
@@ -14075,6 +14107,9 @@ title="Show only this discussion">
 			// still see rather than under the cover of the change.
 			onFiltered?.();
 			updateSubmissionVisibility(visibleCommentIds);
+			// Every way into a filter, not just the strip's own press: focusing a
+			// comment or a quoted passage changes what the pills should say too.
+			syncFilterAffordances();
 
 			if (sidebarUI?.filterBanner && sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBanner.classList.remove("hidden");
