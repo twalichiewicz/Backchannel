@@ -1508,7 +1508,6 @@
 
 		return current === "loid" ? "archive" : "off";
 	}
-	// #endregion hnewhere-test-export
 
 	// A registry rather than a pair of branches. HN is an entry, not a base case:
 	// the moment a source is special-cased the renderer starts learning what a
@@ -1523,6 +1522,21 @@
 	function getSource(id) {
 		return SOURCES.get(id) || null;
 	}
+
+	// The platform a discussion opens on, which is not the same as the label that
+	// tells two discussions apart. A Reddit thread's label is its subreddit, so
+	// this link read "open on r/programmingcirclejerk" where Hacker News read
+	// "open on HN" -- the one line where the same layout said something different
+	// depending on the source. The subreddit still labels the source strip and the
+	// badge beside a comment, which is where telling r/science from r/conspiracy
+	// is the whole point.
+	//
+	// Falls back to the discussion's own label for front-page rows, which are
+	// parsed out of HN's markup and never pass through a source.
+	function sourceShortLabel(story) {
+		return getSource(story?.source)?.shortLabel || story?.label || "the site";
+	}
+	// #endregion hnewhere-test-export
 
 	// Where a name links to, decided by the source the name came from. It used to
 	// be Hacker News for everybody, which sent a Reddit username to an HN profile
@@ -1587,6 +1601,7 @@ ${
 	registerSource({
 		id: "hn",
 		label: "Hacker News",
+		shortLabel: "HN",
 		caveat:
 			"Sends each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
 		capabilities: { vote: true, reply: true, submit: true },
@@ -1712,6 +1727,7 @@ ${
 	registerSource({
 		id: "reddit",
 		label: "Reddit",
+		shortLabel: "Reddit",
 		beta: true,
 		// Measured, not assumed: signed in, a cross-site request from this script
 		// arrives at Reddit authenticated as that account -- reddit_session is
@@ -7425,7 +7441,7 @@ title="Type one or two characters">BC</div>
 ${sourceListHTML({ idPrefix: "setting-source-" })}
 <div class="source-matrix-caption">What each source supports</div>
 <table class="source-matrix">
-<thead><tr><th></th>${[...SOURCES.values()].map((source) => `<th>${escapeHTML(source.label.replace(/^Hacker News$/, "HN"))}</th>`).join("")}</tr></thead>
+<thead><tr><th></th>${[...SOURCES.values()].map((source) => `<th>${escapeHTML(source.shortLabel || source.label)}</th>`).join("")}</tr></thead>
 <tbody>
 ${["read", "vote", "reply", "submit"]
 	.map(
@@ -9364,7 +9380,7 @@ ${settingsPanelHTML()}
 		showTitle
 			? ""
 			: `| <a class="story-open-link" target="_blank" rel="noopener noreferrer"
-	href="${escapeHTML(hnURL)}">open on ${escapeHTML(story.label || "the site")}</a>`
+	href="${escapeHTML(hnURL)}">open on ${escapeHTML(sourceShortLabel(story))}</a>`
 	}
 	${
 		showCommentCount
