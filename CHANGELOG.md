@@ -1,12 +1,87 @@
 # Changelog
 
-All notable changes to HNewhere are documented here.
+All notable changes to Backchannel — formerly HNewhere — are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
+
+## [1.6.0] — 2026-08-03
+
+### Changed
+
+- **HNewhere is now Backchannel.** The name described a product that checked one
+  site. This one asks several, so it is named for what it shows rather than where
+  it looked: the conversation running alongside the page you are reading. The
+  accent colour moves off Hacker News orange for the same reason — the panel
+  speaks for several sources now and should not wear any one of their colours —
+  and the floating button reads **BC** rather than **HN**.
+
+  The repository, the filename and the install URL are unchanged, so an install
+  that auto-updates renames itself in place and keeps everything. Stored settings
+  keep their old key prefix too: renaming them would be invisible to you and
+  would risk your queue and hidden-site list for nothing.
+
+  **If you reinstall by hand rather than letting it update, remove the old
+  HNewhere entry afterwards.** Userscript managers match a manual install on the
+  script's name, so a rename arrives as a second script rather than a new version
+  of the first — and both would run, on every page, at once.
+
+### Added
+
+- **Reddit, and a source picker.** HNewhere told you what Hacker News said about
+  a page. It now tells you what the internet said: Hacker News and Reddit —
+  every subreddit a link was posted to — merged into one conversation rather
+  than presented as two feeds. Each source is a checkbox, including Hacker News
+  itself, so a reader who wants only one gets only one. A fresh install opens on
+  the picker; an existing install keeps Hacker News on and sees no change.
+- **Reddit is read-only and off by default.** Enabling it sends the pages you
+  visit to reddit.com along with the identifier your browser already carries
+  there, which is a real trade and is stated where the checkbox is rather than
+  in a document nobody opens. Nothing is ever posted to Reddit on your behalf.
+  When reddit.com declines the request the sidebar falls back to a cookie-free
+  archive mirror, so the comments still arrive.
+- **A single blended thread.** Top-level comments from every discussion are
+  interleaved by where each one ranks within its own discussion, so a big thread
+  contributes proportionally more without an upvote ever being compared to a
+  point — Hacker News publishes no comment scores, so that comparison was never
+  available. Reply trees stay intact beneath their own root, and the source sits
+  in the byline at the weight of the timestamp: available, not announced.
+
+### Fixed
+
+- **Long Reddit threads are no longer truncated in silence.** Reddit returns a
+  large thread in pieces and marks the gaps; those gaps now say how many replies
+  are behind them and fill in when asked. A gap that cannot be filled — the rate
+  budget runs out on a very long thread — says so and stays, rather than
+  disappearing as though there had been nothing there.
+- **Indent guides line up with the comment they belong to.** They sat eight
+  pixels past the parent's first letter, which read as a slight stagger down a
+  long thread.
+- **Reply, flag and favourite no longer appear on comments that cannot take
+  them.** They are offered where the source supports them and nowhere else; on
+  Reddit they would have acted on an item id Hacker News never issued.
+- **A failed lookup is no longer cached as "no discussion".** `request()`
+  resolves null on an error, a timeout or a bad response, so a moment offline
+  stored an empty result for the full hour and left a page showing a grey button
+  long after the connection came back.
+
+### Changed
+
+- **One sidebar, whatever the page turns up.** A single discussion used to get a
+  submission header and several got a page header, so the panel looked like a
+  different product depending on how many places a link happened to reach. The
+  page is the header now; each submission's own score, author and actions sit
+  beneath it, and the source strip is how you get to one of them.
+- The quoted-passage tooltip picks the earliest comment by time rather than the
+  first in thread order, which stopped meaning anything once a passage could be
+  quoted from more than one discussion.
+- Checking a page no longer fetches every submission's full item up front. The
+  search result already carries the title, score, comment count and author, and
+  only the comment list needs more — so a page check costs the two requests it
+  always did, rather than two plus one per submission found.
 
 ## [1.5.8] — 2026-08-02
 
