@@ -38,9 +38,11 @@ use to detect updates, so every release bumps it.
   itself, so a reader who wants only one gets only one. A fresh install opens on
   the picker; an existing install keeps Hacker News on and sees no change.
 - **Reddit is read-only and off by default.** Enabling it sends the pages you
-  visit to reddit.com along with the identifier your browser already carries
-  there, which is a real trade and is stated where the checkbox is rather than
-  in a document nobody opens. Nothing is ever posted to Reddit on your behalf.
+  visit to reddit.com, and if you are signed in to Reddit those requests arrive
+  as your account — Reddit sets a second session cookie, `reddit_session`, which
+  unlike `token_v2` is `SameSite=None` and travels cross-site. Signed out they
+  carry a long-lived device identifier instead. That is a real trade, and it is
+  stated where the checkbox is rather than in a document nobody opens. Nothing is ever posted to Reddit on your behalf.
   When reddit.com declines the request the sidebar falls back to a cookie-free
   archive mirror, so the comments still arrive.
 - **A single blended thread.** Top-level comments from every discussion are

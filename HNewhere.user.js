@@ -1693,8 +1693,12 @@ ${
 	registerSource({
 		id: "reddit",
 		label: "Reddit",
+		// Measured, not assumed: signed in, a cross-site request from this script
+		// arrives at Reddit authenticated as that account -- reddit_session is
+		// SameSite=None and rides along. Signed out it carries only the device id.
+		// The wording says which, because the difference is the whole trade.
 		caveat:
-			"Sends each page you visit to reddit.com, with the identifier your browser already carries there. Read-only \u2014 no voting or replying.",
+			"Sends each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account \u2014 Reddit can tie your browsing to it. Signed out, they carry only the long-lived device id your browser already holds. Read-only either way: no voting or replying.",
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (author) =>

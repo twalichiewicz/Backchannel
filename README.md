@@ -27,10 +27,12 @@ with none switched on it makes no requests at all.
 
 Hacker News talks to the HN API, Algolia search, and news.ycombinator.com, with
 no persistent identifier attached. Reddit is **off by default** and is a real
-trade: turning it on sends the pages you visit to reddit.com along with the
-identifier your browser already carries there. That's why it's a checkbox, why
-the caveat sits next to it, and why there's a sub-option to use only the archive
-mirror instead. Reddit is read-only — nothing is ever posted on your behalf.
+trade: turning it on sends the pages you visit to reddit.com — and if you're
+signed in to Reddit, those requests arrive *as your account*, which we measured
+rather than guessed. Signed out, they carry a long-lived device identifier
+instead. That's why it's a checkbox, why the caveat sits next to it, and why
+there's a sub-option to use only the archive mirror. Reddit is read-only —
+nothing is ever posted on your behalf.
 
 Webmail, banking, auth flows, and cloud consoles are excluded outright.
 

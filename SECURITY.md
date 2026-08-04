@@ -40,7 +40,7 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Source | Hosts contacted | What they are told |
   | --- | --- | --- |
   | Hacker News | `hn.algolia.com`, `hacker-news.firebaseio.com`, `news.ycombinator.com` | the URL of each page you visit, with no persistent identifier attached |
-  | Reddit | `www.reddit.com` | the URL of each page you visit, **with the identifier your browser already carries for reddit.com** |
+  | Reddit | `www.reddit.com` | the URL of each page you visit. **Signed in to Reddit, these requests arrive authenticated as your account**; signed out, they carry a long-lived device identifier |
   | Reddit (fallback) | `arctic-shift.photon-reddit.com` | the URL of each page you visit, with no identifier. Used automatically when reddit.com declines the request |
   | *no source enabled* | none | nothing — the script performs no lookup at all |
 
@@ -49,13 +49,23 @@ Worth stating plainly, because the permissions are broad by necessity:
   switched off. A disabled source issues no requests; the entry is a permission
   the script is allowed but does not exercise.
 - **Reddit is off by default, and is a real trade.** Enabling it sends your
-  browsing to a company whose business is advertising, tied to a device
-  identifier that persists for over a year — and, if you are signed in, to an
-  identifier associated with your account. Hacker News and Algolia receive URLs
-  with no per-user identifier at all. This is why it is a checkbox rather than a
-  default, and why the caveat sits next to the checkbox rather than only here.
-  Enabling *Never contact Reddit directly* uses only the archive mirror, which
-  receives no identifier.
+  browsing to a company whose business is advertising.
+
+  How much it reveals depends on whether you are signed in, and this was
+  measured rather than assumed. Reddit sets two session cookies. `token_v2` is
+  `SameSite=Lax` and is withheld from cross-site requests — but signing in also
+  sets **`reddit_session`, which is `SameSite=None`** and is not. So a request
+  this script makes from an unrelated page arrives at Reddit **authenticated as
+  your account**: asked who is calling, Reddit answers with your username.
+  Signed out, the same request carries only `loid`, a device identifier that
+  persists for over a year — and which Reddit can associate with your account
+  anyway if you have ever signed in on that browser.
+
+  Hacker News and Algolia receive URLs with no per-user identifier at all. This
+  is why Reddit is a checkbox rather than a default, and why the caveat sits
+  next to the checkbox rather than only here. Enabling *Never contact Reddit
+  directly* uses only the archive mirror, which receives no identifier and no
+  session.
 - **Reddit is read-only.** No voting, no replying, no submitting. Nothing is ever
   posted to Reddit on your behalf.
 - **It stores data locally** through `GM.getValue` / `GM.setValue` — settings,
