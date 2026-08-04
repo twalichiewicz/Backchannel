@@ -16,7 +16,7 @@ Your installed version is shown at the bottom of the settings panel.
 ## Reporting a vulnerability
 
 Please report privately rather than opening a public issue, using
-[GitHub's private vulnerability reporting](https://github.com/twalichiewicz/HNewhere/security/advisories/new)
+[GitHub's private vulnerability reporting](https://github.com/twalichiewicz/Backchannel/security/advisories/new)
 on this repository.
 
 Include what you need to reproduce it: the page or page type, your browser and
