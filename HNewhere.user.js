@@ -9395,6 +9395,9 @@ ${settingsPanelHTML()}
 		// it. It carries the only way out to the discussion though, so that link
 		// moves to the meta row rather than disappearing with it.
 		const showTitle = options.showTitle !== false;
+		// Separate from `actions`, which is about voting. A source can allow one and
+		// not the other, and the front-page rows pass neither.
+		const showComposer = options.compose === true;
 		const storyAuthor = story.author ?? story.by;
 		const storyCreatedAt = story.createdAt ?? story.time;
 		const storyCommentCount = story.commentCount ?? story.descendants ?? 0;
@@ -9452,7 +9455,14 @@ ${settingsPanelHTML()}
 	`
 			: ""
 	}
-	${composerHTML({ label: "add comment", placeholder: "Add a comment…" })}
+	${
+		// A box that cannot send is worse than no box: it invites the reader to
+		// write something and then has nowhere to put it. Reddit ships read-only,
+		// so the composer belongs to sources that can actually reply.
+		showComposer
+			? composerHTML({ label: "add comment", placeholder: "Add a comment…" })
+			: ""
+	}
 	</td>
 	</tr>
 	</tbody>
@@ -10363,9 +10373,15 @@ ${settingsPanelHTML()}
        	<div class="text">
         		${sanitizeHTML(comment.bodyHTML) || ""}
        	</div>
-       	<div class="reply-composer collapsed">
+       	${
+					// Collapsed, so it was invisible either way -- but a reply box with
+					// no reply link to open it is markup that can never be reached.
+					capabilities.reply
+						? `<div class="reply-composer collapsed">
        	${composerHTML({ label: "reply", placeholder: "Reply…" })}
-       	</div>
+       	</div>`
+						: ""
+				}
        	<div class="children"></div>
       </div>
       </div>
@@ -10669,12 +10685,14 @@ ${settingsPanelHTML()}
 
 		for (const story of stories) {
 			const canVote = Boolean(getSource(story.source)?.capabilities.vote);
+			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
 			// Shown only where it says something the page header does not. Two
 			// submitters can title the same link differently, and that is worth
 			// seeing; the usual case, where they match, was two identical headings
 			// stacked on top of each other.
 			const block = renderStory(story, details, {
 				actions: canVote,
+				compose: canReply,
 				// Always with one discussion: the page header has stood down, so this
 				// title is the only one, and it belongs beside the arrow the way HN
 				// sets it. With several the header names the page, so a submission
