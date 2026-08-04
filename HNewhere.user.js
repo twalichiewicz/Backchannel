@@ -4115,6 +4115,15 @@ ${
 			return;
 		}
 
+		// Nowhere to go: no front page, because the source that has one is switched
+		// off, and nothing waiting in the queue. The wordmark is hidden in that
+		// state, so this catches the gap before the first refresh has settled it --
+		// frontPageAvailable starts out optimistic, and a press landing in that gap
+		// opened browse onto a tab that was not there and bounced straight back out.
+		if (on && !frontPageAvailable && !queueHasItems) {
+			return;
+		}
+
 		if (on && comments) {
 			discussionScrollTop = comments.scrollTop;
 		}
@@ -4384,18 +4393,28 @@ ${
 		// to offer does not.
 		tab.hidden = !queueHasItems;
 
-		// Emptied while it was the thing on screen. The tab it was under has just
-		// gone, so staying would leave the reader on a list with nothing in it
-		// beneath a tab that is no longer there -- and the front page is the only
-		// other place to be. Safe from looping: renderBrowseView sets the tab before
-		// it reaches this, so the pass it starts cannot come back through here.
-		if (!queueHasItems && browseTab === "queue" && sidebarUI) {
-			renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
-		}
-
 		// Reads the queue, so the wordmark's own availability is settled here where
 		// the answer is already known rather than by loading it a second time.
+		// Before the fallback below, not after: that fallback asks whether there is
+		// a front page to fall back to, and this is what answers it.
 		await refreshBrowseAffordances(root);
+
+		// Emptied while it was the thing on screen. The tab it was under has just
+		// gone, so staying would leave the reader on a list with nothing in it
+		// beneath a tab that is no longer there. Safe from looping: renderBrowseView
+		// sets the tab before it reaches this, so the pass it starts cannot come
+		// back through here.
+		if (!queueHasItems && browseTab === "queue" && sidebarUI) {
+			if (frontPageAvailable) {
+				renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+			} else {
+				// The front page used to be "the only other place to be", which was
+				// true while Hacker News was the only source. Switched off, there is
+				// no front page to land on, and sending the reader to that tab was
+				// what made pressing the wordmark open browse and snap shut again.
+				setBrowseMode(sidebarUI, false);
+			}
+		}
 	}
 
 	// Kept across a round trip to the discussion, the way the discussion's own
