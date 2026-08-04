@@ -9316,6 +9316,11 @@ ${settingsPanelHTML()}
 		// it. It carries the only way out to the discussion though, so that link
 		// moves to the meta row rather than disappearing with it.
 		const showTitle = options.showTitle !== false;
+		// Dropped when the page header above already states it. With one discussion
+		// the header's total is this submission's own count, so the two lines were
+		// the same number twice, two lines apart. With several the header totals
+		// them and this is the breakdown the strip exists to reveal.
+		const showCommentCount = options.showCommentCount !== false;
 		const storyAuthor = story.author ?? story.by;
 		const storyCreatedAt = story.createdAt ?? story.time;
 		const storyCommentCount = story.commentCount ?? story.descendants ?? 0;
@@ -9361,8 +9366,12 @@ ${settingsPanelHTML()}
 			: `| <a class="story-open-link" target="_blank" rel="noopener noreferrer"
 	href="${escapeHTML(hnURL)}">open on ${escapeHTML(story.label || "the site")}</a>`
 	}
-	|
-	${storyCommentCount} comments
+	${
+		showCommentCount
+			? `|
+	${storyCommentCount} comments`
+			: ""
+	}
 	</div>
 	${
 		storyBodyHTML
@@ -10590,6 +10599,7 @@ ${settingsPanelHTML()}
 			const block = renderStory(story, details, {
 				actions: canVote,
 				showTitle: story.title !== pageTitle,
+				showCommentCount: stories.length > 1,
 			});
 
 			if (block) {
