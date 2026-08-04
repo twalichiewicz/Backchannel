@@ -6,9 +6,9 @@
 A userscript that tells you what everyone's talking about.  
 ```
 
-<a href="https://trendshift.io/repositories/95983?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-95983" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/95983/daily?language=JavaScript" alt="twalichiewicz%2FHNewhere | Trendshift" width="250" height="55"/></a>
+<a href="https://trendshift.io/repositories/95983?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-95983" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/95983/daily?language=JavaScript" alt="twalichiewicz%2FBackchannel | Trendshift" width="250" height="55"/></a>
                                                
-<img width="1161" height="753" alt="A screenshot of Safari on macOS opened to https://john.fun/elevators, with the HNewhere side bar open viewing the comments. The settings dropdown in the sidebar is also open, showing which settings the user currently has enabled." src="https://github.com/user-attachments/assets/8f56269d-a707-4107-9e17-8d1c36e37daa" />
+<img width="1161" height="753" alt="A screenshot of Safari on macOS opened to https://john.fun/elevators, with the Backchannel side bar open viewing the comments. The settings dropdown in the sidebar is also open, showing which settings the user currently has enabled." src="https://github.com/user-attachments/assets/8f56269d-a707-4107-9e17-8d1c36e37daa" />
 
 ## What it does
 
@@ -39,9 +39,10 @@ Full detail, including a host-by-host table, in [SECURITY.md](SECURITY.md).
 ## Where did HNewhere go?
 
 Nothing went anywhere. **HNewhere is now Backchannel**. Same project, same
-repository, same install URL, same settings. It was renamed in v1.6.0 when it
+history, same install URL, same settings. It was renamed in v1.6.0 when it
 stopped being about one site: it now reads Hacker News and/or Reddit, and each
-source is a checkbox you control.
+source is a checkbox you control. The repository has since been renamed to
+match, and links to the old one redirect.
 
 If you already have it installed it updates itself and renames in place. Your hidden sites, your reading queue, your collapsed threads and your
 preferences all carry over untouched.
@@ -53,7 +54,7 @@ preferences all carry over untouched.
    - [Violentmonkey](https://violentmonkey.github.io/)
    - [Userscripts (Safari)](https://apps.apple.com/us/app/userscripts/id1463298887)
 
-2. [Install Backchannel](https://raw.githubusercontent.com/twalichiewicz/HNewhere/refs/heads/main/HNewhere.user.js)
+2. [Install Backchannel](https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js)
    - *Upgrading from HNewhere?* Let it auto-update and it renames itself. If you
      install from this link instead, delete the old **HNewhere** entry afterwards —
      managers match a manual install by name, so the rename arrives as a second
