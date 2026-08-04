@@ -7324,7 +7324,7 @@ ${
 </div>
 <label class="settings-option">
 <input id="setting-hide-without-discussion" data-setting="hideWithoutDiscussion" type="checkbox">
-<span>Only show the HN button when a discussion exists</span>
+<span>Only show the button when a discussion exists</span>
 </label>
 <div class="settings-suboptions" data-suboptions-of="hideWithoutDiscussion">
 <label class="settings-option sub-option">
@@ -14363,7 +14363,7 @@ title="Show only this discussion">
 				for (const rect of rects) {
 					const node = createHighlightRect(rect, {
 						interactive: true,
-						title: "Show linked Hacker News comments",
+						title: "Show the comments quoting this",
 						onActivate: () => {
 							openFocusedDiscussion(group.key).catch(console.error);
 						},
@@ -14889,7 +14889,7 @@ title="Show only this discussion">
 			loadRememberedItemActions(),
 		]);
 
-		// "Only show the HN button when a discussion exists" was chosen before there
+		// "Only show the button when a discussion exists" was chosen before there
 		// was a queue to reach through that button, and taken literally it now hides
 		// the only way to something the reader put there themselves. Its sub-option
 		// says so: hide it, except when something is waiting.
