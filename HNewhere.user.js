@@ -4068,12 +4068,20 @@ ${
 			return;
 		}
 
-		// The outgoing view fades, then the swap happens behind it, then the
-		// incoming one fades up. The class has to survive one frame past the swap:
-		// the view arriving was display:none until that moment, and a browser given
-		// its display and its opacity in the same frame settles both at once with
-		// nothing to transition -- the same reason the panel's own fade waits a
-		// frame.
+		crossFadeCommentsView(comments, swap);
+	}
+
+	// The outgoing view fades, the swap happens behind it, and the incoming one
+	// fades up. The class has to survive one frame past the swap: the view arriving
+	// was display:none until that moment, and a browser given its display and its
+	// opacity in the same frame settles both at once with nothing to transition --
+	// the same reason the panel's own fade waits a frame.
+	//
+	// `swap` may be async and slow. It is not awaited on purpose: the fade covers
+	// the moment the old content leaves, and anything that streams in afterwards
+	// arrives during the fade up, which is what makes a rebuilt thread read as
+	// regenerating rather than as the panel blinking.
+	function crossFadeCommentsView(comments, swap) {
 		if (comments._hnewhereSwapTimer) {
 			clearTimeout(comments._hnewhereSwapTimer);
 		}
@@ -4785,10 +4793,6 @@ ${
 	// a button must not do -- so the press is remembered and honoured the moment
 	// there is an answer to honour it with.
 	let openRequestedWhileChecking = false;
-
-	function requestOpenOnNextPass() {
-		openRequestedWhileChecking = true;
-	}
 
 	function takeRequestedOpen() {
 		const requested = openRequestedWhileChecking;
@@ -14286,62 +14290,84 @@ title="Show only this discussion">
 		teardownSurfaces();
 	}
 
-	// Changing which sources are on changes what this page is, so the whole page
-	// decision is re-run rather than the sidebar patched: a source switched on has
-	// never been looked up here, and one switched off may be on screen.
+	// Changing which sources are on changes what the thread is, not what the page
+	// is. With the panel open it is re-rendered in place behind the same cross-fade
+	// the front-page swap uses: the comments go, the new ones arrive as they load.
 	//
-	// runPagePass, not init. init installs the soft-navigation watcher, which wraps
-	// history.pushState, adds a popstate listener and starts an interval -- none of
-	// them guarded. Calling it again per toggle stacked a new poller every time,
-	// and several of them racing to tear down the same sidebar is what made this
-	// look like a crash. That split is why runPagePass exists.
+	// It used to tear the panel down and re-run the page pass, which was wrong
+	// twice over. The reader lost their place mid-checkbox, and the pass could take
+	// a branch that produced neither a sidebar nor a button -- so turning a source
+	// off could leave the page with nothing on it at all until a reload.
 	//
 	// Same contract as teardownForBlockedSite: persist before calling.
 	async function refreshForSourceChange() {
-		// The panel was open, and the reader opened it. Re-running the pass would
-		// otherwise apply the automatic rules from scratch and leave them looking at
-		// a collapsed button, having lost their place for ticking a checkbox.
-		const wasOpen = isSidebarVisible();
-		const settingsWasOpen = Boolean(
-			sidebarUI?.shadow
-				?.querySelector("#settings-panel")
-				?.classList.contains("hidden") === false,
-		);
-		const pane = sidebarUI?.shadow
-			?.querySelector(".settings-panes.is-secondary .settings-pane-secondary.is-active")
-			?.dataset.pane;
-
-		teardownSurfaces();
-
-		if (wasOpen) {
-			requestOpenOnNextPass();
-		}
-
-		await runPagePass();
-
-		if (wasOpen && settingsWasOpen) {
-			restoreSettingsPane(pane);
-		}
-	}
-
-	// Puts the reader back where they were standing: the settings panel, on the
-	// pane they were using. Toggling a second source otherwise meant walking back
-	// in through the gear and the Sources entry every time.
-	function restoreSettingsPane(pane) {
-		const shadow = sidebarUI?.shadow;
-
-		if (!shadow) {
+		if (isSidebarVisible() && sidebarUI) {
+			await refreshDiscussionsInPlace(sidebarUI);
 			return;
 		}
 
-		shadow.querySelector("#settings-toggle")?.click();
-
-		if (pane) {
-			shadow
-				.querySelector(`.settings-link-button[data-pane="${CSS.escape(pane)}"]`)
-				?.click();
-		}
+		// No panel to preserve -- the settings panel in the submit popover can reach
+		// here too -- so the whole page decision is re-run to update the button.
+		//
+		// runPagePass, not init: init installs the soft-navigation watcher, which
+		// wraps history.pushState, adds a popstate listener and starts an interval,
+		// none of them guarded. Calling it per toggle stacked a poller every time.
+		teardownSurfaces();
+		await runPagePass();
 	}
+
+	// Rebuilds the thread inside the panel the reader is already looking at.
+	async function refreshDiscussionsInPlace(ui) {
+		const generation = ++sidebarGeneration;
+		const comments = ui.shadow?.querySelector("#comments");
+		const settings = await loadSettings();
+
+		const render = () => {
+			if (generation !== sidebarGeneration) {
+				return;
+			}
+
+			(async () => {
+				// Nothing enabled is a state, not an error: the panel offers the
+				// picker rather than emptying and leaving the reader to guess.
+				if (!enabledSourceIds(settings, registeredSourceIds()).length) {
+					sidebarHasDiscussion = false;
+					renderSourcePicker(ui);
+					return;
+				}
+
+				setSidebarStage(ui, "discussion");
+
+				const discussions = await discoverAll(location.href, settings);
+
+				if (generation !== sidebarGeneration) {
+					return;
+				}
+
+				if (!discussions.length) {
+					sidebarHasDiscussion = false;
+					renderNoDiscussion(ui);
+					return;
+				}
+
+				sidebarHasDiscussion = true;
+				setSidebarStage(ui, "comments");
+				await renderDiscussions(discussions, ui);
+
+				if (generation === sidebarGeneration) {
+					await refreshArticleAnnotations();
+				}
+			})().catch(console.error);
+		};
+
+		if (!comments || prefersReducedMotion()) {
+			render();
+			return;
+		}
+
+		crossFadeCommentsView(comments, render);
+	}
+
 
 	// Shared by both headers. Persists before tearing down, because the teardown
 	// destroys the surface this was clicked in.
