@@ -7489,9 +7489,6 @@ header button svg {
        wider -- the controls column is the constraint, and "Squircle" truncates
        before it. */
 	flex:0 0 88px;
-	/* The accent picker sits in the corner of the blueprint rather than in the
-		flow, so the drawing keeps its centred stage. */
-	position:relative;
 	display:flex;
 	flex-direction:column;
 	align-items:center;
@@ -7509,59 +7506,6 @@ header button svg {
 }
 
 /* Fixed so the panel does not jump as the button grows through its range. */
-/* Top left of the blueprint, where a drawing puts its colour key. Sized off the
-	swatch so the whole control is one pill that grows sideways rather than a
-	button with a field appearing beside it. */
-.accent-picker {
-	position:absolute;
-	top:8px;
-	left:8px;
-	z-index:1;
-	display:flex;
-	align-items:center;
-	height:20px;
-	padding:0;
-	border:1px solid var(--blueprint-line);
-	border-radius:10px;
-	background:var(--surface);
-	overflow:hidden;
-}
-
-.accent-swatch {
-	flex:0 0 auto;
-	width:18px;
-	height:18px;
-	margin:0;
-	padding:0;
-	border:0;
-	border-radius:9px;
-	background:var(--accent);
-	font-size:0;
-	color:transparent;
-	cursor:pointer;
-}
-
-/* Collapsed to nothing and opened by width, so the pill grows left to right out
-	of the swatch instead of the field popping in at full size. */
-.accent-input {
-	width:0;
-	min-width:0;
-	height:18px;
-	padding:0;
-	border:0;
-	background:transparent;
-	color:var(--surface-text);
-	font:11px/18px ui-monospace, Menlo, monospace;
-	opacity:0;
-	transition:width .18s ease, opacity .18s ease, padding .18s ease;
-}
-
-.accent-picker.is-open .accent-input {
-	width:70px;
-	padding:0 6px 0 4px;
-	opacity:1;
-}
-
 .button-preview-stage {
 	height:68px;
 	display:flex;
@@ -7609,7 +7553,9 @@ header button svg {
 	position:absolute;
 	top:calc(50% - 5px);
 	height:5px;
-	width:calc(50% - 14px);
+	/* Clears the caption, which is now a seven-character hex rather than the two
+		digits the ticks were spaced for. */
+	width:calc(50% - 27px);
 	border-bottom:1px solid var(--blueprint-ink);
 }
 
@@ -7623,6 +7569,11 @@ header button svg {
 	border-right:1px solid var(--blueprint-ink);
 }
 
+/* The measure's caption, and the accent field. No box of its own: on a blueprint
+	the dimension is already written into the drawing, so it reads as a value that
+	happens to be typeable rather than as a form control dropped on top. The
+	background is the blueprint's, which is what breaks the rule for the text to
+	sit in. */
 .button-preview-dim {
 	position:relative;
 	padding:0 4px;
@@ -7630,6 +7581,13 @@ header button svg {
 	color:var(--blueprint-ink);
 	font-family:Menlo, Consolas, monospace;
 	font-size:9px;
+	white-space:nowrap;
+	cursor:text;
+	outline:0;
+}
+
+.button-preview-dim:focus {
+	color:var(--accent);
 }
 
 /* A text link at the foot of the controls column rather than a button under the
@@ -7824,20 +7782,16 @@ Highlights the passages commenters quote, so you can jump between the article an
 <button id="settings-reset-button" class="settings-reset" type="button">Reset</button>
 </div>
 <div class="button-preview">
-<div class="accent-picker" id="accent-picker">
-<button id="accent-swatch" class="accent-swatch" type="button" aria-expanded="false"
-title="Set the accent colour">Colour</button>
-<input id="accent-input" class="accent-input" type="text" spellcheck="false"
-autocomplete="off" maxlength="7" aria-label="Accent colour as a hex value"
-placeholder="#237140" tabindex="-1">
-</div>
 <div class="button-preview-stage">
 <div id="button-preview-shape" class="button-preview-shape"
 contenteditable="plaintext-only" spellcheck="false"
 role="textbox" aria-label="Button label, one or two characters"
 title="Type one or two characters">BC</div>
 </div>
-<div class="button-preview-rule"><span id="button-preview-dim" class="button-preview-dim">44</span></div>
+<div class="button-preview-rule"><span id="button-preview-dim" class="button-preview-dim"
+contenteditable="plaintext-only" spellcheck="false" role="textbox"
+aria-label="Accent colour as a hex value"
+title="Type a hex colour">#237140</span></div>
 </div>
 </div>
 </div>
@@ -8030,8 +7984,13 @@ ${["read", "vote", "reply", "submit"]
 				sizeInput.value = String(size);
 			}
 
-			if (previewDim) {
-				previewDim.textContent = String(size);
+			// The caption under the measure is the accent, not the size: the size is
+			// already in the stepper beside it, and stating it twice cost the one
+			// place a colour could live. Left alone while focused for the same
+			// reason the size field is.
+			if (previewDim && shadow.activeElement !== previewDim) {
+				previewDim.textContent =
+					settings.accentColor ?? activeAccent(detectDarkMode()).accent;
 			}
 
 			if (previewShape) {
@@ -8252,75 +8211,64 @@ ${["read", "vote", "reply", "submit"]
 			});
 		}
 
-		const accentPicker = shadow.querySelector("#accent-picker");
-		const accentSwatch = shadow.querySelector("#accent-swatch");
-		const accentInput = shadow.querySelector("#accent-input");
-
-		if (accentPicker && accentSwatch && accentInput) {
-			const closePicker = () => {
-				accentPicker.classList.remove("is-open");
-				accentSwatch.setAttribute("aria-expanded", "false");
-				accentInput.tabIndex = -1;
-			};
-
-			// Committed when the field is left, the same way the mark is: a hex is
+		if (previewDim) {
+			// Committed when the caption is left, the same way the mark is: a hex is
 			// only meaningful once it is whole, and repainting every surface on the
-			// way through "#2", "#23", "#237" would be four wrong colours per typed
-			// one.
+			// way through "#2", "#23", "#237" would be four wrong colours per one
+			// the reader meant.
 			const commitAccent = async () => {
-				const typed = accentInput.value.trim();
-				// Empty means "back to the built-in one" rather than "invalid", which
-				// is the only way to undo a colour without knowing what it replaced.
-				const next = typed ? parseHexColor(typed) : null;
+				const typed = previewDim.textContent.trim();
+				// Emptying it means "back to the built-in one" rather than "invalid",
+				// which is the only way to undo a colour without having to know what
+				// it replaced.
+				const parsed = typed ? parseHexColor(typed) : null;
 
-				closePicker();
-
-				if (typed && !next) {
-					// Unparseable: say so by snapping back to what is actually in
-					// force, rather than saving something the panel cannot paint.
-					accentInput.value = (await loadSettings()).accentColor ?? "";
+				if (typed && !parsed) {
+					// Unparseable: snap back to what is actually painting rather than
+					// storing something the panel cannot use.
+					applySettingsPanelState(await loadSettings());
 					return;
 				}
 
-				const value = next ? rgbToHex(next) : null;
+				const value = parsed ? rgbToHex(parsed) : null;
 
-				accentInput.value = value ?? "";
 				applySettingsPanelState(await saveSettings({ accentColor: value }));
 				await refreshAccentOverride();
 			};
 
-			accentSwatch.onclick = async () => {
-				if (accentPicker.classList.contains("is-open")) {
-					accentInput.blur();
-					return;
-				}
-
-				accentInput.value = (await loadSettings()).accentColor ?? "";
-				accentPicker.classList.add("is-open");
-				accentSwatch.setAttribute("aria-expanded", "true");
-				accentInput.tabIndex = 0;
-				accentInput.focus();
-				accentInput.select();
-			};
-
-			accentInput.addEventListener("keydown", (event) => {
+			previewDim.addEventListener("keydown", (event) => {
 				if (event.key === "Enter") {
 					event.preventDefault();
-					accentInput.blur();
+					previewDim.blur();
 					return;
 				}
 
 				// Escape abandons rather than commits, so a half-typed value does not
-				// become the accent just because the reader changed their mind.
+				// become the accent because the reader changed their mind.
 				if (event.key === "Escape") {
 					event.preventDefault();
-					accentInput.value = "";
-					closePicker();
+					loadSettings()
+						.then((settings) => {
+							applySettingsPanelState(settings);
+							previewDim.blur();
+						})
+						.catch(console.error);
 				}
 			});
 
-			accentInput.addEventListener("blur", () => {
+			previewDim.addEventListener("blur", () => {
 				commitAccent().catch(console.error);
+			});
+
+			// Paste arrives as whatever was on the clipboard. Taken as plain text so
+			// a copied swatch cannot bring markup into a caption.
+			previewDim.addEventListener("paste", (event) => {
+				event.preventDefault();
+				previewDim.textContent = (
+					event.clipboardData?.getData("text/plain") ?? ""
+				)
+					.trim()
+					.slice(0, 7);
 			});
 		}
 
