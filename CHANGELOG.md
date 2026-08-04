@@ -117,13 +117,19 @@ use to detect updates, so every release bumps it.
   and then has nowhere to put it. The composer now follows the source's reply
   capability, and the reply box under each comment goes the same way — its link
   was already hidden, so the box could never be opened anyway.
-- **The same link submitted twice is one discussion, not two.** A URL gets
-  posted to Hacker News more than once, and the second is usually a repost
-  nobody replied to. The header read "389 comments across 2 discussions" over
-  two pills both saying HN, one with 103 comments and one with 1. Discussions
-  that would look identical to you now collapse to the one with the
-  conversation. Subreddits are not identical: r/programming and r/webdev are two
-  rooms and both survive, while two posts in the same subreddit do not.
+- **A resubmitted link leads with the discussion happening now.** Instances of a
+  story were ordered by how many comments each had, so an article posted again
+  this morning opened on a thread from December 2024 — that one had 49 comments
+  against today's 11 — and the conversation you could still join sat behind it.
+  They are ordered by when they were posted now, and size only settles a tie.
+  Nothing is hidden either way, so the older thread is one pill away whatever
+  its size.
+- **Repeated submissions are told apart by date.** A link posted to the same
+  site twice gave two pills both reading "HN", which named neither of them.
+  They carry the month they were posted where they would otherwise read the
+  same — `HN · Aug 2026`, `HN · Dec 2024`, `HN · Nov 2024`. A lone discussion
+  keeps its bare label, and subreddits already differ so they are left alone
+  unless one carries two posts.
 - **The pills count comments, not the roots they had loaded.** They disagreed
   with everything around them — the header totalled 325 while the pills summed
   to 100, and filtering to a pill marked 26 opened a submission line reading
