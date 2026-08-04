@@ -4120,9 +4120,7 @@ ${
 
 		const swap = () => {
 			panel.classList.toggle("browsing", on);
-			toggle.title = on
-				? "Back to this page's discussion"
-				: "Hacker News and your queue";
+			toggle.title = on ? "Back to this page's discussion" : browseLabel();
 
 			if (comments) {
 				// Assigning scrollTop forces the layout it depends on, so the list is
@@ -4291,6 +4289,15 @@ ${
 	// synchronously and cannot wait on a settings read to do it.
 	let frontPageAvailable = true;
 
+	// What is actually behind the wordmark, in one place because three of them set
+	// this title -- the header template, setBrowseMode on every toggle, and
+	// refreshBrowseAffordances when the sources change. Kept as two literals, the
+	// last writer won, and a wordmark went on naming Hacker News after it had been
+	// switched off and its front page tab had already gone.
+	function browseLabel() {
+		return frontPageAvailable ? "Hacker News and your queue" : "Your queue";
+	}
+
 	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
 	// rather than the ui object because a browse row only knows the tree it is in.
 	// The front page behind the wordmark is Hacker News' own, parsed from its
@@ -4318,6 +4325,12 @@ ${
 
 		if (wordmark) {
 			wordmark.hidden = !frontPageAvailable && !queueHasItems;
+
+			// Only while the panel is showing this page's discussion. In browse mode
+			// the title is the way back out, and setBrowseMode owns it.
+			if (!isBrowsing({ shadow: root })) {
+				wordmark.title = browseLabel();
+			}
 		}
 
 		// Standing on a page that has just become unavailable. The queue is the only
@@ -7263,7 +7276,7 @@ header button svg {
 ${
 	browse
 		? `<button id="browse-toggle" class="header-wordmark" type="button"
-title="Hacker News and your queue"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
+title="${escapeHTML(browseLabel())}"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
 class="wordmark-root"><b>Back</b>channel</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
 class="wordmark-tail"><span class="wordmark-sep">/</span>Read more</span></button>`
 		: `<span><b>Back</b>channel</span>`
