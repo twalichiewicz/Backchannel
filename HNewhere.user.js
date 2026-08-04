@@ -1192,49 +1192,56 @@
 		};
 	}
 
-	// Ordered by how much discussion there is to read, not by recency. The same
-	// article gets resubmitted, and the newest submission is routinely a 0-comment
-	// repost while the thread worth reading is days old -- putting the empty one
-	// first buries the only discussion there is. Recency is only the tie-break.
+	// Newest submission first. Every instance of a story is shown, so ordering by
+	// recency cannot bury anything -- the older thread is one pill away, whatever
+	// its size. Ordering by comment count instead did bury things: a link
+	// resubmitted today led with a discussion from 2024 because that one had more
+	// comments, while the conversation happening now sat behind it.
+	//
+	// Size decides ties, so two submissions from the same moment put the one with
+	// more to read first.
 	function compareStoriesByDiscussion(a, b) {
 		const left = discussionRank(a);
 		const right = discussionRank(b);
 
 		return (
+			right.time - left.time ||
 			right.comments - left.comments ||
-			right.points - left.points ||
-			right.time - left.time
+			right.points - left.points
 		);
 	}
 
-	// The same link gets submitted to Hacker News more than once, and the second
-	// one is routinely a repost nobody replied to. Two discussions both labelled
-	// "HN" -- one with 103 comments, one with 1 -- are not two places the
-	// conversation is happening; they are the same place listed twice, under two
-	// pills that cannot be told apart.
+	// Every instance of a story is shown, so when a link has been submitted twice
+	// the reader gets two pills -- and two pills both reading "HN" name neither of
+	// them. The date is what tells them apart, and it is added only where it is
+	// needed: a lone Hacker News discussion stays "HN", and subreddits are already
+	// distinct so they are left alone unless the same one carries two posts.
 	//
-	// Keyed on source *and* label rather than source alone, because a subreddit is
-	// a label: r/programming and r/webdev are genuinely two rooms and both survive.
-	// Two posts in the same subreddit do not. The rule is what the reader can
-	// distinguish -- if two entries would present identically, only the one with
-	// the conversation is worth keeping.
-	function collapseIndistinguishable(discussions) {
-		const best = new Map();
+	// Month and year rather than a full date. The pill is small, and two
+	// submissions of one link in the same month is not a case worth widening every
+	// label for.
+	function disambiguateLabels(discussions) {
+		const counts = new Map();
 
 		for (const discussion of discussions) {
-			const key = discussion.source + " " + (discussion.label ?? "");
-			const held = best.get(key);
-
-			if (!held || compareStoriesByDiscussion(discussion, held) < 0) {
-				best.set(key, discussion);
-			}
+			counts.set(discussion.label, (counts.get(discussion.label) ?? 0) + 1);
 		}
 
-		// Input order, not map order: discoverAll has already sorted these, and the
-		// source strip reads left to right off this list.
-		const kept = new Set(best.values());
+		return discussions.map((discussion) => {
+			if ((counts.get(discussion.label) ?? 0) < 2 || !discussion.createdAt) {
+				return discussion;
+			}
 
-		return discussions.filter((discussion) => kept.has(discussion));
+			const when = new Date(discussion.createdAt * 1000);
+
+			return {
+				...discussion,
+				label: `${discussion.label} · ${when.toLocaleString(undefined, {
+					month: "short",
+					year: "numeric",
+				})}`,
+			};
+		});
 	}
 
 	// The shared shape every source is read through. Written as two mappers rather
@@ -11493,7 +11500,7 @@ title="Show only this discussion">
 			enabledSourceIds(settings, registeredSourceIds()),
 		);
 
-		return collapseIndistinguishable(
+		return disambiguateLabels(
 			resolved.filter((discussion) => enabled.has(discussion.source)),
 		);
 	}
