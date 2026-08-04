@@ -6618,6 +6618,14 @@ header button svg {
 	display:none;
 }
 
+/* Nothing left to show: no title, no count, no strip. Kept in the tree because
+	the filter banner mounts against it, but it must not draw a rule across the
+	panel above a submission that is now the heading. */
+.page-header-quiet {
+	padding:0;
+	border-bottom:0;
+}
+
 /* The aggregate leads and this is what a reader reaches for, so it sits below the
 	count at metadata weight rather than above it as a masthead. */
 /* The same slide the settings sub-options use, down to the durations, because it
@@ -10667,7 +10675,11 @@ ${settingsPanelHTML()}
 			// stacked on top of each other.
 			const block = renderStory(story, details, {
 				actions: canVote,
-				showTitle: story.title !== pageTitle,
+				// Always with one discussion: the page header has stood down, so this
+				// title is the only one, and it belongs beside the arrow the way HN
+				// sets it. With several the header names the page, so a submission
+				// only repeats itself when its own title differs.
+				showTitle: stories.length < 2 || story.title !== pageTitle,
 			});
 
 			if (block) {
@@ -10776,9 +10788,16 @@ ${settingsPanelHTML()}
 
 		const wrapper = document.createElement("div");
 
-		wrapper.className = "page-header";
+		// With one discussion the header steps aside entirely and the submission
+		// below renders the way a Hacker News story does: the arrow, the title and
+		// the subline as one unit. Holding the title up here instead left the arrow
+		// pointing at an empty cell, with our own heading and a rule above it --
+		// which is what stopped it reading like HN.
+		const single = stories.length < 2;
+
+		wrapper.className = single ? "page-header page-header-quiet" : "page-header";
 		wrapper.innerHTML = `
-<div class="page-header-title">${escapeHTML(stories[0]?.title || "")}</div>
+<div class="page-header-title">${single ? "" : escapeHTML(stories[0]?.title || "")}</div>
 <div class="page-header-meta">${
 	// With one discussion there is nothing to break down and nothing to switch
 	// between, so the header is the title and nothing else: the submission's own
