@@ -8607,6 +8607,13 @@ ${CHROME_CSS}
 	margin-top:3px;
 }
 
+/* Sitting against the byline rather than the title, where the 3px that centres it
+	against a 13px title drops it too low. The arrow is 10px on a 14px line, so 2px
+	puts it on the line's centre rather than its top. */
+.story-votelinks-inline .vote-controls {
+	margin-top:2px;
+}
+
 .story-title-cell,
 .story-body-cell {
 	padding-left:2px;
@@ -9450,34 +9457,41 @@ ${settingsPanelHTML()}
 		const storyCommentCount = story.commentCount ?? story.descendants ?? 0;
 		const storyBodyHTML = story.bodyHTML ?? story.text;
 
+		// Lifted out because it goes in one of two cells: beside the title when
+		// there is one, and beside the byline when there is not.
+		const voteControlsHTML = `<span class="story-vote-controls vote-controls hidden"
+	data-hn-vote-story-id="${escapeHTML(storyID)}"
+	data-hn-vote-item-id="${escapeHTML(storyID)}"></span>`;
+
 		const wrapper = document.createElement("div");
 		wrapper.innerHTML = `
 
 	<div class="story">
 	<table class="story-table" role="presentation">
 	<tbody>
-	<tr>
+	${
+		// Without a title there is no row for the arrow to sit beside, and it was
+		// left in one of its own pointing at an empty cell. It moves down to the
+		// byline instead, which is then the first line there is.
+		showTitle
+			? `<tr>
 	<td class="story-votelinks">
-	<span class="story-vote-controls vote-controls hidden"
-	data-hn-vote-story-id="${escapeHTML(storyID)}"
-	data-hn-vote-item-id="${escapeHTML(storyID)}"></span>
+	${voteControlsHTML}
 	</td>
 	<td class="story-title-cell">
-	${
-		showTitle
-			? `<div class="story-title">
+	<div class="story-title">
 	<a target="_blank" rel="noopener noreferrer"
 	href="${escapeHTML(hnURL)}"
 	title="Open this discussion where it lives">
 	${escapeHTML(story.title)}
 	</a>
-	</div>`
+	</div>
+	</td>
+	</tr>`
 			: ""
 	}
-	</td>
-	</tr>
 	<tr>
-	<td class="story-votespacer"></td>
+	<td class="${showTitle ? "story-votespacer" : "story-votelinks story-votelinks-inline"}">${showTitle ? "" : voteControlsHTML}</td>
 	<td class="story-body-cell">
 	<div class="story-meta">
 	<span class="story-score" data-story-score-id="${escapeHTML(storyID)}" data-story-score="${escapeHTML(String(story.score || 0))}">${story.score || 0}</span> points by
