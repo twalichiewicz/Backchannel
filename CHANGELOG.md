@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
-## [1.6.0] — 2026-08-03
+## [1.6.0] — 2026-08-04
 
 ### Changed
 
@@ -53,6 +53,26 @@ use to detect updates, so every release bumps it.
   preview in the settings panel is now the field: click it and type one or two
   characters. It is the preview precisely so the mark is edited on the thing it
   applies to, at the size and colour it will actually be.
+- **The accent colour is yours.** The measure under the button in Settings used
+  to caption the button's width, which the stepper beside it already states.
+  It carries the accent's hex instead, and you can type over it: leaving the
+  field applies it, Enter commits, Escape abandons, and emptying it goes back to
+  the built-in colour.
+
+  The panel keeps its accent as a pair — one value for a light background and a
+  lifted one for a dark background, where the light value reads muddy — so a
+  colour you type has to become a pair too. Each half is walked until it clears
+  4.5:1 against the panel it sits on, which is what body text is asked for. How
+  far it has to move depends entirely on what you type: the built-in green needs
+  a sixteen-point lift to be legible on the dark panel, a pale green needs none,
+  and yellow has to come down to be legible on the light one. The header behind
+  it goes the other way and is held to the same bar behind white.
+
+  The mark on the button follows too, black or white depending on what it is
+  sitting on. That was worth fixing regardless: the dark theme's accent is
+  lifted, which makes it a light colour, and white on it was 2.9:1 — a mark you
+  had to look for.
+
 - **A single blended thread.** Top-level comments from every discussion are
   interleaved by where each one ranks within its own discussion, so a big thread
   contributes proportionally more without an upvote ever being compared to a
@@ -84,13 +104,60 @@ use to detect updates, so every release bumps it.
   opening onto an empty list.
 - **A single discussion gets a single heading.** The page header, a source pill
   and the submission's own line were three headings saying one thing. With one
-  discussion the count stands alone and the source strip does not appear.
+  discussion the page header steps aside entirely and the submission reads the
+  way a Hacker News story does: the arrow, the title and the subline as one
+  unit, count and all.
 - **A failed lookup is no longer cached as "no discussion".** `request()`
   resolves null on an error, a timeout or a bad response, so a moment offline
   stored an empty result for the full hour and left a page showing a grey button
   long after the connection came back.
+- **Reddit no longer offers a comment box.** Every Reddit submission carried
+  *Add a comment…* and a button to send it, on a source that ships read-only. A
+  box that cannot send is worse than no box: it invites you to write something
+  and then has nowhere to put it. The composer now follows the source's reply
+  capability, and the reply box under each comment goes the same way — its link
+  was already hidden, so the box could never be opened anyway.
+- **The same link submitted twice is one discussion, not two.** A URL gets
+  posted to Hacker News more than once, and the second is usually a repost
+  nobody replied to. The header read "389 comments across 2 discussions" over
+  two pills both saying HN, one with 103 comments and one with 1. Discussions
+  that would look identical to you now collapse to the one with the
+  conversation. Subreddits are not identical: r/programming and r/webdev are two
+  rooms and both survive, while two posts in the same subreddit do not.
+- **The pills count comments, not the roots they had loaded.** They disagreed
+  with everything around them — the header totalled 325 while the pills summed
+  to 100, and filtering to a pill marked 26 opened a submission line reading
+  "96 comments".
+- **The filter controls agree with the filter.** The source strip was updated by
+  its own press and nothing else, so filtering to a discussion, focusing a
+  comment inside it and then pressing *show all comments* cleared the filter
+  while leaving the pill lit for one that was no longer on.
+- **The upvote arrow sits beside the line it belongs to.** Where a submission's
+  title repeats the page header it is dropped, and the arrow was left in a row
+  of its own pointing at an empty cell. It moves down to the byline, which is
+  then the first line the submission has.
 
 ### Changed
+
+- **The accent is green.** `#237140`, in place of the indigo the rename first
+  landed on. The indigo said nothing about conversation.
+- **The front page tab says whose front page it is.** It read *front page*,
+  which was unambiguous while Hacker News was the only source. The queue beside
+  it stays unqualified, because it is not any source's.
+- **The discussion count is gone from under the wordmark.** It counted
+  submissions when the panel had no other way to say there were several. The
+  source strip names every one and carries its own count, so "7 discussions"
+  above it was a worse version of the row beneath.
+- **Filtering to a source no longer explains itself twice.** Pressing a pill lit
+  that pill and then said *Showing r/programming* underneath it with its own
+  *show all comments* — the same state and the same control, one line apart. The
+  banner stays for a quoted passage and a focused comment, which have no marker
+  of their own. The hatched divider that marks a change of subject appears above
+  the revealed submission instead, and the source label beside each comment goes
+  while the filter is on, since every comment on screen is from it.
+- **The Reddit note in Settings is shorter.** It said the source was read-only,
+  which the table directly beneath it shows in three columns, and that Reddit
+  can tie your browsing to your account, which restated the sentence before it.
 
 - **One sidebar, whatever the page turns up.** A single discussion used to get a
   submission header and several got a page header, so the panel looked like a
