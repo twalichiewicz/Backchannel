@@ -50,6 +50,8 @@
 // @connect      hacker-news.firebaseio.com
 // @connect      hn.algolia.com
 // @connect      news.ycombinator.com
+// @connect      www.reddit.com
+// @connect      arctic-shift.photon-reddit.com
 // @run-at       document-end
 // @noframes
 // ==/UserScript==
@@ -92,6 +94,98 @@
 		}
 	}
 
+	const SOURCE_KEY_MIGRATION = "HNewhere:migrated_source_keys";
+
+	// Must run after migrateStorage, not before: that one copies the v1.5.3 keys
+	// into the current namespace, and this one rewrites what is in the current
+	// namespace. Reversed, it would migrate an empty store and then have the old
+	// unprefixed values copied in on top of it.
+	async function migrateSourceKeys() {
+		if (await load(SOURCE_KEY_MIGRATION, false)) {
+			return;
+		}
+
+		try {
+			await save(
+				STORAGE.collapsed,
+				migrateCollapsedIds(await load(STORAGE.collapsed, [])),
+			);
+			await save(STORAGE.seen, migrateSeenTimes(await load(STORAGE.seen, {})));
+			await save(SOURCE_KEY_MIGRATION, 1);
+		} catch (e) {
+			console.error("HNewhere source key migration failed:", e);
+		}
+	}
+
+	const SOURCE_SEED_MIGRATION = "HNewhere:seeded_sources";
+
+	// Which keys prove a reader was here before this release.
+	//
+	// "HNewhere:migrated" leads, and only because seedSources runs *before*
+	// migrateStorage. Read at that moment it is exact: an upgrading reader has it
+	// from a previous session, and a first run has not reached the line that
+	// writes it. Read any later it is worthless, because migrateStorage sets it
+	// for brand new installs too -- which is why the order in init is load-bearing
+	// rather than tidy.
+	//
+	// The rest are a belt-and-braces list for a store that somehow has history
+	// without that flag. A reader who installed HNewhere and never once opened a
+	// sidebar would leave almost none of them, which is exactly the reader the
+	// flag catches and a hand-kept list would not.
+	const PRIOR_STORAGE_KEYS = [
+		"HNewhere:migrated",
+		"hn_width",
+		"hn_button_position",
+		"hn_last",
+		"hn_collapsed_comments",
+		"hn_seen_comments",
+		"HNewhere:width",
+		"HNewhere:settings",
+		"HNewhere:sidebar_state",
+		"HNewhere:collapsed_comments",
+		"HNewhere:seen_comments",
+	];
+
+	async function hadPriorStorage() {
+		for (const key of PRIOR_STORAGE_KEYS) {
+			if ((await load(key, null)) !== null) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	// Runs before every other migration, because those write, and "has this reader
+	// been here before" is only answerable while the store is still untouched.
+	async function seedSources() {
+		if (await load(SOURCE_SEED_MIGRATION, false)) {
+			return;
+		}
+
+		try {
+			const stored = await load(STORAGE.settings, {});
+			const seeded = seedSourcesForExistingReader(
+				await hadPriorStorage(),
+				stored?.sources,
+			);
+
+			if (seeded) {
+				await save(STORAGE.settings, { ...stored, sources: seeded });
+			}
+
+			await save(SOURCE_SEED_MIGRATION, 1);
+		} catch (e) {
+			console.error("HNewhere source seeding failed:", e);
+		}
+	}
+
+	// The keys keep the old prefix, and deliberately. Renaming them buys nothing a
+	// reader can see, and costs a sweep of seventeen fixed keys plus three
+	// dynamic prefixes -- the per-URL lookup cache, the front-page cache and the
+	// staged bridge payloads -- which would need GM.listValues and GM.deleteValue
+	// granted just to find them. A migration that half-runs loses somebody's queue
+	// and their hidden-site list. The name on the tin changed; the tin did not.
 	const STORAGE = {
 		width: "HNewhere:width",
 		widths: "HNewhere:width_by_site",
@@ -106,6 +200,102 @@
 		queue: "HNewhere:queue",
 		itemActions: "HNewhere:item_actions",
 	};
+
+	// #region hnewhere-test-export
+	// Identifiers carry their source. Two sources number their comments
+	// independently, and buildCommentGraph walks parent links by identity, so
+	// unprefixed ids make the graph correct only by the accident that HN's are
+	// integers and Reddit's are base36. A graph that is acyclic only by luck will
+	// eventually not be.
+	const SOURCE_KEY_SEPARATOR = ":";
+
+	function sourceKey(source, id) {
+		return source + SOURCE_KEY_SEPARATOR + id;
+	}
+
+	// Split on the first separator rather than the last, so an id that contains
+	// one still resolves to the right source. Nothing stored today contains a
+	// colon; the rule is here for the source added when nobody remembers to check.
+	//
+	// Returns null rather than a guess for anything unprefixed, which is how the
+	// storage migration recognises a value written before this existed.
+	function parseSourceKey(key) {
+		const text = String(key ?? "");
+		const at = text.indexOf(SOURCE_KEY_SEPARATOR);
+
+		if (at < 1 || at === text.length - 1) {
+			return null;
+		}
+
+		return { source: text.slice(0, at), id: text.slice(at + 1) };
+	}
+
+	// Every id stored before this release was HN's, because HN was the only
+	// source. So the migration is a prefix, not a lookup -- and anything already
+	// prefixed is left exactly as found, which is what makes running it twice
+	// harmless.
+	function migrateCollapsedIds(stored) {
+		if (!Array.isArray(stored)) {
+			return [];
+		}
+
+		return stored.map((id) =>
+			parseSourceKey(id) ? String(id) : sourceKey("hn", id),
+		);
+	}
+
+	function migrateSeenTimes(stored) {
+		if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+			return {};
+		}
+
+		const migrated = {};
+
+		for (const [key, value] of Object.entries(stored)) {
+			migrated[parseSourceKey(key) ? key : sourceKey("hn", key)] = value;
+		}
+
+		return migrated;
+	}
+
+	// Registration order decides the answer, not the stored object's key order: a
+	// reader who enabled Reddit first must not get Reddit-first discovery for it.
+	function normalizeSourceSettings(stored, registeredIds) {
+		const source =
+			stored && typeof stored === "object" && !Array.isArray(stored)
+				? stored
+				: {};
+		const normalized = {};
+
+		for (const id of registeredIds) {
+			normalized[id] = Boolean(source[id]);
+		}
+
+		return normalized;
+	}
+
+	// Anything unreadable reads as nothing enabled. The failure mode of this
+	// function is network traffic to somebody else's server, so it fails closed.
+	function enabledSourceIds(settings, registeredIds) {
+		const normalized = normalizeSourceSettings(settings?.sources, registeredIds);
+
+		return registeredIds.filter((id) => normalized[id]);
+	}
+
+	// Returns what to write, or null for "leave it alone".
+	//
+	// An empty object counts as a choice already made -- the default is absent,
+	// not empty, so an empty map can only have come from the picker saving with
+	// nothing ticked. Treating it as unset would re-run the picker on every load
+	// for a reader who deliberately turned everything off.
+	function seedSourcesForExistingReader(hadPrior, storedSources) {
+		if (storedSources !== undefined && storedSources !== null) {
+			return null;
+		}
+
+		return hadPrior ? { hn: true } : null;
+	}
+	// #endregion hnewhere-test-export
 
 	// Votes have to be remembered locally. The sidebar reads HN over a cross-site
 	// GM request, which the browser strips the SameSite session cookie from, so a
@@ -201,6 +391,12 @@
 		// autoOpenSidebarOnlyFromHN is: a reader who set the parent gets exactly
 		// what they set until they say otherwise.
 		showButtonWithQueue: false,
+		// Absent rather than { hn: true }. A fresh install has chosen nothing yet,
+		// and that is a state the picker exists to resolve -- seeding a default here
+		// would make "never configured" indistinguishable from "chose HN", and the
+		// upgrade seeding depends on telling them apart. loadSettings deliberately
+		// does not fill this in.
+		sources: undefined,
 		// "auto" reproduces the pre-1.5.4 behaviour of following the page.
 		theme: "auto",
 		buttonShape: "circle",
@@ -269,6 +465,9 @@
 	let openingRun = null;
 	let sidebarGeneration = 0;
 	let renderedComments = [];
+	// Which sources the open sidebar is showing, so per-thread decisions -- the vote
+	// gutter, for one -- do not have to walk the comment list to find out.
+	const sidebarSourceKeys = new Set();
 	let annotationController = null;
 	// Tagged rather than a bare group key: a focused discussion can now be entered
 	// two ways -- through a quoted passage, or through a comment -- and everything
@@ -874,6 +1073,43 @@
 		});
 	}
 
+	// Same transport as request(), but keeps the status and the response headers.
+	// The status matters because 403 and 429 mean different things to a source that
+	// can degrade, and request() flattens both -- along with a timeout and a parse
+	// failure -- to the same null.
+	function requestWithMeta(url) {
+		return new Promise((resolve) => {
+			const failure = { ok: false, status: 0, json: null, rateLimit: null };
+
+			GM.xmlHttpRequest({
+				method: "GET",
+				url,
+				timeout: 10000,
+				onload: function (response) {
+					let json = null;
+
+					try {
+						json = JSON.parse(response.responseText);
+					} catch {
+						json = null;
+					}
+
+					resolve({
+						ok:
+							response.status >= 200 &&
+							response.status < 300 &&
+							json !== null,
+						status: response.status,
+						json,
+						rateLimit: parseRateLimit(response.responseHeaders),
+					});
+				},
+				onerror: () => resolve(failure),
+				ontimeout: () => resolve(failure),
+			});
+		});
+	}
+
 	function requestText(url) {
 		return new Promise((resolve) => {
 			GM.xmlHttpRequest({
@@ -913,14 +1149,16 @@
 		return item;
 	}
 
-	// Stories reach the sort in two shapes: Algolia hits from findHN and Firebase
-	// items from loadStories. Reading both here keeps one ordering rule instead of
-	// two that can disagree.
+	// Stories reach the sort in three shapes: Algolia hits from findHN, Firebase
+	// items from loadStories, and normalized discussions from a source adapter.
+	// Reading all three here keeps one ordering rule instead of three that can
+	// disagree -- the normalized names are read first, since they are the shape
+	// everything is heading towards.
 	function discussionRank(story) {
 		return {
-			comments: story.descendants ?? story.num_comments ?? 0,
+			comments: story.commentCount ?? story.descendants ?? story.num_comments ?? 0,
 			points: story.score ?? story.points ?? 0,
-			time: story.time ?? story.created_at_i ?? 0,
+			time: story.createdAt ?? story.time ?? story.created_at_i ?? 0,
 		};
 	}
 
@@ -937,6 +1175,694 @@
 			right.points - left.points ||
 			right.time - left.time
 		);
+	}
+
+	// #region hnewhere-test-export
+	// The shared shape every source is read through. Written as two mappers rather
+	// than one adapter method because they are pure -- the fetching lives in the
+	// adapter, the shape lives here, and only one of those is testable without a
+	// network.
+	function hnDiscussion(story) {
+		return {
+			source: "hn",
+			key: sourceKey("hn", story.id),
+			id: story.id,
+			title: story.title || "",
+			author: story.by || "",
+			score: story.score ?? 0,
+			commentCount: story.descendants ?? 0,
+			createdAt: story.time || 0,
+			permalink: "https://news.ycombinator.com/item?id=" + story.id,
+			articleURL: story.url || "",
+			label: "HN",
+			bodyHTML: story.text || "",
+			rootKeys: (story.kids || []).map((id) => sourceKey("hn", id)),
+		};
+	}
+
+	// HN arrives in two shapes and both become a Discussion. An Algolia hit already
+	// carries everything the button and the header need -- title, points, comment
+	// count, author, timestamp -- and only the comment list needs the Firebase
+	// item's `kids`. Mapping the hit directly is what keeps a page check at the two
+	// requests it has always been, instead of two plus one per submission found.
+	function algoliaDiscussion(hit) {
+		return {
+			source: "hn",
+			key: sourceKey("hn", hit.objectID),
+			id: Number(hit.objectID),
+			title: hit.title || "",
+			author: hit.author || "",
+			score: hit.points ?? 0,
+			commentCount: hit.num_comments ?? 0,
+			createdAt: hit.created_at_i ?? 0,
+			permalink: "https://news.ycombinator.com/item?id=" + hit.objectID,
+			articleURL: hit.url || "",
+			label: "HN",
+			bodyHTML: hit.story_text || "",
+			// Deliberately empty. The roots live on the Firebase item, and loadThread
+			// is where that is fetched -- which is the whole point of the split.
+			rootKeys: [],
+		};
+	}
+
+	// score is null, not 0. HN's API does not carry comment points at any
+	// endpoint, so there is no number to report -- and a 0 would be indexed,
+	// sorted and displayed as though there were.
+	//
+	// It is also why blending cannot be ordered on score: one of the two sources
+	// has none to give.
+	function hnComment(item, discussion) {
+		return {
+			source: "hn",
+			key: sourceKey("hn", item.id),
+			id: item.id,
+			discussionKey: discussion.key,
+			parentKey: item.parent ? sourceKey("hn", item.parent) : null,
+			author: item.by || "anonymous",
+			bodyHTML: item.text || "",
+			score: null,
+			createdAt: item.time || 0,
+			isOP: Boolean(item.by) && item.by === discussion.author,
+			deleted: Boolean(item.deleted || item.dead),
+			replyKeys: (item.kids || []).map((id) => sourceKey("hn", id)),
+		};
+	}
+
+	// A query that answered with nothing and a query that never answered produce
+	// the same empty result set. Only the first is worth remembering for an hour.
+	function shouldCacheDiscovery(answered) {
+		return answered.some(Boolean);
+	}
+
+	// Reddit reports its budget on every response. Reading it is the difference
+	// between backing off before the limit and meeting it as a run of 429s.
+	//
+	// Returns null rather than zeros when the headers are absent: "no budget left"
+	// and "this service reports no budget" must not look alike, or every response
+	// from a service that does not report one would read as exhausted.
+	function parseRateLimit(headerText) {
+		if (!headerText) {
+			return null;
+		}
+
+		const remaining = /^x-ratelimit-remaining:\s*([\d.]+)/im.exec(headerText);
+		const reset = /^x-ratelimit-reset:\s*([\d.]+)/im.exec(headerText);
+
+		if (!remaining && !reset) {
+			return null;
+		}
+
+		return {
+			remaining: remaining ? Number(remaining[1]) : Infinity,
+			resetSeconds: reset ? Number(reset[1]) : 0,
+		};
+	}
+
+	// Bots that repost Hacker News wholesale. Their "discussion" is a link back to
+	// the thread the sidebar is already showing, so a hit from one is worse than no
+	// hit: it lights the button and delivers nothing. Compared lowercased, because
+	// Reddit preserves the display case of a subreddit name.
+	const MIRROR_SUBREDDITS = new Set(["hackernews", "hypeurls"]);
+
+	function redditHitPasses(post) {
+		return (
+			(post?.num_comments ?? 0) > 0 &&
+			!post.removed_by_category &&
+			!MIRROR_SUBREDDITS.has(String(post.subreddit || "").toLowerCase())
+		);
+	}
+
+	// Reddit sends rendered markdown as an HTML-escaped string inside JSON. Left
+	// escaped it renders as tag soup; unescaped and handed straight to innerHTML it
+	// would let Reddit choose our markup. So it is unescaped here and sanitised
+	// where every other source's body is, by the renderer.
+	function unescapeRedditHTML(value) {
+		if (!value) {
+			return "";
+		}
+
+		const holder = document.createElement("textarea");
+
+		holder.innerHTML = value;
+
+		return holder.value;
+	}
+
+	function redditDiscussion(post) {
+		return {
+			source: "reddit",
+			key: sourceKey("reddit", post.id),
+			id: post.id,
+			title: post.title || "",
+			author: post.author || "",
+			score: post.score ?? 0,
+			commentCount: post.num_comments ?? 0,
+			createdAt: post.created_utc ?? 0,
+			permalink: "https://www.reddit.com" + (post.permalink || ""),
+			articleURL: post.url || "",
+			// The subreddit, not "Reddit". A blended thread shows this beside a
+			// comment, and r/science and r/conspiracy are not interchangeable.
+			label: post.subreddit_name_prefixed || "r/" + (post.subreddit || ""),
+			bodyHTML: unescapeRedditHTML(post.selftext_html),
+			rootKeys: [],
+		};
+	}
+
+	function redditComment(node, discussion) {
+		const data = node.data;
+		const parent = String(data.parent_id || "");
+
+		return {
+			source: "reddit",
+			key: sourceKey("reddit", data.id),
+			id: data.id,
+			discussionKey: discussion.key,
+			// A t3_ parent is the submission itself, which makes this a root. Reported
+			// as null rather than the discussion's key, because the focus walk stops on
+			// null and would otherwise look for a comment that is not in the list.
+			parentKey: parent.startsWith("t1_")
+				? sourceKey("reddit", parent.slice(3))
+				: null,
+			author: data.author || "[deleted]",
+			bodyHTML: unescapeRedditHTML(data.body_html),
+			score: data.score ?? null,
+			createdAt: data.created_utc ?? 0,
+			isOP: Boolean(data.is_submitter),
+			deleted: data.author === "[deleted]" && !data.body_html,
+			replyKeys: [],
+		};
+	}
+
+	// Reddit returns the tree whole and pre-nested, so this is the only walk: it
+	// flattens once into a map the adapter answers getComment from instantly. That
+	// is what lets a source with no per-comment request satisfy an interface built
+	// around one.
+	function redditThreadIndex(listing, discussion) {
+		const byKey = new Map();
+		const rootKeys = [];
+		let hiddenCount = 0;
+
+		// Where the gap is, not just how big. A stub carries the ids Reddit withheld,
+		// which is what /api/morechildren needs to fill it -- counting them and
+		// throwing the ids away made the number unusable.
+		let rootMore = null;
+
+		const walk = (children, intoKeys, parent) => {
+			for (const node of children || []) {
+				if (node.kind === "more") {
+					const ids = node.data?.children || [];
+					const record = { ids, count: node.data?.count ?? ids.length };
+
+					hiddenCount += record.count;
+
+					if (parent) {
+						parent.more = record;
+					} else {
+						rootMore = record;
+					}
+
+					continue;
+				}
+
+				if (node.kind !== "t1" || !node.data?.id) {
+					continue;
+				}
+
+				const comment = redditComment(node, discussion);
+
+				byKey.set(comment.key, comment);
+				intoKeys.push(comment.key);
+
+				const replies = node.data.replies;
+
+				if (replies && replies.data) {
+					walk(replies.data.children, comment.replyKeys, comment);
+				}
+			}
+		};
+
+		walk(listing?.[1]?.data?.children, rootKeys, null);
+
+		return { rootKeys, byKey, hiddenCount, rootMore };
+	}
+
+	// The archive returns comments flat. Same output as redditThreadIndex, rebuilt
+	// from parent_id -- and a comment whose parent is missing from the page becomes
+	// a root rather than being dropped, so a partial fetch still reads as a thread.
+	function redditThreadIndexFromFlat(rows, discussion) {
+		const byKey = new Map();
+		const rootKeys = [];
+
+		for (const row of rows) {
+			if (!row?.id) {
+				continue;
+			}
+
+			byKey.set(
+				sourceKey("reddit", row.id),
+				redditComment({ kind: "t1", data: row }, discussion),
+			);
+		}
+
+		for (const comment of byKey.values()) {
+			const parent = comment.parentKey && byKey.get(comment.parentKey);
+
+			if (parent) {
+				parent.replyKeys.push(comment.key);
+			} else {
+				rootKeys.push(comment.key);
+			}
+		}
+
+		return { rootKeys, byKey, hiddenCount: 0, rootMore: null };
+	}
+
+	// Where a comment sits in its own discussion, as a fraction. This is the whole
+	// ordering rule for a blended thread, and what it carefully never does is
+	// compare a Reddit upvote to an HN point -- HN's API carries no comment score
+	// at all, so that comparison was never available even in principle.
+	//
+	// Each platform has already ranked its own comments: HN's `kids` order is HN's
+	// ranking and Reddit's sort=top is Reddit's. This reads that ranking and says
+	// nothing else.
+	//
+	// The +1s are not decoration. Under plain i/n a discussion with one comment
+	// scores 0 and its lone comment outranks the top comment of a 500-comment
+	// thread; (i+1)/(n+1) puts it at 0.5, which is the honest position for a
+	// discussion contributing one comment.
+	function blendPosition(index, total) {
+		return (index + 1) / (total + 1);
+	}
+
+	// Proportionality falls out of the fraction rather than needing a weighting
+	// term: a discussion with ten times the comments has ten times as many of them
+	// inside any span of the merged list.
+	function blendRoots(groups) {
+		const entries = [];
+
+		for (const group of groups) {
+			const total = group.rootKeys.length;
+
+			group.rootKeys.forEach((key, index) => {
+				entries.push({
+					key,
+					discussionKey: group.discussionKey,
+					position: blendPosition(index, total),
+					size: total,
+				});
+			});
+		}
+
+		// Larger discussion first on a tie, so the thread with more to read leads --
+		// the same argument compareStoriesByDiscussion makes one level up.
+		return entries.sort((a, b) => a.position - b.position || b.size - a.size);
+	}
+
+	// 403 is the only demotion, and it is specific: it is what Reddit returns to a
+	// caller without a usable loid, which is exactly the condition the archive tier
+	// exists for. A 429 is a wait and a 0 is a dropped connection; treating either
+	// as a demotion would move a reader to stale scores over something temporary.
+	function redditTierForStatus(status, current) {
+		if (status !== 403) {
+			return current;
+		}
+
+		return current === "loid" ? "archive" : "off";
+	}
+	// #endregion hnewhere-test-export
+
+	// A registry rather than a pair of branches. HN is an entry, not a base case:
+	// the moment a source is special-cased the renderer starts learning what a
+	// source is, which is the thing this whole seam exists to prevent.
+	const SOURCES = new Map();
+
+	function registerSource(source) {
+		SOURCES.set(source.id, source);
+		return source;
+	}
+
+	function getSource(id) {
+		return SOURCES.get(id) || null;
+	}
+
+	// Where a name links to, decided by the source the name came from. It used to
+	// be Hacker News for everybody, which sent a Reddit username to an HN profile
+	// page that has never existed.
+	//
+	// Returns null for a name that is not a person -- Reddit's "[deleted]", HN's
+	// "anonymous" placeholder -- so the renderer can print the text without
+	// wrapping it in a link to nowhere.
+	const NON_AUTHORS = new Set(["[deleted]", "[removed]", "anonymous", ""]);
+
+	function authorProfileURL(sourceId, author) {
+		if (NON_AUTHORS.has(String(author || "").trim())) {
+			return null;
+		}
+
+		return getSource(sourceId)?.profileURL?.(author) || null;
+	}
+
+	function authorLinkHTML(sourceId, author) {
+		const href = authorProfileURL(sourceId, author);
+
+		return href
+			? `<a target="_blank" rel="noopener noreferrer" href="${escapeHTML(href)}">${escapeHTML(author)}</a>`
+			: escapeHTML(author);
+	}
+
+	function registeredSourceIds() {
+		return [...SOURCES.keys()];
+	}
+
+	// Built from the registry rather than written out, so adding a source is a
+	// registry entry and no markup. The caveat travels with the source that earns
+	// it: a checkbox that sends the reader's browsing history somewhere new has to
+	// say so where it is ticked, not in a document nobody opens.
+	// The id is optional because this list is rendered twice into the same shadow
+	// root -- once in the settings panel, once in the picker -- and two elements
+	// cannot share one. The input sits inside its own label, so nothing needs a
+	// `for` and the picker's copy can simply go without.
+	function sourceListHTML({ idPrefix = "" } = {}) {
+		return [...SOURCES.values()]
+			.map(
+				(source) => `
+<label class="settings-option">
+<input${idPrefix ? ` id="${escapeHTML(idPrefix + source.id)}"` : ""} data-source="${escapeHTML(source.id)}" type="checkbox">
+<span>${escapeHTML(source.label)}</span>
+</label>
+${
+	source.caveat
+		? `<div class="settings-option-hint">${escapeHTML(source.caveat)}</div>`
+		: ""
+}`,
+			)
+			.join("");
+	}
+
+	function enabledSources(settings) {
+		return enabledSourceIds(settings, registeredSourceIds()).map((id) =>
+			SOURCES.get(id),
+		);
+	}
+
+	registerSource({
+		id: "hn",
+		label: "Hacker News",
+		caveat:
+			"Sends each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
+		capabilities: { vote: true, reply: true, submit: true },
+
+		profileURL: (author) =>
+			"https://news.ycombinator.com/user?id=" + encodeURIComponent(author),
+
+		// Algolia only. The Firebase items are fetched by loadThread, when there is
+		// actually a comment list to build, rather than on every page the reader
+		// visits.
+		async discover(url) {
+			return (await findHN(url)).map(algoliaDiscussion);
+		},
+
+		// Returns a reader, not a tree. HN charges one request per comment, so the
+		// renderer has to be able to ask for them one at a time and paint between
+		// answers -- a source that returns whole trees satisfies the same interface
+		// by resolving from a map instead.
+		async loadThread(discussion) {
+			// The one Firebase read a discussion needs before its comments can start:
+			// `kids` exists on the item and nowhere else. A discussion that arrived
+			// already carrying roots -- from the queue or the reading list, which go
+			// through loadStories -- skips it.
+			const roots = discussion.rootKeys.length
+				? discussion.rootKeys
+				: ((await getItem(discussion.id))?.kids || []).map((id) =>
+						sourceKey("hn", id),
+					);
+
+			return {
+				rootKeys: roots,
+				async getComment(key) {
+					const parsed = parseSourceKey(key);
+
+					if (!parsed) {
+						return null;
+					}
+
+					const item = await getItem(Number(parsed.id));
+
+					return item ? hnComment(item, discussion) : null;
+				},
+			};
+		},
+	});
+
+	const REDDIT_TIER_KEY = "HNewhere:reddit_tier";
+	// Matches Reddit's own rate window. Long enough that a demoted browser does not
+	// re-403 on every page, short enough that a reader who has since loaded
+	// reddit.com gets live scores back without doing anything about it.
+	const REDDIT_TIER_TTL = 10 * 60 * 1000;
+	// Below this the budget is left alone. Most pages have no Reddit thread, and
+	// spending the last of it on them would leave none for the one that does.
+	const REDDIT_RATE_FLOOR = 10;
+
+	let redditRateRemaining = Infinity;
+
+	async function redditTier() {
+		const stored = await load(REDDIT_TIER_KEY, null);
+
+		if (stored && Date.now() - stored.timestamp < REDDIT_TIER_TTL) {
+			return stored.tier;
+		}
+
+		return "loid";
+	}
+
+	// One request, through whichever tier is current, falling to the next on the
+	// one status that means "your cookie is not good here".
+	async function redditFetch(path, archivePath) {
+		let tier = await redditTier();
+
+		if (tier === "off") {
+			return null;
+		}
+
+		if (tier === "loid") {
+			if (redditRateRemaining < REDDIT_RATE_FLOOR) {
+				return null;
+			}
+
+			const result = await requestWithMeta("https://www.reddit.com" + path);
+
+			if (result.rateLimit) {
+				redditRateRemaining = result.rateLimit.remaining;
+			}
+
+			if (result.ok) {
+				return { json: result.json, tier };
+			}
+
+			const next = redditTierForStatus(result.status, tier);
+
+			if (next === tier) {
+				return null;
+			}
+
+			await save(REDDIT_TIER_KEY, { tier: next, timestamp: Date.now() });
+			tier = next;
+		}
+
+		if (tier !== "archive" || !archivePath) {
+			return null;
+		}
+
+		const archive = await requestWithMeta(
+			"https://arctic-shift.photon-reddit.com" + archivePath,
+		);
+
+		if (!archive.ok) {
+			const next = redditTierForStatus(archive.status, "archive");
+
+			if (next !== "archive") {
+				await save(REDDIT_TIER_KEY, { tier: next, timestamp: Date.now() });
+			}
+
+			return null;
+		}
+
+		return { json: archive.json, tier: "archive" };
+	}
+
+	registerSource({
+		id: "reddit",
+		label: "Reddit",
+		caveat:
+			"Sends each page you visit to reddit.com, with the identifier your browser already carries there. Read-only \u2014 no voting or replying.",
+		capabilities: { vote: false, reply: false, submit: false },
+
+		profileURL: (author) =>
+			"https://www.reddit.com/user/" + encodeURIComponent(author) + "/",
+
+		async discover(url) {
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return [];
+			}
+
+			// Two queries, the way findHN already runs two against Algolia -- and for
+			// a sharper reason. Reddit matches the URL as it was submitted, and
+			// normalizeURL strips the trailing slash, so one canonical query misses
+			// every thread whose submission kept it. Measured on a live article:
+			// with the slash, eight hits including a 91-comment r/programming
+			// thread; without it, zero. Reddit folds `www.` itself, so that needs no
+			// variant, and the scheme is taken from the page rather than assumed.
+			const scheme = url.startsWith("http://") ? "http://" : "https://";
+			const bare = scheme + target;
+			const queries = [bare, bare + "/"];
+
+			const matches = new Map();
+
+			for (const query of queries) {
+				const encoded = encodeURIComponent(query);
+				const result = await redditFetch(
+					"/api/info.json?url=" + encoded,
+					"/api/posts/search?limit=25&url=" + encoded,
+				);
+
+				if (!result) {
+					continue;
+				}
+
+				const posts =
+					result.tier === "archive"
+						? result.json?.data || []
+						: (result.json?.data?.children || []).map((child) => child.data);
+
+				for (const post of posts) {
+					if (post?.id) {
+						matches.set(post.id, post);
+					}
+				}
+			}
+
+			return [...matches.values()]
+				.filter(redditHitPasses)
+				// The same correctness check findHN applies to Algolia: the query is a
+				// hint, and this comparison is the answer.
+				.filter((post) => normalizeURL(post.url) === target)
+				.map(redditDiscussion);
+		},
+
+		async loadThread(discussion) {
+			const result = await redditFetch(
+				discussion.permalink.replace("https://www.reddit.com", "") +
+					".json?limit=500&sort=top",
+				"/api/comments/search?limit=100&link_id=" +
+					encodeURIComponent(discussion.id),
+			);
+
+			if (!result) {
+				return {
+					rootKeys: [],
+					async getComment() {
+						return null;
+					},
+				};
+			}
+
+			const index =
+				result.tier === "archive"
+					? redditThreadIndexFromFlat(result.json?.data || [], discussion)
+					: redditThreadIndex(result.json, discussion);
+
+			return {
+				rootKeys: index.rootKeys,
+				rootMore: index.rootMore,
+				async getComment(key) {
+					return index.byKey.get(key) || null;
+				},
+
+				// Fills one gap. Reddit takes up to a hundred ids per call and answers
+				// with a flat list, so the replies are re-nested here and folded into
+				// the same map getComment already reads -- a comment fetched this way
+				// is indistinguishable from one that arrived with the tree.
+				async expandMore(ids) {
+					const batch = ids.slice(0, 100);
+
+					if (!batch.length) {
+						return { ok: true, added: [], remaining: [] };
+					}
+
+					const result = await redditFetch(
+						"/api/morechildren.json?api_type=json&link_id=t3_" +
+							encodeURIComponent(discussion.id) +
+							"&sort=top&children=" +
+							encodeURIComponent(batch.join(",")),
+						null,
+					);
+
+					// A request that never answered is not an empty gap. Reported
+					// separately so the caller can leave the offer standing rather
+					// than quietly withdrawing it -- the rate budget runs out, and
+					// "7 more replies" disappearing without producing seven replies
+					// is worse than the button never having been there.
+					if (!result) {
+						return { ok: false, added: [], remaining: ids };
+					}
+
+					const things = result?.json?.json?.data?.things || [];
+					const added = [];
+
+					for (const node of things) {
+						if (node.kind !== "t1" || !node.data?.id) {
+							continue;
+						}
+
+						const comment = redditComment(node, discussion);
+
+						index.byKey.set(comment.key, comment);
+						added.push(comment);
+					}
+
+					// Linked into the tree first, so a reply whose parent came down in
+					// this same batch is reachable from it.
+					for (const comment of added) {
+						const parent =
+							comment.parentKey && index.byKey.get(comment.parentKey);
+
+						if (parent && parent !== comment && !parent.replyKeys.includes(comment.key)) {
+							parent.replyKeys.push(comment.key);
+						}
+					}
+
+					// What the caller renders is decided by the caller, because only it
+					// knows which comment the gap sat under. Classifying by "has no
+					// parent" was wrong in the way that matters: a stub hangs beneath a
+					// comment that is already on screen, so every reply it returns has a
+					// parent in the map and nothing was ever a root.
+					return { ok: true, added, remaining: ids.slice(100) };
+				},
+			};
+		},
+	});
+
+	// The discovery entry point. With one source registered it is a fan-out of
+	// one, and the current lookup still goes through findHN directly because the
+	// button only needs to know whether a discussion exists. This is where a
+	// second source plugs in.
+	//
+	// Sources are independent: one failing must never blank a sidebar that has
+	// something else to show, so a rejected discover contributes nothing rather
+	// than rejecting the whole lookup.
+	async function discoverAll(url, settings) {
+		const results = await Promise.all(
+			enabledSources(settings).map((source) =>
+				source.discover(url).catch((e) => {
+					console.error("HNewhere " + source.id + " discovery failed:", e);
+					return [];
+				}),
+			),
+		);
+
+		return results.flat().sort(compareStoriesByDiscussion);
 	}
 
 	async function findHN(url) {
@@ -960,11 +1886,15 @@
 
 		const matches = new Map();
 
+		const answered = [];
+
 		for (const query of queries) {
 			const result = await request(
 				"https://hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=url&hitsPerPage=20&query=" +
 					encodeURIComponent(query),
 			);
+
+			answered.push(Boolean(result && result.hits));
 
 			if (!result || !result.hits) {
 				continue;
@@ -979,10 +1909,16 @@
 
 		const sorted = [...matches.values()].sort(compareStoriesByDiscussion);
 
-		await save(cacheKey, {
-			timestamp: Date.now(),
-			results: sorted,
-		});
+		// Only a lookup that got an answer is worth an hour. request() resolves
+		// null on error, timeout and parse failure, so caching unconditionally
+		// stored "nobody posted this" for a moment offline -- and kept a live
+		// discussion hidden until the TTL lapsed.
+		if (shouldCacheDiscovery(answered)) {
+			await save(cacheKey, {
+				timestamp: Date.now(),
+				results: sorted,
+			});
+		}
 
 		return sorted;
 	}
@@ -1351,7 +2287,7 @@
 	}
 
 	function isNewComment(comment, seenTimestamp) {
-		return comment.time && comment.time > seenTimestamp;
+		return comment.createdAt && comment.createdAt > seenTimestamp;
 	}
 
 	// Sliver of the page left showing down the left edge on a portrait phone, so it
@@ -1547,6 +2483,7 @@
 			"hn-restore-button",
 			"hn-collapse-button",
 			"hn-submit-button",
+			"hn-setup-button",
 		]) {
 			const button = document.getElementById(id);
 
@@ -1567,25 +2504,59 @@
 		);
 	}
 
+	// The floating button lives in the page rather than a shadow root, so it cannot
+	// read the panel's CSS variables and needs the accent as a value. Same colour,
+	// stated twice -- which is why both live here rather than in the rules that use
+	// them.
+	// #region hnewhere-test-export
+	// In a region because the heat palette is built from ACCENT_RGB and is itself
+	// tested: the harness evaluates the regions alone, so an identifier one region
+	// borrows from another has to be inside one too.
+	const ACCENT = "#ff6600";
+	const ACCENT_DARK = "#ff6600";
+
+	// The same accent as channels, for the places that cannot use a CSS variable at
+	// all: the annotation overlay is mounted in the page rather than in the panel's
+	// shadow root -- deliberately, so mix-blend-mode composites against the article
+	// -- and nothing there can see --accent. A var() reference would resolve to
+	// nothing and paint every highlight invisible.
+	const ACCENT_RGB = "255,102,0";
+	// #endregion hnewhere-test-export
+
+	// Two characters, because that is what a 44px circle holds. "HN" was doing
+	// double duty as the product's mark and as the name of the only source; with
+	// several sources it would have been announcing one of them.
+	const BUTTON_MARK = "HN";
+
 	// The two states the floating button can be in. "active" means a discussion is
 	// known to exist; "inactive" means the lookup came back empty and clicking offers
 	// to submit the page instead. Kept in one table because both the initial cssText
-	// and applyButtonMobileStyle used to hardcode the orange separately, which is
+	// and applyButtonMobileStyle used to hardcode the colour separately, which is
 	// exactly how the two would drift.
 	const BUTTON_VARIANTS = {
 		active: {
-			background: "#ff6600",
-			// HN orange carries itself on either background, so only the inactive grey
-			// needs a dark counterpart -- #b8b8b8 glares on a dark page.
-			darkBackground: "#ff6600",
+			background: ACCENT,
+			// The accent is tuned for a light page; on a dark one the same value reads
+			// muddy, so it lifts -- unlike the old orange, which carried itself on both.
+			darkBackground: ACCENT_DARK,
 			boxShadow: "0 1px 4px rgba(0,0,0,.25)",
-			title: "Hacker News discussion",
+			title: "Discussion found",
 		},
 		inactive: {
 			background: "#b8b8b8",
 			darkBackground: "#4a4a4a",
 			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
-			title: "No Hacker News discussion yet — click to submit this page",
+			title: "No discussion yet — click to submit this page",
+		},
+		// A third meaning for the circle. Lit is "a discussion exists", grey is
+		// "none yet, submit one" -- and with no source enabled neither is true,
+		// because nothing has been looked up and nothing will be. Same grey, a
+		// different offer.
+		setup: {
+			background: "#b8b8b8",
+			darkBackground: "#4a4a4a",
+			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
+			title: "Choose where to read comments from",
 		},
 		// Borrows the inactive grey rather than the orange: this is shown before the
 		// lookup answers, and a page with no discussion would otherwise flash orange
@@ -1594,7 +2565,7 @@
 			background: "#b8b8b8",
 			darkBackground: "#4a4a4a",
 			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
-			title: "Checking Hacker News…",
+			title: "Checking for discussions…",
 		},
 	};
 
@@ -1694,6 +2665,7 @@
 			"hn-restore-button",
 			"hn-collapse-button",
 			"hn-submit-button",
+			"hn-setup-button",
 		]) {
 			const button = document.getElementById(id);
 
@@ -1768,7 +2740,7 @@
 
 			button = document.createElement("button");
 			button.id = id;
-			button.textContent = "HN";
+			button.textContent = BUTTON_MARK;
 
 			button.style.cssText = `
 					position:fixed;
@@ -1846,7 +2818,7 @@
 	function animateButtonFill(button) {
 		const overlay = document.createElement("span");
 
-		overlay.textContent = "HN";
+		overlay.textContent = BUTTON_MARK;
 		overlay.style.cssText = `
 			position:absolute;
 			inset:0;
@@ -3783,7 +4755,7 @@
 		button.style.color = "white";
 
 		window.setTimeout(() => {
-			button.textContent = "HN";
+			button.textContent = BUTTON_MARK;
 			applyButtonMobileStyle(button);
 		}, 900);
 	}
@@ -4017,7 +4989,7 @@ ${CHROME_CSS}
 
 .popover-field input:focus,
 .popover-field textarea:focus {
-	outline:2px solid rgba(255,102,0,.4);
+	outline:2px solid rgba(var(--accent-rgb),.4);
 	outline-offset:-1px;
 }
 
@@ -4054,8 +5026,8 @@ ${CHROME_CSS}
 }
 
 .popover-actions button.primary {
-	background:#ff6600;
-	border-color:#ff6600;
+	background:var(--accent);
+	border-color:var(--accent);
 	color:white;
 }
 
@@ -4347,6 +5319,70 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 		})();
 	}
 
+	// Deferred to a Save, where the settings panel applies immediately. Picking
+	// sources is a commitment -- it decides which servers get told what the reader
+	// is reading -- and a checkbox that acts the instant it is touched is the wrong
+	// shape for that. Everything in the settings panel is reversible; this is a
+	// consent step, and it should feel like one.
+	function renderSourcePicker(ui) {
+		ui.body.innerHTML = `
+<div class="source-picker">
+<div class="source-picker-title">Where should comments come from?</div>
+<div class="source-picker-intro">Pick at least one. Nothing is contacted until you do.</div>
+<div class="source-picker-list">${sourceListHTML()}</div>
+<div class="source-picker-actions">
+<button class="source-picker-save" type="button" disabled>Save</button>
+</div>
+</div>`;
+
+		const list = ui.body.querySelector(".source-picker-list");
+		const save = ui.body.querySelector(".source-picker-save");
+
+		// Saving nothing is the state the picker exists to leave, so the way out has
+		// to be closed until there is something to save.
+		const syncSave = () => {
+			save.disabled = !list.querySelector("input[data-source]:checked");
+		};
+
+		list.addEventListener("change", syncSave);
+		syncSave();
+
+		save.onclick = async () => {
+			const chosen = {};
+
+			for (const input of list.querySelectorAll("input[data-source]")) {
+				chosen[input.dataset.source] = input.checked;
+			}
+
+			save.disabled = true;
+			await saveSettings({ sources: chosen });
+			await refreshForSourceChange();
+		};
+	}
+
+	// Deliberately plainer than createSubmitButton, which carries a popover for
+	// composing a submission. This one only has to open the picker.
+	async function createSetupButton() {
+		const button = createFloatingHNButton("hn-setup-button", "setup");
+
+		if (!button._dragController) {
+			button._dragController = makeButtonDraggable(button);
+		}
+
+		if (!isMobile()) {
+			await applyButtonPosition(button);
+		}
+
+		button.onclick = () => {
+			if (button._dragController.wasMoved()) return;
+
+			destroyFloatingButton(button);
+			openSidebar([], { setupOnly: true }).catch(console.error);
+		};
+
+		return button;
+	}
+
 	async function createSubmitButton() {
 		const button = createFloatingHNButton("hn-submit-button", "inactive");
 
@@ -4469,10 +5505,13 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 :host {
 	--bg:#f6f6ef;
 	--text:#000;
-	--header-bg:#ff6600;
+	--header-bg:var(--accent);
+	/* White, not black. Black carried itself on orange and does not on indigo --
+		the accent is a good deal darker than the colour it replaced. */
 	--header-text:#000;
-    /* Dark orange on the header's own orange: legible, but clearly subordinate
-       to the black title. The peak is the travelling highlight. */
+	/* The relationship inverts with the title: a dimmed lavender on the header's
+		own indigo, clearly subordinate to the white title. The peak is the
+		travelling highlight. */
 	--subtitle-stage:#8f3900;
 	--subtitle-stage-peak:#d0721f;
 	--border:#ccc;
@@ -4480,6 +5519,11 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 	--link:#0000aa;
 	--meta:#828282;
 	--muted:#666;
+	/* Backchannel's accent. Deliberately not Hacker News orange and not Reddit's
+		orange-red: the panel now speaks for several sources and must not wear any
+		one of their colours. One token, so changing the brand is one line. */
+	--accent:#ff6600;
+	--accent-rgb:255,102,0;
 	--surface:#fff;
 	--surface-text:#222;
 	--surface-border:#d6d6d6;
@@ -4519,9 +5563,13 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 :host(.${DARK_CLASS}) {
 	--bg:#1e1e1e;
 	--text:#dcdcdc;
+	/* Deliberately not var(--accent): the dark accent is lifted so it reads as a
+		foreground, which makes it far too bright behind a header. This is the
+		dimmed counterpart, the way #cc5200 was the dimmed counterpart of the old
+		orange. */
 	--header-bg:#cc5200;
 	--header-text:#000;
-    /* Darker to hold the same relationship against the dimmer header. */
+	/* Dimmer to hold the same relationship against the dimmer header. */
 	--subtitle-stage:#6d2b00;
 	--subtitle-stage-peak:#ad5a17;
 	--border:#3d3d3d;
@@ -4529,6 +5577,9 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 	--link:#8ab4f8;
 	--meta:#9a9a9a;
 	--muted:#a3a3a3;
+	/* Lifted a little for dark backgrounds, where the light value reads muddy. */
+	--accent:#ff6600;
+	--accent-rgb:255,102,0;
 	--surface:#2a2a2a;
 	--surface-text:#dcdcdc;
 	--surface-border:#454545;
@@ -5270,9 +6321,9 @@ header button svg {
 }
 
 /* Collapsed rather than merely disabled when the parent option is off: a dead
-   checkbox reads as broken, where nothing reads as "not applicable yet". The
-   max-height ceiling is generous because the real height is not knowable in CSS --
-   it only has to exceed the content for the transition to run to completion. */
+	checkbox reads as broken, where nothing reads as "not applicable yet". The
+	max-height ceiling is generous because the real height is not knowable in CSS --
+	it only has to exceed the content for the transition to run to completion. */
 .settings-suboptions {
 	overflow:hidden;
 	max-height:0;
@@ -5284,15 +6335,23 @@ header button svg {
 .settings-suboptions.is-visible {
 	max-height:140px;
 	opacity:1;
-    /* Separates the first sub-option from whatever it belongs to above it. */
+	/* Separates the first sub-option from whatever it belongs to above it. */
 	margin-top:8px;
 }
 
 /* A sub-options group sits between two options in the auto-open block, which
-   breaks the .settings-option + .settings-option adjacency the spacing rule
-   relies on. Without this the option below would touch the one above whenever the
-   group is collapsed to zero height. */
+	breaks the .settings-option + .settings-option adjacency the spacing rule
+	relies on. Without this the option below would touch the one above whenever the
+	group is collapsed to zero height. */
 .settings-suboptions + .settings-option {
+	margin-top:8px;
+}
+
+/* The same break, from the other thing that comes between two options: on the
+	sources pane every source is a checkbox followed by a line describing it, so
+	every pair after the first lost its spacing and each description ran straight
+	into the next source's box. */
+.settings-option-hint + .settings-option {
 	margin-top:8px;
 }
 
@@ -5316,9 +6375,188 @@ header button svg {
 
 @media (hover: hover) {
 	.settings-credits a:hover {
-		color:#ff6600;
-		text-decoration-color:rgba(255,102,0,.5);
+		color:var(--accent);
+		text-decoration-color:rgba(var(--accent-rgb),.5);
 	}
+}
+
+/* The page, not a submission of it. Sized like a story header used to be, so the
+	panel opens onto the same shape it always did. */
+.page-header {
+	padding:12px 14px 10px;
+	border-bottom:1px solid var(--border-soft);
+}
+
+.page-header-title {
+	font-size:13px;
+	font-weight:600;
+	line-height:1.35;
+}
+
+.page-header-meta {
+	margin-top:3px;
+	color:var(--meta);
+	font-size:11px;
+}
+
+/* The aggregate leads and this is what a reader reaches for, so it sits below the
+	count at metadata weight rather than above it as a masthead. */
+/* The same slide the settings sub-options use, down to the durations, because it
+	is the same gesture: a group opening inside a panel rather than a new surface. */
+.source-strip {
+	display:flex;
+	flex-wrap:wrap;
+	gap:6px;
+	overflow:hidden;
+	max-height:0;
+	opacity:0;
+	margin-top:0;
+	transition:max-height .22s ease, opacity .18s ease, margin-top .22s ease;
+}
+
+/* No max-height here: it is set from the measured content when the strip opens,
+	so a page posted to two places and one posted to twelve both slide for the full
+	duration rather than snapping open against a ceiling. */
+.source-strip.is-open {
+	opacity:1;
+	margin-top:8px;
+}
+
+/* Reads as the affordance it is: the count is the thing you press, so it carries
+	a dotted underline rather than looking like the prose around it. */
+.page-header-disclosure {
+	font:inherit;
+	color:inherit;
+	background:none;
+	border:0;
+	padding:0;
+	cursor:pointer;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
+}
+
+.page-header-disclosure[aria-expanded="true"] {
+	text-decoration-style:solid;
+	text-decoration-color:var(--accent);
+}
+
+.source-strip-entry {
+	display:inline-flex;
+	align-items:baseline;
+	gap:5px;
+	padding:2px 7px;
+	border:0;
+	border-radius:999px;
+	background:var(--hover-tint);
+	color:inherit;
+	font:inherit;
+	font-size:11px;
+	cursor:pointer;
+}
+
+/* The pill that is currently filtering. Pressing it again clears, so it reads as
+	a toggle rather than a destination. */
+.source-strip-entry-active {
+	background:var(--active-tint);
+	font-weight:600;
+}
+
+.source-strip-count {
+	color:var(--muted);
+	font-variant-numeric:tabular-nums;
+}
+
+/* Reads like the meta links it sits beneath -- reply, focus -- rather than as a
+   control, because it is an offer to see more of the same thing rather than an
+   action on it. */
+.more-replies {
+	display:block;
+	margin:8px 0 0 8px;
+	padding:0;
+	border:0;
+	background:none;
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
+	color:var(--meta);
+	cursor:pointer;
+}
+
+.more-replies:disabled {
+	cursor:default;
+	opacity:.7;
+}
+
+@media (hover: hover) {
+	.more-replies:hover:not(:disabled) {
+		text-decoration:underline;
+	}
+}
+
+/* Provenance, at the weight of the age beside it. Deliberately not a badge: the
+	reader is looking at one conversation, and where each turn of it happened is
+	available rather than announced. */
+/* No colour of its own: it inherits .meta, which is what the author and the age
+   beside it use. It had --muted, a step darker, so the label and its separator
+   read as a different kind of thing from the line they sit in. */
+.comment-source::before {
+	content:"·";
+	margin-right:4px;
+}
+
+/* The picker is the first thing a new reader sees, so it borrows the settings
+	panel's spacing and type scale rather than inventing a form of its own. It sits
+	in the sidebar body, which is why it needs its own padding -- the settings panel
+	gets that from its own container. */
+.source-picker {
+	padding:20px 18px;
+	max-width:420px;
+}
+
+.source-picker-title {
+	font-size:15px;
+	font-weight:600;
+	margin-bottom:6px;
+}
+
+.source-picker-intro {
+	color:var(--muted);
+	font-size:12px;
+	line-height:1.45;
+	margin-bottom:14px;
+}
+
+.source-picker-list {
+	margin-bottom:16px;
+}
+
+/* Deliberately identical to .popover-actions and its primary button, restated
+	rather than shared. The submit popover is its own host with its own shadow root,
+	so a rule written there cannot reach in here -- only THEME_CSS crosses, which is
+	why the tokens do and the rules do not. Same values, so the two screens read as
+	one product; if you change one, change both. */
+.source-picker-actions {
+	display:flex;
+	justify-content:flex-end;
+	gap:6px;
+	margin-top:10px;
+}
+
+.source-picker-save {
+	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	padding:5px 10px;
+	border-radius:4px;
+	cursor:pointer;
+	border:1px solid var(--accent);
+	background:var(--accent);
+	color:white;
+}
+
+/* Disabled rather than hidden, so the way out of this screen stays visible along
+	with what it is waiting for. */
+.source-picker-save:disabled {
+	opacity:.6;
+	cursor:default;
 }
 
 /* Indented to clear the checkbox so the text starts under the option's label rather
@@ -5352,7 +6590,7 @@ header button svg {
 	margin-right:4px;
 	padding:1px 4px;
 	border-radius:3px;
-	background:#ff6600;
+	background:var(--accent);
 	color:white;
 	font-size:9px;
 	font-weight:bold;
@@ -5416,9 +6654,63 @@ header button svg {
 }
 
 .settings-panes:not(.is-secondary) > .settings-pane-primary,
-.settings-panes.is-secondary > .settings-pane-secondary {
+.settings-panes.is-secondary > .settings-pane-secondary.is-active {
 	visibility:visible;
 	transition-delay:0s;
+}
+
+/* The track is two slots wide and translates by exactly half, so only one second
+	level may be in the flex flow at a time. display:none takes the others out of
+	it entirely rather than stacking them into a third slot the slide cannot reach. */
+.settings-pane-secondary {
+	display:none;
+}
+
+.settings-pane-secondary.is-active {
+	display:block;
+}
+
+/* Small enough to sit in a dropdown, which is the constraint: four rows and a
+	column per source is about what fits before it stops being glanceable. */
+.source-matrix-caption {
+	margin:14px 0 5px;
+	color:var(--muted);
+	font-size:11px;
+}
+
+.source-matrix {
+	width:100%;
+	border-collapse:collapse;
+	font-size:11px;
+}
+
+.source-matrix th,
+.source-matrix td {
+	padding:3px 4px;
+	text-align:center;
+	font-weight:400;
+}
+
+.source-matrix thead th,
+.source-matrix tbody th {
+	color:var(--muted);
+}
+
+.source-matrix tbody th {
+	text-align:left;
+}
+
+.source-matrix tbody tr + tr th,
+.source-matrix tbody tr + tr td {
+	border-top:1px solid var(--surface-divider);
+}
+
+.source-matrix .yes {
+	color:var(--surface-text);
+}
+
+.source-matrix .no {
+	color:var(--muted);
 }
 
 /* A breadcrumb rather than a bare title: the hidden-sites list is a second level
@@ -5701,7 +6993,7 @@ header button svg {
 	align-items:center;
 	justify-content:center;
 	border:0;
-	background:#ff6600;
+	background:var(--accent);
 	box-shadow:0 1px 4px rgba(0,0,0,.25);
 	color:#fff;
 	font-family:Verdana,sans-serif;
@@ -5865,7 +7157,7 @@ ${
 <div id="settings-head" class="settings-head">
 <button id="settings-blocked-back" class="settings-back" type="button" aria-label="Back to settings" disabled>&lsaquo;</button>
 <button id="settings-crumb-root" class="settings-crumb-root" type="button" disabled>Settings</button>
-<span id="settings-crumb-tail" class="settings-crumb-tail" aria-hidden="true"><span class="settings-crumb-sep">/</span>Hidden sites</span>
+<span id="settings-crumb-tail" class="settings-crumb-tail" aria-hidden="true"><span class="settings-crumb-sep">/</span><span id="settings-crumb-name">Hidden sites</span></span>
 </div>
 <div id="settings-panes" class="settings-panes">
 
@@ -5953,12 +7245,38 @@ Highlights the passages commenters quote, so you can jump between the article an
 </div>
 
 <div class="settings-group">
-<button id="settings-manage-blocked" class="settings-link-button" type="button">Manage hidden sites<span class="settings-link-chevron">&rsaquo;</span></button>
+<button id="settings-manage-sources" class="settings-link-button" type="button" data-pane="sources" data-pane-name="Sources">Sources<span class="settings-link-chevron">&rsaquo;</span></button>
+</div>
+
+<div class="settings-group">
+<button id="settings-manage-blocked" class="settings-link-button" type="button" data-pane="blocked" data-pane-name="Hidden sites">Manage hidden sites<span class="settings-link-chevron">&rsaquo;</span></button>
 </div>
 </div>
 
-<div class="settings-pane settings-pane-secondary">
+<div class="settings-pane settings-pane-secondary" data-pane="blocked">
 <div id="settings-blocked-list" class="settings-blocked-list"></div>
+</div>
+
+<div class="settings-pane settings-pane-secondary" data-pane="sources">
+${sourceListHTML({ idPrefix: "setting-source-" })}
+<div class="source-matrix-caption">What each source supports</div>
+<table class="source-matrix">
+<thead><tr><th></th>${[...SOURCES.values()].map((source) => `<th>${escapeHTML(source.label.replace(/^Hacker News$/, "HN"))}</th>`).join("")}</tr></thead>
+<tbody>
+${["read", "vote", "reply", "submit"]
+	.map(
+		(row) => `<tr><th>${escapeHTML({ read: "Read", vote: "Vote", reply: "Reply", submit: "Submit" }[row])}</th>${[
+			...SOURCES.values(),
+		]
+			.map((source) => {
+				const yes = row === "read" ? true : Boolean(source.capabilities[row]);
+				return `<td class="${yes ? "yes" : "no"}" aria-label="${yes ? "yes" : "no"}">${yes ? "&check;" : "&ndash;"}</td>`;
+			})
+			.join("")}</tr>`,
+	)
+	.join("")}
+</tbody>
+</table>
 </div>
 
 </div>
@@ -6022,9 +7340,15 @@ Highlights the passages commenters quote, so you can jump between the article an
 				return;
 			}
 
+			// `.is-active`, not just `.settings-pane-secondary`. While hidden sites
+			// was the only second level the two selectors picked the same element;
+			// with more than one they do not, and this took the first in document
+			// order -- the empty blocked list -- and pinned the track to its height.
+			// The pane the reader is looking at was fully rendered and 314px tall
+			// inside a box measured at 0.
 			const active = panes.querySelector(
 				panes.classList.contains("is-secondary")
-					? ".settings-pane-secondary"
+					? ".settings-pane-secondary.is-active"
 					: ".settings-pane-primary",
 			);
 
@@ -6052,8 +7376,27 @@ Highlights the passages commenters quote, so you can jump between the article an
 		const crumbBack = shadow.querySelector("#settings-blocked-back");
 		const crumbRoot = shadow.querySelector("#settings-crumb-root");
 		const crumbTail = shadow.querySelector("#settings-crumb-tail");
+		const crumbName = shadow.querySelector("#settings-crumb-name");
 
-		const showSecondaryPane = (secondary) => {
+		// Takes a pane name, or null for the first level. It used to take a boolean,
+		// which was enough while "hidden sites" was the only second level -- the
+		// track is two slots wide, so exactly one secondary pane may occupy the
+		// second at a time, and the rest are display:none and therefore out of the
+		// flex flow entirely.
+		const showSecondaryPane = (paneName) => {
+			const secondary = Boolean(paneName);
+
+			for (const pane of panes?.querySelectorAll(".settings-pane-secondary") ||
+				[]) {
+				pane.classList.toggle("is-active", pane.dataset.pane === paneName);
+			}
+
+			if (paneName && crumbName) {
+				crumbName.textContent =
+					shadow.querySelector(`[data-pane="${paneName}"][data-pane-name]`)
+						?.dataset.paneName || "";
+			}
+
 			panes?.classList.toggle("is-secondary", secondary);
 
 			// One class drives the whole trail so the chevron, the de-emphasis of
@@ -6127,6 +7470,17 @@ Highlights the passages commenters quote, so you can jump between the article an
 
 			applyButtonDesigner(settings);
 
+			const sourceState = normalizeSourceSettings(
+				settings.sources,
+				registeredSourceIds(),
+			);
+
+			for (const input of settingsPanel.querySelectorAll(
+				"input[data-source]",
+			)) {
+				input.checked = Boolean(sourceState[input.dataset.source]);
+			}
+
 			for (const group of suboptionGroups) {
 				const enabled = Boolean(settings[group.dataset.suboptionsOf]);
 
@@ -6158,7 +7512,7 @@ Highlights the passages commenters quote, so you can jump between the article an
 			}
 
 			// Reopening lands on the main pane rather than wherever it was left.
-			showSecondaryPane(false);
+			showSecondaryPane(null);
 		};
 
 		setSettingsOpen(false);
@@ -6196,6 +7550,25 @@ Highlights the passages commenters quote, so you can jump between the article an
 		});
 
 		settingsPanel.addEventListener("change", async (event) => {
+			const sourceInput = event.target.closest("input[data-source]");
+
+			if (sourceInput) {
+				const current = await loadSettings();
+
+				await saveSettings({
+					sources: {
+						...normalizeSourceSettings(current.sources, registeredSourceIds()),
+						[sourceInput.dataset.source]: sourceInput.checked,
+					},
+				});
+
+				// A source turned on mid-visit has never been looked up for this page,
+				// and one turned off may be on screen. Re-running the whole decision is
+				// cheaper to reason about than patching the sidebar in place.
+				await refreshForSourceChange();
+				return;
+			}
+
 			const input = event.target.closest("input[data-setting]");
 
 			if (!input) {
@@ -6359,18 +7732,23 @@ Highlights the passages commenters quote, so you can jump between the article an
 
 		await renderBlockedList();
 
-		const manageBlocked = shadow.querySelector("#settings-manage-blocked");
+		for (const entry of settingsPanel.querySelectorAll(
+			".settings-link-button[data-pane]",
+		)) {
+			entry.onclick = async () => {
+				// The blocked list is built on demand rather than kept in sync, so it
+				// has to be rendered before the pane it lives in slides in.
+				if (entry.dataset.pane === "blocked") {
+					await renderBlockedList();
+				}
 
-		if (manageBlocked) {
-			manageBlocked.onclick = async () => {
-				await renderBlockedList();
-				showSecondaryPane(true);
+				showSecondaryPane(entry.dataset.pane);
 			};
 		}
 
 		for (const control of [crumbBack, crumbRoot]) {
 			if (control) {
-				control.onclick = () => showSecondaryPane(false);
+				control.onclick = () => showSecondaryPane(null);
 			}
 		}
 
@@ -6490,7 +7868,7 @@ ${CHROME_CSS}
 	}
 
 	#resize-handle.resize-handle-active::before {
-		background:#ff6600;
+		background:var(--accent);
 	}
 }
 
@@ -6543,7 +7921,13 @@ ${CHROME_CSS}
 	overflow:auto;
 	overflow-x:hidden;
 			overscroll-behavior:contain;
-	padding:12px 12px 8px;
+	/* The bottom is deliberately far larger than the top. The panel is fixed to
+		the full viewport height, so a page with a horizontal scrollbar puts that
+		scrollbar over the foot of the list -- and 8px was not enough to scroll the
+		last comment clear of it, which read as the thread being cut off. It also
+		gives a long thread somewhere to end: a list that stops flush against the
+		edge looks truncated even when it is complete. */
+	padding:12px 12px 32px;
 	word-wrap:break-word;
 }
 
@@ -6710,7 +8094,13 @@ ${CHROME_CSS}
 	margin-left:0;
 }
 
+/* margin-left:0 so the guide lands on the parent's first letter rather than 8px
+	past it. .children sits inside .comment-main, which already starts after the
+	vote slot, so zeroing the margin puts the rule exactly under where the parent's
+	text begins -- which is what makes a column of them read as one hierarchy
+	instead of a slight stagger. */
 .children > .comment {
+	margin-left:0;
 	border-left:1px solid var(--border-soft);
 	padding-left:6px;
 }
@@ -6718,7 +8108,7 @@ ${CHROME_CSS}
 /* 2px border + 5px padding lines this up with the 1px + 6px of an ordinary
    child, so gaining or losing the "new" accent never shifts the text. */
 .comment.new-comment {
-			border-left:2px solid rgba(255,102,0,.95);
+			border-left:2px solid rgba(var(--accent-rgb),.95);
 			padding-left:5px;
 			transition:border-left-color .9s ease;
 }
@@ -6735,7 +8125,7 @@ ${CHROME_CSS}
 }
 
 .comment.comment-target {
-	background:rgba(255,102,0,.10);
+	background:rgba(var(--accent-rgb),.10);
 	border-radius:6px;
 }
 
@@ -6887,6 +8277,13 @@ ${CHROME_CSS}
 	align-items:flex-start;
 }
 
+/* Collapsed rather than hidden: the slot still exists so the layout is one rule,
+   it just stops reserving width when nothing in the thread can be voted on. */
+.comment-vote-slot-empty {
+	flex-basis:0;
+	width:0;
+}
+
 .comment-vote-slot {
 	flex:0 0 17px;
 	width:17px;
@@ -6937,16 +8334,16 @@ ${CHROME_CSS}
 /* Split deliberately: the -active colour marks a recorded vote and must apply on
    touch, so only the :hover half is gated. */
 .vote-button-active::before {
-	border-bottom-color:#ff6600;
+	border-bottom-color:var(--accent);
 }
 
 @media (hover: hover) {
 	.vote-button:hover::before {
-		border-bottom-color:#ff6600;
+		border-bottom-color:var(--accent);
 	}
 
 	.vote-button-down:hover::before {
-		border-top-color:#ff6600;
+		border-top-color:var(--accent);
 	}
 }
 
@@ -6967,12 +8364,12 @@ ${CHROME_CSS}
 }
 
 .vote-button-neutral.vote-button-active {
-	color:#ff6600;
+	color:var(--accent);
 }
 
 @media (hover: hover) {
 	.vote-button-neutral:hover {
-		color:#ff6600;
+		color:var(--accent);
 	}
 }
 
@@ -7081,7 +8478,7 @@ ${CHROME_CSS}
    under the text rather than as a mark on it. */
 .comment-quote-link-inline {
 	text-decoration:underline;
-	text-decoration-color:rgba(255,102,0,.32);
+	text-decoration-color:rgba(var(--accent-rgb),.32);
 	text-decoration-thickness:1px;
 	text-underline-offset:2px;
 }
@@ -7089,20 +8486,20 @@ ${CHROME_CSS}
 /* Split deliberately: :focus-visible is keyboard navigation and must keep working
    regardless of pointer type, so only the :hover half is gated. */
 .comment-quote-link:focus-visible {
-	background:rgba(255,102,0,.06);
+	background:rgba(var(--accent-rgb),.06);
 }
 
 blockquote.comment-quote-link:focus-visible {
-	background:rgba(255,102,0,.04);
+	background:rgba(var(--accent-rgb),.04);
 }
 
 @media (hover: hover) {
 	.comment-quote-link:hover {
-		background:rgba(255,102,0,.06);
+		background:rgba(var(--accent-rgb),.06);
 	}
 
 	blockquote.comment-quote-link:hover {
-		background:rgba(255,102,0,.04);
+		background:rgba(var(--accent-rgb),.04);
 	}
 }
 
@@ -7243,7 +8640,7 @@ blockquote.comment-quote-redundant {
 }
 
 .composer-text:focus {
-	outline:2px solid rgba(255,102,0,.4);
+	outline:2px solid rgba(var(--accent-rgb),.4);
 	outline-offset:-1px;
 }
 
@@ -7688,7 +9085,27 @@ ${settingsPanelHTML()}
 		}
 
 		const storyID = String(story.id);
-		const hnURL = commentURL(story.id);
+		// The discussion supplies its own permalink rather than having an HN URL
+		// assembled from its id, so this stops pointing at HN for a discussion that
+		// is not on HN. Falls back for the front-page rows, which arrive as parsed
+		// HN markup rather than through an adapter.
+		const hnURL = story.permalink || commentURL(story.id);
+
+		// Read through the normalized names first, falling back to the raw Firebase
+		// ones. renderStory has two callers with different shapes: a discussion from
+		// an adapter, and a front-page row parsed straight out of HN's markup, which
+		// never passes through a mapper.
+		// Flag and favourite are Hacker News features. A source without them must
+		// not be given links that would act on an item id Hacker News never issued.
+		const showActions = options.actions !== false;
+		// The title row is dropped when it would only repeat the page header above
+		// it. It carries the only way out to the discussion though, so that link
+		// moves to the meta row rather than disappearing with it.
+		const showTitle = options.showTitle !== false;
+		const storyAuthor = story.author ?? story.by;
+		const storyCreatedAt = story.createdAt ?? story.time;
+		const storyCommentCount = story.commentCount ?? story.descendants ?? 0;
+		const storyBodyHTML = story.bodyHTML ?? story.text;
 
 		const wrapper = document.createElement("div");
 		wrapper.innerHTML = `
@@ -7703,13 +9120,17 @@ ${settingsPanelHTML()}
 	data-hn-vote-item-id="${escapeHTML(storyID)}"></span>
 	</td>
 	<td class="story-title-cell">
-	<div class="story-title">
-	<a target="_blank"
+	${
+		showTitle
+			? `<div class="story-title">
+	<a target="_blank" rel="noopener noreferrer"
 	href="${escapeHTML(hnURL)}"
-	title="Open discussion on Hacker News">
+	title="Open this discussion where it lives">
 	${escapeHTML(story.title)}
 	</a>
-	</div>
+	</div>`
+			: ""
+	}
 	</td>
 	</tr>
 	<tr>
@@ -7717,22 +9138,23 @@ ${settingsPanelHTML()}
 	<td class="story-body-cell">
 	<div class="story-meta">
 	<span class="story-score" data-story-score-id="${escapeHTML(storyID)}" data-story-score="${escapeHTML(String(story.score || 0))}">${story.score || 0}</span> points by
+	${storyAuthor ? authorLinkHTML(story.source, storyAuthor) : ""}
+	<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
+	${showActions ? itemActionLinksHTML(storyID) : ""}
 	${
-		story.by
-			? `<a target="_blank"
-	href="https://news.ycombinator.com/user?id=${encodeURIComponent(story.by)}">${escapeHTML(story.by)}</a>`
-			: ""
+		showTitle
+			? ""
+			: `| <a class="story-open-link" target="_blank" rel="noopener noreferrer"
+	href="${escapeHTML(hnURL)}">open on ${escapeHTML(story.label || "the site")}</a>`
 	}
-	<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(story.time)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
-	${itemActionLinksHTML(storyID)}
 	|
-	${story.descendants || 0} comments
+	${storyCommentCount} comments
 	</div>
 	${
-		story.text
+		storyBodyHTML
 			? `
 	<div class="story-text">
-	${sanitizeHTML(story.text)}
+	${sanitizeHTML(storyBodyHTML)}
 	</div>
 	`
 			: ""
@@ -8169,35 +9591,38 @@ ${settingsPanelHTML()}
 	// -------------------------
 
 	async function renderChildren(
-		replyIDs,
+		replyKeys,
+		thread,
 		container,
-		storyID,
-		storyAuthor,
+		discussion,
 		seenTime,
-		collapsedIds,
+		collapsedKeys,
 		generation = sidebarGeneration,
-		parentId = null,
+		parentKey = null,
 	) {
 		const batchSize = 5;
 
-		for (let i = 0; i < replyIDs.length; i += batchSize) {
-			const batch = replyIDs.slice(i, i + batchSize);
+		for (let i = 0; i < replyKeys.length; i += batchSize) {
+			const batch = replyKeys.slice(i, i + batchSize);
 
 			await Promise.all(
-				batch.map((id) =>
+				batch.map((key) =>
 					renderComment(
-						id,
+						key,
+						thread,
 						container,
-						storyID,
-						storyAuthor,
+						discussion,
 						seenTime,
-						collapsedIds,
+						collapsedKeys,
 						generation,
-						parentId,
+						parentKey,
 					),
 				),
 			);
 
+			// The frame yield is what makes a thread appear in batches rather than in
+			// one block. A source that returns whole trees resolves getComment
+			// instantly, and without this it would paint everything at once.
 			await new Promise(requestAnimationFrame);
 		}
 	}
@@ -8540,38 +9965,50 @@ ${settingsPanelHTML()}
 	// #endregion hnewhere-test-export
 
 	async function renderComment(
-		id,
+		key,
+		thread,
 		container,
-		storyID,
-		storyAuthor,
+		discussion,
 		seenTime = 0,
-		collapsedIds = new Set(),
+		collapsedKeys = new Set(),
 		generation = sidebarGeneration,
-		parentId = null,
+		parentKey = null,
 	) {
-		const comment = await getItem(id);
+		const comment = await thread.getComment(key);
 
 		if (generation !== sidebarGeneration) {
 			return;
 		}
 
-		if (!comment || comment.deleted || comment.dead) return;
+		if (!comment || comment.deleted) return;
 		const div = document.createElement("div");
 
+		// Two identifiers, deliberately. `comment.key` is identity -- the graph, the
+		// focus filter, collapsed state -- and is source-qualified. `commentID` is
+		// HN's own item number, which the vote, reply and age wiring put into HN
+		// URLs and HN-shaped data attributes, and which a namespaced value would
+		// turn into a 404.
+		const storyID = discussion.id;
+
 		div.className = "comment";
-		div.dataset.commentId = String(comment.id);
+		div.dataset.commentId = comment.key;
 		div.dataset.storyId = String(storyID);
 
 		if (isNewComment(comment, seenTime)) {
 			div.classList.add("new-comment");
 		}
 
-		const replies = comment.kids || [];
+		const replies = comment.replyKeys;
 		const commentID = String(comment.id);
+		const capabilities = getSource(comment.source)?.capabilities || {};
+		// Per thread, not per comment: a blended list where only some comments
+		// reserve the gutter has a ragged left edge, and one where nobody can vote
+		// has a dead column down the whole thing.
+		const threadCanVote = renderedSourcesCanVote();
 
 		div.innerHTML = `
       <div class="comment-layout">
-      <span class="comment-vote-slot">
+      <span class="comment-vote-slot${threadCanVote ? "" : " comment-vote-slot-empty"}">
       <span class="comment-vote-controls vote-controls hidden"
       data-hn-vote-story-id="${escapeHTML(String(storyID))}"
       data-hn-vote-item-id="${escapeHTML(commentID)}"></span>
@@ -8580,33 +10017,48 @@ ${settingsPanelHTML()}
       <div class="comment-main">
       <div class="meta">
 
-      <a target="_blank"
-      href="https://news.ycombinator.com/user?id=${encodeURIComponent(comment.by || "")}">
+      ${authorLinkHTML(comment.source, comment.author)}
 
-      ${escapeHTML(comment.by || "anonymous")}
+		${comment.isOP ? `<span class="op-pill">OP</span>` : ""}
 
-      </a>
+		${
+				// Provenance at metadata weight, beside the author and the age, not as
+				// a badge. Quiet, because the reader is meant to be reading one
+				// conversation rather than two feeds stitched together -- but present,
+				// because a comment from r/science and one from r/conspiracy are not
+				// interchangeable, and removing it would make the sidebar feel coherent
+				// by making it slightly dishonest.
+				//
+				// Roots only. Replies inherit it through the indent guides, and
+				// repeating it on every nested comment would double the weight of the
+				// metadata line to say what the parent already said.
+				parentKey === null && discussion.label && sidebarSourceKeys.size > 1
+					? `<span class="comment-source">${escapeHTML(discussion.label)}</span>`
+					: ""
+			}
 
-      ${
-					comment.by && comment.by === storyAuthor
-						? `<span class="op-pill">OP</span>`
-						: ""
-				}
+		<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span><span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
 
-      <span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.time)}</span><span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
-
-      |
+		${
+				// Reply, flag and favourite are things the reader can *do*, and only
+				// where the source allows it. Reddit is read-only, so offering them
+				// there is an offer that cannot be honoured -- and flag/favourite would
+				// act on an item id Hacker News never issued.
+				capabilities.reply
+					? `|
 
       <a class="reply-link" href="#">
       reply
-      </a>
+		</a>`
+					: ""
+			}
 
       |
 
       <a class="focus-link" href="#">
       focus
       </a>
-      ${itemActionLinksHTML(commentID)}
+		${capabilities.vote ? itemActionLinksHTML(commentID) : ""}
 
       <span class="toggle">
       [–]
@@ -8616,7 +10068,7 @@ ${settingsPanelHTML()}
 
       <div class="comment-content">
        	<div class="text">
-        		${sanitizeHTML(comment.text) || ""}
+        		${sanitizeHTML(comment.bodyHTML) || ""}
        	</div>
        	<div class="reply-composer collapsed">
        	${composerHTML({ label: "reply", placeholder: "Reply…" })}
@@ -8639,13 +10091,21 @@ ${settingsPanelHTML()}
 		foldQuoteBlocks(textElement);
 		wrapLooseCommentText(textElement);
 
+		// `id` and `parentId` keep their names and change what they hold: a
+		// source-qualified key rather than a bare number. Everything downstream --
+		// buildCommentGraph, the focus filter, the annotation groups -- compares
+		// them for identity and never does arithmetic on them, so the rename would
+		// have been churn across a dozen call sites and one test fixture to express
+		// something the values already say.
 		renderedComments.push({
-			id: comment.id,
+			id: comment.key,
+			source: comment.source,
+			discussionKey: discussion.key,
 			storyID,
-			parentId,
-			author: comment.by || "anonymous",
-			time: comment.time || 0,
-			textHTML: comment.text || "",
+			parentId: parentKey,
+			author: comment.author,
+			time: comment.createdAt,
+			textHTML: comment.bodyHTML,
 			element: div,
 			textElement,
 			contentElement: content,
@@ -8654,7 +10114,7 @@ ${settingsPanelHTML()}
 			matchedGroupKeys: new Set(),
 		});
 
-		if (collapsedIds.has(comment.id)) {
+		if (collapsedKeys.has(comment.key)) {
 			content.classList.add("hidden");
 			toggle.textContent = "[+]";
 		}
@@ -8683,7 +10143,7 @@ ${settingsPanelHTML()}
 
 			toggle.textContent = hidden ? "[+]" : "[–]";
 
-			await toggleCollapsed(comment.id, hidden);
+			await toggleCollapsed(comment.key, hidden);
 		};
 
 		const replyButton = div.querySelector(".reply-link");
@@ -8695,164 +10155,464 @@ ${settingsPanelHTML()}
 		// asked for.
 		let composerAPI = null;
 
-		replyButton.onclick = function (event) {
-			event.preventDefault();
+		// Absent on a read-only source, where the link was never rendered.
+		if (replyButton) {
+			replyButton.onclick = function (event) {
+				event.preventDefault();
 
-			const opening = replyComposer.classList.contains("collapsed");
+				const opening = replyComposer.classList.contains("collapsed");
 
-			replyComposer.classList.toggle("collapsed", !opening);
-			replyButton.classList.toggle("is-open", opening);
+				replyComposer.classList.toggle("collapsed", !opening);
+				replyButton.classList.toggle("is-open", opening);
 
-			if (!opening) {
-				return;
-			}
+				if (!opening) {
+					return;
+				}
 
-			// Expanding a collapsed reply box inside a collapsed comment would put it
-			// somewhere invisible, so make sure the comment itself is showing.
-			if (content.classList.contains("hidden")) {
-				content.classList.remove("hidden");
-				toggle.textContent = "[–]";
-				toggleCollapsed(comment.id, false).catch(console.error);
-			}
+				// Expanding a collapsed reply box inside a collapsed comment would put it
+				// somewhere invisible, so make sure the comment itself is showing.
+				if (content.classList.contains("hidden")) {
+					content.classList.remove("hidden");
+					toggle.textContent = "[–]";
+					toggleCollapsed(comment.key, false).catch(console.error);
+				}
 
-			composerAPI ||= wireComposer(
-				replyComposer.querySelector(".comment-composer"),
-				{
-					storyID,
-					parentId: comment.id,
-				},
-			);
+				// comment.id, not comment.key: this becomes HN's own reply URL, and a
+				// namespaced value lands on a 404.
+				composerAPI ||= wireComposer(
+					replyComposer.querySelector(".comment-composer"),
+					{
+						storyID,
+						parentId: comment.id,
+					},
+				);
 
-			composerAPI?.focus();
-		};
+				composerAPI?.focus();
+			};
+		}
 
 		focusButton.onclick = function (event) {
 			event.preventDefault();
-			applyCommentFocus(comment.id);
+			applyCommentFocus(comment.key);
 		};
 
 		if (replies.length) {
 			await renderChildren(
 				replies,
+				thread,
 				children,
-				storyID,
-				storyAuthor,
+				discussion,
 				seenTime,
-				collapsedIds,
+				collapsedKeys,
 				generation,
-				comment.id,
+				comment.key,
 			);
 		}
+
+		mountMoreReplies(comment.more, thread, children, discussion, {
+			seenTime,
+			collapsedKeys,
+			generation,
+			parentKey: comment.key,
+		});
+	}
+
+	// A source that withholds part of a thread says so, and this is the button that
+	// asks for the rest. Optional on both sides: a source with no gaps never sets
+	// `more`, and one that cannot fill them offers no expandMore -- in either case
+	// nothing is drawn, which is why Hacker News needed no changes for this.
+	// Whether any source currently on screen can be voted on. Read off the enabled
+	// sources rather than the rendered comments, so it is stable while a thread is
+	// still painting.
+	function renderedSourcesCanVote() {
+		return [...SOURCES.values()].some(
+			(source) => source.capabilities.vote && sidebarSourceKeys.has(source.id),
+		);
+	}
+
+	function mountMoreReplies(more, thread, container, discussion, context) {
+		if (!more?.ids?.length || typeof thread.expandMore !== "function") {
+			return;
+		}
+
+		let pending = more.ids;
+		let remainingCount = more.count;
+
+		const button = document.createElement("button");
+
+		button.type = "button";
+		button.className = "more-replies";
+		container.appendChild(button);
+
+		const label = () =>
+			`${pluralize(remainingCount, "more reply", "more replies")}`;
+
+		button.textContent = label();
+
+		button.onclick = async () => {
+			if (button.disabled) {
+				return;
+			}
+
+			button.disabled = true;
+			button.textContent = "loading…";
+
+			const { ok, added, remaining } = await thread.expandMore(pending);
+
+			if (context.generation !== sidebarGeneration) {
+				return;
+			}
+
+			// Left standing, and say so. Reddit's budget is a hundred requests per ten
+			// minutes and a long thread can exhaust it, which is a "try again shortly"
+			// rather than a "there was nothing there".
+			if (!ok) {
+				button.disabled = false;
+				button.textContent = label() + " — try again";
+				return;
+			}
+
+			// Rendered before the button so the thread reads in order, and the button
+			// stays beneath whatever it just produced.
+			const holder = document.createElement("div");
+
+			container.insertBefore(holder, button);
+
+			// Direct children of the comment the gap sat under. Their own replies
+			// arrived in the same batch and are already linked, so renderChildren
+			// recurses into them without another request.
+			const directKeys = added
+				.filter((comment) => comment.parentKey === context.parentKey)
+				.map((comment) => comment.key);
+
+			await renderChildren(
+				directKeys,
+				thread,
+				holder,
+				discussion,
+				context.seenTime,
+				context.collapsedKeys,
+				context.generation,
+				context.parentKey,
+			);
+
+			pending = remaining;
+			// Counted against everything that arrived, not just the direct children:
+			// a nested reply is one fewer comment behind the gap too.
+			remainingCount = Math.max(0, remainingCount - added.length);
+
+			// The gap is genuinely closed: the source answered, and either it gave
+			// back nothing or there are no ids left to ask about.
+			if (!pending.length || !added.length) {
+				button.remove();
+				return;
+			}
+
+			button.disabled = false;
+			button.textContent = label();
+		};
 	}
 
 	// -------------------------
 	// Discussion loading
 	// -------------------------
 
-	async function renderSingleDiscussion(story, ui) {
+	async function renderDiscussions(stories, ui) {
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
 		// The observer holds the elements about to be thrown away with the list.
 		stopObservingNewComments();
 		renderedComments = [];
 		ui.body.innerHTML = "";
-		setSidebarRestingSubtitle(ui, "");
+		// "submissions on HN" was true while HN was the only source. It stops being
+		// true the moment a second one is enabled, and a header that miscounts where
+		// a conversation happened is worse than one that just counts it. The proper
+		// per-source breakdown is the source strip, which the blended thread brings.
+		setSidebarRestingSubtitle(ui, pluralize(stories.length, "discussion"));
 
 		const generation = sidebarGeneration;
-		const votePromise = isSidebarVisible() ? loadVoteLinks(story.id) : null;
-		const storyElement = renderStory(story, ui.body);
-		mountFilterBanner(storyElement, ui);
+
+		// Every thread first, because the merge needs each discussion's total before
+		// it can place any one comment. They are independent reads, so they overlap
+		// rather than queueing behind each other.
+		const threads = await Promise.all(
+			stories.map((story) => getSource(story.source).loadThread(story)),
+		);
+
+		if (generation !== sidebarGeneration) {
+			return;
+		}
+
+		const headerElement = renderPageHeader(stories, threads, ui.body);
+
+		mountFilterBanner(headerElement, ui);
+
+		// Each discussion's own block -- its score, its author, and on Hacker News
+		// its vote, flag, favourite and composer -- rendered once and revealed by
+		// the strip. The page is the header; a submission is a thing inside it.
+		//
+		// Shown outright when there is only one, because then there is nothing to
+		// disambiguate: its actions are the page's actions, and hiding the composer
+		// behind a filter nobody needs would take away the way to reply.
+		sidebarSourceKeys.clear();
+
+		for (const story of stories) {
+			sidebarSourceKeys.add(story.source);
+		}
+
+		const details = document.createElement("div");
+
+		details.className = "submission-details";
+		ui.body.appendChild(details);
+
+		const pageTitle = stories[0]?.title || "";
+
+		for (const story of stories) {
+			const canVote = Boolean(getSource(story.source)?.capabilities.vote);
+			// Shown only where it says something the page header does not. Two
+			// submitters can title the same link differently, and that is worth
+			// seeing; the usual case, where they match, was two identical headings
+			// stacked on top of each other.
+			const block = renderStory(story, details, {
+				actions: canVote,
+				showTitle: story.title !== pageTitle,
+			});
+
+			if (block) {
+				block.classList.add("submission-detail");
+				block.dataset.discussionKey = story.key;
+				block.hidden = stories.length > 1;
+			}
+		}
 
 		const comments = document.createElement("div");
+
 		comments.className = "top-level-comments";
 		ui.body.appendChild(comments);
 
-		// Independent reads, so they resolve together instead of one after the
-		// other in front of the first comment.
-		const [seenTime, collapsedIds] = await Promise.all([
-			getSeenTime(story.id),
-			loadCollapsed(),
-		]);
-
-		await renderChildren(
-			story.kids || [],
-			comments,
-			story.id,
-			story.by,
-			seenTime,
-			collapsedIds,
+		const collapsedKeys = await loadCollapsed();
+		const seenTimes = new Map(
+			await Promise.all(
+				stories.map(async (story) => [story.key, await getSeenTime(story.key)]),
+			),
 		);
 
-		await markSeen(story.id);
+		const context = new Map(
+			stories.map((story, index) => [
+				story.key,
+				{ story, thread: threads[index] },
+			]),
+		);
 
-		if (votePromise && generation === sidebarGeneration) {
-			// The fetch was started before rendering, so this names only whatever is
-			// left of it. It sits between the comments and the annotations because
-			// that is where the reader actually waits for it.
+		const entries = blendRoots(
+			stories.map((story, index) => ({
+				discussionKey: story.key,
+				rootKeys: threads[index].rootKeys,
+			})),
+		);
+
+		// Batched exactly as renderChildren batches, for the same reason: the frame
+		// yield is what makes a long thread appear in pieces rather than in one
+		// block. What differs is that each root carries its own thread and
+		// discussion, because the list they are merged into spans several.
+		const batchSize = 5;
+
+		for (let i = 0; i < entries.length; i += batchSize) {
+			if (generation !== sidebarGeneration) {
+				return;
+			}
+
+			await Promise.all(
+				entries.slice(i, i + batchSize).map((entry) => {
+					const held = context.get(entry.discussionKey);
+
+					return renderComment(
+						entry.key,
+						held.thread,
+						comments,
+						held.story,
+						seenTimes.get(entry.discussionKey) || 0,
+						collapsedKeys,
+						generation,
+					);
+				}),
+			);
+
+			await new Promise(requestAnimationFrame);
+		}
+
+		for (const [index, story] of stories.entries()) {
+			mountMoreReplies(threads[index].rootMore, threads[index], comments, story, {
+				seenTime: seenTimes.get(story.key) || 0,
+				collapsedKeys,
+				generation,
+				parentKey: null,
+			});
+		}
+
+		for (const story of stories) {
+			await markSeen(story.key);
+		}
+
+		// Vote wiring is HN's, and only HN's -- Reddit is read-only, so its
+		// discussions declare no vote capability and are skipped rather than
+		// fetched-and-discarded.
+		for (const story of stories) {
+			if (!isSidebarVisible() || !getSource(story.source)?.capabilities.vote) {
+				continue;
+			}
+
+			if (generation !== sidebarGeneration) {
+				return;
+			}
+
 			setSidebarStage(ui, "votes");
-			hydrateVoteControlsForStory(story.id, await votePromise);
+			hydrateVoteControlsForStory(story.id, await loadVoteLinks(story.id));
 			hydrateDisplayAges(story.id);
 		}
 	}
 
-	async function renderBlendedDiscussion(stories, ui) {
-		clearArticleAnnotations();
-		clearCommentFilter({ animate: false });
-		// The observer holds the elements about to be thrown away with the list.
-		stopObservingNewComments();
-		renderedComments = [];
-		ui.body.innerHTML = "";
-		setSidebarRestingSubtitle(
-			ui,
-			pluralize(stories.length, "submission") + " on HN",
+	// The subject is the page, not any one submission of it. `renderStory` put a
+	// submission's own title and score at the top because there was only ever one;
+	// with several, across several sites, that is trivia sitting where the article
+	// should be.
+	function renderPageHeader(stories, threads, container) {
+		const total = stories.reduce(
+			(sum, story) => sum + (story.commentCount || 0),
+			0,
 		);
 
-		const generation = sidebarGeneration;
+		const wrapper = document.createElement("div");
 
-		for (const [index, story] of stories.entries()) {
-			const votePromise = isSidebarVisible() ? loadVoteLinks(story.id) : null;
-			const section = document.createElement("div");
-			section.className = "submission";
-			section.dataset.storyId = String(story.id);
+		wrapper.className = "page-header";
+		wrapper.innerHTML = `
+<div class="page-header-title">${escapeHTML(stories[0]?.title || "")}</div>
+<div class="page-header-meta">${escapeHTML(pluralize(total, "comment"))} across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button></div>
+<div class="source-strip" id="source-strip">
+${stories
+	.map(
+		(story, index) => `
+<button type="button" class="source-strip-entry"
+data-discussion-key="${escapeHTML(story.key)}"
+title="Show only this discussion">
+<span class="source-strip-label">${escapeHTML(story.label)}</span>
+<span class="source-strip-count">${escapeHTML(String(threads[index]?.rootKeys.length ?? 0))}</span>
+</button>`,
+	)
+	.join("")}
+</div>`;
 
-			ui.body.appendChild(section);
+		// Collapsed until asked for. The aggregate is the headline -- "what the
+		// internet said about this page" -- and the breakdown is what a reader
+		// reaches for, so it opens off the count that names it rather than sitting
+		// permanently under the title.
+		const strip = wrapper.querySelector(".source-strip");
+		const disclosure = wrapper.querySelector(".page-header-disclosure");
 
-			const storyElement = renderStory(story, section, {
-				multiple: true,
-				stories,
-			});
+		const setStripOpen = (open) => {
+			strip.classList.toggle("is-open", open);
+			disclosure.setAttribute("aria-expanded", open ? "true" : "false");
 
-			if (index === 0) {
-				mountFilterBanner(storyElement, ui);
+			// Measured rather than left to the CSS ceiling. A max-height animation
+			// only *looks* like a slide while the ceiling is still below the content:
+			// against a fixed 160px, a two-pill strip 22px tall finishes moving about
+			// 30ms into a 220ms transition and reads as a snap. Setting the height it
+			// actually needs makes the motion last as long as the transition does.
+			strip.style.maxHeight = open ? `${strip.scrollHeight}px` : "0px";
+
+			// Collapsed content stays in the layout for the slide, so it has to leave
+			// the tab order by hand or a hidden pill can still be focused.
+			for (const entry of strip.querySelectorAll(".source-strip-entry")) {
+				entry.tabIndex = open ? 0 : -1;
+			}
+		};
+
+		setStripOpen(false);
+
+		disclosure.onclick = () =>
+			setStripOpen(!strip.classList.contains("is-open"));
+
+		// Filtering, not navigating. A pill that opened the thread on Reddit would
+		// be answering "show me this part of the conversation" by sending the reader
+		// out of the conversation -- and the sidebar already knows how to show one
+		// discussion, because a quoted passage and a focused comment do the same
+		// thing. Pressing the active one puts the whole blend back.
+		wrapper.querySelector(".source-strip").addEventListener("click", (event) => {
+			const entry = event.target.closest(".source-strip-entry");
+
+			if (!entry) {
+				return;
 			}
 
-			const comments = document.createElement("div");
-			comments.className = "top-level-comments";
+			const key = entry.dataset.discussionKey;
 
-			section.appendChild(comments);
-
-			const [seenTime, collapsedIds] = await Promise.all([
-				getSeenTime(story.id),
-				loadCollapsed(),
-			]);
-
-			await renderChildren(
-				story.kids || [],
-				comments,
-				story.id,
-				story.by,
-				seenTime,
-				collapsedIds,
-			);
-
-			await markSeen(story.id);
-
-			if (votePromise && generation === sidebarGeneration) {
-				setSidebarStage(ui, "votes");
-				hydrateVoteControlsForStory(story.id, await votePromise);
-				hydrateDisplayAges(story.id);
+			if (activeCommentFilter?.type === "discussion" && activeCommentFilter.key === key) {
+				clearCommentFilter({ restore: true });
+			} else {
+				applyDiscussionFilter(key);
 			}
+
+			syncSourceStripState(wrapper);
+			syncSubmissionDetails();
+			// Left open on purpose: collapsing the strip out from under the press
+			// that just filtered would take away the control needed to undo it.
+			setStripOpen(true);
+		});
+
+		container.appendChild(wrapper);
+
+		return wrapper;
+	}
+
+	// Which pill is currently doing something, read off the filter rather than
+	// tracked separately, so a filter cleared from the banner leaves the strip
+	// showing the truth.
+	// The story block belonging to whichever discussion is filtered. Driven off
+	// activeCommentFilter rather than tracked separately, so a filter cleared from
+	// the banner leaves the right block showing.
+	function syncSubmissionDetails() {
+		const blocks = sidebarUI?.body?.querySelectorAll(".submission-detail");
+
+		if (!blocks?.length) {
+			return;
 		}
+
+		// One discussion has no ambiguity to resolve, so its block simply stays.
+		if (blocks.length === 1) {
+			blocks[0].hidden = false;
+			return;
+		}
+
+		const active =
+			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
+
+		for (const block of blocks) {
+			block.hidden = block.dataset.discussionKey !== active;
+		}
+	}
+
+	function syncSourceStripState(wrapper) {
+		const active =
+			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
+
+		for (const entry of wrapper.querySelectorAll(".source-strip-entry")) {
+			entry.classList.toggle(
+				"source-strip-entry-active",
+				entry.dataset.discussionKey === active,
+			);
+		}
+	}
+
+	// Told apart by `source`, which only a normalized discussion carries. Refs are
+	// HN by construction -- every path that produces one stores an HN item id --
+	// so loading them through the HN adapter is not an assumption, it is what
+	// those ids are.
+	async function resolveDiscussions(items) {
+		if (items.some((item) => item && item.source)) {
+			return items;
+		}
+
+		return (await loadStories(items)).map(hnDiscussion);
 	}
 
 	async function loadStories(stories) {
@@ -8985,6 +10745,15 @@ ${settingsPanelHTML()}
 			// to load, nothing to annotate, and no per-site state worth recording --
 			// writing "collapsed" here would suppress automatic opening later, on a
 			// page that has since been submitted, for a panel the reader never shut.
+			// Same shape as browseOnly below: the shell is real, the body is not a
+			// discussion. Nothing further applies -- there are no stories to load,
+			// nothing to annotate, and no per-site state worth recording.
+			if (options.setupOnly) {
+				sidebarHasDiscussion = false;
+				renderSourcePicker(ui);
+				return;
+			}
+
 			if (options.browseOnly) {
 				sidebarHasDiscussion = false;
 				renderNoDiscussion(ui);
@@ -9043,10 +10812,14 @@ ${settingsPanelHTML()}
 
 			setSidebarStage(ui, "discussion");
 
-			const loaded = await loadStories(stories);
+			// Two shapes converge here. The page lookup hands over discussions that
+			// are already normalized, because a Reddit one cannot be rebuilt from an
+			// HN id. The queue, the reading list and the reopen-after-commenting path
+			// hand over HN story refs, which still have to be loaded.
+			const loaded = await resolveDiscussions(stories);
 
 			if (!loaded.length) {
-				throw new Error("No HN stories could be loaded");
+				throw new Error("No discussions could be loaded");
 			}
 
 			if (generation !== sidebarGeneration) {
@@ -9055,11 +10828,11 @@ ${settingsPanelHTML()}
 
 			setSidebarStage(ui, "comments");
 
-			if (loaded.length === 1) {
-				await renderSingleDiscussion(loaded[0], ui);
-			} else {
-				await renderBlendedDiscussion(loaded, ui);
-			}
+			// One path, whatever the count. Two renderers meant the panel looked
+			// like a different product depending on how many places a link happened
+			// to be posted to -- a submission header for one, a page header for
+			// several -- and every fix had to be made twice.
+			await renderDiscussions(loaded, ui);
 
 			if (generation === sidebarGeneration) {
 				// Announced only when the pass will actually run, so the sidebar never
@@ -10337,6 +12110,7 @@ ${settingsPanelHTML()}
 
 			setQuoteRedundancy(null, false);
 			updateSubmissionVisibility(null);
+			syncSubmissionDetails();
 			sidebarUI?.filterBanner?.classList.add("hidden");
 			if (sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBannerQuote.textContent = "";
@@ -11719,16 +13493,19 @@ ${settingsPanelHTML()}
 	}
 
 	// #region hnewhere-test-export
+	// Literal channels, not var(--accent-rgb): these paint into the page-side
+	// overlay, which cannot see the panel's variables. Keep them in step with
+	// ACCENT_RGB by hand -- there is no mechanism that can do it here.
 	const HEAT_FILL_LIGHT = {
-		light: "rgba(255,102,0,.025)",
-		medium: "rgba(255,102,0,.045)",
-		heavy: "rgba(255,102,0,.07)",
+		light: `rgba(${ACCENT_RGB},.025)`,
+		medium: `rgba(${ACCENT_RGB},.045)`,
+		heavy: `rgba(${ACCENT_RGB},.07)`,
 	};
 
 	const HEAT_FILL_DARK = {
-		light: "rgba(255,102,0,.035)",
-		medium: "rgba(255,102,0,.055)",
-		heavy: "rgba(255,102,0,.075)",
+		light: `rgba(${ACCENT_RGB},.035)`,
+		medium: `rgba(${ACCENT_RGB},.055)`,
+		heavy: `rgba(${ACCENT_RGB},.075)`,
 	};
 
 	// Quote rects paint solid and their layer carries the strength. Painting them
@@ -11738,9 +13515,9 @@ ${settingsPanelHTML()}
 	// layer that is itself partly transparent cannot compound, so every quote reads
 	// the same. How much a passage is discussed is the heat layer's job, and it was
 	// only ever being said twice.
-	const QUOTE_INK = "#ff6600";
+	const QUOTE_INK = ACCENT;
 	// Meant to read as a highlighter drawn over the line, not as a tint on it: half
-	// strength puts white paper at rgb(255,178,127). The overlay blends, so orange
+	// strength puts white paper at rgb(173,173,235). The overlay blends, so the accent
 	// cannot touch the glyphs however heavy it gets -- text on a highlight keeps a
 	// contrast ratio above 10 here, against the 4.5 body text is asked for -- which
 	// is what lets this be a real mark rather than the .08 whisper it started as.
@@ -11952,9 +13729,17 @@ ${settingsPanelHTML()}
 			return;
 		}
 
+		// Earliest by timestamp, not first in thread order. Thread order is a
+		// property of one discussion, and a quote group can now hold comments from
+		// several -- so "first" meant "whichever source happened to render first",
+		// which is not a fact about the comments at all.
+		const earliest = [...group.comments].sort(
+			(a, b) => (a.time || 0) - (b.time || 0),
+		)[0];
+
 		const targetMatch =
 			group.comments.find((match) => match.commentId === options.commentId) ||
-			group.comments[0];
+			earliest;
 
 		applyFocusedDiscussion(
 			{
@@ -11973,6 +13758,48 @@ ${settingsPanelHTML()}
 				onFiltered: () => setQuoteRedundancy(group, true),
 			},
 			options,
+		);
+	}
+
+	// The third way in, and the plainest: show one discussion out of the blend.
+	// Direct matches are that discussion's roots, and getVisibleCommentIds carries
+	// their subtrees down, so "just r/rust" is the same kind of view a quoted
+	// passage produces rather than a separate mode with its own rules.
+	function applyDiscussionFilter(discussionKey, options = {}) {
+		const roots = renderedComments.filter(
+			(rendered) =>
+				rendered.discussionKey === discussionKey && rendered.parentId === null,
+		);
+
+		// Same bail-out as a missing quote group: a re-render between refreshes can
+		// leave a filter pointing at comments that are no longer in the list.
+		if (!roots.length) {
+			clearCommentFilter(options);
+			return;
+		}
+
+		applyFocusedDiscussion(
+			{
+				filter: { type: "discussion", key: discussionKey },
+				directMatchIds: new Set(roots.map((rendered) => rendered.id)),
+				// The strip is above the list rather than inside it, so there is no
+				// comment to pin the banner to -- it sits at the top, where entering
+				// this filter leaves the reader anyway.
+				anchorElement: null,
+				paintBanner: (quote) => {
+					quote.classList.add("filter-banner-quote-comment");
+					quote.textContent = discussionLabelForKey(discussionKey);
+				},
+			},
+			options,
+		);
+	}
+
+	function discussionLabelForKey(discussionKey) {
+		return (
+			sidebarUI?.body
+				?.querySelector(`.source-strip-entry[data-discussion-key="${CSS.escape(discussionKey)}"] .source-strip-label`)
+				?.textContent?.trim() || "this discussion"
 		);
 	}
 
@@ -12421,6 +14248,7 @@ ${settingsPanelHTML()}
 			"hn-restore-button",
 			"hn-collapse-button",
 			"hn-submit-button",
+			"hn-setup-button",
 		]) {
 			const button = document.getElementById(id);
 
@@ -12448,6 +14276,16 @@ ${settingsPanelHTML()}
 	// sidebar or sidebarUI afterwards.
 	function teardownForBlockedSite() {
 		teardownSurfaces();
+	}
+
+	// Changing which sources are on changes what this page is, so the whole
+	// decision is re-run rather than the sidebar patched: a source switched on has
+	// never been looked up here, one switched off may be on screen, and init is the
+	// only place that knows how to choose between a discussion, a submit button and
+	// the picker. Same contract as teardownForBlockedSite -- persist first.
+	async function refreshForSourceChange() {
+		teardownSurfaces();
+		await init();
 	}
 
 	// Shared by both headers. Persists before tearing down, because the teardown
@@ -12502,6 +14340,11 @@ ${settingsPanelHTML()}
 			});
 		} else if (activeCommentFilter?.type === "comment") {
 			applyCommentFocus(activeCommentFilter.id, {
+				scroll: false,
+				animate: false,
+			});
+		} else if (activeCommentFilter?.type === "discussion") {
+			applyDiscussionFilter(activeCommentFilter.key, {
 				scroll: false,
 				animate: false,
 			});
@@ -12618,7 +14461,11 @@ ${settingsPanelHTML()}
 	// -------------------------
 
 	async function init() {
+		// Before migrateStorage, which writes on its own first run and would make
+		// every fresh install look like an upgrade.
+		await seedSources();
 		await migrateStorage();
+		await migrateSourceKeys();
 
 		// On HN, only record clicked stories, offer the queue, and service popup
 		// bridge actions.
@@ -12730,6 +14577,17 @@ ${settingsPanelHTML()}
 			settings.hideWithoutDiscussion &&
 			!(settings.showButtonWithQueue && unreadQueueCount(await loadQueue()));
 
+		// Nothing enabled means nothing is looked up: no Algolia, no Firebase, no
+		// requests at all. The button stops being a discussion indicator, because
+		// there is no discussion to indicate, and becomes the way into the picker.
+		if (!enabledSourceIds(settings, registeredSourceIds()).length) {
+			if (!hideButton) {
+				await createSetupButton();
+			}
+
+			return;
+		}
+
 		// Drawn before the lookup, so the page shows something immediately and the
 		// ring covers whatever comes next. Skipped when the reader has asked for no
 		// button without a discussion, because then it might correctly never appear
@@ -12773,9 +14631,9 @@ ${settingsPanelHTML()}
 
 		// Otherwise look the URL up now rather than on click. 1.5.3 makes the button's
 		// colour mean "a discussion exists", which is only answerable before it is
-		// drawn. findHN caches per URL for an hour, so this is one request per new
-		// page rather than one per visit.
-		const stories = await findHN(location.href);
+		// drawn. Each source caches per URL for an hour, so this is one request per
+		// source per new page rather than one per visit.
+		const stories = await discoverAll(location.href, settings);
 
 		const requestedOpen = takeRequestedOpen();
 
@@ -12787,12 +14645,15 @@ ${settingsPanelHTML()}
 			// are doing now. Recorded like any other open they asked for.
 			if (requestedOpen) {
 				destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
-				await openSidebar(stories.map((story) => ({ objectID: story.objectID })));
+				// Passed whole rather than reduced to ids. A Reddit discussion cannot
+				// be rebuilt from an HN item number, and reducing these to refs was
+				// what made that impossible.
+				await openSidebar(stories);
 				return;
 			}
 
 			await presentDiscussion(
-				stories.map((story) => ({ objectID: story.objectID })),
+				stories,
 				settings,
 				siteState,
 				arrivedFromHNReferrer,
