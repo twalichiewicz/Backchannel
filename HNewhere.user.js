@@ -10720,7 +10720,7 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		const headerElement = renderPageHeader(stories, threads, ui.body);
+		const headerElement = renderPageHeader(stories, ui.body);
 
 		mountFilterBanner(headerElement, ui);
 
@@ -10859,7 +10859,11 @@ ${settingsPanelHTML()}
 	// submission's own title and score at the top because there was only ever one;
 	// with several, across several sites, that is trivia sitting where the article
 	// should be.
-	function renderPageHeader(stories, threads, container) {
+	// The pill counts every comment in a discussion, not the roots it happens to
+	// have loaded. Roots made the pills disagree with everything around them: the
+	// header totalled 325 while they summed to 100, and filtering to a pill that
+	// said 26 opened a submission line reading "96 comments".
+	function renderPageHeader(stories, container) {
 		const total = stories.reduce(
 			(sum, story) => sum + (story.commentCount || 0),
 			0,
@@ -10895,7 +10899,7 @@ ${stories
 data-discussion-key="${escapeHTML(story.key)}"
 title="Show only this discussion">
 <span class="source-strip-label">${escapeHTML(story.label)}</span>
-<span class="source-strip-count">${escapeHTML(String(threads[index]?.rootKeys.length ?? 0))}</span>
+<span class="source-strip-count">${escapeHTML(String(story.commentCount ?? 0))}</span>
 </button>`,
 	)
 	.join("")}
