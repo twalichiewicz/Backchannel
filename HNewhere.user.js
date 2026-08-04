@@ -1,13 +1,13 @@
 // ==UserScript==
-// @name         HNewhere
+// @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.5.8
+// @version      1.6.0
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @homepageURL  https://github.com/twalichiewicz/HNewhere
 // @supportURL   https://github.com/twalichiewicz/HNewhere/issues
-// @description  Hacker News comments sidebar for any article
+// @description  Read what Hacker News and Reddit said about any page, in one thread
 // @include      http://*
 // @include      https://*
 // @exclude      http://localhost/*
@@ -90,7 +90,7 @@
 
 			await save("HNewhere:migrated", 1);
 		} catch (e) {
-			console.error("HNewhere migration failed:", e);
+			console.error("Backchannel migration failed:", e);
 		}
 	}
 
@@ -113,7 +113,7 @@
 			await save(STORAGE.seen, migrateSeenTimes(await load(STORAGE.seen, {})));
 			await save(SOURCE_KEY_MIGRATION, 1);
 		} catch (e) {
-			console.error("HNewhere source key migration failed:", e);
+			console.error("Backchannel source key migration failed:", e);
 		}
 	}
 
@@ -176,7 +176,7 @@
 
 			await save(SOURCE_SEED_MIGRATION, 1);
 		} catch (e) {
-			console.error("HNewhere source seeding failed:", e);
+			console.error("Backchannel source seeding failed:", e);
 		}
 	}
 
@@ -1856,7 +1856,7 @@ ${
 		const results = await Promise.all(
 			enabledSources(settings).map((source) =>
 				source.discover(url).catch((e) => {
-					console.error("HNewhere " + source.id + " discovery failed:", e);
+					console.error("Backchannel " + source.id + " discovery failed:", e);
 					return [];
 				}),
 			),
@@ -2512,21 +2512,21 @@ ${
 	// In a region because the heat palette is built from ACCENT_RGB and is itself
 	// tested: the harness evaluates the regions alone, so an identifier one region
 	// borrows from another has to be inside one too.
-	const ACCENT = "#ff6600";
-	const ACCENT_DARK = "#ff6600";
+	const ACCENT = "#5b5bd6";
+	const ACCENT_DARK = "#8b8bf0";
 
 	// The same accent as channels, for the places that cannot use a CSS variable at
 	// all: the annotation overlay is mounted in the page rather than in the panel's
 	// shadow root -- deliberately, so mix-blend-mode composites against the article
 	// -- and nothing there can see --accent. A var() reference would resolve to
 	// nothing and paint every highlight invisible.
-	const ACCENT_RGB = "255,102,0";
+	const ACCENT_RGB = "91,91,214";
 	// #endregion hnewhere-test-export
 
 	// Two characters, because that is what a 44px circle holds. "HN" was doing
 	// double duty as the product's mark and as the name of the only source; with
 	// several sources it would have been announcing one of them.
-	const BUTTON_MARK = "HN";
+	const BUTTON_MARK = "BC";
 
 	// The two states the floating button can be in. "active" means a discussion is
 	// known to exist; "inactive" means the lookup came back empty and clicking offers
@@ -5508,12 +5508,12 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 	--header-bg:var(--accent);
 	/* White, not black. Black carried itself on orange and does not on indigo --
 		the accent is a good deal darker than the colour it replaced. */
-	--header-text:#000;
+	--header-text:#fff;
 	/* The relationship inverts with the title: a dimmed lavender on the header's
 		own indigo, clearly subordinate to the white title. The peak is the
 		travelling highlight. */
-	--subtitle-stage:#8f3900;
-	--subtitle-stage-peak:#d0721f;
+	--subtitle-stage:#c6c6ef;
+	--subtitle-stage-peak:#ffffff;
 	--border:#ccc;
 	--border-soft:#ddd;
 	--link:#0000aa;
@@ -5522,8 +5522,8 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 	/* Backchannel's accent. Deliberately not Hacker News orange and not Reddit's
 		orange-red: the panel now speaks for several sources and must not wear any
 		one of their colours. One token, so changing the brand is one line. */
-	--accent:#ff6600;
-	--accent-rgb:255,102,0;
+	--accent:#5b5bd6;
+	--accent-rgb:91,91,214;
 	--surface:#fff;
 	--surface-text:#222;
 	--surface-border:#d6d6d6;
@@ -5567,19 +5567,19 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 		foreground, which makes it far too bright behind a header. This is the
 		dimmed counterpart, the way #cc5200 was the dimmed counterpart of the old
 		orange. */
-	--header-bg:#cc5200;
-	--header-text:#000;
+	--header-bg:#3f3f9e;
+	--header-text:#f0f0ff;
 	/* Dimmer to hold the same relationship against the dimmer header. */
-	--subtitle-stage:#6d2b00;
-	--subtitle-stage-peak:#ad5a17;
+	--subtitle-stage:#9a9ad4;
+	--subtitle-stage-peak:#e6e6ff;
 	--border:#3d3d3d;
 	--border-soft:#383838;
 	--link:#8ab4f8;
 	--meta:#9a9a9a;
 	--muted:#a3a3a3;
 	/* Lifted a little for dark backgrounds, where the light value reads muddy. */
-	--accent:#ff6600;
-	--accent-rgb:255,102,0;
+	--accent:#8b8bf0;
+	--accent-rgb:139,139,240;
 	--surface:#2a2a2a;
 	--surface-text:#dcdcdc;
 	--surface-border:#454545;
@@ -7116,29 +7116,29 @@ ${
 	browse
 		? `<button id="browse-toggle" class="header-wordmark" type="button"
 title="Hacker News and your queue"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
-class="wordmark-root"><b>HN</b>ewhere</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
+class="wordmark-root"><b>Back</b>channel</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
 class="wordmark-tail"><span class="wordmark-sep">/</span>Read more</span></button>`
-		: `<span><b>HN</b>ewhere</span>`
+		: `<span><b>Back</b>channel</span>`
 }
 ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </span>
 
 <div class="header-actions">
-<button id="hide-site" aria-label="Hide HNewhere on this site" title="Hide HNewhere on this site">
+<button id="hide-site" aria-label="Hide Backchannel on this site" title="Hide Backchannel on this site">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path d="M1.4 8S3.9 3.9 8 3.9 14.6 8 14.6 8 12.1 12.1 8 12.1 1.4 8 1.4 8Z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
 <circle cx="8" cy="8" r="1.85" fill="none" stroke="currentColor" stroke-width="1.25"/>
 <line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
 </svg>
 </button>
-<button id="settings-toggle" aria-label="Open HNewhere settings" title="HNewhere settings" aria-expanded="false" aria-controls="settings-panel">
+<button id="settings-toggle" aria-label="Open Backchannel settings" title="Backchannel settings" aria-expanded="false" aria-controls="settings-panel">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>
 </svg>
 </button>
 ${
 	minimize
-		? `<button id="minimize" aria-label="Minimize HNewhere" title="Minimize">
+		? `<button id="minimize" aria-label="Minimize Backchannel" title="Minimize">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <line x1="3.4" y1="8" x2="12.6" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
 </svg>
@@ -7282,7 +7282,7 @@ ${["read", "vote", "reply", "submit"]
 </div>
 
 <div class="settings-credits">
-<a href="${escapeHTML(REPO_URL)}" target="_blank" rel="noopener noreferrer">HNewhere${SCRIPT_VERSION ? " v" + escapeHTML(SCRIPT_VERSION) : ""}</a>
+<a href="${escapeHTML(REPO_URL)}" target="_blank" rel="noopener noreferrer">Backchannel${SCRIPT_VERSION ? " v" + escapeHTML(SCRIPT_VERSION) : ""}</a>
 <a href="${escapeHTML(REPO_URL)}/issues" target="_blank" rel="noopener noreferrer">Report an issue</a>
 </div>
 </div>
@@ -7714,7 +7714,7 @@ ${["read", "vote", "reply", "submit"]
 				remove.type = "button";
 				remove.className = "settings-blocked-remove";
 				remove.textContent = "×";
-				remove.setAttribute("aria-label", `Stop hiding HNewhere on ${host}`);
+				remove.setAttribute("aria-label", `Stop hiding Backchannel on ${host}`);
 				remove.onclick = async () => {
 					const next = await loadBlockedSites();
 
