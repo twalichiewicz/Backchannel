@@ -8377,15 +8377,20 @@ ${["read", "vote", "reply", "submit"]
 
 		if (resetButton) {
 			resetButton.onclick = async () => {
-				// Shape and size only. A button reset should not silently change the
-				// user's theme choice.
+				// What the blueprint draws: shape, size and the accent whose hex is
+				// the measure's caption. Deliberately not the theme, which is a
+				// separate control above and not a property of the button.
 				const settings = await saveSettings({
 					buttonShape: DEFAULT_SETTINGS.buttonShape,
 					buttonSize: DEFAULT_SETTINGS.buttonSize,
+					accentColor: DEFAULT_SETTINGS.accentColor,
 				});
 
 				applySettingsPanelState(settings);
 				await refreshButtonAppearance();
+				// Reaches further than the button: the accent is the panel's, the
+				// article highlights' and the header's as well.
+				await refreshAccentOverride();
 			};
 		}
 
