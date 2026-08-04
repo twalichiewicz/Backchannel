@@ -9121,7 +9121,7 @@ ${settingsPanelHTML()}
 <div id="browse-view" class="browse-view">
 <div class="browse-tabs" role="tablist">
 <button id="browse-tab-queue" class="browse-tab" type="button" role="tab" hidden>queue</button>
-<button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front page</button>
+<button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">Hacker News front page</button>
 </div>
 <div id="browse-list"></div>
 </div>
