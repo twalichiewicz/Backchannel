@@ -1168,6 +1168,7 @@
 		return item;
 	}
 
+	// #region hnewhere-test-export
 	// Stories reach the sort in three shapes: Algolia hits from findHN, Firebase
 	// items from loadStories, and normalized discussions from a source adapter.
 	// Reading all three here keeps one ordering rule instead of three that can
@@ -1196,7 +1197,36 @@
 		);
 	}
 
-	// #region hnewhere-test-export
+	// The same link gets submitted to Hacker News more than once, and the second
+	// one is routinely a repost nobody replied to. Two discussions both labelled
+	// "HN" -- one with 103 comments, one with 1 -- are not two places the
+	// conversation is happening; they are the same place listed twice, under two
+	// pills that cannot be told apart.
+	//
+	// Keyed on source *and* label rather than source alone, because a subreddit is
+	// a label: r/programming and r/webdev are genuinely two rooms and both survive.
+	// Two posts in the same subreddit do not. The rule is what the reader can
+	// distinguish -- if two entries would present identically, only the one with
+	// the conversation is worth keeping.
+	function collapseIndistinguishable(discussions) {
+		const best = new Map();
+
+		for (const discussion of discussions) {
+			const key = discussion.source + " " + (discussion.label ?? "");
+			const held = best.get(key);
+
+			if (!held || compareStoriesByDiscussion(discussion, held) < 0) {
+				best.set(key, discussion);
+			}
+		}
+
+		// Input order, not map order: discoverAll has already sorted these, and the
+		// source strip reads left to right off this list.
+		const kept = new Set(best.values());
+
+		return discussions.filter((discussion) => kept.has(discussion));
+	}
+
 	// The shared shape every source is read through. Written as two mappers rather
 	// than one adapter method because they are pure -- the fetching lives in the
 	// adapter, the shape lives here, and only one of those is testable without a
@@ -10901,7 +10931,9 @@ title="Show only this discussion">
 			enabledSourceIds(settings, registeredSourceIds()),
 		);
 
-		return resolved.filter((discussion) => enabled.has(discussion.source));
+		return collapseIndistinguishable(
+			resolved.filter((discussion) => enabled.has(discussion.source)),
+		);
 	}
 
 	async function loadStories(stories) {
