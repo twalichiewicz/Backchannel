@@ -3895,76 +3895,76 @@ ${THEME_CSS}
 ${CHROME_CSS}
 
 #popover {
-    width:320px;
-    box-sizing:border-box;
-    background:var(--bg);
-    color:var(--text);
-    border:1px solid var(--border);
-    border-radius:8px;
-    box-shadow:0 8px 24px rgba(0,0,0,.18);
+	width:320px;
+	box-sizing:border-box;
+	background:var(--bg);
+	color:var(--text);
+	border:1px solid var(--border);
+	border-radius:8px;
+	box-shadow:0 8px 24px rgba(0,0,0,.18);
     /* No padding of its own: the header runs edge to edge like the sidebar's and
        rounds its own top corners. The body below carries the inset instead.
        Deliberately no overflow:hidden -- it used to clip the header, but it also
        clipped the absolutely positioned settings dropdown to this box, and the
        popover is only as tall as a short submit form. */
-    padding:0;
+	padding:0;
     /* Containing block for the absolutely positioned settings dropdown. */
-    position:relative;
-    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    font-size:12px;
-    line-height:1.4;
+	position:relative;
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	font-size:12px;
+	line-height:1.4;
     /* The same inheritance the panel has to close off, for the same reason: this
        is a second shadow root on the same page, and it reads whatever the host
        inherited. See #panel for the full account. */
-    text-align:left;
-    text-indent:0;
-    text-transform:none;
-    letter-spacing:normal;
-    word-spacing:normal;
-    font-style:normal;
-    font-variant:normal;
-    white-space:normal;
+	text-align:left;
+	text-indent:0;
+	text-transform:none;
+	letter-spacing:normal;
+	word-spacing:normal;
+	font-style:normal;
+	font-variant:normal;
+	white-space:normal;
 }
 
 /* Same inset the sidebar's #comments uses, so the two read as one product. */
 .popover-body {
-    padding:12px 12px 8px;
+	padding:12px 12px 8px;
     /* The form is tall enough to run off a short viewport, so it scrolls itself
        rather than being clipped by the edge of the screen. Sized against the header
        and the popover's own vertical margins. */
-    max-height:calc(100vh - 120px);
-    overflow-y:auto;
+	max-height:calc(100vh - 120px);
+	overflow-y:auto;
 }
 
 /* Rounds its own top corners now that #popover no longer clips its children. */
 #popover header {
-    border-radius:7px 7px 0 0;
+	border-radius:7px 7px 0 0;
 }
 
 /* Narrower host than the sidebar, so the dropdown spans the width rather than
    sitting in a 240px column that would overhang the left edge. */
 .settings-panel {
-    top:44px;
-    right:8px;
-    left:8px;
-    width:auto;
+	top:44px;
+	right:8px;
+	left:8px;
+	width:auto;
 }
 
 .popover-title {
-    font-weight:600;
-    margin-bottom:8px;
+	font-weight:600;
+	margin-bottom:8px;
 }
 
 /* HN's own explanation of how url and text interact. Kept because the two fields
    are genuinely non-obvious: a blank url turns the whole thing into an Ask HN. */
 .popover-note {
-    margin-top:8px;
-    color:var(--muted);
-    font-size:11px;
+	margin-top:8px;
+	color:var(--muted);
+	font-size:11px;
 }
 
 .popover-field + .popover-field {
-    margin-top:8px;
+	margin-top:8px;
 }
 
 /* All of the following are scoped to .popover-field rather than bare element
@@ -3972,114 +3972,114 @@ ${CHROME_CSS}
    "input" rule would stretch its checkboxes to full width and give them a text
    field's border. */
 .popover-field label {
-    display:block;
-    color:var(--muted);
-    font-size:10px;
-    font-weight:700;
-    letter-spacing:.04em;
-    text-transform:uppercase;
-    margin-bottom:3px;
+	display:block;
+	color:var(--muted);
+	font-size:10px;
+	font-weight:700;
+	letter-spacing:.04em;
+	text-transform:uppercase;
+	margin-bottom:3px;
 }
 
 /* Label left, character count hard right, sharing one line above the field. Baseline
    alignment rather than centre so the count sits on the label's baseline despite
    being the smaller of the two. */
 .popover-field-head {
-    display:flex;
-    align-items:baseline;
-    justify-content:space-between;
-    gap:8px;
-    margin-bottom:3px;
+	display:flex;
+	align-items:baseline;
+	justify-content:space-between;
+	gap:8px;
+	margin-bottom:3px;
 }
 
 .popover-field-head label {
-    margin-bottom:0;
+	margin-bottom:0;
 }
 
 .popover-field input,
 .popover-field textarea {
-    width:100%;
-    box-sizing:border-box;
-    font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    padding:5px 6px;
-    border:1px solid var(--field-border);
-    border-radius:4px;
-    background:var(--field-bg);
-    color:var(--field-text);
+	width:100%;
+	box-sizing:border-box;
+	font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	padding:5px 6px;
+	border:1px solid var(--field-border);
+	border-radius:4px;
+	background:var(--field-bg);
+	color:var(--field-text);
 }
 
 .popover-field textarea {
-    min-height:56px;
-    resize:vertical;
+	min-height:56px;
+	resize:vertical;
     /* Same reasoning as the sidebar composer: HN reads leading spaces as code. */
-    white-space:pre-wrap;
+	white-space:pre-wrap;
 }
 
 .popover-field input:focus,
 .popover-field textarea:focus {
-    outline:2px solid rgba(255,102,0,.4);
-    outline-offset:-1px;
+	outline:2px solid rgba(255,102,0,.4);
+	outline-offset:-1px;
 }
 
 .popover-count {
-    color:var(--meta);
-    font-size:10px;
+	color:var(--meta);
+	font-size:10px;
     /* Fixed digits would be better, but the count is short enough that reflow is
        imperceptible; what matters is that it never pushes the label around. */
-    flex:0 0 auto;
-    white-space:nowrap;
+	flex:0 0 auto;
+	white-space:nowrap;
 }
 
 .popover-count.over {
-    color:var(--error);
+	color:var(--error);
 }
 
 .popover-actions {
-    display:flex;
-    justify-content:flex-end;
-    gap:6px;
-    margin-top:10px;
+	display:flex;
+	justify-content:flex-end;
+	gap:6px;
+	margin-top:10px;
 }
 
 /* Scoped for the same reason as the fields above: the header's gear button lives
    in this shadow root and must keep its own borderless styling. */
 .popover-actions button {
-    font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    padding:5px 10px;
-    border-radius:4px;
-    cursor:pointer;
-    border:1px solid var(--button-border);
-    background:var(--button-bg);
-    color:var(--button-text);
+	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	padding:5px 10px;
+	border-radius:4px;
+	cursor:pointer;
+	border:1px solid var(--button-border);
+	background:var(--button-bg);
+	color:var(--button-text);
 }
 
 .popover-actions button.primary {
-    background:#ff6600;
-    border-color:#ff6600;
-    color:white;
+	background:#ff6600;
+	border-color:#ff6600;
+	color:white;
 }
 
 .popover-actions button:disabled {
-    opacity:.6;
-    cursor:default;
+	opacity:.6;
+	cursor:default;
 }
 
 .popover-status {
-    margin-top:8px;
-    font-size:11px;
-    line-height:1.4;
+	margin-top:8px;
+	font-size:11px;
+	line-height:1.4;
 }
 
 .popover-status.error {
-    color:var(--error);
+	color:var(--error);
 }
 
 .popover-status a {
-    color:var(--link);
+	color:var(--link);
 }
 
 .hidden {
-    display:none;
+	display:none;
 }
 </style>
 
@@ -4467,99 +4467,99 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 	// composer, popover and status surfaces added in 1.5.3.
 	const THEME_CSS = `
 :host {
-    --bg:#f6f6ef;
-    --text:#000;
-    --header-bg:#ff6600;
-    --header-text:#000;
+	--bg:#f6f6ef;
+	--text:#000;
+	--header-bg:#ff6600;
+	--header-text:#000;
     /* Dark orange on the header's own orange: legible, but clearly subordinate
        to the black title. The peak is the travelling highlight. */
-    --subtitle-stage:#8f3900;
-    --subtitle-stage-peak:#d0721f;
-    --border:#ccc;
-    --border-soft:#ddd;
-    --link:#0000aa;
-    --meta:#828282;
-    --muted:#666;
-    --surface:#fff;
-    --surface-text:#222;
-    --surface-border:#d6d6d6;
-    --surface-divider:#eee;
-    --hover-tint:rgba(0,0,0,.08);
-    --active-tint:rgba(0,0,0,.16);
-    --grip:rgba(0,0,0,.2);
-    --quote-text:#5f5f5f;
-    --quote-ornament:#b4b4b4;
+	--subtitle-stage:#8f3900;
+	--subtitle-stage-peak:#d0721f;
+	--border:#ccc;
+	--border-soft:#ddd;
+	--link:#0000aa;
+	--meta:#828282;
+	--muted:#666;
+	--surface:#fff;
+	--surface-text:#222;
+	--surface-border:#d6d6d6;
+	--surface-divider:#eee;
+	--hover-tint:rgba(0,0,0,.08);
+	--active-tint:rgba(0,0,0,.16);
+	--grip:rgba(0,0,0,.2);
+	--quote-text:#5f5f5f;
+	--quote-ornament:#b4b4b4;
 
     /* 1.5.3 surfaces */
-    --field-bg:#fff;
-    --field-text:#000;
-    --field-border:#ccc;
-    --field-disabled-bg:#f0f0ea;
-    --help-bg:#fbfbf5;
-    --help-border:#e2e2d9;
-    --help-text:#555;
-    --code-bg:#efefe6;
+	--field-bg:#fff;
+	--field-text:#000;
+	--field-border:#ccc;
+	--field-disabled-bg:#f0f0ea;
+	--help-bg:#fbfbf5;
+	--help-border:#e2e2d9;
+	--help-text:#555;
+	--code-bg:#efefe6;
     /* Deliberately cool against the panel's warm neutrals: the preview is a
        measuring surface, not part of the orange brand language. */
-    --blueprint-bg:#f6f8fa;
-    --blueprint-grid:rgba(64,86,112,.13);
-    --blueprint-line:rgba(64,86,112,.22);
-    --blueprint-ink:rgba(52,72,96,.72);
-    --status-text:#555;
-    --error:#c00;
-    --button-bg:#fff;
-    --button-text:#333;
-    --button-border:#ccc;
-    --inactive-button:#b8b8b8;
-    --underline-soft:rgba(0,0,0,.2);
+	--blueprint-bg:#f6f8fa;
+	--blueprint-grid:rgba(64,86,112,.13);
+	--blueprint-line:rgba(64,86,112,.22);
+	--blueprint-ink:rgba(52,72,96,.72);
+	--status-text:#555;
+	--error:#c00;
+	--button-bg:#fff;
+	--button-text:#333;
+	--button-border:#ccc;
+	--inactive-button:#b8b8b8;
+	--underline-soft:rgba(0,0,0,.2);
 
-    color-scheme:light;
+	color-scheme:light;
 }
 
 :host(.${DARK_CLASS}) {
-    --bg:#1e1e1e;
-    --text:#dcdcdc;
-    --header-bg:#cc5200;
-    --header-text:#000;
+	--bg:#1e1e1e;
+	--text:#dcdcdc;
+	--header-bg:#cc5200;
+	--header-text:#000;
     /* Darker to hold the same relationship against the dimmer header. */
-    --subtitle-stage:#6d2b00;
-    --subtitle-stage-peak:#ad5a17;
-    --border:#3d3d3d;
-    --border-soft:#383838;
-    --link:#8ab4f8;
-    --meta:#9a9a9a;
-    --muted:#a3a3a3;
-    --surface:#2a2a2a;
-    --surface-text:#dcdcdc;
-    --surface-border:#454545;
-    --surface-divider:#3a3a3a;
-    --hover-tint:rgba(255,255,255,.10);
-    --active-tint:rgba(255,255,255,.18);
-    --grip:rgba(255,255,255,.25);
-    --quote-text:#a8a8a8;
-    --quote-ornament:#6d6d6d;
+	--subtitle-stage:#6d2b00;
+	--subtitle-stage-peak:#ad5a17;
+	--border:#3d3d3d;
+	--border-soft:#383838;
+	--link:#8ab4f8;
+	--meta:#9a9a9a;
+	--muted:#a3a3a3;
+	--surface:#2a2a2a;
+	--surface-text:#dcdcdc;
+	--surface-border:#454545;
+	--surface-divider:#3a3a3a;
+	--hover-tint:rgba(255,255,255,.10);
+	--active-tint:rgba(255,255,255,.18);
+	--grip:rgba(255,255,255,.25);
+	--quote-text:#a8a8a8;
+	--quote-ornament:#6d6d6d;
 
-    --field-bg:#262626;
-    --field-text:#dcdcdc;
-    --field-border:#4a4a4a;
-    --field-disabled-bg:#222;
-    --help-bg:#252525;
-    --help-border:#3a3a3a;
-    --help-text:#b0b0b0;
-    --code-bg:#333;
-    --blueprint-bg:#1b1f25;
-    --blueprint-grid:rgba(150,180,214,.12);
-    --blueprint-line:rgba(150,180,214,.2);
-    --blueprint-ink:rgba(168,196,226,.75);
-    --status-text:#b0b0b0;
-    --error:#ff8080;
-    --button-bg:#333;
-    --button-text:#dcdcdc;
-    --button-border:#4a4a4a;
-    --inactive-button:#4a4a4a;
-    --underline-soft:rgba(255,255,255,.28);
+	--field-bg:#262626;
+	--field-text:#dcdcdc;
+	--field-border:#4a4a4a;
+	--field-disabled-bg:#222;
+	--help-bg:#252525;
+	--help-border:#3a3a3a;
+	--help-text:#b0b0b0;
+	--code-bg:#333;
+	--blueprint-bg:#1b1f25;
+	--blueprint-grid:rgba(150,180,214,.12);
+	--blueprint-line:rgba(150,180,214,.2);
+	--blueprint-ink:rgba(168,196,226,.75);
+	--status-text:#b0b0b0;
+	--error:#ff8080;
+	--button-bg:#333;
+	--button-text:#dcdcdc;
+	--button-border:#4a4a4a;
+	--inactive-button:#4a4a4a;
+	--underline-soft:rgba(255,255,255,.28);
 
-    color-scheme:dark;
+	color-scheme:dark;
 }
 `;
 
@@ -4569,14 +4569,14 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 	// never drift apart.
 	const CHROME_CSS = `
 header {
-    background:var(--header-bg);
-    color:var(--header-text);
-    padding:6px 8px;
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    gap:8px;
-    font-weight:bold;
+	background:var(--header-bg);
+	color:var(--header-text);
+	padding:6px 8px;
+	display:flex;
+	justify-content:space-between;
+	align-items:center;
+	gap:8px;
+	font-weight:bold;
 }
 
 /* Scoped to the action row rather than to every button in the header. It
@@ -4586,34 +4586,34 @@ header {
    "header button" the rule sized it to 36 square and left its text hanging
    outside the box. */
 .header-actions button {
-    background:none;
-    border:0;
-    color:var(--header-text);
-    cursor:pointer;
-    font-size:20px;
-    width:36px;
-    height:36px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    border-radius:4px;
-    padding:0;
-    touch-action:manipulation;
+	background:none;
+	border:0;
+	color:var(--header-text);
+	cursor:pointer;
+	font-size:20px;
+	width:36px;
+	height:36px;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	border-radius:4px;
+	padding:0;
+	touch-action:manipulation;
 }
 
 /* Touch devices latch :hover on after a tap and hold it until something else is
    tapped, so the settings and minimize buttons stayed highlighted. Only apply it
    where a real pointer can hover. */
 @media (hover: hover) {
-    .header-actions button:hover {
-        background:var(--hover-tint);
-    }
+	.header-actions button:hover {
+		background:var(--hover-tint);
+	}
 }
 
 .header-actions {
-    display:flex;
-    align-items:center;
-    gap:0;
+	display:flex;
+	align-items:center;
+	gap:0;
 }
 
 /* The wordmark is the way back, so it has to look like the wordmark and behave
@@ -4624,17 +4624,17 @@ header {
     /* .header-title is a flex column, so a button placed in it is stretched to
        the header's full width and stops reading as a word. Hugging its content
        is what keeps it a word. */
-    align-self:flex-start;
-    display:flex;
-    align-items:baseline;
-    border:0;
-    padding:0;
-    margin:0;
-    background:none;
-    color:inherit;
-    font:inherit;
-    cursor:pointer;
-    text-align:left;
+	align-self:flex-start;
+	display:flex;
+	align-items:baseline;
+	border:0;
+	padding:0;
+	margin:0;
+	background:none;
+	color:inherit;
+	font:inherit;
+	cursor:pointer;
+	text-align:left;
 }
 
 /* The trail into Hacker News, built the way the settings panel builds its trail
@@ -4644,19 +4644,19 @@ header {
    Collapsed to zero width rather than hidden, so arriving slides the chevron open
    and pushes the trail across instead of snapping it into place. */
 .wordmark-chevron {
-    flex:0 0 auto;
-    width:0;
-    margin-right:0;
-    overflow:hidden;
-    opacity:0;
-    color:var(--subtitle-stage);
-    transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
+	flex:0 0 auto;
+	width:0;
+	margin-right:0;
+	overflow:hidden;
+	opacity:0;
+	color:var(--subtitle-stage);
+	transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
 }
 
 #panel.browsing .wordmark-chevron {
-    width:9px;
-    margin-right:5px;
-    opacity:1;
+	width:9px;
+	margin-right:5px;
+	opacity:1;
 }
 
 /* Emphasis comes off the wordmark once it stops being the title and becomes the
@@ -4666,11 +4666,11 @@ header {
    title reads as a rendering fault rather than as a de-emphasis. Dark orange
    rather than the panel's grey, because this sits on the header's own bar. */
 .wordmark-root {
-    transition:color .2s ease;
+	transition:color .2s ease;
 }
 
 #panel.browsing .wordmark-root {
-    color:var(--subtitle-stage);
+	color:var(--subtitle-stage);
 }
 
 /* On Hacker News the trail has nothing behind it, so the wordmark is a label
@@ -4678,12 +4678,12 @@ header {
    would otherwise pick up. It is not unavailable, it simply does not lead
    anywhere from here. */
 #panel.queue-only .wordmark-chevron {
-    display:none;
+	display:none;
 }
 
 #panel.queue-only .header-wordmark {
-    cursor:default;
-    opacity:1;
+	cursor:default;
+	opacity:1;
 }
 
 /* The one thing saying the title is pressable. A wordmark that is also a control
@@ -4696,18 +4696,18 @@ header {
    one control. Collapsed the same way the chevron is, so the swap is a movement
    rather than a flicker. */
 .wordmark-more {
-    flex:0 0 auto;
-    width:auto;
-    margin-left:4px;
-    overflow:hidden;
-    color:var(--subtitle-stage);
-    transition:width .2s ease, margin-left .2s ease, opacity .2s ease;
+	flex:0 0 auto;
+	width:auto;
+	margin-left:4px;
+	overflow:hidden;
+	color:var(--subtitle-stage);
+	transition:width .2s ease, margin-left .2s ease, opacity .2s ease;
 }
 
 #panel.browsing .wordmark-more {
-    width:0;
-    margin-left:0;
-    opacity:0;
+	width:0;
+	margin-left:0;
+	opacity:0;
 }
 
 /* Always in flow, faded and nudged rather than display:none, so it can animate in
@@ -4715,37 +4715,37 @@ header {
    reason it costs nothing in the settings head: the title is left-aligned, so a
    trail nobody can see shifts nothing. */
 .wordmark-tail {
-    display:flex;
-    align-items:baseline;
-    gap:5px;
-    margin-left:5px;
-    white-space:nowrap;
-    opacity:0;
-    transform:translateX(-4px);
-    pointer-events:none;
-    transition:opacity .2s ease, transform .2s ease;
+	display:flex;
+	align-items:baseline;
+	gap:5px;
+	margin-left:5px;
+	white-space:nowrap;
+	opacity:0;
+	transform:translateX(-4px);
+	pointer-events:none;
+	transition:opacity .2s ease, transform .2s ease;
 }
 
 #panel.browsing .wordmark-tail {
-    opacity:1;
-    transform:none;
-    pointer-events:auto;
+	opacity:1;
+	transform:none;
+	pointer-events:auto;
 }
 
 .wordmark-sep {
-    font-weight:400;
-    color:var(--subtitle-stage);
+	font-weight:400;
+	color:var(--subtitle-stage);
 }
 
 .header-wordmark:focus-visible {
-    outline:1px solid var(--link);
-    outline-offset:2px;
+	outline:1px solid var(--link);
+	outline-offset:2px;
 }
 
 @media (hover: hover) {
-    .header-wordmark:hover {
-        opacity:.75;
-    }
+	.header-wordmark:hover {
+		opacity:.75;
+	}
 }
 
 /* Hidden rather than emptied. The discussion subtree is what renderedComments,
@@ -4757,12 +4757,12 @@ header {
    reach the header too -- which is what lets the wordmark swap labels by CSS
    instead of by rewriting its markup on every toggle. */
 .browse-view {
-    display:none;
+	display:none;
     /* Where .browse-main begins: the rank column's 22px plus the row's 6px gap.
        Named because four things line up on it -- the tabs, the More link, the
        empty state and the rows themselves -- and a number repeated four times is
        a number three of them will eventually disagree about. */
-    --browse-indent:28px;
+	--browse-indent:28px;
 }
 
 /* Both views fade, all the way out, where a filter change fades only the list to
@@ -4772,13 +4772,13 @@ header {
    would leave whichever part stayed put looking like it belonged to both. */
 #comments-content,
 .browse-view {
-    transition:opacity .16s ease;
+	transition:opacity .16s ease;
 }
 
 #comments.views-swapping > #comments-content,
 #comments.views-swapping > .browse-view,
 #comments.views-swapping > .filter-banner {
-    opacity:0;
+	opacity:0;
 }
 
 /* Two tabs set as a meta row rather than as a control: the same 11px Verdana the
@@ -4786,11 +4786,11 @@ header {
    panel rather than as a widget dropped into it. */
 /* Starts exactly where every title beneath it does. */
 .browse-tabs {
-    display:flex;
-    align-items:baseline;
-    margin:0 0 10px var(--browse-indent);
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
+	display:flex;
+	align-items:baseline;
+	margin:0 0 10px var(--browse-indent);
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
 }
 
 /* The bar hangs off the queue rather than sitting between the two as a sibling
@@ -4798,28 +4798,28 @@ header {
    attached to whichever tab came second and leave a leading bar in front of
    Front page on its own. */
 #browse-tab-queue::after {
-    content:"|";
+	content:"|";
     /* HN's own ratio, measured off it: 3.28px each side of the bar at 9.33px
        type, which is .35em. Given in em rather than pixels so it holds at the
        11px these are set in. */
-    margin:0 .35em;
-    color:var(--meta);
+	margin:0 .35em;
+	color:var(--meta);
 }
 
 /* Nothing queued, nothing to show. The queue keeps its place on the left for
    when there is -- it does not move, it arrives. */
 .browse-tab[hidden] {
-    display:none;
+	display:none;
 }
 
 .browse-tab {
-    border:0;
-    padding:0;
-    background:none;
-    color:var(--meta);
-    cursor:pointer;
-    font-family:inherit;
-    font-size:inherit;
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+	font-family:inherit;
+	font-size:inherit;
 }
 
 /* The current one carries the panel's text colour, the way .filter-banner-title
@@ -4827,28 +4827,28 @@ header {
    regular Verdana differ more in colour than in shape, and the colour is already
    saying it. */
 .browse-tab.is-current {
-    color:var(--text);
+	color:var(--text);
 }
 
 @media (hover: hover) {
-    .browse-tab:not(.is-current):hover {
-        text-decoration:underline;
-        text-underline-offset:2px;
-    }
+	.browse-tab:not(.is-current):hover {
+		text-decoration:underline;
+		text-underline-offset:2px;
+	}
 }
 
 .browse-empty {
-    margin:4px 0 0 var(--browse-indent);
-    max-width:var(--measure);
-    color:var(--meta);
-    line-height:1.5;
+	margin:4px 0 0 var(--browse-indent);
+	max-width:var(--measure);
+	color:var(--meta);
+	line-height:1.5;
 }
 
 /* Read entries stay in the list, dimmed. Which is the point: the queue has to be
    able to be wrong about what you finished, and something invisible cannot be
    corrected. */
 .browse-row-read {
-    opacity:.5;
+	opacity:.5;
 }
 
 /* A rank column wide enough for two digits and the stop after them, which is
@@ -4866,73 +4866,73 @@ header {
    so a wrapped row is taller than 35px. That is the panel's width, not its
    spacing. */
 .browse-row {
-    display:flex;
-    gap:6px;
-    align-items:baseline;
-    padding:0 0 5px;
+	display:flex;
+	gap:6px;
+	align-items:baseline;
+	padding:0 0 5px;
 }
 
 .browse-row .story-title {
-    font-size:13px;
-    line-height:1.3;
+	font-size:13px;
+	line-height:1.3;
 }
 
 /* HN leaves about a pixel and a half between the title and the subtext under it,
    which reads as none at all. The 2px this normally carries is there to separate
    the header from a story's own text below it, and there is no text here. */
 .browse-row .story-meta {
-    line-height:1.15;
-    padding-top:1px;
+	line-height:1.15;
+	padding-top:1px;
 }
 
 .browse-rank {
-    flex:0 0 auto;
-    min-width:22px;
-    text-align:right;
-    color:var(--meta);
-    font-size:11px;
+	flex:0 0 auto;
+	min-width:22px;
+	text-align:right;
+	color:var(--meta);
+	font-size:11px;
 }
 
 .browse-main {
-    flex:1 1 auto;
-    min-width:0;
+	flex:1 1 auto;
+	min-width:0;
 }
 
 /* Beside the title at meta weight, the way HN sets it: it qualifies the link
    rather than competing with it. */
 .browse-site {
-    color:var(--meta);
-    font-size:11px;
+	color:var(--meta);
+	font-size:11px;
 }
 
 /* Indented to the rank column's right edge, so it starts where every title above
    it starts rather than at the panel's edge. */
 .browse-nav {
-    display:flex;
-    align-items:baseline;
-    gap:10px;
-    margin:14px 0 8px var(--browse-indent);
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
-    color:var(--meta);
+	display:flex;
+	align-items:baseline;
+	gap:10px;
+	margin:14px 0 8px var(--browse-indent);
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
+	color:var(--meta);
 }
 
 /* Set as a meta-row text link, like every other action on these rows. HN writes
    favorite and flag exactly this way and puts them in exactly this company. */
 .item-action-link {
-    border:0;
-    padding:0;
-    background:none;
-    color:var(--meta);
-    cursor:pointer;
-    font-family:inherit;
-    font-size:inherit;
-    text-decoration:none;
-    text-underline-offset:2px;
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+	font-family:inherit;
+	font-size:inherit;
+	text-decoration:none;
+	text-underline-offset:2px;
 }
 
 .item-action-link[hidden] {
-    display:none;
+	display:none;
 }
 
 /* Deliberately no colour of its own. The label already says what pressing it
@@ -4941,18 +4941,18 @@ header {
    something means. */
 
 .item-action-link:disabled {
-    opacity:.5;
-    cursor:default;
+	opacity:.5;
+	cursor:default;
 }
 
 .item-action-link:enabled:focus-visible {
-    text-decoration:underline;
+	text-decoration:underline;
 }
 
 @media (hover: hover) {
-    .item-action-link:enabled:hover {
-        text-decoration:underline;
-    }
+	.item-action-link:enabled:hover {
+		text-decoration:underline;
+	}
 }
 
 /* A control in a meta row, so it is set as one: the same text-link treatment
@@ -4960,50 +4960,50 @@ header {
    button. HN's own row actions are text links between pipes and this sits among
    them. */
 .browse-save-link {
-    border:0;
-    padding:0;
-    background:none;
-    color:var(--meta);
-    cursor:pointer;
-    font-family:inherit;
-    font-size:inherit;
-    text-decoration:none;
-    text-underline-offset:2px;
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+	font-family:inherit;
+	font-size:inherit;
+	text-decoration:none;
+	text-underline-offset:2px;
 }
 
 @media (hover: hover) {
-    .browse-save-link:hover {
-        text-decoration:underline;
-    }
+	.browse-save-link:hover {
+		text-decoration:underline;
+	}
 }
 
 .browse-save-link:focus-visible {
-    text-decoration:underline;
+	text-decoration:underline;
 }
 
 /* Text links on a meta row, the same treatment .filter-banner-close gets: no
    underline until hover, no colour shift. */
 .browse-nav-link {
-    border:0;
-    padding:0;
-    background:none;
-    color:var(--meta);
-    cursor:pointer;
-    font-family:inherit;
-    font-size:inherit;
-    text-decoration:none;
-    text-underline-offset:2px;
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+	font-family:inherit;
+	font-size:inherit;
+	text-decoration:none;
+	text-underline-offset:2px;
 }
 
 /* Dimmed and inert rather than removed. Which end of the list you are at is
    information, and a control that vanishes makes the reader work out why. */
 .browse-nav-link:disabled {
-    opacity:.4;
-    cursor:default;
+	opacity:.4;
+	cursor:default;
 }
 
 .browse-nav-link:enabled:focus-visible {
-    text-decoration:underline;
+	text-decoration:underline;
 }
 
 /* Sits under the last comment, separated by a rule rather than by space alone:
@@ -5011,11 +5011,11 @@ header {
    same 14px the filter banner uses, so it lines up with the story above it rather
    than with the scroll container. */
 .next-up {
-    display:block;
-    margin:18px -12px 24px;
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
-    color:var(--meta);
+	display:block;
+	margin:18px -12px 24px;
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
+	color:var(--meta);
 }
 
 /* The inset lives on the row rather than on the strip, so the band above it can
@@ -5023,67 +5023,67 @@ header {
    panel's own 12px plus the 14px every story and banner is indented by, so the
    text lines up with the thread above it. */
 .next-up-row {
-    display:flex;
-    flex-wrap:wrap;
-    align-items:baseline;
-    gap:6px;
-    padding:0 12px 0 26px;
+	display:flex;
+	flex-wrap:wrap;
+	align-items:baseline;
+	gap:6px;
+	padding:0 12px 0 26px;
 }
 
 .next-up.hidden {
-    display:none;
+	display:none;
 }
 
 .next-up-label {
-    color:var(--meta);
+	color:var(--meta);
 }
 
 /* The title carries the panel's own text colour and the panel's own size: it is
    the thing being offered, and the row around it is the label. */
 .next-up-title {
-    flex:1 1 auto;
-    min-width:0;
-    color:var(--text);
-    font-family:inherit;
-    font-size:13px;
-    text-decoration:none;
+	flex:1 1 auto;
+	min-width:0;
+	color:var(--text);
+	font-family:inherit;
+	font-size:13px;
+	text-decoration:none;
 }
 
 @media (hover: hover) {
-    .next-up-title:hover {
-        text-decoration:underline;
-        text-underline-offset:2px;
-    }
+	.next-up-title:hover {
+		text-decoration:underline;
+		text-underline-offset:2px;
+	}
 }
 
 .next-up-count {
-    flex:0 0 auto;
+	flex:0 0 auto;
 }
 
 @media (hover: hover) {
-    .browse-nav-link:enabled:hover {
-        text-decoration:underline;
-    }
+	.browse-nav-link:enabled:hover {
+		text-decoration:underline;
+	}
 }
 
 #panel.browsing .browse-view {
-    display:block;
+	display:block;
 }
 
 #panel.browsing #comments-content,
 #panel.browsing .filter-banner,
 #panel.browsing .next-up {
-    display:none;
+	display:none;
 }
 
 /* The 36px buttons already centre their glyphs, so the visual inset on the right
    is the 8px header padding plus roughly half the leftover button width. This
    mirrors that on the left rather than letting the title hug the edge. */
 .header-title {
-    display:flex;
-    flex-direction:column;
-    min-width:0;
-    padding-left:12px;
+	display:flex;
+	flex-direction:column;
+	min-width:0;
+	padding-left:12px;
 }
 
 /* Only the two-line case needs tightening, and the subtitle exists only in the
@@ -5095,32 +5095,32 @@ header {
    sidebar's. Typed as a span it silently stopped applying the moment the
    wordmark became a control, and the air came back. */
 .header-title:has(.header-subtitle) > :first-child {
-    line-height:1.25;
+	line-height:1.25;
 }
 
 /* Collapsed until it has something to say. Animating the height is what moves
    the title, so the status arriving reads as the header opening rather than as
    the whole panel jumping. */
 .header-subtitle {
-    font-size:11px;
-    font-weight:normal;
-    line-height:1.2;
-    max-height:0;
-    opacity:0;
-    overflow:hidden;
-    transition:max-height .2s ease, opacity .2s ease;
+	font-size:11px;
+	font-weight:normal;
+	line-height:1.2;
+	max-height:0;
+	opacity:0;
+	overflow:hidden;
+	transition:max-height .2s ease, opacity .2s ease;
 }
 
 .header-subtitle-visible {
-    max-height:16px;
-    opacity:.85;
+	max-height:16px;
+	opacity:.85;
 }
 
 /* Dark orange rather than the header's black, so a status reads as transient
    next to the permanent title. Applied whether or not motion is allowed, so the
    colour never depends on the animation. */
 .header-subtitle-stage {
-    color:var(--subtitle-stage);
+	color:var(--subtitle-stage);
 }
 
 /* A highlight swept across the text itself rather than a spinner beside it, so
@@ -5128,17 +5128,17 @@ header {
 .header-subtitle-loading {
     background:linear-gradient(
         90deg,
-        var(--subtitle-stage) 0%,
-        var(--subtitle-stage) 40%,
-        var(--subtitle-stage-peak) 50%,
-        var(--subtitle-stage) 60%,
+		var(--subtitle-stage) 0%,
+		var(--subtitle-stage) 40%,
+		var(--subtitle-stage-peak) 50%,
+		var(--subtitle-stage) 60%,
         var(--subtitle-stage) 100%
     );
-    background-size:220% 100%;
-    -webkit-background-clip:text;
-    background-clip:text;
-    -webkit-text-fill-color:transparent;
-    animation:hnewhere-subtitle-shimmer 1.6s linear infinite;
+	background-size:220% 100%;
+	-webkit-background-clip:text;
+	background-clip:text;
+	-webkit-text-fill-color:transparent;
+	animation:hnewhere-subtitle-shimmer 1.6s linear infinite;
 }
 
 @keyframes hnewhere-subtitle-shimmer {
@@ -5147,26 +5147,26 @@ header {
 }
 
 .settings-panel {
-    position:absolute;
-    top:46px;
-    right:8px;
-    width:240px;
-    background:var(--surface);
-    color:var(--surface-text);
-    border:1px solid var(--surface-border);
-    border-radius:8px;
-    box-shadow:0 8px 24px rgba(0,0,0,.16);
+	position:absolute;
+	top:46px;
+	right:8px;
+	width:240px;
+	background:var(--surface);
+	color:var(--surface-text);
+	border:1px solid var(--surface-border);
+	border-radius:8px;
+	box-shadow:0 8px 24px rgba(0,0,0,.16);
     /* Slightly more at the bottom than the top: the title's line-height adds its
        own leading up top, so a literal 10px all round reads as short underneath
        the last option. */
-    padding:10px 10px 13px;
-    z-index:3;
+	padding:10px 10px 13px;
+	z-index:3;
 }
 
 .settings-group + .settings-group {
-    margin-top:10px;
-    padding-top:10px;
-    border-top:1px solid var(--surface-divider);
+	margin-top:10px;
+	padding-top:10px;
+	border-top:1px solid var(--surface-divider);
 }
 
 /* Every header icon is drawn, not typed. Flexbox centres a glyph's line box
@@ -5180,26 +5180,26 @@ header {
    presentation on iOS, which needed a U+FE0E variation selector in the markup
    plus font-variant-emoji, and that only lands in Safari 17+. */
 header button svg {
-    display:block;
+	display:block;
 }
 
 /* Held while the dropdown is open so the gear reads as a toggle rather than a
    button that fired once. Darker than the hover tint so the two stay distinct on
    a pointer device, and outside the hover media query so touch gets it too. */
 #settings-toggle.is-open {
-    background:var(--active-tint);
+	background:var(--active-tint);
 }
 
 .settings-option {
-    display:flex;
-    gap:8px;
-    align-items:flex-start;
-    font-size:12px;
-    line-height:1.35;
+	display:flex;
+	gap:8px;
+	align-items:flex-start;
+	font-size:12px;
+	line-height:1.35;
 }
 
 .settings-option + .settings-option {
-    margin-top:8px;
+	margin-top:8px;
 }
 
 /* Drawn from the panel's own tokens rather than left to appearance:auto. Chrome
@@ -5209,12 +5209,12 @@ header button svg {
    13px is the native width the .settings-option-hint indent is measured against,
    so it stays 13px including the border. */
 .settings-option input[type="checkbox"] {
-    appearance:none;
-    -webkit-appearance:none;
-    box-sizing:border-box;
-    flex:0 0 auto;
-    width:13px;
-    height:13px;
+	appearance:none;
+	-webkit-appearance:none;
+	box-sizing:border-box;
+	flex:0 0 auto;
+	width:13px;
+	height:13px;
     /* Centred on the first line of the label, which is what the row aligns to --
        align-items is flex-start so a wrapping option keeps its box beside the
        first line rather than beside the middle of the block. Derived rather than
@@ -5223,50 +5223,50 @@ header button svg {
        smaller offset. 1.35 is .settings-option's line-height, and font-size:inherit
        is what makes em resolve against the label rather than the input's UA
        default. Nothing here has text, so inheriting a size costs nothing. */
-    font-size:inherit;
-    margin:calc((1.35em - 13px) / 2) 0 0;
-    display:inline-grid;
-    place-content:center;
-    border:1px solid var(--help-border);
-    border-radius:3px;
-    background:var(--help-bg);
-    cursor:pointer;
-    transition:background .14s ease, border-color .14s ease;
+	font-size:inherit;
+	margin:calc((1.35em - 13px) / 2) 0 0;
+	display:inline-grid;
+	place-content:center;
+	border:1px solid var(--help-border);
+	border-radius:3px;
+	background:var(--help-bg);
+	cursor:pointer;
+	transition:background .14s ease, border-color .14s ease;
 }
 
 /* Same accent the selected segment uses, so a checked box and a chosen segment
    read as the same kind of "on". */
 .settings-option input[type="checkbox"]:checked {
-    border-color:transparent;
-    background:#0b63ce;
-    background:AccentColor;
+	border-color:transparent;
+	background:#0b63ce;
+	background:AccentColor;
 }
 
 .settings-option input[type="checkbox"]:checked::after {
-    content:"";
-    width:6px;
-    height:3px;
-    border-left:1.5px solid #fff;
-    border-bottom:1.5px solid #fff;
-    transform:translateY(-1px) rotate(-45deg);
+	content:"";
+	width:6px;
+	height:3px;
+	border-left:1.5px solid #fff;
+	border-bottom:1.5px solid #fff;
+	transform:translateY(-1px) rotate(-45deg);
 }
 
 .settings-option input[type="checkbox"]:focus-visible {
-    outline:2px solid #0b63ce;
-    outline:2px solid AccentColor;
-    outline-offset:1px;
+	outline:2px solid #0b63ce;
+	outline:2px solid AccentColor;
+	outline-offset:1px;
 }
 
 /* Sub-options are disabled while their parent is off, and an appearance:none box
    has no UA disabled styling of its own. */
 .settings-option input[type="checkbox"]:disabled {
-    opacity:.45;
-    cursor:default;
+	opacity:.45;
+	cursor:default;
 }
 
 .settings-option.sub-option {
-    margin-left:20px;
-    font-size:11px;
+	margin-left:20px;
+	font-size:11px;
 }
 
 /* Collapsed rather than merely disabled when the parent option is off: a dead
@@ -5274,18 +5274,18 @@ header button svg {
    max-height ceiling is generous because the real height is not knowable in CSS --
    it only has to exceed the content for the transition to run to completion. */
 .settings-suboptions {
-    overflow:hidden;
-    max-height:0;
-    opacity:0;
-    margin-top:0;
-    transition:max-height .22s ease, opacity .18s ease, margin-top .22s ease;
+	overflow:hidden;
+	max-height:0;
+	opacity:0;
+	margin-top:0;
+	transition:max-height .22s ease, opacity .18s ease, margin-top .22s ease;
 }
 
 .settings-suboptions.is-visible {
-    max-height:140px;
-    opacity:1;
+	max-height:140px;
+	opacity:1;
     /* Separates the first sub-option from whatever it belongs to above it. */
-    margin-top:8px;
+	margin-top:8px;
 }
 
 /* A sub-options group sits between two options in the auto-open block, which
@@ -5293,41 +5293,41 @@ header button svg {
    relies on. Without this the option below would touch the one above whenever the
    group is collapsed to zero height. */
 .settings-suboptions + .settings-option {
-    margin-top:8px;
+	margin-top:8px;
 }
 
 /* Version on the left, issues link on the right, one row. */
 .settings-credits {
-    display:flex;
-    align-items:baseline;
-    justify-content:space-between;
-    gap:10px;
-    color:var(--muted);
-    font-size:11px;
-    line-height:1.45;
+	display:flex;
+	align-items:baseline;
+	justify-content:space-between;
+	gap:10px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.45;
 }
 
 .settings-credits a {
-    color:var(--muted);
-    text-decoration:underline;
-    text-decoration-color:var(--underline-soft);
-    text-underline-offset:2px;
+	color:var(--muted);
+	text-decoration:underline;
+	text-decoration-color:var(--underline-soft);
+	text-underline-offset:2px;
 }
 
 @media (hover: hover) {
-    .settings-credits a:hover {
-        color:#ff6600;
-        text-decoration-color:rgba(255,102,0,.5);
-    }
+	.settings-credits a:hover {
+		color:#ff6600;
+		text-decoration-color:rgba(255,102,0,.5);
+	}
 }
 
 /* Indented to clear the checkbox so the text starts under the option's label rather
    than under its box. 13px is the native checkbox width, plus the flex gap. */
 .settings-option-hint {
-    margin:3px 0 0 21px;
-    color:var(--muted);
-    font-size:11px;
-    line-height:1.35;
+	margin:3px 0 0 21px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
 }
 
 /* That hint describes what happens with the setting off. Switched on, it is
@@ -5337,88 +5337,88 @@ header button svg {
    place to keep in step. The hint is the last thing in its group, so the
    sibling combinator reaches nothing else. */
 .settings-option:has(#setting-hide-without-discussion:checked) ~ .settings-option-hint {
-    display:none;
+	display:none;
 }
 
 .settings-option.sub-option + .settings-option-hint {
-    margin-left:41px;
+	margin-left:41px;
 }
 
 /* Shared: the settings panel's BETA pill needs this in the popover, and comment
    rendering needs it in the sidebar. */
 .op-pill {
-    display:inline-block;
-    margin-left:4px;
-    margin-right:4px;
-    padding:1px 4px;
-    border-radius:3px;
-    background:#ff6600;
-    color:white;
-    font-size:9px;
-    font-weight:bold;
-    line-height:1.2;
+	display:inline-block;
+	margin-left:4px;
+	margin-right:4px;
+	padding:1px 4px;
+	border-radius:3px;
+	background:#ff6600;
+	color:white;
+	font-size:9px;
+	font-weight:bold;
+	line-height:1.2;
 }
 
 .hidden {
-    display:none;
+	display:none;
 }
 
 .settings-field + .settings-field {
-    margin-top:10px;
+	margin-top:10px;
 }
 
 .settings-field-label {
-    font-size:11px;
-    color:var(--muted);
-    margin-bottom:4px;
+	font-size:11px;
+	color:var(--muted);
+	margin-bottom:4px;
 }
 
 /* Two panes side by side inside a clipped viewport. Height is set in JS from the
    active pane, because a flex row is always as tall as its tallest child and the
    hidden-sites pane is much shorter than the main one. */
 .settings-panel {
-    overflow-x:hidden;
+	overflow-x:hidden;
     /* The popover no longer clips this, so the panel bounds itself against a
        short viewport rather than running off the bottom of the screen. */
-    max-height:calc(100vh - 120px);
-    overflow-y:auto;
+	max-height:calc(100vh - 120px);
+	overflow-y:auto;
 }
 
 /* The title and credits sit outside the sliding track, so both panes keep them.
    This replaces the .settings-group + .settings-group rule that used to draw the
    separator when credits was itself a group inside the stack. */
 .settings-panes + .settings-credits {
-    margin-top:10px;
-    padding-top:10px;
-    border-top:1px solid var(--surface-divider);
+	margin-top:10px;
+	padding-top:10px;
+	border-top:1px solid var(--surface-divider);
 }
 
 .settings-panes {
-    display:flex;
-    align-items:flex-start;
-    width:200%;
-    overflow:hidden;
-    transition:transform .26s ease, height .26s ease;
+	display:flex;
+	align-items:flex-start;
+	width:200%;
+	overflow:hidden;
+	transition:transform .26s ease, height .26s ease;
 }
 
 .settings-panes.is-secondary {
-    transform:translateX(-50%);
+	transform:translateX(-50%);
 }
 
 .settings-pane {
-    flex:0 0 50%;
-    width:50%;
-    min-width:0;
+	flex:0 0 50%;
+	width:50%;
+	min-width:0;
     /* Delayed on the way out so the outgoing pane stays visible for the whole
        slide, then drops out of the tab order once it is off-screen. */
-    visibility:hidden;
-    transition:visibility 0s linear .26s;
+	visibility:hidden;
+	transition:visibility 0s linear .26s;
 }
 
 .settings-panes:not(.is-secondary) > .settings-pane-primary,
 .settings-panes.is-secondary > .settings-pane-secondary {
-    visibility:visible;
-    transition-delay:0s;
+	visibility:visible;
+	transition-delay:0s;
 }
 
 /* A breadcrumb rather than a bare title: the hidden-sites list is a second level
@@ -5427,130 +5427,130 @@ header button svg {
 /* No gap: the chevron animates its own width and margin, and a flex gap would
    still reserve space for it while collapsed, indenting the title on level one. */
 .settings-head {
-    display:flex;
-    align-items:baseline;
-    margin:0 0 8px;
+	display:flex;
+	align-items:baseline;
+	margin:0 0 8px;
 }
 
 /* Collapsed to zero width rather than hidden, so entering the second level slides
    it open and pushes the trail across instead of snapping. */
 .settings-back {
-    flex:0 0 auto;
-    width:0;
-    margin-right:0;
-    padding:0;
-    border:0;
-    overflow:hidden;
-    background:none;
-    color:var(--muted);
-    font-size:15px;
-    line-height:1;
-    opacity:0;
-    cursor:pointer;
-    align-self:center;
-    transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
+	flex:0 0 auto;
+	width:0;
+	margin-right:0;
+	padding:0;
+	border:0;
+	overflow:hidden;
+	background:none;
+	color:var(--muted);
+	font-size:15px;
+	line-height:1;
+	opacity:0;
+	cursor:pointer;
+	align-self:center;
+	transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
 }
 
 .settings-head.is-secondary .settings-back {
-    width:9px;
-    margin-right:5px;
-    opacity:1;
+	width:9px;
+	margin-right:5px;
+	opacity:1;
 }
 
 .settings-crumb-root {
-    padding:0;
-    border:0;
-    background:none;
-    color:inherit;
-    font-size:12px;
-    font-weight:600;
-    line-height:1.3;
+	padding:0;
+	border:0;
+	background:none;
+	color:inherit;
+	font-size:12px;
+	font-weight:600;
+	line-height:1.3;
     /* Inert on the first level, where it is simply the panel's title. */
-    cursor:default;
-    transition:color .2s ease, font-weight .2s ease;
+	cursor:default;
+	transition:color .2s ease, font-weight .2s ease;
 }
 
 /* Enabled only on the second level, where it stops being the title and becomes
    the way back -- so emphasis moves off it and onto the current page. */
 .settings-crumb-root:enabled {
-    cursor:pointer;
-    font-weight:400;
-    color:var(--muted);
-    text-decoration:underline;
-    text-underline-offset:2px;
+	cursor:pointer;
+	font-weight:400;
+	color:var(--muted);
+	text-decoration:underline;
+	text-underline-offset:2px;
 }
 
 /* Always in flow, faded and nudged rather than display:none, so it can animate
    in both directions. Laying it out on the first level costs nothing: the head
    is left-aligned, so an invisible trail shifts nothing. */
 .settings-crumb-tail {
-    display:flex;
-    align-items:baseline;
-    gap:5px;
+	display:flex;
+	align-items:baseline;
+	gap:5px;
     /* The head has no flex gap -- the chevron animates its own -- so the space
        before the separator belongs to the trail. */
-    margin-left:5px;
-    font-size:12px;
-    font-weight:600;
-    line-height:1.3;
-    opacity:0;
-    transform:translateX(-4px);
-    pointer-events:none;
-    transition:opacity .2s ease, transform .2s ease;
+	margin-left:5px;
+	font-size:12px;
+	font-weight:600;
+	line-height:1.3;
+	opacity:0;
+	transform:translateX(-4px);
+	pointer-events:none;
+	transition:opacity .2s ease, transform .2s ease;
 }
 
 .settings-head.is-secondary .settings-crumb-tail {
-    opacity:1;
-    transform:none;
-    pointer-events:auto;
+	opacity:1;
+	transform:none;
+	pointer-events:auto;
 }
 
 .settings-crumb-sep {
-    font-weight:400;
-    color:var(--muted);
+	font-weight:400;
+	color:var(--muted);
 }
 
 .segmented {
-    display:flex;
-    border:1px solid var(--help-border);
-    border-radius:5px;
-    background:var(--help-bg);
-    overflow:hidden;
+	display:flex;
+	border:1px solid var(--help-border);
+	border-radius:5px;
+	background:var(--help-bg);
+	overflow:hidden;
 }
 
 .segment {
-    position:relative;
-    flex:1 1 0;
-    min-width:0;
+	position:relative;
+	flex:1 1 0;
+	min-width:0;
 }
 
 .segment + .segment {
-    border-left:1px solid var(--help-border);
+	border-left:1px solid var(--help-border);
 }
 
 /* Full-bleed rather than display:none so the control stays keyboard reachable and
    arrow keys still move through the group. */
 .segment input {
-    position:absolute;
-    inset:0;
-    width:100%;
-    height:100%;
-    margin:0;
-    opacity:0;
-    cursor:pointer;
+	position:absolute;
+	inset:0;
+	width:100%;
+	height:100%;
+	margin:0;
+	opacity:0;
+	cursor:pointer;
 }
 
 .segment span {
-    display:block;
-    padding:4px 5px;
-    text-align:center;
-    font-size:11px;
-    line-height:1.3;
-    color:var(--help-text);
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
-    transition:background .14s ease, color .14s ease;
+	display:block;
+	padding:4px 5px;
+	text-align:center;
+	font-size:11px;
+	line-height:1.3;
+	color:var(--help-text);
+	white-space:nowrap;
+	overflow:hidden;
+	text-overflow:ellipsis;
+	transition:background .14s ease, color .14s ease;
 }
 
 /* Matches the native checkboxes above rather than the HN orange: orange is
@@ -5561,104 +5561,104 @@ header button svg {
    light system accent, which left the selected label unreadable on the blue. The
    background follows the system accent; the label does not follow it back. */
 .segment input:checked + span {
-    background:#0b63ce;
-    background:AccentColor;
-    color:#fff;
-    font-weight:600;
+	background:#0b63ce;
+	background:AccentColor;
+	color:#fff;
+	font-weight:600;
 }
 
 .segment input:focus-visible + span {
-    outline:2px solid #0b63ce;
-    outline:2px solid AccentColor;
-    outline-offset:-2px;
+	outline:2px solid #0b63ce;
+	outline:2px solid AccentColor;
+	outline-offset:-2px;
 }
 
 .button-designer {
-    display:flex;
-    align-items:stretch;
-    gap:10px;
+	display:flex;
+	align-items:stretch;
+	gap:10px;
 }
 
 /* flex-start so the "Button" label sits level with the top of the preview box
    beside it rather than floating in the middle of the column. */
 .button-designer-controls {
-    flex:1 1 auto;
-    min-width:0;
-    display:flex;
-    flex-direction:column;
-    justify-content:flex-start;
+	flex:1 1 auto;
+	min-width:0;
+	display:flex;
+	flex-direction:column;
+	justify-content:flex-start;
 }
 
 /* align-self so the row is only as wide as its three controls; stretched to the
    column it left the two buttons marooned at opposite edges. */
 .stepper {
-    display:flex;
-    align-items:center;
-    align-self:flex-start;
-    gap:4px;
-    margin-top:8px;
+	display:flex;
+	align-items:center;
+	align-self:flex-start;
+	gap:4px;
+	margin-top:8px;
 }
 
 .stepper-button {
-    flex:0 0 24px;
-    width:24px;
-    height:24px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    padding:0;
-    border:1px solid var(--help-border);
-    border-radius:4px;
-    background:var(--help-bg);
-    color:var(--help-text);
-    font-size:14px;
-    line-height:1;
-    cursor:pointer;
+	flex:0 0 24px;
+	width:24px;
+	height:24px;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	padding:0;
+	border:1px solid var(--help-border);
+	border-radius:4px;
+	background:var(--help-bg);
+	color:var(--help-text);
+	font-size:14px;
+	line-height:1;
+	cursor:pointer;
 }
 
 .stepper-button:disabled {
-    opacity:.4;
-    cursor:default;
+	opacity:.4;
+	cursor:default;
 }
 
 .stepper-value {
-    display:flex;
-    align-items:baseline;
-    gap:1px;
-    padding:0 5px;
-    border:1px solid var(--help-border);
-    border-radius:4px;
-    background:var(--field-bg);
+	display:flex;
+	align-items:baseline;
+	gap:1px;
+	padding:0 5px;
+	border:1px solid var(--help-border);
+	border-radius:4px;
+	background:var(--field-bg);
 }
 
 .stepper-value:focus-within {
-    outline:2px solid #0b63ce;
-    outline:2px solid AccentColor;
-    outline-offset:-1px;
+	outline:2px solid #0b63ce;
+	outline:2px solid AccentColor;
+	outline-offset:-1px;
 }
 
 /* Fixed at three digits' worth: the field accepts anything typed and clamps on
    commit, so it has to hold a number wider than the 64px ceiling without the
    row resizing as you type. */
 .stepper-input {
-    width:24px;
-    padding:3px 0;
-    border:0;
-    background:none;
-    color:var(--field-text);
-    font-family:Menlo, Consolas, monospace;
-    font-size:11px;
-    text-align:right;
+	width:24px;
+	padding:3px 0;
+	border:0;
+	background:none;
+	color:var(--field-text);
+	font-family:Menlo, Consolas, monospace;
+	font-size:11px;
+	text-align:right;
 }
 
 .stepper-input:focus {
-    outline:none;
+	outline:none;
 }
 
 .stepper-unit {
-    font-family:Menlo, Consolas, monospace;
-    font-size:9px;
-    color:var(--muted);
+	font-family:Menlo, Consolas, monospace;
+	font-size:9px;
+	color:var(--muted);
 }
 
 /* A drafting surface: hairline graph grid, the button drawn as line art rather
@@ -5668,54 +5668,54 @@ header button svg {
     /* Sized to clear the 64px maximum button plus its padding and border, and no
        wider -- the controls column is the constraint, and "Squircle" truncates
        before it. */
-    flex:0 0 88px;
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-    justify-content:center;
-    gap:5px;
-    padding:8px 6px;
-    border:1px solid var(--blueprint-line);
-    border-radius:5px;
-    background-color:var(--blueprint-bg);
+	flex:0 0 88px;
+	display:flex;
+	flex-direction:column;
+	align-items:center;
+	justify-content:center;
+	gap:5px;
+	padding:8px 6px;
+	border:1px solid var(--blueprint-line);
+	border-radius:5px;
+	background-color:var(--blueprint-bg);
     background-image:
-        linear-gradient(var(--blueprint-grid) 1px, transparent 1px),
+		linear-gradient(var(--blueprint-grid) 1px, transparent 1px),
         linear-gradient(90deg, var(--blueprint-grid) 1px, transparent 1px);
-    background-size:8px 8px;
-    background-position:center center;
+	background-size:8px 8px;
+	background-position:center center;
 }
 
 /* Fixed so the panel does not jump as the button grows through its range. */
 .button-preview-stage {
-    height:68px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
+	height:68px;
+	display:flex;
+	align-items:center;
+	justify-content:center;
 }
 
 /* Filled rather than drawn as line art: the point of the preview is to show the
    button you will actually get, colour included. The grid behind it still does
    the measuring work. */
 .button-preview-shape {
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    border:0;
-    background:#ff6600;
-    box-shadow:0 1px 4px rgba(0,0,0,.25);
-    color:#fff;
-    font-family:Verdana,sans-serif;
-    font-weight:bold;
-    transition:width .16s ease, height .16s ease, border-radius .16s ease, font-size .16s ease;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	border:0;
+	background:#ff6600;
+	box-shadow:0 1px 4px rgba(0,0,0,.25);
+	color:#fff;
+	font-family:Verdana,sans-serif;
+	font-weight:bold;
+	transition:width .16s ease, height .16s ease, border-radius .16s ease, font-size .16s ease;
 }
 
 .button-preview-rule {
-    position:relative;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    width:100%;
-    height:9px;
+	position:relative;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	width:100%;
+	height:9px;
 }
 
 /* The rule sits on each box's bottom edge so the side ticks rise from it toward
@@ -5723,95 +5723,95 @@ header button svg {
    ticks pointed away from it. */
 .button-preview-rule::before,
 .button-preview-rule::after {
-    content:"";
-    position:absolute;
-    top:calc(50% - 5px);
-    height:5px;
-    width:calc(50% - 14px);
-    border-bottom:1px solid var(--blueprint-ink);
+	content:"";
+	position:absolute;
+	top:calc(50% - 5px);
+	height:5px;
+	width:calc(50% - 14px);
+	border-bottom:1px solid var(--blueprint-ink);
 }
 
 .button-preview-rule::before {
-    left:0;
-    border-left:1px solid var(--blueprint-ink);
+	left:0;
+	border-left:1px solid var(--blueprint-ink);
 }
 
 .button-preview-rule::after {
-    right:0;
-    border-right:1px solid var(--blueprint-ink);
+	right:0;
+	border-right:1px solid var(--blueprint-ink);
 }
 
 .button-preview-dim {
-    position:relative;
-    padding:0 4px;
-    background:var(--blueprint-bg);
-    color:var(--blueprint-ink);
-    font-family:Menlo, Consolas, monospace;
-    font-size:9px;
+	position:relative;
+	padding:0 4px;
+	background:var(--blueprint-bg);
+	color:var(--blueprint-ink);
+	font-family:Menlo, Consolas, monospace;
+	font-size:9px;
 }
 
 /* A text link at the foot of the controls column rather than a button under the
    whole row: it undoes the two controls directly above it, and reads as
    secondary to them. */
 .settings-reset {
-    align-self:flex-end;
-    margin-top:6px;
-    padding:0;
-    border:0;
-    background:none;
-    color:var(--muted);
-    font-size:11px;
-    text-decoration:underline;
-    text-underline-offset:2px;
-    cursor:pointer;
+	align-self:flex-end;
+	margin-top:6px;
+	padding:0;
+	border:0;
+	background:none;
+	color:var(--muted);
+	font-size:11px;
+	text-decoration:underline;
+	text-underline-offset:2px;
+	cursor:pointer;
 }
 
 .settings-link-button {
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    width:100%;
-    padding:6px 8px;
-    border:1px solid var(--help-border);
-    border-radius:4px;
-    background:var(--help-bg);
-    color:var(--help-text);
-    font-size:12px;
-    text-align:left;
-    cursor:pointer;
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	width:100%;
+	padding:6px 8px;
+	border:1px solid var(--help-border);
+	border-radius:4px;
+	background:var(--help-bg);
+	color:var(--help-text);
+	font-size:12px;
+	text-align:left;
+	cursor:pointer;
 }
 
 .settings-link-chevron {
-    font-size:14px;
-    opacity:.6;
+	font-size:14px;
+	opacity:.6;
 }
 
 .settings-blocked-list {
-    margin-top:4px;
+	margin-top:4px;
 }
 
 .settings-blocked-entry {
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:8px;
-    padding:3px 0;
-    font-size:11px;
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	gap:8px;
+	padding:3px 0;
+	font-size:11px;
 }
 
 .settings-blocked-remove {
-    border:0;
-    background:none;
-    color:var(--muted);
-    font-size:14px;
-    line-height:1;
-    padding:0 2px;
-    cursor:pointer;
+	border:0;
+	background:none;
+	color:var(--muted);
+	font-size:14px;
+	line-height:1;
+	padding:0 2px;
+	cursor:pointer;
 }
 
 .settings-blocked-empty {
-    font-size:11px;
-    color:var(--muted);
+	font-size:11px;
+	color:var(--muted);
 }
 `;
 
@@ -6405,26 +6405,26 @@ Highlights the passages commenters quote, so you can jump between the article an
 <style>
 
 #panel {
-    position:fixed;
-    right:0;
-    top:0;
-    height:100vh;
-    width:${width}px;
-    min-width:${isPortraitPhone() ? "0" : "280px"};
-    max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "80vw"};
+	position:fixed;
+	right:0;
+	top:0;
+	height:100vh;
+	width:${width}px;
+	min-width:${isPortraitPhone() ? "0" : "280px"};
+	max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "80vw"};
     /* Without this the 1px border-left is added to the width, so a panel sized to
        the viewport renders a pixel past its left edge. */
-    box-sizing:border-box;
-    background:var(--bg);
-    color:var(--text);
-    z-index:2147483646;
-    display:flex;
-    flex-direction:column;
-    border-left:1px solid var(--border);
-    box-shadow:-3px 0 12px rgba(0,0,0,.15);
-    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-    font-size:13px;
-    overflow:visible;
+	box-sizing:border-box;
+	background:var(--bg);
+	color:var(--text);
+	z-index:2147483646;
+	display:flex;
+	flex-direction:column;
+	border-left:1px solid var(--border);
+	box-shadow:-3px 0 12px rgba(0,0,0,.15);
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+	font-size:13px;
+	overflow:visible;
     /* Shadow DOM encapsulates selectors, not inheritance. Every inherited property
        flows in from the host unless the shadow tree sets its own, so a page that
        centres its body -- victoriametrics.com does -- centres the entire panel,
@@ -6439,17 +6439,17 @@ Highlights the passages commenters quote, so you can jump between the article an
        line-height and the components that care carry their own, so pinning one now
        would restyle every site rather than fix one; and direction says something
        real about a reader's language, which is not ours to overrule. */
-    text-align:left;
-    text-indent:0;
-    text-transform:none;
-    letter-spacing:normal;
-    word-spacing:normal;
-    font-style:normal;
-    font-variant:normal;
-    white-space:normal;
+	text-align:left;
+	text-indent:0;
+	text-transform:none;
+	letter-spacing:normal;
+	word-spacing:normal;
+	font-style:normal;
+	font-variant:normal;
+	white-space:normal;
     /* Reading width for a single block of prose. Never applied to a container: a
        cap on any ancestor of .children narrows every reply nested under it. */
-    --measure:1215px;
+	--measure:1215px;
 }
 
 
@@ -6459,45 +6459,45 @@ ${CHROME_CSS}
 /* Sidebar-only, so deliberately not part of CHROME_CSS: the submit popover has no
    resize handle. #panel is position:fixed, which is already a containing block. */
 #resize-handle {
-    position:absolute;
-    left:0;
-    top:0;
-    bottom:0;
-    width:8px;
-    cursor:col-resize;
-    z-index:3;
+	position:absolute;
+	left:0;
+	top:0;
+	bottom:0;
+	width:8px;
+	cursor:col-resize;
+	z-index:3;
     /* Keeps the browser from turning the drag into a scroll or a page-back swipe
        before the resize handlers see it. */
-    touch-action:none;
+	touch-action:none;
 }
 
 /* A finger needs a far bigger target than a cursor, and an invisible edge strip is
    undiscoverable, so coarse pointers get a wider strip with a visible grip. */
 @media (pointer: coarse) {
-    #resize-handle {
-        width:20px;
-        display:flex;
-        align-items:center;
-        justify-content:center;
-    }
+	#resize-handle {
+		width:20px;
+		display:flex;
+		align-items:center;
+		justify-content:center;
+	}
 
-    #resize-handle::before {
-        content:"";
-        width:4px;
-        height:40px;
-        border-radius:2px;
-        background:var(--grip);
-    }
+	#resize-handle::before {
+		content:"";
+		width:4px;
+		height:40px;
+		border-radius:2px;
+		background:var(--grip);
+	}
 
-    #resize-handle.resize-handle-active::before {
-        background:#ff6600;
-    }
+	#resize-handle.resize-handle-active::before {
+		background:#ff6600;
+	}
 }
 
 
 .submission {
-    margin:0;
-    padding-top:0;
+	margin:0;
+	padding-top:0;
 }
 
 /* A hatched band rather than a rule, in the two places where the panel changes
@@ -6515,36 +6515,36 @@ ${CHROME_CSS}
    across it, which is the one thing it is for. */
 .next-up::before,
 .submission + .submission::before {
-    content:"";
-    display:block;
-    height:15px;
-    box-sizing:content-box;
-    margin:0 -12px 12px;
-    border-top:1px solid var(--border);
-    border-bottom:1px solid var(--border);
+	content:"";
+	display:block;
+	height:15px;
+	box-sizing:content-box;
+	margin:0 -12px 12px;
+	border-top:1px solid var(--border);
+	border-bottom:1px solid var(--border);
     background-image:repeating-linear-gradient(
         315deg,
-        var(--border) 0,
-        var(--border) 1px,
-        transparent 0,
+		var(--border) 0,
+		var(--border) 1px,
+		transparent 0,
         transparent 50%
     );
-    background-size:6px 6px;
+	background-size:6px 6px;
 }
 
 .submission + .submission {
-    margin:16px -12px 0;
-    padding:0 12px;
+	margin:16px -12px 0;
+	padding:0 12px;
 }
 
 #comments {
 			flex:1 1 auto;
 			min-height:0;
-    overflow:auto;
-    overflow-x:hidden;
+	overflow:auto;
+	overflow-x:hidden;
 			overscroll-behavior:contain;
-    padding:12px 12px 8px;
-    word-wrap:break-word;
+	padding:12px 12px 8px;
+	word-wrap:break-word;
 }
 
 /* Only the comment lists fade. Filtering to a discussion changes which comments
@@ -6552,13 +6552,13 @@ ${CHROME_CSS}
    are the frame around that change, so fading them made the whole sidebar blink
    for what is really an edit to the list underneath. */
 .top-level-comments {
-    opacity:1;
-    transition:opacity .18s ease;
-    will-change:opacity;
+	opacity:1;
+	transition:opacity .18s ease;
+	will-change:opacity;
 }
 
 .comments-transitioning .top-level-comments {
-    opacity:.12;
+	opacity:.12;
 }
 
 /* The 14px indent is the width of the story's vote-arrow column
@@ -6566,33 +6566,33 @@ ${CHROME_CSS}
    composer and every submission. Matching it lines the banner up with them
    instead of with the scroll container. */
 .filter-banner {
-    max-width:720px;
-    margin:12px 0 16px 14px;
-    color:var(--meta);
+	max-width:720px;
+	margin:12px 0 16px 14px;
+	color:var(--meta);
 }
 
 /* Reads as an HN meta line: same 11px Verdana and the same pipe separators as
    "deergomoo 11 hours ago | reply". Adopting the idiom already in use is what
    lets the header drop its uppercase treatment without losing its rank. */
 .filter-banner-head {
-    display:flex;
-    flex-wrap:wrap;
-    align-items:baseline;
-    color:var(--meta);
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
+	display:flex;
+	flex-wrap:wrap;
+	align-items:baseline;
+	color:var(--meta);
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
 }
 
 /* The one piece of contrast in the row, echoing how the story title sits above
    its own grey meta line. Without it every word carries equal weight and the
    label stops reading as a label. */
 .filter-banner-title {
-    color:var(--text);
+	color:var(--text);
 }
 
 .filter-banner-close::before {
-    content:"|";
-    margin:0 5px;
+	content:"|";
+	margin:0 5px;
 }
 
 /* Same chrome as .composer-help, at the panel's own 13px so the quote reads at
@@ -6600,15 +6600,15 @@ ${CHROME_CSS}
    it, which is what separates a focused quote from the comment quotes below --
    those carry the opening mark alone. */
 .filter-banner-quote {
-    margin-top:6px;
-    padding:7px 8px;
-    border:1px solid var(--help-border);
-    border-radius:4px;
-    background:var(--help-bg);
-    color:var(--quote-text);
-    font-size:13px;
-    font-style:italic;
-    line-height:1.5;
+	margin-top:6px;
+	padding:7px 8px;
+	border:1px solid var(--help-border);
+	border-radius:4px;
+	background:var(--help-bg);
+	color:var(--quote-text);
+	font-size:13px;
+	font-style:italic;
+	line-height:1.5;
 }
 
 /* Set above the text size: at 13px the ornament reads as a speck rather than a
@@ -6616,21 +6616,21 @@ ${CHROME_CSS}
    raised comma sits in type. */
 .filter-banner-quote::before,
 .filter-banner-quote::after {
-    color:var(--quote-ornament);
-    font-size:17px;
-    font-style:normal;
-    line-height:0;
-    vertical-align:-2px;
+	color:var(--quote-ornament);
+	font-size:17px;
+	font-style:normal;
+	line-height:0;
+	vertical-align:-2px;
 }
 
 .filter-banner-quote::before {
-    content:"❛";
-    margin-right:3px;
+	content:"❛";
+	margin-right:3px;
 }
 
 .filter-banner-quote::after {
-    content:"❜";
-    margin-left:3px;
+	content:"❜";
+	margin-left:3px;
 }
 
 /* A comment focus has no quotation to mark. The ornaments say "these are somebody
@@ -6639,55 +6639,55 @@ ${CHROME_CSS}
    what it separates from the thread below is unchanged. */
 .filter-banner-quote-comment::before,
 .filter-banner-quote-comment::after {
-    content:none;
+	content:none;
 }
 
 .filter-banner-quote-comment {
-    font-style:normal;
+	font-style:normal;
 }
 
 /* The one piece of contrast in the line, the same job .filter-banner-title does in
    the row above: without it the author reads as part of the sentence. */
 .filter-banner-author {
-    color:var(--text);
+	color:var(--text);
 }
 
 .filter-banner-author::after {
-    content:" — ";
-    color:var(--meta);
+	content:" — ";
+	color:var(--meta);
 }
 
 /* Unboxed, an empty quote was invisible. Boxed, it would render as a stray
    empty rectangle whenever a group carries no quote text. */
 .filter-banner-quote:empty {
-    display:none;
+	display:none;
 }
 
 
 /* A text link on the meta row, not a floating glyph. Same rule as .meta a and
    .composer-help-toggle: no underline until hover, no colour shift. */
 .filter-banner-close {
-    border:0;
-    padding:0;
-    background:none;
-    color:var(--meta);
-    cursor:pointer;
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
-    text-decoration:none;
-    text-underline-offset:2px;
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
+	text-decoration:none;
+	text-underline-offset:2px;
 }
 
 /* Split from :hover deliberately, same as the quote links: keyboard focus must
    show regardless of pointer type. */
 .filter-banner-close:focus-visible {
-    text-decoration:underline;
+	text-decoration:underline;
 }
 
 @media (hover: hover) {
-    .filter-banner-close:hover {
-        text-decoration:underline;
-    }
+	.filter-banner-close:hover {
+		text-decoration:underline;
+	}
 }
 
 /* Indent is deliberately small. Every level costs horizontal space the comment
@@ -6701,18 +6701,18 @@ ${CHROME_CSS}
    deepest reply. A top-only margin cannot accumulate: it still separates siblings,
    and still separates the first reply from its parent's text. */
 .comment {
-    margin:12px 0 0 8px;
-    max-width:100%;
-    overflow-wrap:anywhere;
+	margin:12px 0 0 8px;
+	max-width:100%;
+	overflow-wrap:anywhere;
 }
 
 .top-level-comments > .comment {
-    margin-left:0;
+	margin-left:0;
 }
 
 .children > .comment {
-    border-left:1px solid var(--border-soft);
-    padding-left:6px;
+	border-left:1px solid var(--border-soft);
+	padding-left:6px;
 }
 
 /* 2px border + 5px padding lines this up with the 1px + 6px of an ordinary
@@ -6725,26 +6725,26 @@ ${CHROME_CSS}
 
 /* A top-level comment has no divider under the accent, so it does fade to nothing. */
 .comment.new-comment.comment-new-seen {
-    border-left-color:transparent;
+	border-left-color:transparent;
 }
 
 /* A child does have one. Fading the accent all the way out erased the nesting line
    with it, so it settles on the divider colour instead of disappearing. */
 .children > .comment.new-comment.comment-new-seen {
-    border-left-color:var(--border-soft);
+	border-left-color:var(--border-soft);
 }
 
 .comment.comment-target {
-    background:rgba(255,102,0,.10);
-    border-radius:6px;
+	background:rgba(255,102,0,.10);
+	border-radius:6px;
 }
 
 .comment.comment-filter-hidden {
-    display:none !important;
+	display:none !important;
 }
 
 .submission.submission-filter-hidden {
-    display:none !important;
+	display:none !important;
 }
 
 /* Stated rather than left to cursor:auto. The panel used to write an inline
@@ -6753,15 +6753,15 @@ ${CHROME_CSS}
    write is gone, but saying it here means no future ancestor rule can take the
    I-beam away again without being noticed. */
 .text {
-    margin-top:4px;
-    line-height:132%;
-    font-weight:normal;
-    cursor:text;
-    max-width:var(--measure);
+	margin-top:4px;
+	line-height:132%;
+	font-weight:normal;
+	cursor:text;
+	max-width:var(--measure);
 }
 
 .text p {
-    margin:8px 0;
+	margin:8px 0;
 }
 
 /* A comment's first and last element must not decide how far the comment sits from
@@ -6777,12 +6777,12 @@ ${CHROME_CSS}
    to zero, which is why it was the odd one out to begin with. */
 .text > *:first-child,
 .story-text > *:first-child {
-    margin-top:0;
+	margin-top:0;
 }
 
 .text > *:last-child,
 .story-text > *:last-child {
-    margin-bottom:0;
+	margin-bottom:0;
 }
 
 /* A <pre> defaults to white-space:pre, which does not wrap at any width, so a code
@@ -6796,9 +6796,9 @@ ${CHROME_CSS}
    than widening everything around it. */
 .text pre,
 .story-text pre {
-    white-space:pre-wrap;
-    overflow-x:auto;
-    max-width:100%;
+	white-space:pre-wrap;
+	overflow-x:auto;
+	max-width:100%;
 }
 
 /* Browser defaults are 1em, which is 13px here and sits oddly beside the 8px every
@@ -6810,213 +6810,213 @@ ${CHROME_CSS}
 .story-text pre,
 .story-text ul,
 .story-text ol {
-    margin:8px 0;
+	margin:8px 0;
 }
 
 .text ul,
 .text ol,
 .story-text ul,
 .story-text ol {
-    padding-left:22px;
+	padding-left:22px;
 }
 
 .text a {
-    color:var(--link);
+	color:var(--link);
 }
 
 .meta {
-    color:var(--meta);
-    font-size:10px;
+	color:var(--meta);
+	font-size:10px;
 }
 
 .meta a {
-    color:var(--meta);
-    text-decoration:none;
+	color:var(--meta);
+	text-decoration:none;
 }
 
 @media (hover: hover) {
-    .meta a:hover {
-        text-decoration:underline;
-    }
+	.meta a:hover {
+		text-decoration:underline;
+	}
 }
 
 .vote-controls {
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-    width:17px;
-    opacity:1;
-    transition:opacity .15s ease;
+	display:flex;
+	flex-direction:column;
+	align-items:center;
+	width:17px;
+	opacity:1;
+	transition:opacity .15s ease;
 }
 
 .vote-controls-arriving {
-    opacity:0;
+	opacity:0;
 }
 
 .story-table {
-    width:100%;
-    border-collapse:collapse;
-    table-layout:fixed;
+	width:100%;
+	border-collapse:collapse;
+	table-layout:fixed;
 }
 
 .story-table td {
-    padding:0;
-    vertical-align:top;
+	padding:0;
+	vertical-align:top;
 }
 
 .story-votelinks,
 .story-votespacer {
-    width:14px;
+	width:14px;
 }
 
 .story-votelinks {
-    text-align:center;
+	text-align:center;
 }
 
 .story-votelinks .vote-controls {
-    margin-top:3px;
+	margin-top:3px;
 }
 
 .story-title-cell,
 .story-body-cell {
-    padding-left:2px;
+	padding-left:2px;
 }
 
 .comment-layout {
-    display:flex;
-    align-items:flex-start;
+	display:flex;
+	align-items:flex-start;
 }
 
 .comment-vote-slot {
-    flex:0 0 17px;
-    width:17px;
-    display:flex;
-    justify-content:center;
-    align-items:flex-start;
-    padding-top:1px;
+	flex:0 0 17px;
+	width:17px;
+	display:flex;
+	justify-content:center;
+	align-items:flex-start;
+	padding-top:1px;
 }
 
 .comment-main {
-    flex:1 1 auto;
-    min-width:0;
+	flex:1 1 auto;
+	min-width:0;
 }
 
 .vote-button {
-    position:relative;
-    width:10px;
-    height:10px;
-    min-width:10px;
-    border:none;
-    background:none;
-    padding:0;
-    margin:0;
-    color:transparent;
-    cursor:pointer;
-    font-size:0;
-    line-height:1;
+	position:relative;
+	width:10px;
+	height:10px;
+	min-width:10px;
+	border:none;
+	background:none;
+	padding:0;
+	margin:0;
+	color:transparent;
+	cursor:pointer;
+	font-size:0;
+	line-height:1;
 }
 
 .vote-button::before {
-    content:"";
-    position:absolute;
-    left:1px;
-    top:1px;
-    width:0;
-    height:0;
-    border-left:4px solid transparent;
-    border-right:4px solid transparent;
-    border-bottom:7px solid var(--meta);
+	content:"";
+	position:absolute;
+	left:1px;
+	top:1px;
+	width:0;
+	height:0;
+	border-left:4px solid transparent;
+	border-right:4px solid transparent;
+	border-bottom:7px solid var(--meta);
 }
 
 .vote-button-down::before {
-    border-bottom:none;
-    border-top:7px solid var(--meta);
-    top:2px;
+	border-bottom:none;
+	border-top:7px solid var(--meta);
+	top:2px;
 }
 
 /* Split deliberately: the -active colour marks a recorded vote and must apply on
    touch, so only the :hover half is gated. */
 .vote-button-active::before {
-    border-bottom-color:#ff6600;
+	border-bottom-color:#ff6600;
 }
 
 @media (hover: hover) {
-    .vote-button:hover::before {
-        border-bottom-color:#ff6600;
-    }
+	.vote-button:hover::before {
+		border-bottom-color:#ff6600;
+	}
 
-    .vote-button-down:hover::before {
-        border-top-color:#ff6600;
-    }
+	.vote-button-down:hover::before {
+		border-top-color:#ff6600;
+	}
 }
 
 .vote-button-down.vote-button-active::before {
-    border-top-color:var(--muted);
+	border-top-color:var(--muted);
 }
 
 .vote-button-neutral {
-    width:auto;
-    min-width:10px;
-    height:auto;
-    color:var(--meta);
-    font:600 10px/1 Verdana, Geneva, sans-serif;
+	width:auto;
+	min-width:10px;
+	height:auto;
+	color:var(--meta);
+	font:600 10px/1 Verdana, Geneva, sans-serif;
 }
 
 .vote-button-neutral::before {
-    content:none;
+	content:none;
 }
 
 .vote-button-neutral.vote-button-active {
-    color:#ff6600;
+	color:#ff6600;
 }
 
 @media (hover: hover) {
-    .vote-button-neutral:hover {
-        color:#ff6600;
-    }
+	.vote-button-neutral:hover {
+		color:#ff6600;
+	}
 }
 
 .vote-button + .vote-button {
-    margin-top:2px;
+	margin-top:2px;
 }
 
 .vote-button:disabled {
-    opacity:.55;
-    cursor:default;
+	opacity:.55;
+	cursor:default;
 }
 
 .story-vote-status,
 .comment-vote-status {
-    color:var(--meta);
+	color:var(--meta);
 }
 
 /* Sits in the byline as plain text, the way HN's own unvote link does. */
 .vote-unvote-link {
-    background:none;
-    border:0;
-    padding:0;
-    margin:0;
-    color:inherit;
-    font:inherit;
-    cursor:pointer;
+	background:none;
+	border:0;
+	padding:0;
+	margin:0;
+	color:inherit;
+	font:inherit;
+	cursor:pointer;
 }
 
 @media (hover: hover) {
-    .vote-unvote-link:hover {
-        text-decoration:underline;
-    }
+	.vote-unvote-link:hover {
+		text-decoration:underline;
+	}
 }
 
 .vote-controls-pending {
-    opacity:.7;
+	opacity:.7;
 }
 
 .comment-quote-link {
-    color:inherit;
-    cursor:pointer;
-    border-radius:3px;
-    outline:none;
-    transition:background .18s ease, opacity .18s ease, max-height .18s ease, margin .18s ease, padding .18s ease, border-color .18s ease;
+	color:inherit;
+	cursor:pointer;
+	border-radius:3px;
+	outline:none;
+	transition:background .18s ease, opacity .18s ease, max-height .18s ease, margin .18s ease, padding .18s ease, border-color .18s ease;
 }
 
 /* HN ships no quote syntax, so foldQuoteBlocks turns runs of marked lines into
@@ -7031,11 +7031,11 @@ ${CHROME_CSS}
    prose, whatever is on either side of it. */
 .text blockquote,
 .text p.comment-quote-promoted {
-    position:relative;
-    margin:8px 0;
-    padding-left:15px;
-    color:var(--quote-text);
-    font-style:italic;
+	position:relative;
+	margin:8px 0;
+	padding-left:15px;
+	color:var(--quote-text);
+	font-style:italic;
 }
 
 /* The ornaments are written as literal characters, not CSS codepoint escapes.
@@ -7043,22 +7043,22 @@ ${CHROME_CSS}
    digit as an octal escape, which is a syntax error in template strings. */
 .text blockquote::before,
 .text p.comment-quote-promoted::before {
-    content:"❛";
-    position:absolute;
-    left:0;
-    top:0;
-    color:var(--quote-ornament);
-    font-size:15px;
-    font-style:normal;
-    line-height:1.35;
+	content:"❛";
+	position:absolute;
+	left:0;
+	top:0;
+	color:var(--quote-ornament);
+	font-size:15px;
+	font-style:normal;
+	line-height:1.35;
 }
 
 .text blockquote p:first-child {
-    margin-top:0;
+	margin-top:0;
 }
 
 .text blockquote p:last-child {
-    margin-bottom:0;
+	margin-bottom:0;
 }
 
 /* The ornament stays neutral whether or not the quote is linked. The orange
@@ -7074,36 +7074,36 @@ ${CHROME_CSS}
    No backticks in here - this whole stylesheet is inside a template literal. */
 .text blockquote .comment-quote-link-inline,
 .comment-quote-promoted .comment-quote-link-inline {
-    text-decoration:none;
+	text-decoration:none;
 }
 
 /* A hairline. 1.5px was landing on three device pixels at 2x, which read as a rule
    under the text rather than as a mark on it. */
 .comment-quote-link-inline {
-    text-decoration:underline;
-    text-decoration-color:rgba(255,102,0,.32);
-    text-decoration-thickness:1px;
-    text-underline-offset:2px;
+	text-decoration:underline;
+	text-decoration-color:rgba(255,102,0,.32);
+	text-decoration-thickness:1px;
+	text-underline-offset:2px;
 }
 
 /* Split deliberately: :focus-visible is keyboard navigation and must keep working
    regardless of pointer type, so only the :hover half is gated. */
 .comment-quote-link:focus-visible {
-    background:rgba(255,102,0,.06);
+	background:rgba(255,102,0,.06);
 }
 
 blockquote.comment-quote-link:focus-visible {
-    background:rgba(255,102,0,.04);
+	background:rgba(255,102,0,.04);
 }
 
 @media (hover: hover) {
-    .comment-quote-link:hover {
-        background:rgba(255,102,0,.06);
-    }
+	.comment-quote-link:hover {
+		background:rgba(255,102,0,.06);
+	}
 
-    blockquote.comment-quote-link:hover {
-        background:rgba(255,102,0,.04);
-    }
+	blockquote.comment-quote-link:hover {
+		background:rgba(255,102,0,.04);
+	}
 }
 
 /* Inside a focused discussion the banner is already showing this sentence, so
@@ -7114,63 +7114,63 @@ blockquote.comment-quote-link:focus-visible {
    The blockquote form collapses instead, below, because there the quote is a
    standalone block rather than part of a sentence. */
 .comment-quote-redundant.comment-quote-link-inline {
-    text-decoration:none;
-    cursor:default;
+	text-decoration:none;
+	cursor:default;
 }
 
 /* Outside the hover media query and more specific than the rules there, so a
    quote the reader cannot usefully click does not light up under the pointer. */
 .comment-quote-redundant.comment-quote-link-inline:hover,
 .comment-quote-redundant.comment-quote-link-inline:focus-visible {
-    background:transparent;
+	background:transparent;
 }
 
 blockquote.comment-quote-redundant {
-    max-height:0;
-    overflow:hidden;
-    margin:0;
-    padding:0;
-    opacity:.08;
+	max-height:0;
+	overflow:hidden;
+	margin:0;
+	padding:0;
+	opacity:.08;
 }
 
 .toggle {
-    cursor:pointer;
+	cursor:pointer;
 }
 
 .story-title {
-    font-size:15px;
-    line-height:1.25;
+	font-size:15px;
+	line-height:1.25;
 }
 
 .story-title a {
-    color:var(--text);
-    text-decoration:none;
-    word-break:break-word;
+	color:var(--text);
+	text-decoration:none;
+	word-break:break-word;
 }
 
 .story-meta {
-    color:var(--meta);
-    font-size:10px;
-    line-height:1.4;
-    padding-top:2px;
+	color:var(--meta);
+	font-size:10px;
+	line-height:1.4;
+	padding-top:2px;
 }
 
 /* Matches .meta a, so the submitter reads the same as any commenter's name. */
 .story-meta a {
-    color:var(--meta);
-    text-decoration:none;
+	color:var(--meta);
+	text-decoration:none;
 }
 
 @media (hover: hover) {
-    .story-meta a:hover {
-        text-decoration:underline;
-    }
+	.story-meta a:hover {
+		text-decoration:underline;
+	}
 }
 
 .story-text {
-    margin:10px 0;
-    line-height:1.45;
-    cursor:text;
+	margin:10px 0;
+	line-height:1.45;
+	cursor:text;
 }
 
 /* The story ran on the browser's default paragraph margin -- 13px against the
@@ -7179,19 +7179,19 @@ blockquote.comment-quote-redundant {
    first-child/last-child rules above, which is what the old p:last-child rule here
    was reaching for. */
 .story-text p {
-    margin:8px 0;
+	margin:8px 0;
 }
 
 .story-text a {
-    color:var(--link);
+	color:var(--link);
 }
 
 /* The cap lives on the wrapper rather than the textarea so the actions row below
    inherits the same width, which is what lets the formatting link sit flush with
    the textarea's right edge instead of the panel's. */
 .comment-composer {
-    margin-top:10px;
-    max-width:720px;
+	margin-top:10px;
+	max-width:720px;
 }
 
 /* Reply boxes are collapsed until their comment's "reply" link is used. Same
@@ -7199,126 +7199,126 @@ blockquote.comment-quote-redundant {
    in CSS, so the ceiling only has to clear the content for the transition to
    finish. Generous because the formatting pane can be open inside it. */
 .reply-composer {
-    overflow:hidden;
-    max-height:600px;
-    opacity:1;
-    transition:max-height .24s ease, opacity .18s ease;
+	overflow:hidden;
+	max-height:600px;
+	opacity:1;
+	transition:max-height .24s ease, opacity .18s ease;
 }
 
 .reply-composer.collapsed {
-    max-height:0;
-    opacity:0;
+	max-height:0;
+	opacity:0;
     /* Nothing inside a collapsed box should be reachable by keyboard. */
-    visibility:hidden;
+	visibility:hidden;
 }
 
 /* Matches .composer-help-toggle: a text link that keeps its underline while the
    thing it toggles is open. */
 .reply-link.is-open {
-    text-decoration:underline;
+	text-decoration:underline;
 }
 
 /* Deliberately monospace-free and plain. HN treats two leading spaces as a code
    block, so a proportional font that hides whitespace would make the one piece of
    formatting that depends on exact spacing impossible to see. */
 .composer-text {
-    display:block;
-    width:100%;
-    box-sizing:border-box;
-    min-height:72px;
+	display:block;
+	width:100%;
+	box-sizing:border-box;
+	min-height:72px;
     /* Both axes, but bounded by the wrapper: a textarea dragged wider than the
        sidebar would just be clipped by #comments' overflow-x:hidden. */
-    max-width:100%;
-    resize:both;
-    padding:6px 7px;
-    border:1px solid var(--field-border);
-    border-radius:4px;
-    background:var(--field-bg);
-    color:var(--field-text);
-    font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	max-width:100%;
+	resize:both;
+	padding:6px 7px;
+	border:1px solid var(--field-border);
+	border-radius:4px;
+	background:var(--field-bg);
+	color:var(--field-text);
+	font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     /* Whitespace is significant to HN's formatter, so never collapse it visually. */
-    white-space:pre-wrap;
-    tab-size:4;
-    cursor:text;
+	white-space:pre-wrap;
+	tab-size:4;
+	cursor:text;
 }
 
 .composer-text:focus {
-    outline:2px solid rgba(255,102,0,.4);
-    outline-offset:-1px;
+	outline:2px solid rgba(255,102,0,.4);
+	outline-offset:-1px;
 }
 
 .composer-text:disabled {
-    background:var(--field-disabled-bg);
-    color:var(--muted);
+	background:var(--field-disabled-bg);
+	color:var(--muted);
 }
 
 /* space-between rather than a margin on the link, so the button stays left and the
    formatting link stays flush right however either one is relabelled. */
 .composer-actions {
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:8px;
-    margin-top:6px;
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	gap:8px;
+	margin-top:6px;
 }
 
 /* HN renders "add comment" as a real submit input, so it inherits the platform's
    default button chrome. Deliberately left unstyled to match. */
 .composer-submit {
-    cursor:pointer;
+	cursor:pointer;
 }
 
 /* Reads as a text link, so it follows the same rule as .meta a: no underline until
    hover. Being a toggle, it also keeps the underline while the pane is open, which
    is the one place it differs from a plain link. */
 .composer-help-toggle {
-    background:none;
-    border:0;
-    padding:0;
-    color:var(--meta);
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
-    cursor:pointer;
-    text-decoration:none;
-    text-underline-offset:2px;
+	background:none;
+	border:0;
+	padding:0;
+	color:var(--meta);
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
+	cursor:pointer;
+	text-decoration:none;
+	text-underline-offset:2px;
 }
 
 .composer-help-toggle.is-open {
-    text-decoration:underline;
+	text-decoration:underline;
 }
 
 /* Underline only, no colour shift -- exactly what .meta a does for usernames. */
 @media (hover: hover) {
-    .composer-help-toggle:hover {
-        text-decoration:underline;
-    }
+	.composer-help-toggle:hover {
+		text-decoration:underline;
+	}
 }
 
 .composer-help {
-    margin-top:6px;
-    padding:7px 8px;
-    border:1px solid var(--help-border);
-    border-radius:4px;
-    background:var(--help-bg);
-    color:var(--help-text);
-    font-size:11px;
-    line-height:1.5;
+	margin-top:6px;
+	padding:7px 8px;
+	border:1px solid var(--help-border);
+	border-radius:4px;
+	background:var(--help-bg);
+	color:var(--help-text);
+	font-size:11px;
+	line-height:1.5;
 }
 
 .composer-help p {
-    margin:0;
+	margin:0;
 }
 
 .composer-help p + p {
-    margin-top:5px;
+	margin-top:5px;
 }
 
 .composer-help code {
-    background:var(--code-bg);
-    border-radius:2px;
-    padding:0 3px;
-    font-family:Menlo, Consolas, monospace;
-    font-size:10px;
+	background:var(--code-bg);
+	border-radius:2px;
+	padding:0 3px;
+	font-family:Menlo, Consolas, monospace;
+	font-size:10px;
 }
 
 /* Sits between the button and the formatting link, taking up the slack so the link
@@ -7327,35 +7327,35 @@ blockquote.comment-quote-redundant {
    rather than truncate -- the row grows, which is preferable to hiding half of why
    something failed. */
 .composer-status {
-    flex:1 1 auto;
-    min-width:0;
-    font-size:11px;
-    line-height:1.4;
-    color:var(--status-text);
-    transition:opacity .14s ease;
+	flex:1 1 auto;
+	min-width:0;
+	font-size:11px;
+	line-height:1.4;
+	color:var(--status-text);
+	transition:opacity .14s ease;
 }
 
 /* Held while the message is being swapped, so one state fades out before the next
    fades in rather than the text changing under the reader. */
 .composer-status.is-fading {
-    opacity:0;
+	opacity:0;
 }
 
 .composer-status.error {
-    color:var(--error);
+	color:var(--error);
 }
 
 /* Braille frames rather than a spinning glyph: they animate in place without the
    baseline wobble a rotating character gives you, and need no image or keyframes. */
 .composer-spinner {
-    display:inline-block;
-    width:1em;
-    font-family:Menlo, Consolas, monospace;
-    color:var(--meta);
+	display:inline-block;
+	width:1em;
+	font-family:Menlo, Consolas, monospace;
+	color:var(--meta);
 }
 
 .composer-status a {
-    color:var(--link);
+	color:var(--link);
 }
 
 </style>
