@@ -4507,7 +4507,7 @@ ${
 		const message = document.createElement("div");
 		message.className = "browse-empty no-discussion";
 		message.textContent =
-			"No Hacker News discussion for this page yet. Minimize to submit it, or read something else.";
+			"No discussion found for this page yet. Minimize to submit it, or read something else.";
 
 		body.appendChild(message);
 	}
@@ -14549,6 +14549,9 @@ title="Show only this discussion">
 
 				// Nothing enabled is a state, not an error: the panel offers the
 				// picker rather than emptying and leaving the reader to guess.
+				// Nothing enabled is a state the reader chose, and the picker is how
+				// they undo it -- so the panel stays and offers it rather than
+				// vanishing and leaving them to find the grey button.
 				if (!enabledSourceIds(settings, registeredSourceIds()).length) {
 					sidebarHasDiscussion = false;
 					renderSourcePicker(ui);
@@ -14563,9 +14566,14 @@ title="Show only this discussion">
 					return;
 				}
 
+				// No source turned anything up, which is exactly what a page with no
+				// discussion has always looked like: the grey button, offering to
+				// submit. Keeping the panel open around a message would be a third
+				// state that says less than the button it replaced.
 				if (!discussions.length) {
 					sidebarHasDiscussion = false;
-					renderNoDiscussion(ui);
+					teardownSurfaces();
+					await runPagePass();
 					return;
 				}
 
