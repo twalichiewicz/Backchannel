@@ -1,13 +1,13 @@
 // ==UserScript==
-// @name         HNewhere
+// @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.5.8
+// @version      1.6.0
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
 // @homepageURL  https://github.com/twalichiewicz/HNewhere
 // @supportURL   https://github.com/twalichiewicz/HNewhere/issues
-// @description  Hacker News comments sidebar for any article
+// @description  See what everyone's talking about.
 // @include      http://*
 // @include      https://*
 // @exclude      http://localhost/*
@@ -50,6 +50,8 @@
 // @connect      hacker-news.firebaseio.com
 // @connect      hn.algolia.com
 // @connect      news.ycombinator.com
+// @connect      www.reddit.com
+// @connect      arctic-shift.photon-reddit.com
 // @run-at       document-end
 // @noframes
 // ==/UserScript==
@@ -88,10 +90,102 @@
 
 			await save("HNewhere:migrated", 1);
 		} catch (e) {
-			console.error("HNewhere migration failed:", e);
+			console.error("Backchannel migration failed:", e);
 		}
 	}
 
+	const SOURCE_KEY_MIGRATION = "HNewhere:migrated_source_keys";
+
+	// Must run after migrateStorage, not before: that one copies the v1.5.3 keys
+	// into the current namespace, and this one rewrites what is in the current
+	// namespace. Reversed, it would migrate an empty store and then have the old
+	// unprefixed values copied in on top of it.
+	async function migrateSourceKeys() {
+		if (await load(SOURCE_KEY_MIGRATION, false)) {
+			return;
+		}
+
+		try {
+			await save(
+				STORAGE.collapsed,
+				migrateCollapsedIds(await load(STORAGE.collapsed, [])),
+			);
+			await save(STORAGE.seen, migrateSeenTimes(await load(STORAGE.seen, {})));
+			await save(SOURCE_KEY_MIGRATION, 1);
+		} catch (e) {
+			console.error("Backchannel source key migration failed:", e);
+		}
+	}
+
+	const SOURCE_SEED_MIGRATION = "HNewhere:seeded_sources";
+
+	// Which keys prove a reader was here before this release.
+	//
+	// "HNewhere:migrated" leads, and only because seedSources runs *before*
+	// migrateStorage. Read at that moment it is exact: an upgrading reader has it
+	// from a previous session, and a first run has not reached the line that
+	// writes it. Read any later it is worthless, because migrateStorage sets it
+	// for brand new installs too -- which is why the order in init is load-bearing
+	// rather than tidy.
+	//
+	// The rest are a belt-and-braces list for a store that somehow has history
+	// without that flag. A reader who installed HNewhere and never once opened a
+	// sidebar would leave almost none of them, which is exactly the reader the
+	// flag catches and a hand-kept list would not.
+	const PRIOR_STORAGE_KEYS = [
+		"HNewhere:migrated",
+		"hn_width",
+		"hn_button_position",
+		"hn_last",
+		"hn_collapsed_comments",
+		"hn_seen_comments",
+		"HNewhere:width",
+		"HNewhere:settings",
+		"HNewhere:sidebar_state",
+		"HNewhere:collapsed_comments",
+		"HNewhere:seen_comments",
+	];
+
+	async function hadPriorStorage() {
+		for (const key of PRIOR_STORAGE_KEYS) {
+			if ((await load(key, null)) !== null) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	// Runs before every other migration, because those write, and "has this reader
+	// been here before" is only answerable while the store is still untouched.
+	async function seedSources() {
+		if (await load(SOURCE_SEED_MIGRATION, false)) {
+			return;
+		}
+
+		try {
+			const stored = await load(STORAGE.settings, {});
+			const seeded = seedSourcesForExistingReader(
+				await hadPriorStorage(),
+				stored?.sources,
+			);
+
+			if (seeded) {
+				await save(STORAGE.settings, { ...stored, sources: seeded });
+			}
+
+			await save(SOURCE_SEED_MIGRATION, 1);
+		} catch (e) {
+			console.error("Backchannel source seeding failed:", e);
+		}
+	}
+
+	// The keys keep the old prefix, and deliberately. Renaming them buys nothing a
+	// reader can see, and costs a sweep of seventeen fixed keys plus three
+	// dynamic prefixes -- the per-URL lookup cache, the front-page cache and the
+	// staged bridge payloads -- which would need GM.listValues and GM.deleteValue
+	// granted just to find them. A migration that half-runs loses somebody's queue
+	// and their hidden-site list. The name on the tin changed; the tin did not.
 	const STORAGE = {
 		width: "HNewhere:width",
 		widths: "HNewhere:width_by_site",
@@ -106,6 +200,102 @@
 		queue: "HNewhere:queue",
 		itemActions: "HNewhere:item_actions",
 	};
+
+	// #region hnewhere-test-export
+	// Identifiers carry their source. Two sources number their comments
+	// independently, and buildCommentGraph walks parent links by identity, so
+	// unprefixed ids make the graph correct only by the accident that HN's are
+	// integers and Reddit's are base36. A graph that is acyclic only by luck will
+	// eventually not be.
+	const SOURCE_KEY_SEPARATOR = ":";
+
+	function sourceKey(source, id) {
+		return source + SOURCE_KEY_SEPARATOR + id;
+	}
+
+	// Split on the first separator rather than the last, so an id that contains
+	// one still resolves to the right source. Nothing stored today contains a
+	// colon; the rule is here for the source added when nobody remembers to check.
+	//
+	// Returns null rather than a guess for anything unprefixed, which is how the
+	// storage migration recognises a value written before this existed.
+	function parseSourceKey(key) {
+		const text = String(key ?? "");
+		const at = text.indexOf(SOURCE_KEY_SEPARATOR);
+
+		if (at < 1 || at === text.length - 1) {
+			return null;
+		}
+
+		return { source: text.slice(0, at), id: text.slice(at + 1) };
+	}
+
+	// Every id stored before this release was HN's, because HN was the only
+	// source. So the migration is a prefix, not a lookup -- and anything already
+	// prefixed is left exactly as found, which is what makes running it twice
+	// harmless.
+	function migrateCollapsedIds(stored) {
+		if (!Array.isArray(stored)) {
+			return [];
+		}
+
+		return stored.map((id) =>
+			parseSourceKey(id) ? String(id) : sourceKey("hn", id),
+		);
+	}
+
+	function migrateSeenTimes(stored) {
+		if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+			return {};
+		}
+
+		const migrated = {};
+
+		for (const [key, value] of Object.entries(stored)) {
+			migrated[parseSourceKey(key) ? key : sourceKey("hn", key)] = value;
+		}
+
+		return migrated;
+	}
+
+	// Registration order decides the answer, not the stored object's key order: a
+	// reader who enabled Reddit first must not get Reddit-first discovery for it.
+	function normalizeSourceSettings(stored, registeredIds) {
+		const source =
+			stored && typeof stored === "object" && !Array.isArray(stored)
+				? stored
+				: {};
+		const normalized = {};
+
+		for (const id of registeredIds) {
+			normalized[id] = Boolean(source[id]);
+		}
+
+		return normalized;
+	}
+
+	// Anything unreadable reads as nothing enabled. The failure mode of this
+	// function is network traffic to somebody else's server, so it fails closed.
+	function enabledSourceIds(settings, registeredIds) {
+		const normalized = normalizeSourceSettings(settings?.sources, registeredIds);
+
+		return registeredIds.filter((id) => normalized[id]);
+	}
+
+	// Returns what to write, or null for "leave it alone".
+	//
+	// An empty object counts as a choice already made -- the default is absent,
+	// not empty, so an empty map can only have come from the picker saving with
+	// nothing ticked. Treating it as unset would re-run the picker on every load
+	// for a reader who deliberately turned everything off.
+	function seedSourcesForExistingReader(hadPrior, storedSources) {
+		if (storedSources !== undefined && storedSources !== null) {
+			return null;
+		}
+
+		return hadPrior ? { hn: true } : null;
+	}
+	// #endregion hnewhere-test-export
 
 	// Votes have to be remembered locally. The sidebar reads HN over a cross-site
 	// GM request, which the browser strips the SameSite session cookie from, so a
@@ -136,6 +326,22 @@
 	// Clamped to the range but deliberately NOT snapped to the step: a size typed
 	// into the field is the user's choice and is kept exactly, so any whole pixel
 	// from 24 to 64 is a valid stored value. Snapping belongs to the stepper alone.
+	// One or two characters, because that is what a 44px circle holds. Trimmed and
+	// upper-cased so "bc" and " Bc " settle on the same mark, and anything that
+	// normalises to nothing falls back rather than leaving a blank circle -- an
+	// unlabelled button is indistinguishable from a broken one.
+	const BUTTON_MARK_DEFAULT = "BC";
+	const BUTTON_MARK_MAX = 2;
+
+	function normalizeButtonMark(value) {
+		const text = String(value ?? "")
+			.trim()
+			.slice(0, BUTTON_MARK_MAX)
+			.toUpperCase();
+
+		return text || BUTTON_MARK_DEFAULT;
+	}
+
 	function normalizeButtonSize(value) {
 		const raw = typeof value === "string" ? LEGACY_BUTTON_SIZES[value] : value;
 		const numeric = Number.isFinite(raw)
@@ -172,15 +378,23 @@
 	let themePreference = "auto";
 	let buttonShapePreference = "circle";
 	let buttonSizePreference = BUTTON_SIZE_DEFAULT;
+	let buttonMarkPreference = BUTTON_MARK_DEFAULT;
+	// The hex the reader typed, or null while they are on the built-in accent. Kept
+	// as the raw string rather than the derived pair, so this stays a plain cache
+	// and the derivation can memoise off it.
+	let accentPreference = null;
 
-	// The only writer of the three caches. Called by loadSettings and saveSettings
-	// so they cannot drift from stored settings, and directly by tests.
+	// The only writer of the caches. Called by loadSettings and saveSettings so they
+	// cannot drift from stored settings, and directly by tests.
 	function syncAppearancePreferences(settings) {
 		themePreference = settings.theme || "auto";
 		buttonShapePreference = BUTTON_SHAPES[settings.buttonShape]
 			? settings.buttonShape
 			: "circle";
 		buttonSizePreference = normalizeButtonSize(settings.buttonSize);
+		buttonMarkPreference = normalizeButtonMark(settings.buttonMark);
+		accentPreference =
+			typeof settings.accentColor === "string" ? settings.accentColor : null;
 	}
 	// #endregion hnewhere-test-export
 
@@ -201,10 +415,21 @@
 		// autoOpenSidebarOnlyFromHN is: a reader who set the parent gets exactly
 		// what they set until they say otherwise.
 		showButtonWithQueue: false,
+		// Absent rather than { hn: true }. A fresh install has chosen nothing yet,
+		// and that is a state the picker exists to resolve -- seeding a default here
+		// would make "never configured" indistinguishable from "chose HN", and the
+		// upgrade seeding depends on telling them apart. loadSettings deliberately
+		// does not fill this in.
+		sources: undefined,
 		// "auto" reproduces the pre-1.5.4 behaviour of following the page.
 		theme: "auto",
 		buttonShape: "circle",
 		buttonSize: BUTTON_SIZE_DEFAULT,
+		buttonMark: BUTTON_MARK_DEFAULT,
+		// null rather than the built-in hex, so "never chosen" stays distinguishable
+		// from "chose the default colour" -- and a later change to the brand reaches
+		// everyone who has not picked their own.
+		accentColor: null,
 	};
 
 	// #region hnewhere-test-export
@@ -269,6 +494,9 @@
 	let openingRun = null;
 	let sidebarGeneration = 0;
 	let renderedComments = [];
+	// Which sources the open sidebar is showing, so per-thread decisions -- the vote
+	// gutter, for one -- do not have to walk the comment list to find out.
+	const sidebarSourceKeys = new Set();
 	let annotationController = null;
 	// Tagged rather than a bare group key: a focused discussion can now be entered
 	// two ways -- through a quoted passage, or through a comment -- and everything
@@ -874,6 +1102,43 @@
 		});
 	}
 
+	// Same transport as request(), but keeps the status and the response headers.
+	// The status matters because 403 and 429 mean different things to a source that
+	// can degrade, and request() flattens both -- along with a timeout and a parse
+	// failure -- to the same null.
+	function requestWithMeta(url) {
+		return new Promise((resolve) => {
+			const failure = { ok: false, status: 0, json: null, rateLimit: null };
+
+			GM.xmlHttpRequest({
+				method: "GET",
+				url,
+				timeout: 10000,
+				onload: function (response) {
+					let json = null;
+
+					try {
+						json = JSON.parse(response.responseText);
+					} catch {
+						json = null;
+					}
+
+					resolve({
+						ok:
+							response.status >= 200 &&
+							response.status < 300 &&
+							json !== null,
+						status: response.status,
+						json,
+						rateLimit: parseRateLimit(response.responseHeaders),
+					});
+				},
+				onerror: () => resolve(failure),
+				ontimeout: () => resolve(failure),
+			});
+		});
+	}
+
 	function requestText(url) {
 		return new Promise((resolve) => {
 			GM.xmlHttpRequest({
@@ -913,30 +1178,778 @@
 		return item;
 	}
 
-	// Stories reach the sort in two shapes: Algolia hits from findHN and Firebase
-	// items from loadStories. Reading both here keeps one ordering rule instead of
-	// two that can disagree.
+	// #region hnewhere-test-export
+	// Stories reach the sort in three shapes: Algolia hits from findHN, Firebase
+	// items from loadStories, and normalized discussions from a source adapter.
+	// Reading all three here keeps one ordering rule instead of three that can
+	// disagree -- the normalized names are read first, since they are the shape
+	// everything is heading towards.
 	function discussionRank(story) {
 		return {
-			comments: story.descendants ?? story.num_comments ?? 0,
+			comments: story.commentCount ?? story.descendants ?? story.num_comments ?? 0,
 			points: story.score ?? story.points ?? 0,
-			time: story.time ?? story.created_at_i ?? 0,
+			time: story.createdAt ?? story.time ?? story.created_at_i ?? 0,
 		};
 	}
 
-	// Ordered by how much discussion there is to read, not by recency. The same
-	// article gets resubmitted, and the newest submission is routinely a 0-comment
-	// repost while the thread worth reading is days old -- putting the empty one
-	// first buries the only discussion there is. Recency is only the tie-break.
+	// Newest submission first. Every instance of a story is shown, so ordering by
+	// recency cannot bury anything -- the older thread is one pill away, whatever
+	// its size. Ordering by comment count instead did bury things: a link
+	// resubmitted today led with a discussion from 2024 because that one had more
+	// comments, while the conversation happening now sat behind it.
+	//
+	// Size decides ties, so two submissions from the same moment put the one with
+	// more to read first.
 	function compareStoriesByDiscussion(a, b) {
 		const left = discussionRank(a);
 		const right = discussionRank(b);
 
 		return (
+			right.time - left.time ||
 			right.comments - left.comments ||
-			right.points - left.points ||
-			right.time - left.time
+			right.points - left.points
 		);
+	}
+
+	// Every instance of a story is shown, so when a link has been submitted twice
+	// the reader gets two pills -- and two pills both reading "HN" name neither of
+	// them. The date is what tells them apart, and it is added only where it is
+	// needed: a lone Hacker News discussion stays "HN", and subreddits are already
+	// distinct so they are left alone unless the same one carries two posts.
+	//
+	// Month and year rather than a full date. The pill is small, and two
+	// submissions of one link in the same month is not a case worth widening every
+	// label for.
+	function disambiguateLabels(discussions) {
+		const counts = new Map();
+
+		for (const discussion of discussions) {
+			counts.set(discussion.label, (counts.get(discussion.label) ?? 0) + 1);
+		}
+
+		return discussions.map((discussion) => {
+			if ((counts.get(discussion.label) ?? 0) < 2 || !discussion.createdAt) {
+				return discussion;
+			}
+
+			const when = new Date(discussion.createdAt * 1000);
+
+			return {
+				...discussion,
+				label: `${discussion.label} · ${when.toLocaleString(undefined, {
+					month: "short",
+					year: "numeric",
+				})}`,
+			};
+		});
+	}
+
+	// The shared shape every source is read through. Written as two mappers rather
+	// than one adapter method because they are pure -- the fetching lives in the
+	// adapter, the shape lives here, and only one of those is testable without a
+	// network.
+	function hnDiscussion(story) {
+		return {
+			source: "hn",
+			key: sourceKey("hn", story.id),
+			id: story.id,
+			title: story.title || "",
+			author: story.by || "",
+			score: story.score ?? 0,
+			commentCount: story.descendants ?? 0,
+			createdAt: story.time || 0,
+			permalink: "https://news.ycombinator.com/item?id=" + story.id,
+			articleURL: story.url || "",
+			label: "HN",
+			bodyHTML: story.text || "",
+			rootKeys: (story.kids || []).map((id) => sourceKey("hn", id)),
+		};
+	}
+
+	// HN arrives in two shapes and both become a Discussion. An Algolia hit already
+	// carries everything the button and the header need -- title, points, comment
+	// count, author, timestamp -- and only the comment list needs the Firebase
+	// item's `kids`. Mapping the hit directly is what keeps a page check at the two
+	// requests it has always been, instead of two plus one per submission found.
+	function algoliaDiscussion(hit) {
+		return {
+			source: "hn",
+			key: sourceKey("hn", hit.objectID),
+			id: Number(hit.objectID),
+			title: hit.title || "",
+			author: hit.author || "",
+			score: hit.points ?? 0,
+			commentCount: hit.num_comments ?? 0,
+			createdAt: hit.created_at_i ?? 0,
+			permalink: "https://news.ycombinator.com/item?id=" + hit.objectID,
+			articleURL: hit.url || "",
+			label: "HN",
+			bodyHTML: hit.story_text || "",
+			// Deliberately empty. The roots live on the Firebase item, and loadThread
+			// is where that is fetched -- which is the whole point of the split.
+			rootKeys: [],
+		};
+	}
+
+	// score is null, not 0. HN's API does not carry comment points at any
+	// endpoint, so there is no number to report -- and a 0 would be indexed,
+	// sorted and displayed as though there were.
+	//
+	// It is also why blending cannot be ordered on score: one of the two sources
+	// has none to give.
+	function hnComment(item, discussion) {
+		return {
+			source: "hn",
+			key: sourceKey("hn", item.id),
+			id: item.id,
+			discussionKey: discussion.key,
+			parentKey: item.parent ? sourceKey("hn", item.parent) : null,
+			author: item.by || "anonymous",
+			bodyHTML: item.text || "",
+			score: null,
+			createdAt: item.time || 0,
+			isOP: Boolean(item.by) && item.by === discussion.author,
+			deleted: Boolean(item.deleted || item.dead),
+			replyKeys: (item.kids || []).map((id) => sourceKey("hn", id)),
+		};
+	}
+
+	// A query that answered with nothing and a query that never answered produce
+	// the same empty result set. Only the first is worth remembering for an hour.
+	function shouldCacheDiscovery(answered) {
+		return answered.some(Boolean);
+	}
+
+	// Reddit reports its budget on every response. Reading it is the difference
+	// between backing off before the limit and meeting it as a run of 429s.
+	//
+	// Returns null rather than zeros when the headers are absent: "no budget left"
+	// and "this service reports no budget" must not look alike, or every response
+	// from a service that does not report one would read as exhausted.
+	function parseRateLimit(headerText) {
+		if (!headerText) {
+			return null;
+		}
+
+		const remaining = /^x-ratelimit-remaining:\s*([\d.]+)/im.exec(headerText);
+		const reset = /^x-ratelimit-reset:\s*([\d.]+)/im.exec(headerText);
+
+		if (!remaining && !reset) {
+			return null;
+		}
+
+		return {
+			remaining: remaining ? Number(remaining[1]) : Infinity,
+			resetSeconds: reset ? Number(reset[1]) : 0,
+		};
+	}
+
+	// Bots that repost Hacker News wholesale. Their "discussion" is a link back to
+	// the thread the sidebar is already showing, so a hit from one is worse than no
+	// hit: it lights the button and delivers nothing. Compared lowercased, because
+	// Reddit preserves the display case of a subreddit name.
+	const MIRROR_SUBREDDITS = new Set(["hackernews", "hypeurls"]);
+
+	function redditHitPasses(post) {
+		return (
+			(post?.num_comments ?? 0) > 0 &&
+			!post.removed_by_category &&
+			!MIRROR_SUBREDDITS.has(String(post.subreddit || "").toLowerCase())
+		);
+	}
+
+	// Reddit sends rendered markdown as an HTML-escaped string inside JSON. Left
+	// escaped it renders as tag soup; unescaped and handed straight to innerHTML it
+	// would let Reddit choose our markup. So it is unescaped here and sanitised
+	// where every other source's body is, by the renderer.
+	function unescapeRedditHTML(value) {
+		if (!value) {
+			return "";
+		}
+
+		const holder = document.createElement("textarea");
+
+		holder.innerHTML = value;
+
+		return holder.value;
+	}
+
+	function redditDiscussion(post) {
+		return {
+			source: "reddit",
+			key: sourceKey("reddit", post.id),
+			id: post.id,
+			title: post.title || "",
+			author: post.author || "",
+			score: post.score ?? 0,
+			commentCount: post.num_comments ?? 0,
+			createdAt: post.created_utc ?? 0,
+			permalink: "https://www.reddit.com" + (post.permalink || ""),
+			articleURL: post.url || "",
+			// The subreddit, not "Reddit". A blended thread shows this beside a
+			// comment, and r/science and r/conspiracy are not interchangeable.
+			label: post.subreddit_name_prefixed || "r/" + (post.subreddit || ""),
+			bodyHTML: unescapeRedditHTML(post.selftext_html),
+			rootKeys: [],
+		};
+	}
+
+	function redditComment(node, discussion) {
+		const data = node.data;
+		const parent = String(data.parent_id || "");
+
+		return {
+			source: "reddit",
+			key: sourceKey("reddit", data.id),
+			id: data.id,
+			discussionKey: discussion.key,
+			// A t3_ parent is the submission itself, which makes this a root. Reported
+			// as null rather than the discussion's key, because the focus walk stops on
+			// null and would otherwise look for a comment that is not in the list.
+			parentKey: parent.startsWith("t1_")
+				? sourceKey("reddit", parent.slice(3))
+				: null,
+			author: data.author || "[deleted]",
+			bodyHTML: unescapeRedditHTML(data.body_html),
+			score: data.score ?? null,
+			createdAt: data.created_utc ?? 0,
+			isOP: Boolean(data.is_submitter),
+			deleted: data.author === "[deleted]" && !data.body_html,
+			replyKeys: [],
+		};
+	}
+
+	// Reddit returns the tree whole and pre-nested, so this is the only walk: it
+	// flattens once into a map the adapter answers getComment from instantly. That
+	// is what lets a source with no per-comment request satisfy an interface built
+	// around one.
+	function redditThreadIndex(listing, discussion) {
+		const byKey = new Map();
+		const rootKeys = [];
+		let hiddenCount = 0;
+
+		// Where the gap is, not just how big. A stub carries the ids Reddit withheld,
+		// which is what /api/morechildren needs to fill it -- counting them and
+		// throwing the ids away made the number unusable.
+		let rootMore = null;
+
+		const walk = (children, intoKeys, parent) => {
+			for (const node of children || []) {
+				if (node.kind === "more") {
+					const ids = node.data?.children || [];
+					const record = { ids, count: node.data?.count ?? ids.length };
+
+					hiddenCount += record.count;
+
+					if (parent) {
+						parent.more = record;
+					} else {
+						rootMore = record;
+					}
+
+					continue;
+				}
+
+				if (node.kind !== "t1" || !node.data?.id) {
+					continue;
+				}
+
+				const comment = redditComment(node, discussion);
+
+				byKey.set(comment.key, comment);
+				intoKeys.push(comment.key);
+
+				const replies = node.data.replies;
+
+				if (replies && replies.data) {
+					walk(replies.data.children, comment.replyKeys, comment);
+				}
+			}
+		};
+
+		walk(listing?.[1]?.data?.children, rootKeys, null);
+
+		return { rootKeys, byKey, hiddenCount, rootMore };
+	}
+
+	// The archive returns comments flat. Same output as redditThreadIndex, rebuilt
+	// from parent_id -- and a comment whose parent is missing from the page becomes
+	// a root rather than being dropped, so a partial fetch still reads as a thread.
+	function redditThreadIndexFromFlat(rows, discussion) {
+		const byKey = new Map();
+		const rootKeys = [];
+
+		for (const row of rows) {
+			if (!row?.id) {
+				continue;
+			}
+
+			byKey.set(
+				sourceKey("reddit", row.id),
+				redditComment({ kind: "t1", data: row }, discussion),
+			);
+		}
+
+		for (const comment of byKey.values()) {
+			const parent = comment.parentKey && byKey.get(comment.parentKey);
+
+			if (parent) {
+				parent.replyKeys.push(comment.key);
+			} else {
+				rootKeys.push(comment.key);
+			}
+		}
+
+		return { rootKeys, byKey, hiddenCount: 0, rootMore: null };
+	}
+
+	// Where a comment sits in its own discussion, as a fraction. This is the whole
+	// ordering rule for a blended thread, and what it carefully never does is
+	// compare a Reddit upvote to an HN point -- HN's API carries no comment score
+	// at all, so that comparison was never available even in principle.
+	//
+	// Each platform has already ranked its own comments: HN's `kids` order is HN's
+	// ranking and Reddit's sort=top is Reddit's. This reads that ranking and says
+	// nothing else.
+	//
+	// The +1s are not decoration. Under plain i/n a discussion with one comment
+	// scores 0 and its lone comment outranks the top comment of a 500-comment
+	// thread; (i+1)/(n+1) puts it at 0.5, which is the honest position for a
+	// discussion contributing one comment.
+	function blendPosition(index, total) {
+		return (index + 1) / (total + 1);
+	}
+
+	// Proportionality falls out of the fraction rather than needing a weighting
+	// term: a discussion with ten times the comments has ten times as many of them
+	// inside any span of the merged list.
+	function blendRoots(groups) {
+		const entries = [];
+
+		for (const group of groups) {
+			const total = group.rootKeys.length;
+
+			group.rootKeys.forEach((key, index) => {
+				entries.push({
+					key,
+					discussionKey: group.discussionKey,
+					position: blendPosition(index, total),
+					size: total,
+				});
+			});
+		}
+
+		// Larger discussion first on a tie, so the thread with more to read leads --
+		// the same argument compareStoriesByDiscussion makes one level up.
+		return entries.sort((a, b) => a.position - b.position || b.size - a.size);
+	}
+
+	// 403 is the only demotion, and it is specific: it is what Reddit returns to a
+	// caller without a usable loid, which is exactly the condition the archive tier
+	// exists for. A 429 is a wait and a 0 is a dropped connection; treating either
+	// as a demotion would move a reader to stale scores over something temporary.
+	function redditTierForStatus(status, current) {
+		if (status !== 403) {
+			return current;
+		}
+
+		return current === "loid" ? "archive" : "off";
+	}
+
+	// A registry rather than a pair of branches. HN is an entry, not a base case:
+	// the moment a source is special-cased the renderer starts learning what a
+	// source is, which is the thing this whole seam exists to prevent.
+	const SOURCES = new Map();
+
+	function registerSource(source) {
+		SOURCES.set(source.id, source);
+		return source;
+	}
+
+	function getSource(id) {
+		return SOURCES.get(id) || null;
+	}
+
+	// The platform a discussion opens on, which is not the same as the label that
+	// tells two discussions apart. A Reddit thread's label is its subreddit, so
+	// this link read "open on r/programmingcirclejerk" where Hacker News read
+	// "open on HN" -- the one line where the same layout said something different
+	// depending on the source. The subreddit still labels the source strip and the
+	// badge beside a comment, which is where telling r/science from r/conspiracy
+	// is the whole point.
+	//
+	// Falls back to the discussion's own label for front-page rows, which are
+	// parsed out of HN's markup and never pass through a source.
+	function sourceShortLabel(story) {
+		return getSource(story?.source)?.shortLabel || story?.label || "the site";
+	}
+	// #endregion hnewhere-test-export
+
+	// Where a name links to, decided by the source the name came from. It used to
+	// be Hacker News for everybody, which sent a Reddit username to an HN profile
+	// page that has never existed.
+	//
+	// Returns null for a name that is not a person -- Reddit's "[deleted]", HN's
+	// "anonymous" placeholder -- so the renderer can print the text without
+	// wrapping it in a link to nowhere.
+	const NON_AUTHORS = new Set(["[deleted]", "[removed]", "anonymous", ""]);
+
+	function authorProfileURL(sourceId, author) {
+		if (NON_AUTHORS.has(String(author || "").trim())) {
+			return null;
+		}
+
+		return getSource(sourceId)?.profileURL?.(author) || null;
+	}
+
+	function authorLinkHTML(sourceId, author) {
+		const href = authorProfileURL(sourceId, author);
+
+		return href
+			? `<a target="_blank" rel="noopener noreferrer" href="${escapeHTML(href)}">${escapeHTML(author)}</a>`
+			: escapeHTML(author);
+	}
+
+	function registeredSourceIds() {
+		return [...SOURCES.keys()];
+	}
+
+	// Built from the registry rather than written out, so adding a source is a
+	// registry entry and no markup. The caveat travels with the source that earns
+	// it: a checkbox that sends the reader's browsing history somewhere new has to
+	// say so where it is ticked, not in a document nobody opens.
+	// The id is optional because this list is rendered twice into the same shadow
+	// root -- once in the settings panel, once in the picker -- and two elements
+	// cannot share one. The input sits inside its own label, so nothing needs a
+	// `for` and the picker's copy can simply go without.
+	function sourceListHTML({ idPrefix = "" } = {}) {
+		return [...SOURCES.values()]
+			.map(
+				(source) => `
+<label class="settings-option">
+<input${idPrefix ? ` id="${escapeHTML(idPrefix + source.id)}"` : ""} data-source="${escapeHTML(source.id)}" type="checkbox">
+<span>${escapeHTML(source.label)}${source.beta ? ` <span class="op-pill">BETA</span>` : ""}</span>
+</label>
+${
+	source.caveat
+		? `<div class="settings-option-hint">${escapeHTML(source.caveat)}</div>`
+		: ""
+}`,
+			)
+			.join("");
+	}
+
+	function enabledSources(settings) {
+		return enabledSourceIds(settings, registeredSourceIds()).map((id) =>
+			SOURCES.get(id),
+		);
+	}
+
+	registerSource({
+		id: "hn",
+		label: "Hacker News",
+		shortLabel: "HN",
+		caveat:
+			"Sends each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
+		capabilities: { vote: true, reply: true, submit: true },
+
+		profileURL: (author) =>
+			"https://news.ycombinator.com/user?id=" + encodeURIComponent(author),
+
+		// Algolia only. The Firebase items are fetched by loadThread, when there is
+		// actually a comment list to build, rather than on every page the reader
+		// visits.
+		async discover(url) {
+			return (await findHN(url)).map(algoliaDiscussion);
+		},
+
+		// Returns a reader, not a tree. HN charges one request per comment, so the
+		// renderer has to be able to ask for them one at a time and paint between
+		// answers -- a source that returns whole trees satisfies the same interface
+		// by resolving from a map instead.
+		async loadThread(discussion) {
+			// The one Firebase read a discussion needs before its comments can start:
+			// `kids` exists on the item and nowhere else. A discussion that arrived
+			// already carrying roots -- from the queue or the reading list, which go
+			// through loadStories -- skips it.
+			const roots = discussion.rootKeys.length
+				? discussion.rootKeys
+				: ((await getItem(discussion.id))?.kids || []).map((id) =>
+						sourceKey("hn", id),
+					);
+
+			return {
+				rootKeys: roots,
+				async getComment(key) {
+					const parsed = parseSourceKey(key);
+
+					if (!parsed) {
+						return null;
+					}
+
+					const item = await getItem(Number(parsed.id));
+
+					return item ? hnComment(item, discussion) : null;
+				},
+			};
+		},
+	});
+
+	const REDDIT_TIER_KEY = "HNewhere:reddit_tier";
+	// Matches Reddit's own rate window. Long enough that a demoted browser does not
+	// re-403 on every page, short enough that a reader who has since loaded
+	// reddit.com gets live scores back without doing anything about it.
+	const REDDIT_TIER_TTL = 10 * 60 * 1000;
+	// Below this the budget is left alone. Most pages have no Reddit thread, and
+	// spending the last of it on them would leave none for the one that does.
+	const REDDIT_RATE_FLOOR = 10;
+
+	let redditRateRemaining = Infinity;
+
+	async function redditTier() {
+		const stored = await load(REDDIT_TIER_KEY, null);
+
+		if (stored && Date.now() - stored.timestamp < REDDIT_TIER_TTL) {
+			return stored.tier;
+		}
+
+		return "loid";
+	}
+
+	// One request, through whichever tier is current, falling to the next on the
+	// one status that means "your cookie is not good here".
+	async function redditFetch(path, archivePath) {
+		let tier = await redditTier();
+
+		if (tier === "off") {
+			return null;
+		}
+
+		if (tier === "loid") {
+			if (redditRateRemaining < REDDIT_RATE_FLOOR) {
+				return null;
+			}
+
+			const result = await requestWithMeta("https://www.reddit.com" + path);
+
+			if (result.rateLimit) {
+				redditRateRemaining = result.rateLimit.remaining;
+			}
+
+			if (result.ok) {
+				return { json: result.json, tier };
+			}
+
+			const next = redditTierForStatus(result.status, tier);
+
+			if (next === tier) {
+				return null;
+			}
+
+			await save(REDDIT_TIER_KEY, { tier: next, timestamp: Date.now() });
+			tier = next;
+		}
+
+		if (tier !== "archive" || !archivePath) {
+			return null;
+		}
+
+		const archive = await requestWithMeta(
+			"https://arctic-shift.photon-reddit.com" + archivePath,
+		);
+
+		if (!archive.ok) {
+			const next = redditTierForStatus(archive.status, "archive");
+
+			if (next !== "archive") {
+				await save(REDDIT_TIER_KEY, { tier: next, timestamp: Date.now() });
+			}
+
+			return null;
+		}
+
+		return { json: archive.json, tier: "archive" };
+	}
+
+	registerSource({
+		id: "reddit",
+		label: "Reddit",
+		shortLabel: "Reddit",
+		beta: true,
+		// Measured, not assumed: signed in, a cross-site request from this script
+		// arrives at Reddit authenticated as that account -- reddit_session is
+		// SameSite=None and rides along. Signed out it carries only the device id.
+		// The wording says which, because the difference is the whole trade.
+		caveat:
+			"Sends each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds.",
+		capabilities: { vote: false, reply: false, submit: false },
+
+		profileURL: (author) =>
+			"https://www.reddit.com/user/" + encodeURIComponent(author) + "/",
+
+		async discover(url) {
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return [];
+			}
+
+			// Two queries, the way findHN already runs two against Algolia -- and for
+			// a sharper reason. Reddit matches the URL as it was submitted, and
+			// normalizeURL strips the trailing slash, so one canonical query misses
+			// every thread whose submission kept it. Measured on a live article:
+			// with the slash, eight hits including a 91-comment r/programming
+			// thread; without it, zero. Reddit folds `www.` itself, so that needs no
+			// variant, and the scheme is taken from the page rather than assumed.
+			const scheme = url.startsWith("http://") ? "http://" : "https://";
+			const bare = scheme + target;
+			const queries = [bare, bare + "/"];
+
+			const matches = new Map();
+
+			for (const query of queries) {
+				const encoded = encodeURIComponent(query);
+				const result = await redditFetch(
+					"/api/info.json?url=" + encoded,
+					"/api/posts/search?limit=25&url=" + encoded,
+				);
+
+				if (!result) {
+					continue;
+				}
+
+				const posts =
+					result.tier === "archive"
+						? result.json?.data || []
+						: (result.json?.data?.children || []).map((child) => child.data);
+
+				for (const post of posts) {
+					if (post?.id) {
+						matches.set(post.id, post);
+					}
+				}
+			}
+
+			return [...matches.values()]
+				.filter(redditHitPasses)
+				// The same correctness check findHN applies to Algolia: the query is a
+				// hint, and this comparison is the answer.
+				.filter((post) => normalizeURL(post.url) === target)
+				.map(redditDiscussion);
+		},
+
+		async loadThread(discussion) {
+			const result = await redditFetch(
+				discussion.permalink.replace("https://www.reddit.com", "") +
+					".json?limit=500&sort=top",
+				"/api/comments/search?limit=100&link_id=" +
+					encodeURIComponent(discussion.id),
+			);
+
+			if (!result) {
+				return {
+					rootKeys: [],
+					async getComment() {
+						return null;
+					},
+				};
+			}
+
+			const index =
+				result.tier === "archive"
+					? redditThreadIndexFromFlat(result.json?.data || [], discussion)
+					: redditThreadIndex(result.json, discussion);
+
+			return {
+				rootKeys: index.rootKeys,
+				rootMore: index.rootMore,
+				async getComment(key) {
+					return index.byKey.get(key) || null;
+				},
+
+				// Fills one gap. Reddit takes up to a hundred ids per call and answers
+				// with a flat list, so the replies are re-nested here and folded into
+				// the same map getComment already reads -- a comment fetched this way
+				// is indistinguishable from one that arrived with the tree.
+				async expandMore(ids) {
+					const batch = ids.slice(0, 100);
+
+					if (!batch.length) {
+						return { ok: true, added: [], remaining: [] };
+					}
+
+					const result = await redditFetch(
+						"/api/morechildren.json?api_type=json&link_id=t3_" +
+							encodeURIComponent(discussion.id) +
+							"&sort=top&children=" +
+							encodeURIComponent(batch.join(",")),
+						null,
+					);
+
+					// A request that never answered is not an empty gap. Reported
+					// separately so the caller can leave the offer standing rather
+					// than quietly withdrawing it -- the rate budget runs out, and
+					// "7 more replies" disappearing without producing seven replies
+					// is worse than the button never having been there.
+					if (!result) {
+						return { ok: false, added: [], remaining: ids };
+					}
+
+					const things = result?.json?.json?.data?.things || [];
+					const added = [];
+
+					for (const node of things) {
+						if (node.kind !== "t1" || !node.data?.id) {
+							continue;
+						}
+
+						const comment = redditComment(node, discussion);
+
+						index.byKey.set(comment.key, comment);
+						added.push(comment);
+					}
+
+					// Linked into the tree first, so a reply whose parent came down in
+					// this same batch is reachable from it.
+					for (const comment of added) {
+						const parent =
+							comment.parentKey && index.byKey.get(comment.parentKey);
+
+						if (parent && parent !== comment && !parent.replyKeys.includes(comment.key)) {
+							parent.replyKeys.push(comment.key);
+						}
+					}
+
+					// What the caller renders is decided by the caller, because only it
+					// knows which comment the gap sat under. Classifying by "has no
+					// parent" was wrong in the way that matters: a stub hangs beneath a
+					// comment that is already on screen, so every reply it returns has a
+					// parent in the map and nothing was ever a root.
+					return { ok: true, added, remaining: ids.slice(100) };
+				},
+			};
+		},
+	});
+
+	// The discovery entry point. With one source registered it is a fan-out of
+	// one, and the current lookup still goes through findHN directly because the
+	// button only needs to know whether a discussion exists. This is where a
+	// second source plugs in.
+	//
+	// Sources are independent: one failing must never blank a sidebar that has
+	// something else to show, so a rejected discover contributes nothing rather
+	// than rejecting the whole lookup.
+	async function discoverAll(url, settings) {
+		const results = await Promise.all(
+			enabledSources(settings).map((source) =>
+				source.discover(url).catch((e) => {
+					console.error("Backchannel " + source.id + " discovery failed:", e);
+					return [];
+				}),
+			),
+		);
+
+		return results.flat().sort(compareStoriesByDiscussion);
 	}
 
 	async function findHN(url) {
@@ -960,11 +1973,15 @@
 
 		const matches = new Map();
 
+		const answered = [];
+
 		for (const query of queries) {
 			const result = await request(
 				"https://hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=url&hitsPerPage=20&query=" +
 					encodeURIComponent(query),
 			);
+
+			answered.push(Boolean(result && result.hits));
 
 			if (!result || !result.hits) {
 				continue;
@@ -979,10 +1996,16 @@
 
 		const sorted = [...matches.values()].sort(compareStoriesByDiscussion);
 
-		await save(cacheKey, {
-			timestamp: Date.now(),
-			results: sorted,
-		});
+		// Only a lookup that got an answer is worth an hour. request() resolves
+		// null on error, timeout and parse failure, so caching unconditionally
+		// stored "nobody posted this" for a moment offline -- and kept a live
+		// discussion hidden until the TTL lapsed.
+		if (shouldCacheDiscovery(answered)) {
+			await save(cacheKey, {
+				timestamp: Date.now(),
+				results: sorted,
+			});
+		}
 
 		return sorted;
 	}
@@ -1351,7 +2374,7 @@
 	}
 
 	function isNewComment(comment, seenTimestamp) {
-		return comment.time && comment.time > seenTimestamp;
+		return comment.createdAt && comment.createdAt > seenTimestamp;
 	}
 
 	// Sliver of the page left showing down the left edge on a portrait phone, so it
@@ -1479,11 +2502,101 @@
 
 	const DARK_CLASS = "hnewhere-dark";
 
+	// The reader's accent split into its light and dark halves, or null while they
+	// are on the built-in one. Memoised on the stored string: activeAccent is asked
+	// once per highlight rect, and a page with a busy article asks hundreds of
+	// times for an answer that only changes when the setting does.
+	// #region hnewhere-test-export
+	let accentMemoKey = false;
+	let accentMemo = null;
+
+	function accentOverridePalette() {
+		if (accentMemoKey !== accentPreference) {
+			accentMemoKey = accentPreference;
+			accentMemo = accentPreference
+				? deriveAccentPalette(accentPreference)
+				: null;
+		}
+
+		return accentMemo;
+	}
+
+	// What the panel and the page-side overlay should actually paint, whichever of
+	// the two is in force. Everything that used to read ACCENT, ACCENT_DARK or
+	// ACCENT_RGB reads this instead, so the reader's colour reaches the button and
+	// the article highlights rather than only the panel.
+	function activeAccent(dark) {
+		const override = accentOverridePalette();
+
+		if (override) {
+			return dark ? override.dark : override.light;
+		}
+
+		return dark
+			? {
+					accent: ACCENT_DARK,
+					accentRgb: ACCENT_DARK_RGB,
+					ink: readableInk(parseHexColor(ACCENT_DARK)),
+				}
+			: {
+					accent: ACCENT,
+					accentRgb: ACCENT_RGB,
+					ink: readableInk(parseHexColor(ACCENT)),
+				};
+	}
+	// #endregion hnewhere-test-export
+
+	// loadSettings and saveSettings have already refreshed the cache the palette
+	// memoises off, so this only has to push the new colour out to what is mounted.
+	async function refreshAccentOverride() {
+		for (const apply of themeAppliers) {
+			apply();
+		}
+
+		await refreshButtonAppearance();
+		await refreshArticleAnnotations();
+	}
+
 	// The class goes on the host element rather than anything inside the shadow root,
 	// because that is what both the sidebar and the submit popover have in common --
 	// and custom properties set on a host inherit into its shadow tree.
 	function applyThemeToHost(host) {
-		host.classList.toggle(DARK_CLASS, detectDarkMode());
+		const dark = detectDarkMode();
+
+		host.classList.toggle(DARK_CLASS, dark);
+
+		// Set on the host, which beats the :host rules in the stylesheet, and
+		// cleared rather than overwritten when the reader goes back to the default
+		// -- otherwise the built-in accent could never come back.
+		const properties = {
+			"--accent": null,
+			"--accent-rgb": null,
+			"--accent-ink": null,
+			"--header-bg": null,
+			"--subtitle-stage": null,
+		};
+
+		const override = accentOverridePalette();
+
+		if (override) {
+			const half = dark ? override.dark : override.light;
+
+			properties["--accent"] = half.accent;
+			properties["--accent-rgb"] = half.accentRgb;
+			properties["--accent-ink"] = half.ink;
+			properties["--subtitle-stage"] = half.subtitleStage;
+			// Light follows the accent through var(--header-bg:var(--accent)); dark
+			// is a literal in the stylesheet and has to be replaced outright.
+			properties["--header-bg"] = dark ? half.headerBg : null;
+		}
+
+		for (const [name, value] of Object.entries(properties)) {
+			if (value) {
+				host.style.setProperty(name, value);
+			} else {
+				host.style.removeProperty(name);
+			}
+		}
 	}
 
 	// Every mounted surface registers its applier here so a settings change can be
@@ -1547,6 +2660,7 @@
 			"hn-restore-button",
 			"hn-collapse-button",
 			"hn-submit-button",
+			"hn-setup-button",
 		]) {
 			const button = document.getElementById(id);
 
@@ -1567,25 +2681,258 @@
 		);
 	}
 
+	// The floating button lives in the page rather than a shadow root, so it cannot
+	// read the panel's CSS variables and needs the accent as a value. Same colour,
+	// stated twice -- which is why both live here rather than in the rules that use
+	// them.
+	// #region hnewhere-test-export
+	// In a region because the heat palette is built from ACCENT_RGB and is itself
+	// tested: the harness evaluates the regions alone, so an identifier one region
+	// borrows from another has to be inside one too.
+	const ACCENT = "#237140";
+	const ACCENT_DARK = "#3fa96a";
+
+	// The same accent as channels, for the places that cannot use a CSS variable at
+	// all: the annotation overlay is mounted in the page rather than in the panel's
+	// shadow root -- deliberately, so mix-blend-mode composites against the article
+	// -- and nothing there can see --accent. A var() reference would resolve to
+	// nothing and paint every highlight invisible.
+	const ACCENT_RGB = "35,113,64";
+	// The dark half's channels, beside the hex they belong to rather than written
+	// out again wherever they are needed.
+	const ACCENT_DARK_RGB = "63,169,106";
+
+	// The panel background each theme's accent has to hold up against, and the
+	// ratio it has to clear. 4.5 is what body text is asked for; the accent paints
+	// links and marks, so it is held to the same bar rather than a decorative one.
+	const PANEL_BG_LIGHT = { r: 246, g: 246, b: 239 };
+	const PANEL_BG_DARK = { r: 30, g: 30, b: 30 };
+	const ACCENT_MIN_CONTRAST = 4.5;
+
+	function parseHexColor(value) {
+		const text = String(value ?? "").trim().replace(/^#/, "");
+
+		// Three digits is the shorthand every colour picker accepts, so a reader
+		// typing #0a0 means the same thing here as everywhere else.
+		const full =
+			text.length === 3
+				? text.replace(/./g, (character) => character + character)
+				: text;
+
+		if (!/^[0-9a-f]{6}$/i.test(full)) {
+			return null;
+		}
+
+		return {
+			r: parseInt(full.slice(0, 2), 16),
+			g: parseInt(full.slice(2, 4), 16),
+			b: parseInt(full.slice(4, 6), 16),
+		};
+	}
+
+	function rgbToHex({ r, g, b }) {
+		return (
+			"#" +
+			[r, g, b]
+				.map((channel) =>
+					Math.max(0, Math.min(255, Math.round(channel)))
+						.toString(16)
+						.padStart(2, "0"),
+				)
+				.join("")
+		);
+	}
+
+	function rgbToHsl({ r, g, b }) {
+		const red = r / 255;
+		const green = g / 255;
+		const blue = b / 255;
+		const max = Math.max(red, green, blue);
+		const min = Math.min(red, green, blue);
+		const delta = max - min;
+		const l = (max + min) / 2;
+
+		if (!delta) {
+			return { h: 0, s: 0, l };
+		}
+
+		const s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+		let h;
+
+		if (max === red) {
+			h = ((green - blue) / delta) % 6;
+		} else if (max === green) {
+			h = (blue - red) / delta + 2;
+		} else {
+			h = (red - green) / delta + 4;
+		}
+
+		return { h: (h * 60 + 360) % 360, s, l };
+	}
+
+	function hslToRgb({ h, s, l }) {
+		const c = (1 - Math.abs(2 * l - 1)) * s;
+		const x = c * (1 - Math.abs((((h % 360) + 360) % 360) / 60 % 2 - 1));
+		const m = l - c / 2;
+		const sector = Math.floor((((h % 360) + 360) % 360) / 60);
+		const [r, g, b] = [
+			[c, x, 0],
+			[x, c, 0],
+			[0, c, x],
+			[0, x, c],
+			[x, 0, c],
+			[c, 0, x],
+		][sector];
+
+		return {
+			r: Math.round((r + m) * 255),
+			g: Math.round((g + m) * 255),
+			b: Math.round((b + m) * 255),
+		};
+	}
+
+	function relativeLuminance({ r, g, b }) {
+		const [red, green, blue] = [r, g, b].map((channel) => {
+			const value = channel / 255;
+
+			return value <= 0.03928
+				? value / 12.92
+				: Math.pow((value + 0.055) / 1.055, 2.4);
+		});
+
+		return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+	}
+
+	// Whichever of black or white the colour underneath can actually carry. The
+	// accent is the reader's to set now, and the mark sits directly on it -- a pale
+	// accent with white on it is a button with no legible mark at all. True of the
+	// built-in pair too: the dark green carries black at 7.1:1 and white at 2.9.
+	function readableInk(rgb) {
+		return contrastRatio(rgb, { r: 255, g: 255, b: 255 }) >=
+			contrastRatio(rgb, { r: 0, g: 0, b: 0 })
+			? "#ffffff"
+			: "#000000";
+	}
+
+	function contrastRatio(a, b) {
+		const first = relativeLuminance(a);
+		const second = relativeLuminance(b);
+
+		return (
+			(Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
+		);
+	}
+
+	// Walks lightness towards `direction` until the colour clears `target` against
+	// `background`, keeping hue and saturation. A search rather than a fixed offset
+	// because the reader can type any hex: #237140 needs a 16-point lift to be
+	// readable on the dark panel, #90ee90 needs none, and #ffff00 has to come down.
+	function reachContrast(hsl, background, target, direction) {
+		let { l } = hsl;
+
+		for (let step = 0; step <= 100; step += 1) {
+			const candidate = { ...hsl, l };
+
+			if (contrastRatio(hslToRgb(candidate), background) >= target) {
+				return candidate;
+			}
+
+			l = Math.max(0, Math.min(1, l + direction * 0.01));
+
+			if (l === 0 || l === 1) {
+				return { ...hsl, l };
+			}
+		}
+
+		return { ...hsl, l };
+	}
+
+	// One hex in, every accent-derived value out. The panel keeps its accent as a
+	// pair -- lifted for dark backgrounds where the light value reads muddy, dimmed
+	// again behind a header where the lifted one is far too bright -- so a custom
+	// colour has to arrive as a pair too, or dark mode gets an unreadable link
+	// colour and a glaring header.
+	function deriveAccentPalette(hex) {
+		const rgb = parseHexColor(hex);
+
+		if (!rgb) {
+			return null;
+		}
+
+		const hsl = rgbToHsl(rgb);
+		const light = reachContrast(
+			hsl,
+			PANEL_BG_LIGHT,
+			ACCENT_MIN_CONTRAST,
+			-1,
+		);
+		const dark = reachContrast(hsl, PANEL_BG_DARK, ACCENT_MIN_CONTRAST, 1);
+
+		// The header is a field of colour behind white, not a foreground on the
+		// panel, so it is darkened rather than lifted: about three quarters of the
+		// accent's lightness, then far enough down to hold white text.
+		const headerDark = reachContrast(
+			{ ...hsl, l: Math.min(hsl.l, dark.l) * 0.75 },
+			{ r: 255, g: 255, b: 255 },
+			ACCENT_MIN_CONTRAST,
+			-1,
+		);
+
+		const tint = (source, lightness, saturation) =>
+			rgbToHex(hslToRgb({ h: source.h, s: source.s * saturation, l: lightness }));
+
+		return {
+			light: {
+				accent: rgbToHex(hslToRgb(light)),
+				accentRgb: Object.values(hslToRgb(light)).join(","),
+				ink: readableInk(hslToRgb(light)),
+				subtitleStage: tint(hsl, 0.82, 0.45),
+			},
+			dark: {
+				accent: rgbToHex(hslToRgb(dark)),
+				accentRgb: Object.values(hslToRgb(dark)).join(","),
+				ink: readableInk(hslToRgb(dark)),
+				headerBg: rgbToHex(hslToRgb(headerDark)),
+				subtitleStage: tint(hsl, 0.65, 0.35),
+			},
+		};
+	}
+	// #endregion hnewhere-test-export
+
+	// "HN" was doing double duty as the product's mark and as the name of the only
+	// source; with several sources it would have been announcing one of them. The
+	// reader can set their own, so this reads the preference rather than a
+	// constant -- see normalizeButtonMark for what a valid one is.
+
 	// The two states the floating button can be in. "active" means a discussion is
 	// known to exist; "inactive" means the lookup came back empty and clicking offers
 	// to submit the page instead. Kept in one table because both the initial cssText
-	// and applyButtonMobileStyle used to hardcode the orange separately, which is
+	// and applyButtonMobileStyle used to hardcode the colour separately, which is
 	// exactly how the two would drift.
 	const BUTTON_VARIANTS = {
 		active: {
-			background: "#ff6600",
-			// HN orange carries itself on either background, so only the inactive grey
-			// needs a dark counterpart -- #b8b8b8 glares on a dark page.
-			darkBackground: "#ff6600",
+			background: ACCENT,
+			// The accent is tuned for a light page; on a dark one the same value reads
+			// muddy, so it lifts -- unlike the old orange, which carried itself on both.
+			darkBackground: ACCENT_DARK,
 			boxShadow: "0 1px 4px rgba(0,0,0,.25)",
-			title: "Hacker News discussion",
+			title: "Discussion found",
 		},
 		inactive: {
 			background: "#b8b8b8",
 			darkBackground: "#4a4a4a",
 			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
-			title: "No Hacker News discussion yet — click to submit this page",
+			title: "No discussion yet — click to submit this page",
+		},
+		// A third meaning for the circle. Lit is "a discussion exists", grey is
+		// "none yet, submit one" -- and with no source enabled neither is true,
+		// because nothing has been looked up and nothing will be. Same grey, a
+		// different offer.
+		setup: {
+			background: "#b8b8b8",
+			darkBackground: "#4a4a4a",
+			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
+			title: "Choose where to read comments from",
 		},
 		// Borrows the inactive grey rather than the orange: this is shown before the
 		// lookup answers, and a page with no discussion would otherwise flash orange
@@ -1594,7 +2941,7 @@
 			background: "#b8b8b8",
 			darkBackground: "#4a4a4a",
 			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
-			title: "Checking Hacker News…",
+			title: "Checking for discussions…",
 		},
 	};
 
@@ -1675,13 +3022,19 @@
 		}, 220);
 	}
 
-	// The only place these four properties are set. They used to be spelled out in
-	// both createFloatingHNButton's cssText and applyButtonMobileStyle, which
-	// re-asserts them on every resize -- so a value applied to only one of them was
-	// silently reverted the next time the window changed size.
+	// The only place these properties are set. They used to be spelled out in both
+	// createFloatingHNButton's cssText and applyButtonMobileStyle, which re-asserts
+	// them on every resize -- so a value applied to only one of them was silently
+	// reverted the next time the window changed size.
+	//
+	// The label belongs here for the same reason. createFloatingHNButton returns an
+	// existing button untouched and adopts a pending one by id, so neither path
+	// re-labels it: a mark changed while a button was already on the page stayed on
+	// the old one until a reload.
 	function applyButtonAppearance(button) {
 		const size = buttonSizePreference;
 
+		button.textContent = buttonMarkPreference;
 		button.style.width = `${size}px`;
 		button.style.height = `${size}px`;
 		button.style.fontSize = `${buttonFontSizeFor(size)}px`;
@@ -1694,6 +3047,7 @@
 			"hn-restore-button",
 			"hn-collapse-button",
 			"hn-submit-button",
+			"hn-setup-button",
 		]) {
 			const button = document.getElementById(id);
 
@@ -1717,11 +3071,24 @@
 		const style = BUTTON_VARIANTS[variant] || BUTTON_VARIANTS.active;
 
 		// The button sits in the page, not in a shadow root, so it cannot inherit the
-		// custom properties and resolves its own colour instead.
+		// custom properties and resolves its own colour instead. Only the active
+		// variant carries the accent -- the greys mean "nothing found here" and are
+		// not the reader's colour to set.
+		const dark = detectDarkMode();
+		const background =
+			variant === "active"
+				? activeAccent(dark).accent
+				: dark
+					? style.darkBackground
+					: style.background;
+
 		button.dataset.hnewhereVariant = variant;
-		button.style.background = detectDarkMode()
-			? style.darkBackground
-			: style.background;
+		button.style.background = background;
+		// The mark sits on that background, so its colour is decided by it rather
+		// than fixed at white. The greys go through the same test as the accent --
+		// #b8b8b8 carries black, #4a4a4a carries white -- so one rule covers every
+		// variant instead of the accent being a special case.
+		button.style.color = readableInk(parseHexColor(background));
 		button.style.boxShadow = style.boxShadow;
 		button.title = style.title;
 	}
@@ -1752,7 +3119,10 @@
 		function createFloatingHNButton(id, variant = "active") {
 			let button = document.getElementById(id);
 
-			if (button) return button;
+			if (button) {
+				button.textContent = buttonMarkPreference;
+				return button;
+			}
 
 			// A button drawn before the lookup answered becomes whichever button the
 			// answer calls for, rather than being torn down and rebuilt: rebuilding
@@ -1762,13 +3132,14 @@
 
 			if (button) {
 				button.id = id;
+				button.textContent = buttonMarkPreference;
 				setFloatingButtonVariant(button, variant);
 				return button;
 			}
 
 			button = document.createElement("button");
 			button.id = id;
-			button.textContent = "HN";
+			button.textContent = buttonMarkPreference;
 
 			button.style.cssText = `
 					position:fixed;
@@ -1846,7 +3217,7 @@
 	function animateButtonFill(button) {
 		const overlay = document.createElement("span");
 
-		overlay.textContent = "HN";
+		overlay.textContent = buttonMarkPreference;
 		overlay.style.cssText = `
 			position:absolute;
 			inset:0;
@@ -2890,16 +4261,55 @@
 	// Restore button
 	// -------------------------
 
+	// The visible viewport, which is not window.innerWidth: that includes the
+	// scrollbar, so clamping to it let the button sit underneath one. On a page
+	// with a vertical scrollbar the button landed 15px past the last visible pixel
+	// and had to be dragged back into view.
+	//
+	// The margin keeps it off the edge entirely. Flush against the boundary is
+	// where a button is hardest to grab and where a scrollbar, an overlay or a
+	// rounded display corner is most likely to cover it.
+	const BUTTON_EDGE_MARGIN = 4;
+
+	function buttonBounds(button) {
+		const doc = document.documentElement;
+		const width = doc.clientWidth || window.innerWidth;
+		const height = doc.clientHeight || window.innerHeight;
+
+		return {
+			minX: BUTTON_EDGE_MARGIN,
+			minY: BUTTON_EDGE_MARGIN,
+			// Never negative: a button wider than the viewport clamps to the margin
+			// rather than to a max below its min, which would pin it off-screen left.
+			maxX: Math.max(
+				BUTTON_EDGE_MARGIN,
+				width - button.offsetWidth - BUTTON_EDGE_MARGIN,
+			),
+			maxY: Math.max(
+				BUTTON_EDGE_MARGIN,
+				height - button.offsetHeight - BUTTON_EDGE_MARGIN,
+			),
+		};
+	}
+
+	function clampButtonToViewport(button, x, y) {
+		const bounds = buttonBounds(button);
+
+		return {
+			x: Math.min(Math.max(x, bounds.minX), bounds.maxX),
+			y: Math.min(Math.max(y, bounds.minY), bounds.maxY),
+		};
+	}
+
 	async function applyButtonPosition(button) {
 		const saved = await load(STORAGE.position, null);
 
 		if (!saved) return;
 
-		const maxX = window.innerWidth - button.offsetWidth;
-		const maxY = window.innerHeight - button.offsetHeight;
+		const { x, y } = clampButtonToViewport(button, saved.x, saved.y);
 
-		button.style.left = Math.max(0, Math.min(saved.x, maxX)) + "px";
-		button.style.top = Math.max(0, Math.min(saved.y, maxY)) + "px";
+		button.style.left = x + "px";
+		button.style.top = y + "px";
 		button.style.right = "auto";
 	}
 
@@ -2921,11 +4331,14 @@
 		};
 
 		const clampPosition = () => {
-			const maxX = window.innerWidth - button.offsetWidth;
-			const maxY = window.innerHeight - button.offsetHeight;
+			const { x, y } = clampButtonToViewport(
+				button,
+				button.offsetLeft,
+				button.offsetTop,
+			);
 
-			button.style.left = Math.max(0, Math.min(button.offsetLeft, maxX)) + "px";
-			button.style.top = Math.max(0, Math.min(button.offsetTop, maxY)) + "px";
+			button.style.left = x + "px";
+			button.style.top = y + "px";
 			button.style.right = "auto";
 			notifyMoved();
 		};
@@ -2957,18 +4370,16 @@
 				moved = true;
 			}
 
-			button.style.left =
-				Math.min(
-					Math.max(0, startLeft + deltaX),
-					window.innerWidth - button.offsetWidth,
-				) + "px";
+			// Same bounds as every other clamp: the visible viewport, not
+			// window.innerWidth, so a drag cannot park the button under a scrollbar.
+			const { x, y } = clampButtonToViewport(
+				button,
+				startLeft + deltaX,
+				startTop + deltaY,
+			);
 
-			button.style.top =
-				Math.min(
-					Math.max(0, startTop + deltaY),
-					window.innerHeight - button.offsetHeight,
-				) + "px";
-
+			button.style.left = x + "px";
+			button.style.top = y + "px";
 			button.style.right = "auto";
 			notifyMoved();
 		});
@@ -3053,6 +4464,15 @@
 			return;
 		}
 
+		// Nowhere to go: no front page, because the source that has one is switched
+		// off, and nothing waiting in the queue. The wordmark is hidden in that
+		// state, so this catches the gap before the first refresh has settled it --
+		// frontPageAvailable starts out optimistic, and a press landing in that gap
+		// opened browse onto a tab that was not there and bounced straight back out.
+		if (on && !frontPageAvailable && !queueHasItems) {
+			return;
+		}
+
 		if (on && comments) {
 			discussionScrollTop = comments.scrollTop;
 		}
@@ -3064,14 +4484,17 @@
 		// incidental press turning this off for good, invisibly, which is the fault
 		// the auto-open setting was already fixed for once.
 		if (on) {
-			browseTab = options.tab || (queueHasItems ? "queue" : "front");
+			// Queue first when it has something, and always when there is no front
+			// page to fall back on -- otherwise turning Hacker News off and pressing
+			// the wordmark opened an empty front page for a source that is not on.
+			browseTab =
+				options.tab ||
+				(queueHasItems || !frontPageAvailable ? "queue" : "front");
 		}
 
 		const swap = () => {
 			panel.classList.toggle("browsing", on);
-			toggle.title = on
-				? "Back to this page's discussion"
-				: "Hacker News and your queue";
+			toggle.title = on ? "Back to this page's discussion" : browseLabel();
 
 			if (comments) {
 				// Assigning scrollTop forces the layout it depends on, so the list is
@@ -3092,12 +4515,20 @@
 			return;
 		}
 
-		// The outgoing view fades, then the swap happens behind it, then the
-		// incoming one fades up. The class has to survive one frame past the swap:
-		// the view arriving was display:none until that moment, and a browser given
-		// its display and its opacity in the same frame settles both at once with
-		// nothing to transition -- the same reason the panel's own fade waits a
-		// frame.
+		crossFadeCommentsView(comments, swap);
+	}
+
+	// The outgoing view fades, the swap happens behind it, and the incoming one
+	// fades up. The class has to survive one frame past the swap: the view arriving
+	// was display:none until that moment, and a browser given its display and its
+	// opacity in the same frame settles both at once with nothing to transition --
+	// the same reason the panel's own fade waits a frame.
+	//
+	// `swap` may be async and slow. It is not awaited on purpose: the fade covers
+	// the moment the old content leaves, and anything that streams in afterwards
+	// arrives during the fade up, which is what makes a rebuilt thread read as
+	// regenerating rather than as the panel blinking.
+	function crossFadeCommentsView(comments, swap) {
 		if (comments._hnewhereSwapTimer) {
 			clearTimeout(comments._hnewhereSwapTimer);
 		}
@@ -3227,9 +4658,68 @@
 	}
 
 	let queueHasItems = false;
+	// Whether there is a front page to show at all, which is Hacker News being on.
+	// Cached for the same reason queueHasItems is: renderBrowseView picks a tab
+	// synchronously and cannot wait on a settings read to do it.
+	let frontPageAvailable = true;
+
+	// What is actually behind the wordmark, in one place because three of them set
+	// this title -- the header template, setBrowseMode on every toggle, and
+	// refreshBrowseAffordances when the sources change. Kept as two literals, the
+	// last writer won, and a wordmark went on naming Hacker News after it had been
+	// switched off and its front page tab had already gone.
+	function browseLabel() {
+		return frontPageAvailable ? "Hacker News and your queue" : "Your queue";
+	}
 
 	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
 	// rather than the ui object because a browse row only knows the tree it is in.
+	// The front page behind the wordmark is Hacker News' own, parsed from its
+	// markup. With Hacker News switched off there is no front page to show, so the
+	// tab goes -- and if the queue is empty too there is nothing behind the
+	// wordmark at all, so the wordmark goes with it rather than opening onto an
+	// empty list under a tab for a source the reader turned off.
+	async function refreshBrowseAffordances(root) {
+		const frontTab = root?.querySelector?.("#browse-tab-front");
+		const wordmark = root?.querySelector?.("#browse-toggle");
+
+		if (!frontTab && !wordmark) {
+			return;
+		}
+
+		const settings = await loadSettings();
+		frontPageAvailable = enabledSourceIds(
+			settings,
+			registeredSourceIds(),
+		).includes("hn");
+
+		if (frontTab) {
+			frontTab.hidden = !frontPageAvailable;
+		}
+
+		if (wordmark) {
+			wordmark.hidden = !frontPageAvailable && !queueHasItems;
+
+			// Only while the panel is showing this page's discussion. In browse mode
+			// the title is the way back out, and setBrowseMode owns it.
+			if (!isBrowsing({ shadow: root })) {
+				wordmark.title = browseLabel();
+			}
+		}
+
+		// Standing on a page that has just become unavailable. The queue is the only
+		// other place to be, and if that is empty too the browse view has nothing
+		// left -- so it hands back to the discussion rather than sitting on a blank
+		// list. Guarded on browseTab so this cannot loop through renderBrowseView.
+		if (!frontPageAvailable && browseTab === "front" && sidebarUI) {
+			if (queueHasItems) {
+				renderBrowseView(sidebarUI, { tab: "queue" }).catch(console.error);
+			} else {
+				setBrowseMode(sidebarUI, false);
+			}
+		}
+	}
+
 	async function refreshQueueCount(root) {
 		const tab = root?.querySelector?.("#browse-tab-queue");
 
@@ -3252,13 +4742,27 @@
 		// to offer does not.
 		tab.hidden = !queueHasItems;
 
+		// Reads the queue, so the wordmark's own availability is settled here where
+		// the answer is already known rather than by loading it a second time.
+		// Before the fallback below, not after: that fallback asks whether there is
+		// a front page to fall back to, and this is what answers it.
+		await refreshBrowseAffordances(root);
+
 		// Emptied while it was the thing on screen. The tab it was under has just
 		// gone, so staying would leave the reader on a list with nothing in it
-		// beneath a tab that is no longer there -- and the front page is the only
-		// other place to be. Safe from looping: renderBrowseView sets the tab before
-		// it reaches this, so the pass it starts cannot come back through here.
+		// beneath a tab that is no longer there. Safe from looping: renderBrowseView
+		// sets the tab before it reaches this, so the pass it starts cannot come
+		// back through here.
 		if (!queueHasItems && browseTab === "queue" && sidebarUI) {
-			renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+			if (frontPageAvailable) {
+				renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+			} else {
+				// The front page used to be "the only other place to be", which was
+				// true while Hacker News was the only source. Switched off, there is
+				// no front page to land on, and sending the reader to that tab was
+				// what made pressing the wordmark open browse and snap shut again.
+				setBrowseMode(sidebarUI, false);
+			}
 		}
 	}
 
@@ -3400,7 +4904,7 @@
 		const message = document.createElement("div");
 		message.className = "browse-empty no-discussion";
 		message.textContent =
-			"No Hacker News discussion for this page yet. Minimize to submit it, or read something else.";
+			"No discussion found for this page yet. Minimize to submit it, or read something else.";
 
 		body.appendChild(message);
 	}
@@ -3783,7 +5287,7 @@
 		button.style.color = "white";
 
 		window.setTimeout(() => {
-			button.textContent = "HN";
+			button.textContent = buttonMarkPreference;
 			applyButtonMobileStyle(button);
 		}, 900);
 	}
@@ -3874,9 +5378,38 @@
 		SUBMIT_BRIDGE_MESSAGE_SOURCE,
 	);
 
+	// Which enabled source could actually take this page, or null if none can.
+	// Read from capabilities rather than checking for "hn" by name, so a later
+	// source that can submit needs no change here.
+	function submitTargetFor(settings) {
+		return (
+			enabledSourceIds(settings, registeredSourceIds())
+				.map(getSource)
+				.find((source) => source?.capabilities.submit) ?? null
+		);
+	}
+
+	// Said in the terms the rest of the panel uses for Reddit: not broken, not
+	// refused, just not built yet -- the same thing the BETA pill and the
+	// capability table are saying.
+	function unsubmittableMessage(settings) {
+		const enabled = enabledSourceIds(settings, registeredSourceIds())
+			.map((id) => getSource(id)?.label)
+			.filter(Boolean);
+
+		const names =
+			enabled.length > 1
+				? enabled.slice(0, -1).join(", ") + " and " + enabled.at(-1)
+				: enabled[0] || "your sources";
+
+		return `Submitting to ${names} is not supported yet. Turn on a source that accepts submissions in Settings → Sources to post this page.`;
+	}
+
 	// Its own shadow root for the same reason the sidebar has one: this renders over
 	// an arbitrary page whose CSS would otherwise reach in and restyle it.
-	function createSubmitPopover(button, onSubmit, onClose) {
+	function createSubmitPopover(button, onSubmit, onClose, options = {}) {
+		const submitTarget = options.submitTarget ?? null;
+		const unsubmittableMessageText = options.message ?? "";
 		const host = document.createElement("div");
 
 		host.setAttribute("data-hnewhere-submit-popover", "1");
@@ -3895,76 +5428,76 @@ ${THEME_CSS}
 ${CHROME_CSS}
 
 #popover {
-    width:320px;
-    box-sizing:border-box;
-    background:var(--bg);
-    color:var(--text);
-    border:1px solid var(--border);
-    border-radius:8px;
-    box-shadow:0 8px 24px rgba(0,0,0,.18);
+	width:320px;
+	box-sizing:border-box;
+	background:var(--bg);
+	color:var(--text);
+	border:1px solid var(--border);
+	border-radius:8px;
+	box-shadow:0 8px 24px rgba(0,0,0,.18);
     /* No padding of its own: the header runs edge to edge like the sidebar's and
        rounds its own top corners. The body below carries the inset instead.
        Deliberately no overflow:hidden -- it used to clip the header, but it also
        clipped the absolutely positioned settings dropdown to this box, and the
        popover is only as tall as a short submit form. */
-    padding:0;
+	padding:0;
     /* Containing block for the absolutely positioned settings dropdown. */
-    position:relative;
-    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    font-size:12px;
-    line-height:1.4;
+	position:relative;
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	font-size:12px;
+	line-height:1.4;
     /* The same inheritance the panel has to close off, for the same reason: this
        is a second shadow root on the same page, and it reads whatever the host
        inherited. See #panel for the full account. */
-    text-align:left;
-    text-indent:0;
-    text-transform:none;
-    letter-spacing:normal;
-    word-spacing:normal;
-    font-style:normal;
-    font-variant:normal;
-    white-space:normal;
+	text-align:left;
+	text-indent:0;
+	text-transform:none;
+	letter-spacing:normal;
+	word-spacing:normal;
+	font-style:normal;
+	font-variant:normal;
+	white-space:normal;
 }
 
 /* Same inset the sidebar's #comments uses, so the two read as one product. */
 .popover-body {
-    padding:12px 12px 8px;
+	padding:12px 12px 8px;
     /* The form is tall enough to run off a short viewport, so it scrolls itself
        rather than being clipped by the edge of the screen. Sized against the header
        and the popover's own vertical margins. */
-    max-height:calc(100vh - 120px);
-    overflow-y:auto;
+	max-height:calc(100vh - 120px);
+	overflow-y:auto;
 }
 
 /* Rounds its own top corners now that #popover no longer clips its children. */
 #popover header {
-    border-radius:7px 7px 0 0;
+	border-radius:7px 7px 0 0;
 }
 
 /* Narrower host than the sidebar, so the dropdown spans the width rather than
    sitting in a 240px column that would overhang the left edge. */
 .settings-panel {
-    top:44px;
-    right:8px;
-    left:8px;
-    width:auto;
+	top:44px;
+	right:8px;
+	left:8px;
+	width:auto;
 }
 
 .popover-title {
-    font-weight:600;
-    margin-bottom:8px;
+	font-weight:600;
+	margin-bottom:8px;
 }
 
 /* HN's own explanation of how url and text interact. Kept because the two fields
    are genuinely non-obvious: a blank url turns the whole thing into an Ask HN. */
 .popover-note {
-    margin-top:8px;
-    color:var(--muted);
-    font-size:11px;
+	margin-top:8px;
+	color:var(--muted);
+	font-size:11px;
 }
 
 .popover-field + .popover-field {
-    margin-top:8px;
+	margin-top:8px;
 }
 
 /* All of the following are scoped to .popover-field rather than bare element
@@ -3972,124 +5505,130 @@ ${CHROME_CSS}
    "input" rule would stretch its checkboxes to full width and give them a text
    field's border. */
 .popover-field label {
-    display:block;
-    color:var(--muted);
-    font-size:10px;
-    font-weight:700;
-    letter-spacing:.04em;
-    text-transform:uppercase;
-    margin-bottom:3px;
+	display:block;
+	color:var(--muted);
+	font-size:10px;
+	font-weight:700;
+	letter-spacing:.04em;
+	text-transform:uppercase;
+	margin-bottom:3px;
 }
 
 /* Label left, character count hard right, sharing one line above the field. Baseline
    alignment rather than centre so the count sits on the label's baseline despite
    being the smaller of the two. */
 .popover-field-head {
-    display:flex;
-    align-items:baseline;
-    justify-content:space-between;
-    gap:8px;
-    margin-bottom:3px;
+	display:flex;
+	align-items:baseline;
+	justify-content:space-between;
+	gap:8px;
+	margin-bottom:3px;
 }
 
 .popover-field-head label {
-    margin-bottom:0;
+	margin-bottom:0;
 }
 
 .popover-field input,
 .popover-field textarea {
-    width:100%;
-    box-sizing:border-box;
-    font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    padding:5px 6px;
-    border:1px solid var(--field-border);
-    border-radius:4px;
-    background:var(--field-bg);
-    color:var(--field-text);
+	width:100%;
+	box-sizing:border-box;
+	font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	padding:5px 6px;
+	border:1px solid var(--field-border);
+	border-radius:4px;
+	background:var(--field-bg);
+	color:var(--field-text);
 }
 
 .popover-field textarea {
-    min-height:56px;
-    resize:vertical;
+	min-height:56px;
+	resize:vertical;
     /* Same reasoning as the sidebar composer: HN reads leading spaces as code. */
-    white-space:pre-wrap;
+	white-space:pre-wrap;
 }
 
 .popover-field input:focus,
 .popover-field textarea:focus {
-    outline:2px solid rgba(255,102,0,.4);
-    outline-offset:-1px;
+	outline:2px solid rgba(var(--accent-rgb),.4);
+	outline-offset:-1px;
 }
 
 .popover-count {
-    color:var(--meta);
-    font-size:10px;
+	color:var(--meta);
+	font-size:10px;
     /* Fixed digits would be better, but the count is short enough that reflow is
        imperceptible; what matters is that it never pushes the label around. */
-    flex:0 0 auto;
-    white-space:nowrap;
+	flex:0 0 auto;
+	white-space:nowrap;
 }
 
 .popover-count.over {
-    color:var(--error);
+	color:var(--error);
 }
 
 .popover-actions {
-    display:flex;
-    justify-content:flex-end;
-    gap:6px;
-    margin-top:10px;
+	display:flex;
+	justify-content:flex-end;
+	gap:6px;
+	margin-top:10px;
 }
 
 /* Scoped for the same reason as the fields above: the header's gear button lives
    in this shadow root and must keep its own borderless styling. */
 .popover-actions button {
-    font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    padding:5px 10px;
-    border-radius:4px;
-    cursor:pointer;
-    border:1px solid var(--button-border);
-    background:var(--button-bg);
-    color:var(--button-text);
+	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	padding:5px 10px;
+	border-radius:4px;
+	cursor:pointer;
+	border:1px solid var(--button-border);
+	background:var(--button-bg);
+	color:var(--button-text);
 }
 
 .popover-actions button.primary {
-    background:#ff6600;
-    border-color:#ff6600;
-    color:white;
+	background:var(--accent);
+	border-color:var(--accent);
+	color:white;
 }
 
 .popover-actions button:disabled {
-    opacity:.6;
-    cursor:default;
+	opacity:.6;
+	cursor:default;
 }
 
 .popover-status {
-    margin-top:8px;
-    font-size:11px;
-    line-height:1.4;
+	margin-top:8px;
+	font-size:11px;
+	line-height:1.4;
 }
 
 .popover-status.error {
-    color:var(--error);
+	color:var(--error);
 }
 
 .popover-status a {
-    color:var(--link);
+	color:var(--link);
 }
 
 .hidden {
-    display:none;
+	display:none;
 }
 </style>
 
-<div id="popover" role="dialog" aria-label="Submit to Hacker News">
+<div id="popover" role="dialog" aria-label="${escapeHTML(submitTarget ? "Submit to " + submitTarget.label : "Submitting not available")}">
 ${headerHTML({ browse: true })}
 ${settingsPanelHTML()}
 
 <div class="popover-body">
-<div class="popover-title">Submit</div>
-
+<div class="popover-title">${
+	// Named, not bare. "Submit" was unambiguous while one source could take a
+	// submission; with a picker in front of the reader it has to say where.
+	submitTarget ? "Submit to " + escapeHTML(submitTarget.label) : "Submit"
+}</div>
+${
+	submitTarget
+		? `
 <div class="popover-field">
 <div class="popover-field-head">
 <label for="submit-title">title</label>
@@ -4110,11 +5649,16 @@ ${settingsPanelHTML()}
 
 <div class="popover-note">
 Leave url blank to submit a question for discussion. If there is no url, text will appear at the top of the thread. If there is a url, text is optional.
-</div>
+</div>`
+		: `
+<div class="popover-note">
+${escapeHTML(unsubmittableMessageText)}
+</div>`
+}
 
 <div class="popover-actions">
-<button id="submit-cancel" type="button">Cancel</button>
-<button id="submit-go" type="button" class="primary">Submit</button>
+<button id="submit-cancel" type="button">${submitTarget ? "Cancel" : "Close"}</button>
+${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</button>` : ""}
 </div>
 
 <div id="submit-status" class="popover-status hidden" role="status"></div>
@@ -4159,28 +5703,33 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 		const cancelButton = shadow.querySelector("#submit-cancel");
 		const statusLine = shadow.querySelector("#submit-status");
 
-		// Same two values HN's own bookmarklet passes to /submitlink, both editable
-		// here because the bookmarklet's weakness is that they are not.
-		titleInput.value = suggestedSubmissionTitle();
-		urlInput.value = location.href;
+		// Only rendered when something can take the submission. With no such source
+		// the popover is a sentence and a close button, so there are no fields to
+		// fill or validate.
+		if (submitTarget) {
+			// Same two values HN's own bookmarklet passes to /submitlink, both editable
+			// here because the bookmarklet's weakness is that they are not.
+			titleInput.value = suggestedSubmissionTitle();
+			urlInput.value = location.href;
 
-		const updateCount = () => {
-			const remaining = HN_TITLE_LIMIT - titleInput.value.length;
+			const updateCount = () => {
+				const remaining = HN_TITLE_LIMIT - titleInput.value.length;
 
-			countLabel.textContent = remaining + " left";
-			countLabel.classList.toggle("over", remaining < 0);
+				countLabel.textContent = remaining + " left";
+				countLabel.classList.toggle("over", remaining < 0);
 
-			// HN requires a title, and requires at least one of url or text -- a
-			// submission with neither has nothing in it.
-			goButton.disabled =
-				!titleInput.value.trim() ||
-				(!urlInput.value.trim() && !textInput.value.trim());
-		};
+				// HN requires a title, and requires at least one of url or text -- a
+				// submission with neither has nothing in it.
+				goButton.disabled =
+					!titleInput.value.trim() ||
+					(!urlInput.value.trim() && !textInput.value.trim());
+			};
 
-		updateCount();
-		titleInput.addEventListener("input", updateCount);
-		urlInput.addEventListener("input", updateCount);
-		textInput.addEventListener("input", updateCount);
+			updateCount();
+			titleInput.addEventListener("input", updateCount);
+			urlInput.addEventListener("input", updateCount);
+			textInput.addEventListener("input", updateCount);
+		}
 
 		// Anchored to the button rather than a fixed corner, because the button is
 		// draggable and may be sitting anywhere along the edge.
@@ -4266,7 +5815,9 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 			}
 		};
 
-		goButton.onclick = async () => {
+		// Guarded for the same reason the fields are: with nothing able to take a
+		// submission this button was never rendered.
+		if (goButton) goButton.onclick = async () => {
 			const title = titleInput.value.trim();
 			const url = urlInput.value.trim();
 			// Not trimmed: HN reads two leading spaces as a code block, so the body has
@@ -4293,7 +5844,7 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 
 		// Enter submits from the single-line fields only. In the text area it has to
 		// stay a newline, since blank lines are how HN separates paragraphs.
-		for (const field of [titleInput, urlInput]) {
+		for (const field of [titleInput, urlInput].filter(Boolean)) {
 			field.addEventListener("keydown", (event) => {
 				if (event.key === "Enter") {
 					event.preventDefault();
@@ -4302,8 +5853,10 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 			});
 		}
 
-		titleInput.focus();
-		titleInput.select();
+		// Focus lands on the way out when there is no form to fill, so the popover
+		// still answers the keyboard rather than leaving focus behind on the page.
+		(titleInput ?? cancelButton)?.focus();
+		titleInput?.select();
 
 		return { close, host };
 	}
@@ -4347,6 +5900,70 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 		})();
 	}
 
+	// Deferred to a Save, where the settings panel applies immediately. Picking
+	// sources is a commitment -- it decides which servers get told what the reader
+	// is reading -- and a checkbox that acts the instant it is touched is the wrong
+	// shape for that. Everything in the settings panel is reversible; this is a
+	// consent step, and it should feel like one.
+	function renderSourcePicker(ui) {
+		ui.body.innerHTML = `
+<div class="source-picker">
+<div class="source-picker-title">Where should comments come from?</div>
+<div class="source-picker-intro">Pick at least one. Nothing is contacted until you do.</div>
+<div class="source-picker-list">${sourceListHTML()}</div>
+<div class="source-picker-actions">
+<button class="source-picker-save" type="button" disabled>Save</button>
+</div>
+</div>`;
+
+		const list = ui.body.querySelector(".source-picker-list");
+		const save = ui.body.querySelector(".source-picker-save");
+
+		// Saving nothing is the state the picker exists to leave, so the way out has
+		// to be closed until there is something to save.
+		const syncSave = () => {
+			save.disabled = !list.querySelector("input[data-source]:checked");
+		};
+
+		list.addEventListener("change", syncSave);
+		syncSave();
+
+		save.onclick = async () => {
+			const chosen = {};
+
+			for (const input of list.querySelectorAll("input[data-source]")) {
+				chosen[input.dataset.source] = input.checked;
+			}
+
+			save.disabled = true;
+			await saveSettings({ sources: chosen });
+			await refreshForSourceChange();
+		};
+	}
+
+	// Deliberately plainer than createSubmitButton, which carries a popover for
+	// composing a submission. This one only has to open the picker.
+	async function createSetupButton() {
+		const button = createFloatingHNButton("hn-setup-button", "setup");
+
+		if (!button._dragController) {
+			button._dragController = makeButtonDraggable(button);
+		}
+
+		if (!isMobile()) {
+			await applyButtonPosition(button);
+		}
+
+		button.onclick = () => {
+			if (button._dragController.wasMoved()) return;
+
+			destroyFloatingButton(button);
+			openSidebar([], { setupOnly: true }).catch(console.error);
+		};
+
+		return button;
+	}
+
 	async function createSubmitButton() {
 		const button = createFloatingHNButton("hn-submit-button", "inactive");
 
@@ -4371,7 +5988,7 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 			baseCleanup?.();
 		};
 
-		button.onclick = () => {
+		button.onclick = async () => {
 			if (button._dragController.wasMoved()) return;
 
 			if (popover) {
@@ -4379,6 +5996,11 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 				popover = null;
 				return;
 			}
+
+			// Read before the popover is built, because it decides whether there is a
+			// form to build at all.
+			const settings = await loadSettings();
+			const submitTarget = submitTargetFor(settings);
 
 			popover = createSubmitPopover(
 				button,
@@ -4415,6 +6037,10 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 				},
 				() => {
 					popover = null;
+				},
+				{
+					submitTarget,
+					message: submitTarget ? "" : unsubmittableMessage(settings),
 				},
 			);
 		};
@@ -4467,99 +6093,125 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 	// composer, popover and status surfaces added in 1.5.3.
 	const THEME_CSS = `
 :host {
-    --bg:#f6f6ef;
-    --text:#000;
-    --header-bg:#ff6600;
-    --header-text:#000;
-    /* Dark orange on the header's own orange: legible, but clearly subordinate
-       to the black title. The peak is the travelling highlight. */
-    --subtitle-stage:#8f3900;
-    --subtitle-stage-peak:#d0721f;
-    --border:#ccc;
-    --border-soft:#ddd;
-    --link:#0000aa;
-    --meta:#828282;
-    --muted:#666;
-    --surface:#fff;
-    --surface-text:#222;
-    --surface-border:#d6d6d6;
-    --surface-divider:#eee;
-    --hover-tint:rgba(0,0,0,.08);
-    --active-tint:rgba(0,0,0,.16);
-    --grip:rgba(0,0,0,.2);
-    --quote-text:#5f5f5f;
-    --quote-ornament:#b4b4b4;
+	--bg:#f6f6ef;
+	--text:#000;
+	--header-bg:var(--accent);
+	/* White, not black. Black carried itself on orange and does not on a green
+		this deep -- the accent is a good deal darker than the colour it replaced,
+		and white clears 6:1 against it. */
+	--header-text:#fff;
+	/* The relationship inverts with the title: a dimmed tint of the header's own
+		green, clearly subordinate to the white title. The peak is the travelling
+		highlight. */
+	--subtitle-stage:#c2e0cd;
+	--subtitle-stage-peak:#ffffff;
+	--border:#ccc;
+	--border-soft:#ddd;
+	--link:#0000aa;
+	--meta:#828282;
+	--muted:#666;
+	/* Backchannel's accent. Deliberately not Hacker News orange and not Reddit's
+		orange-red: the panel now speaks for several sources and must not wear any
+		one of their colours. One token, so changing the brand is one line. */
+	--accent:#237140;
+	--accent-rgb:35,113,64;
+	/* What reads on the accent, for the mark that sits directly on it. White here
+		because #237140 carries white at 6:1 and black at 3.5. */
+	--accent-ink:#ffffff;
+	--surface:#fff;
+	--surface-text:#222;
+	--surface-border:#d6d6d6;
+	--surface-divider:#eee;
+	--hover-tint:rgba(0,0,0,.08);
+	--active-tint:rgba(0,0,0,.16);
+	--grip:rgba(0,0,0,.2);
+	--quote-text:#5f5f5f;
+	--quote-ornament:#b4b4b4;
 
     /* 1.5.3 surfaces */
-    --field-bg:#fff;
-    --field-text:#000;
-    --field-border:#ccc;
-    --field-disabled-bg:#f0f0ea;
-    --help-bg:#fbfbf5;
-    --help-border:#e2e2d9;
-    --help-text:#555;
-    --code-bg:#efefe6;
+	--field-bg:#fff;
+	--field-text:#000;
+	--field-border:#ccc;
+	--field-disabled-bg:#f0f0ea;
+	--help-bg:#fbfbf5;
+	--help-border:#e2e2d9;
+	--help-text:#555;
+	--code-bg:#efefe6;
     /* Deliberately cool against the panel's warm neutrals: the preview is a
        measuring surface, not part of the orange brand language. */
-    --blueprint-bg:#f6f8fa;
-    --blueprint-grid:rgba(64,86,112,.13);
-    --blueprint-line:rgba(64,86,112,.22);
-    --blueprint-ink:rgba(52,72,96,.72);
-    --status-text:#555;
-    --error:#c00;
-    --button-bg:#fff;
-    --button-text:#333;
-    --button-border:#ccc;
-    --inactive-button:#b8b8b8;
-    --underline-soft:rgba(0,0,0,.2);
+	--blueprint-bg:#f6f8fa;
+	--blueprint-grid:rgba(64,86,112,.13);
+	--blueprint-line:rgba(64,86,112,.22);
+	--blueprint-ink:rgba(52,72,96,.72);
+	--status-text:#555;
+	--error:#c00;
+	--button-bg:#fff;
+	--button-text:#333;
+	--button-border:#ccc;
+	--inactive-button:#b8b8b8;
+	--underline-soft:rgba(0,0,0,.2);
 
-    color-scheme:light;
+	color-scheme:light;
 }
 
 :host(.${DARK_CLASS}) {
-    --bg:#1e1e1e;
-    --text:#dcdcdc;
-    --header-bg:#cc5200;
-    --header-text:#000;
-    /* Darker to hold the same relationship against the dimmer header. */
-    --subtitle-stage:#6d2b00;
-    --subtitle-stage-peak:#ad5a17;
-    --border:#3d3d3d;
-    --border-soft:#383838;
-    --link:#8ab4f8;
-    --meta:#9a9a9a;
-    --muted:#a3a3a3;
-    --surface:#2a2a2a;
-    --surface-text:#dcdcdc;
-    --surface-border:#454545;
-    --surface-divider:#3a3a3a;
-    --hover-tint:rgba(255,255,255,.10);
-    --active-tint:rgba(255,255,255,.18);
-    --grip:rgba(255,255,255,.25);
-    --quote-text:#a8a8a8;
-    --quote-ornament:#6d6d6d;
+	--bg:#1e1e1e;
+	--text:#dcdcdc;
+	/* Deliberately not var(--accent): the dark accent is lifted so it reads as a
+		foreground, which makes it far too bright behind a header. This is the
+		dimmed counterpart, the way #cc5200 was the dimmed counterpart of the old
+		orange -- about half the luminance of the light header, which is the
+		relationship the indigo pair had. */
+	--header-bg:#1b5732;
+	--header-text:#f0fff5;
+	/* Dimmer to hold the same relationship against the dimmer header. */
+	--subtitle-stage:#8fbda2;
+	--subtitle-stage-peak:#e6fff0;
+	--border:#3d3d3d;
+	--border-soft:#383838;
+	--link:#8ab4f8;
+	--meta:#9a9a9a;
+	--muted:#a3a3a3;
+	/* Lifted for dark backgrounds, where the light value reads muddy -- and it has
+		further to travel than the indigo did: #237140 sits at 29% lightness, which
+		against #1e1e1e is 2.8:1 and unreadable. This clears 5.6:1. */
+	--accent:#3fa96a;
+	--accent-rgb:63,169,106;
+	/* Black, not white. The lifted accent is a light colour by construction -- it
+		has to be, to read on #1e1e1e -- and it carries black at 7.1:1 against
+		white's 2.9. */
+	--accent-ink:#000000;
+	--surface:#2a2a2a;
+	--surface-text:#dcdcdc;
+	--surface-border:#454545;
+	--surface-divider:#3a3a3a;
+	--hover-tint:rgba(255,255,255,.10);
+	--active-tint:rgba(255,255,255,.18);
+	--grip:rgba(255,255,255,.25);
+	--quote-text:#a8a8a8;
+	--quote-ornament:#6d6d6d;
 
-    --field-bg:#262626;
-    --field-text:#dcdcdc;
-    --field-border:#4a4a4a;
-    --field-disabled-bg:#222;
-    --help-bg:#252525;
-    --help-border:#3a3a3a;
-    --help-text:#b0b0b0;
-    --code-bg:#333;
-    --blueprint-bg:#1b1f25;
-    --blueprint-grid:rgba(150,180,214,.12);
-    --blueprint-line:rgba(150,180,214,.2);
-    --blueprint-ink:rgba(168,196,226,.75);
-    --status-text:#b0b0b0;
-    --error:#ff8080;
-    --button-bg:#333;
-    --button-text:#dcdcdc;
-    --button-border:#4a4a4a;
-    --inactive-button:#4a4a4a;
-    --underline-soft:rgba(255,255,255,.28);
+	--field-bg:#262626;
+	--field-text:#dcdcdc;
+	--field-border:#4a4a4a;
+	--field-disabled-bg:#222;
+	--help-bg:#252525;
+	--help-border:#3a3a3a;
+	--help-text:#b0b0b0;
+	--code-bg:#333;
+	--blueprint-bg:#1b1f25;
+	--blueprint-grid:rgba(150,180,214,.12);
+	--blueprint-line:rgba(150,180,214,.2);
+	--blueprint-ink:rgba(168,196,226,.75);
+	--status-text:#b0b0b0;
+	--error:#ff8080;
+	--button-bg:#333;
+	--button-text:#dcdcdc;
+	--button-border:#4a4a4a;
+	--inactive-button:#4a4a4a;
+	--underline-soft:rgba(255,255,255,.28);
 
-    color-scheme:dark;
+	color-scheme:dark;
 }
 `;
 
@@ -4569,14 +6221,14 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 	// never drift apart.
 	const CHROME_CSS = `
 header {
-    background:var(--header-bg);
-    color:var(--header-text);
-    padding:6px 8px;
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    gap:8px;
-    font-weight:bold;
+	background:var(--header-bg);
+	color:var(--header-text);
+	padding:6px 8px;
+	display:flex;
+	justify-content:space-between;
+	align-items:center;
+	gap:8px;
+	font-weight:bold;
 }
 
 /* Scoped to the action row rather than to every button in the header. It
@@ -4586,34 +6238,34 @@ header {
    "header button" the rule sized it to 36 square and left its text hanging
    outside the box. */
 .header-actions button {
-    background:none;
-    border:0;
-    color:var(--header-text);
-    cursor:pointer;
-    font-size:20px;
-    width:36px;
-    height:36px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    border-radius:4px;
-    padding:0;
-    touch-action:manipulation;
+	background:none;
+	border:0;
+	color:var(--header-text);
+	cursor:pointer;
+	font-size:20px;
+	width:36px;
+	height:36px;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	border-radius:4px;
+	padding:0;
+	touch-action:manipulation;
 }
 
 /* Touch devices latch :hover on after a tap and hold it until something else is
    tapped, so the settings and minimize buttons stayed highlighted. Only apply it
    where a real pointer can hover. */
 @media (hover: hover) {
-    .header-actions button:hover {
-        background:var(--hover-tint);
-    }
+	.header-actions button:hover {
+		background:var(--hover-tint);
+	}
 }
 
 .header-actions {
-    display:flex;
-    align-items:center;
-    gap:0;
+	display:flex;
+	align-items:center;
+	gap:0;
 }
 
 /* The wordmark is the way back, so it has to look like the wordmark and behave
@@ -4624,17 +6276,17 @@ header {
     /* .header-title is a flex column, so a button placed in it is stretched to
        the header's full width and stops reading as a word. Hugging its content
        is what keeps it a word. */
-    align-self:flex-start;
-    display:flex;
-    align-items:baseline;
-    border:0;
-    padding:0;
-    margin:0;
-    background:none;
-    color:inherit;
-    font:inherit;
-    cursor:pointer;
-    text-align:left;
+	align-self:flex-start;
+	display:flex;
+	align-items:baseline;
+	border:0;
+	padding:0;
+	margin:0;
+	background:none;
+	color:inherit;
+	font:inherit;
+	cursor:pointer;
+	text-align:left;
 }
 
 /* The trail into Hacker News, built the way the settings panel builds its trail
@@ -4644,19 +6296,19 @@ header {
    Collapsed to zero width rather than hidden, so arriving slides the chevron open
    and pushes the trail across instead of snapping it into place. */
 .wordmark-chevron {
-    flex:0 0 auto;
-    width:0;
-    margin-right:0;
-    overflow:hidden;
-    opacity:0;
-    color:var(--subtitle-stage);
-    transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
+	flex:0 0 auto;
+	width:0;
+	margin-right:0;
+	overflow:hidden;
+	opacity:0;
+	color:var(--subtitle-stage);
+	transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
 }
 
 #panel.browsing .wordmark-chevron {
-    width:9px;
-    margin-right:5px;
-    opacity:1;
+	width:9px;
+	margin-right:5px;
+	opacity:1;
 }
 
 /* Emphasis comes off the wordmark once it stops being the title and becomes the
@@ -4666,11 +6318,11 @@ header {
    title reads as a rendering fault rather than as a de-emphasis. Dark orange
    rather than the panel's grey, because this sits on the header's own bar. */
 .wordmark-root {
-    transition:color .2s ease;
+	transition:color .2s ease;
 }
 
 #panel.browsing .wordmark-root {
-    color:var(--subtitle-stage);
+	color:var(--subtitle-stage);
 }
 
 /* On Hacker News the trail has nothing behind it, so the wordmark is a label
@@ -4678,12 +6330,12 @@ header {
    would otherwise pick up. It is not unavailable, it simply does not lead
    anywhere from here. */
 #panel.queue-only .wordmark-chevron {
-    display:none;
+	display:none;
 }
 
 #panel.queue-only .header-wordmark {
-    cursor:default;
-    opacity:1;
+	cursor:default;
+	opacity:1;
 }
 
 /* The one thing saying the title is pressable. A wordmark that is also a control
@@ -4696,18 +6348,18 @@ header {
    one control. Collapsed the same way the chevron is, so the swap is a movement
    rather than a flicker. */
 .wordmark-more {
-    flex:0 0 auto;
-    width:auto;
-    margin-left:4px;
-    overflow:hidden;
-    color:var(--subtitle-stage);
-    transition:width .2s ease, margin-left .2s ease, opacity .2s ease;
+	flex:0 0 auto;
+	width:auto;
+	margin-left:4px;
+	overflow:hidden;
+	color:var(--subtitle-stage);
+	transition:width .2s ease, margin-left .2s ease, opacity .2s ease;
 }
 
 #panel.browsing .wordmark-more {
-    width:0;
-    margin-left:0;
-    opacity:0;
+	width:0;
+	margin-left:0;
+	opacity:0;
 }
 
 /* Always in flow, faded and nudged rather than display:none, so it can animate in
@@ -4715,37 +6367,37 @@ header {
    reason it costs nothing in the settings head: the title is left-aligned, so a
    trail nobody can see shifts nothing. */
 .wordmark-tail {
-    display:flex;
-    align-items:baseline;
-    gap:5px;
-    margin-left:5px;
-    white-space:nowrap;
-    opacity:0;
-    transform:translateX(-4px);
-    pointer-events:none;
-    transition:opacity .2s ease, transform .2s ease;
+	display:flex;
+	align-items:baseline;
+	gap:5px;
+	margin-left:5px;
+	white-space:nowrap;
+	opacity:0;
+	transform:translateX(-4px);
+	pointer-events:none;
+	transition:opacity .2s ease, transform .2s ease;
 }
 
 #panel.browsing .wordmark-tail {
-    opacity:1;
-    transform:none;
-    pointer-events:auto;
+	opacity:1;
+	transform:none;
+	pointer-events:auto;
 }
 
 .wordmark-sep {
-    font-weight:400;
-    color:var(--subtitle-stage);
+	font-weight:400;
+	color:var(--subtitle-stage);
 }
 
 .header-wordmark:focus-visible {
-    outline:1px solid var(--link);
-    outline-offset:2px;
+	outline:1px solid var(--link);
+	outline-offset:2px;
 }
 
 @media (hover: hover) {
-    .header-wordmark:hover {
-        opacity:.75;
-    }
+	.header-wordmark:hover {
+		opacity:.75;
+	}
 }
 
 /* Hidden rather than emptied. The discussion subtree is what renderedComments,
@@ -4757,12 +6409,12 @@ header {
    reach the header too -- which is what lets the wordmark swap labels by CSS
    instead of by rewriting its markup on every toggle. */
 .browse-view {
-    display:none;
+	display:none;
     /* Where .browse-main begins: the rank column's 22px plus the row's 6px gap.
        Named because four things line up on it -- the tabs, the More link, the
        empty state and the rows themselves -- and a number repeated four times is
        a number three of them will eventually disagree about. */
-    --browse-indent:28px;
+	--browse-indent:28px;
 }
 
 /* Both views fade, all the way out, where a filter change fades only the list to
@@ -4772,13 +6424,13 @@ header {
    would leave whichever part stayed put looking like it belonged to both. */
 #comments-content,
 .browse-view {
-    transition:opacity .16s ease;
+	transition:opacity .16s ease;
 }
 
 #comments.views-swapping > #comments-content,
 #comments.views-swapping > .browse-view,
 #comments.views-swapping > .filter-banner {
-    opacity:0;
+	opacity:0;
 }
 
 /* Two tabs set as a meta row rather than as a control: the same 11px Verdana the
@@ -4786,11 +6438,11 @@ header {
    panel rather than as a widget dropped into it. */
 /* Starts exactly where every title beneath it does. */
 .browse-tabs {
-    display:flex;
-    align-items:baseline;
-    margin:0 0 10px var(--browse-indent);
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
+	display:flex;
+	align-items:baseline;
+	margin:0 0 10px var(--browse-indent);
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
 }
 
 /* The bar hangs off the queue rather than sitting between the two as a sibling
@@ -4798,28 +6450,28 @@ header {
    attached to whichever tab came second and leave a leading bar in front of
    Front page on its own. */
 #browse-tab-queue::after {
-    content:"|";
+	content:"|";
     /* HN's own ratio, measured off it: 3.28px each side of the bar at 9.33px
        type, which is .35em. Given in em rather than pixels so it holds at the
        11px these are set in. */
-    margin:0 .35em;
-    color:var(--meta);
+	margin:0 .35em;
+	color:var(--meta);
 }
 
 /* Nothing queued, nothing to show. The queue keeps its place on the left for
    when there is -- it does not move, it arrives. */
 .browse-tab[hidden] {
-    display:none;
+	display:none;
 }
 
 .browse-tab {
-    border:0;
-    padding:0;
-    background:none;
-    color:var(--meta);
-    cursor:pointer;
-    font-family:inherit;
-    font-size:inherit;
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+	font-family:inherit;
+	font-size:inherit;
 }
 
 /* The current one carries the panel's text colour, the way .filter-banner-title
@@ -4827,28 +6479,28 @@ header {
    regular Verdana differ more in colour than in shape, and the colour is already
    saying it. */
 .browse-tab.is-current {
-    color:var(--text);
+	color:var(--text);
 }
 
 @media (hover: hover) {
-    .browse-tab:not(.is-current):hover {
-        text-decoration:underline;
-        text-underline-offset:2px;
-    }
+	.browse-tab:not(.is-current):hover {
+		text-decoration:underline;
+		text-underline-offset:2px;
+	}
 }
 
 .browse-empty {
-    margin:4px 0 0 var(--browse-indent);
-    max-width:var(--measure);
-    color:var(--meta);
-    line-height:1.5;
+	margin:4px 0 0 var(--browse-indent);
+	max-width:var(--measure);
+	color:var(--meta);
+	line-height:1.5;
 }
 
 /* Read entries stay in the list, dimmed. Which is the point: the queue has to be
    able to be wrong about what you finished, and something invisible cannot be
    corrected. */
 .browse-row-read {
-    opacity:.5;
+	opacity:.5;
 }
 
 /* A rank column wide enough for two digits and the stop after them, which is
@@ -4866,73 +6518,73 @@ header {
    so a wrapped row is taller than 35px. That is the panel's width, not its
    spacing. */
 .browse-row {
-    display:flex;
-    gap:6px;
-    align-items:baseline;
-    padding:0 0 5px;
+	display:flex;
+	gap:6px;
+	align-items:baseline;
+	padding:0 0 5px;
 }
 
 .browse-row .story-title {
-    font-size:13px;
-    line-height:1.3;
+	font-size:13px;
+	line-height:1.3;
 }
 
 /* HN leaves about a pixel and a half between the title and the subtext under it,
    which reads as none at all. The 2px this normally carries is there to separate
    the header from a story's own text below it, and there is no text here. */
 .browse-row .story-meta {
-    line-height:1.15;
-    padding-top:1px;
+	line-height:1.15;
+	padding-top:1px;
 }
 
 .browse-rank {
-    flex:0 0 auto;
-    min-width:22px;
-    text-align:right;
-    color:var(--meta);
-    font-size:11px;
+	flex:0 0 auto;
+	min-width:22px;
+	text-align:right;
+	color:var(--meta);
+	font-size:11px;
 }
 
 .browse-main {
-    flex:1 1 auto;
-    min-width:0;
+	flex:1 1 auto;
+	min-width:0;
 }
 
 /* Beside the title at meta weight, the way HN sets it: it qualifies the link
    rather than competing with it. */
 .browse-site {
-    color:var(--meta);
-    font-size:11px;
+	color:var(--meta);
+	font-size:11px;
 }
 
 /* Indented to the rank column's right edge, so it starts where every title above
    it starts rather than at the panel's edge. */
 .browse-nav {
-    display:flex;
-    align-items:baseline;
-    gap:10px;
-    margin:14px 0 8px var(--browse-indent);
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
-    color:var(--meta);
+	display:flex;
+	align-items:baseline;
+	gap:10px;
+	margin:14px 0 8px var(--browse-indent);
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
+	color:var(--meta);
 }
 
 /* Set as a meta-row text link, like every other action on these rows. HN writes
    favorite and flag exactly this way and puts them in exactly this company. */
 .item-action-link {
-    border:0;
-    padding:0;
-    background:none;
-    color:var(--meta);
-    cursor:pointer;
-    font-family:inherit;
-    font-size:inherit;
-    text-decoration:none;
-    text-underline-offset:2px;
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+	font-family:inherit;
+	font-size:inherit;
+	text-decoration:none;
+	text-underline-offset:2px;
 }
 
 .item-action-link[hidden] {
-    display:none;
+	display:none;
 }
 
 /* Deliberately no colour of its own. The label already says what pressing it
@@ -4941,18 +6593,18 @@ header {
    something means. */
 
 .item-action-link:disabled {
-    opacity:.5;
-    cursor:default;
+	opacity:.5;
+	cursor:default;
 }
 
 .item-action-link:enabled:focus-visible {
-    text-decoration:underline;
+	text-decoration:underline;
 }
 
 @media (hover: hover) {
-    .item-action-link:enabled:hover {
-        text-decoration:underline;
-    }
+	.item-action-link:enabled:hover {
+		text-decoration:underline;
+	}
 }
 
 /* A control in a meta row, so it is set as one: the same text-link treatment
@@ -4960,50 +6612,50 @@ header {
    button. HN's own row actions are text links between pipes and this sits among
    them. */
 .browse-save-link {
-    border:0;
-    padding:0;
-    background:none;
-    color:var(--meta);
-    cursor:pointer;
-    font-family:inherit;
-    font-size:inherit;
-    text-decoration:none;
-    text-underline-offset:2px;
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+	font-family:inherit;
+	font-size:inherit;
+	text-decoration:none;
+	text-underline-offset:2px;
 }
 
 @media (hover: hover) {
-    .browse-save-link:hover {
-        text-decoration:underline;
-    }
+	.browse-save-link:hover {
+		text-decoration:underline;
+	}
 }
 
 .browse-save-link:focus-visible {
-    text-decoration:underline;
+	text-decoration:underline;
 }
 
 /* Text links on a meta row, the same treatment .filter-banner-close gets: no
    underline until hover, no colour shift. */
 .browse-nav-link {
-    border:0;
-    padding:0;
-    background:none;
-    color:var(--meta);
-    cursor:pointer;
-    font-family:inherit;
-    font-size:inherit;
-    text-decoration:none;
-    text-underline-offset:2px;
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+	font-family:inherit;
+	font-size:inherit;
+	text-decoration:none;
+	text-underline-offset:2px;
 }
 
 /* Dimmed and inert rather than removed. Which end of the list you are at is
    information, and a control that vanishes makes the reader work out why. */
 .browse-nav-link:disabled {
-    opacity:.4;
-    cursor:default;
+	opacity:.4;
+	cursor:default;
 }
 
 .browse-nav-link:enabled:focus-visible {
-    text-decoration:underline;
+	text-decoration:underline;
 }
 
 /* Sits under the last comment, separated by a rule rather than by space alone:
@@ -5011,11 +6663,11 @@ header {
    same 14px the filter banner uses, so it lines up with the story above it rather
    than with the scroll container. */
 .next-up {
-    display:block;
-    margin:18px -12px 24px;
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
-    color:var(--meta);
+	display:block;
+	margin:18px -12px 24px;
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
+	color:var(--meta);
 }
 
 /* The inset lives on the row rather than on the strip, so the band above it can
@@ -5023,67 +6675,67 @@ header {
    panel's own 12px plus the 14px every story and banner is indented by, so the
    text lines up with the thread above it. */
 .next-up-row {
-    display:flex;
-    flex-wrap:wrap;
-    align-items:baseline;
-    gap:6px;
-    padding:0 12px 0 26px;
+	display:flex;
+	flex-wrap:wrap;
+	align-items:baseline;
+	gap:6px;
+	padding:0 12px 0 26px;
 }
 
 .next-up.hidden {
-    display:none;
+	display:none;
 }
 
 .next-up-label {
-    color:var(--meta);
+	color:var(--meta);
 }
 
 /* The title carries the panel's own text colour and the panel's own size: it is
    the thing being offered, and the row around it is the label. */
 .next-up-title {
-    flex:1 1 auto;
-    min-width:0;
-    color:var(--text);
-    font-family:inherit;
-    font-size:13px;
-    text-decoration:none;
+	flex:1 1 auto;
+	min-width:0;
+	color:var(--text);
+	font-family:inherit;
+	font-size:13px;
+	text-decoration:none;
 }
 
 @media (hover: hover) {
-    .next-up-title:hover {
-        text-decoration:underline;
-        text-underline-offset:2px;
-    }
+	.next-up-title:hover {
+		text-decoration:underline;
+		text-underline-offset:2px;
+	}
 }
 
 .next-up-count {
-    flex:0 0 auto;
+	flex:0 0 auto;
 }
 
 @media (hover: hover) {
-    .browse-nav-link:enabled:hover {
-        text-decoration:underline;
-    }
+	.browse-nav-link:enabled:hover {
+		text-decoration:underline;
+	}
 }
 
 #panel.browsing .browse-view {
-    display:block;
+	display:block;
 }
 
 #panel.browsing #comments-content,
 #panel.browsing .filter-banner,
 #panel.browsing .next-up {
-    display:none;
+	display:none;
 }
 
 /* The 36px buttons already centre their glyphs, so the visual inset on the right
    is the 8px header padding plus roughly half the leftover button width. This
    mirrors that on the left rather than letting the title hug the edge. */
 .header-title {
-    display:flex;
-    flex-direction:column;
-    min-width:0;
-    padding-left:12px;
+	display:flex;
+	flex-direction:column;
+	min-width:0;
+	padding-left:12px;
 }
 
 /* Only the two-line case needs tightening, and the subtitle exists only in the
@@ -5095,32 +6747,32 @@ header {
    sidebar's. Typed as a span it silently stopped applying the moment the
    wordmark became a control, and the air came back. */
 .header-title:has(.header-subtitle) > :first-child {
-    line-height:1.25;
+	line-height:1.25;
 }
 
 /* Collapsed until it has something to say. Animating the height is what moves
    the title, so the status arriving reads as the header opening rather than as
    the whole panel jumping. */
 .header-subtitle {
-    font-size:11px;
-    font-weight:normal;
-    line-height:1.2;
-    max-height:0;
-    opacity:0;
-    overflow:hidden;
-    transition:max-height .2s ease, opacity .2s ease;
+	font-size:11px;
+	font-weight:normal;
+	line-height:1.2;
+	max-height:0;
+	opacity:0;
+	overflow:hidden;
+	transition:max-height .2s ease, opacity .2s ease;
 }
 
 .header-subtitle-visible {
-    max-height:16px;
-    opacity:.85;
+	max-height:16px;
+	opacity:.85;
 }
 
 /* Dark orange rather than the header's black, so a status reads as transient
    next to the permanent title. Applied whether or not motion is allowed, so the
    colour never depends on the animation. */
 .header-subtitle-stage {
-    color:var(--subtitle-stage);
+	color:var(--subtitle-stage);
 }
 
 /* A highlight swept across the text itself rather than a spinner beside it, so
@@ -5128,17 +6780,17 @@ header {
 .header-subtitle-loading {
     background:linear-gradient(
         90deg,
-        var(--subtitle-stage) 0%,
-        var(--subtitle-stage) 40%,
-        var(--subtitle-stage-peak) 50%,
-        var(--subtitle-stage) 60%,
+		var(--subtitle-stage) 0%,
+		var(--subtitle-stage) 40%,
+		var(--subtitle-stage-peak) 50%,
+		var(--subtitle-stage) 60%,
         var(--subtitle-stage) 100%
     );
-    background-size:220% 100%;
-    -webkit-background-clip:text;
-    background-clip:text;
-    -webkit-text-fill-color:transparent;
-    animation:hnewhere-subtitle-shimmer 1.6s linear infinite;
+	background-size:220% 100%;
+	-webkit-background-clip:text;
+	background-clip:text;
+	-webkit-text-fill-color:transparent;
+	animation:hnewhere-subtitle-shimmer 1.6s linear infinite;
 }
 
 @keyframes hnewhere-subtitle-shimmer {
@@ -5147,26 +6799,26 @@ header {
 }
 
 .settings-panel {
-    position:absolute;
-    top:46px;
-    right:8px;
-    width:240px;
-    background:var(--surface);
-    color:var(--surface-text);
-    border:1px solid var(--surface-border);
-    border-radius:8px;
-    box-shadow:0 8px 24px rgba(0,0,0,.16);
+	position:absolute;
+	top:46px;
+	right:8px;
+	width:240px;
+	background:var(--surface);
+	color:var(--surface-text);
+	border:1px solid var(--surface-border);
+	border-radius:8px;
+	box-shadow:0 8px 24px rgba(0,0,0,.16);
     /* Slightly more at the bottom than the top: the title's line-height adds its
        own leading up top, so a literal 10px all round reads as short underneath
        the last option. */
-    padding:10px 10px 13px;
-    z-index:3;
+	padding:10px 10px 13px;
+	z-index:3;
 }
 
 .settings-group + .settings-group {
-    margin-top:10px;
-    padding-top:10px;
-    border-top:1px solid var(--surface-divider);
+	margin-top:10px;
+	padding-top:10px;
+	border-top:1px solid var(--surface-divider);
 }
 
 /* Every header icon is drawn, not typed. Flexbox centres a glyph's line box
@@ -5180,26 +6832,26 @@ header {
    presentation on iOS, which needed a U+FE0E variation selector in the markup
    plus font-variant-emoji, and that only lands in Safari 17+. */
 header button svg {
-    display:block;
+	display:block;
 }
 
 /* Held while the dropdown is open so the gear reads as a toggle rather than a
    button that fired once. Darker than the hover tint so the two stay distinct on
    a pointer device, and outside the hover media query so touch gets it too. */
 #settings-toggle.is-open {
-    background:var(--active-tint);
+	background:var(--active-tint);
 }
 
 .settings-option {
-    display:flex;
-    gap:8px;
-    align-items:flex-start;
-    font-size:12px;
-    line-height:1.35;
+	display:flex;
+	gap:8px;
+	align-items:flex-start;
+	font-size:12px;
+	line-height:1.35;
 }
 
 .settings-option + .settings-option {
-    margin-top:8px;
+	margin-top:8px;
 }
 
 /* Drawn from the panel's own tokens rather than left to appearance:auto. Chrome
@@ -5209,12 +6861,12 @@ header button svg {
    13px is the native width the .settings-option-hint indent is measured against,
    so it stays 13px including the border. */
 .settings-option input[type="checkbox"] {
-    appearance:none;
-    -webkit-appearance:none;
-    box-sizing:border-box;
-    flex:0 0 auto;
-    width:13px;
-    height:13px;
+	appearance:none;
+	-webkit-appearance:none;
+	box-sizing:border-box;
+	flex:0 0 auto;
+	width:13px;
+	height:13px;
     /* Centred on the first line of the label, which is what the row aligns to --
        align-items is flex-start so a wrapping option keeps its box beside the
        first line rather than beside the middle of the block. Derived rather than
@@ -5223,111 +6875,326 @@ header button svg {
        smaller offset. 1.35 is .settings-option's line-height, and font-size:inherit
        is what makes em resolve against the label rather than the input's UA
        default. Nothing here has text, so inheriting a size costs nothing. */
-    font-size:inherit;
-    margin:calc((1.35em - 13px) / 2) 0 0;
-    display:inline-grid;
-    place-content:center;
-    border:1px solid var(--help-border);
-    border-radius:3px;
-    background:var(--help-bg);
-    cursor:pointer;
-    transition:background .14s ease, border-color .14s ease;
+	font-size:inherit;
+	margin:calc((1.35em - 13px) / 2) 0 0;
+	display:inline-grid;
+	place-content:center;
+	border:1px solid var(--help-border);
+	border-radius:3px;
+	background:var(--help-bg);
+	cursor:pointer;
+	transition:background .14s ease, border-color .14s ease;
 }
 
 /* Same accent the selected segment uses, so a checked box and a chosen segment
    read as the same kind of "on". */
 .settings-option input[type="checkbox"]:checked {
-    border-color:transparent;
-    background:#0b63ce;
-    background:AccentColor;
+	border-color:transparent;
+	background:#0b63ce;
+	background:AccentColor;
 }
 
 .settings-option input[type="checkbox"]:checked::after {
-    content:"";
-    width:6px;
-    height:3px;
-    border-left:1.5px solid #fff;
-    border-bottom:1.5px solid #fff;
-    transform:translateY(-1px) rotate(-45deg);
+	content:"";
+	width:6px;
+	height:3px;
+	border-left:1.5px solid #fff;
+	border-bottom:1.5px solid #fff;
+	transform:translateY(-1px) rotate(-45deg);
 }
 
 .settings-option input[type="checkbox"]:focus-visible {
-    outline:2px solid #0b63ce;
-    outline:2px solid AccentColor;
-    outline-offset:1px;
+	outline:2px solid #0b63ce;
+	outline:2px solid AccentColor;
+	outline-offset:1px;
 }
 
 /* Sub-options are disabled while their parent is off, and an appearance:none box
    has no UA disabled styling of its own. */
 .settings-option input[type="checkbox"]:disabled {
-    opacity:.45;
-    cursor:default;
+	opacity:.45;
+	cursor:default;
 }
 
 .settings-option.sub-option {
-    margin-left:20px;
-    font-size:11px;
+	margin-left:20px;
+	font-size:11px;
 }
 
 /* Collapsed rather than merely disabled when the parent option is off: a dead
-   checkbox reads as broken, where nothing reads as "not applicable yet". The
-   max-height ceiling is generous because the real height is not knowable in CSS --
-   it only has to exceed the content for the transition to run to completion. */
+	checkbox reads as broken, where nothing reads as "not applicable yet". The
+	max-height ceiling is generous because the real height is not knowable in CSS --
+	it only has to exceed the content for the transition to run to completion. */
 .settings-suboptions {
-    overflow:hidden;
-    max-height:0;
-    opacity:0;
-    margin-top:0;
-    transition:max-height .22s ease, opacity .18s ease, margin-top .22s ease;
+	overflow:hidden;
+	max-height:0;
+	opacity:0;
+	margin-top:0;
+	transition:max-height .22s ease, opacity .18s ease, margin-top .22s ease;
 }
 
 .settings-suboptions.is-visible {
-    max-height:140px;
-    opacity:1;
-    /* Separates the first sub-option from whatever it belongs to above it. */
-    margin-top:8px;
+	max-height:140px;
+	opacity:1;
+	/* Separates the first sub-option from whatever it belongs to above it. */
+	margin-top:8px;
 }
 
 /* A sub-options group sits between two options in the auto-open block, which
-   breaks the .settings-option + .settings-option adjacency the spacing rule
-   relies on. Without this the option below would touch the one above whenever the
-   group is collapsed to zero height. */
+	breaks the .settings-option + .settings-option adjacency the spacing rule
+	relies on. Without this the option below would touch the one above whenever the
+	group is collapsed to zero height. */
 .settings-suboptions + .settings-option {
-    margin-top:8px;
+	margin-top:8px;
+}
+
+/* The same break, from the other thing that comes between two options: on the
+	sources pane every source is a checkbox followed by a line describing it, so
+	every pair after the first lost its spacing and each description ran straight
+	into the next source's box. */
+.settings-option-hint + .settings-option {
+	margin-top:8px;
 }
 
 /* Version on the left, issues link on the right, one row. */
 .settings-credits {
-    display:flex;
-    align-items:baseline;
-    justify-content:space-between;
-    gap:10px;
-    color:var(--muted);
-    font-size:11px;
-    line-height:1.45;
+	display:flex;
+	align-items:baseline;
+	justify-content:space-between;
+	gap:10px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.45;
 }
 
 .settings-credits a {
-    color:var(--muted);
-    text-decoration:underline;
-    text-decoration-color:var(--underline-soft);
-    text-underline-offset:2px;
+	color:var(--muted);
+	text-decoration:underline;
+	text-decoration-color:var(--underline-soft);
+	text-underline-offset:2px;
 }
 
 @media (hover: hover) {
-    .settings-credits a:hover {
-        color:#ff6600;
-        text-decoration-color:rgba(255,102,0,.5);
-    }
+	.settings-credits a:hover {
+		color:var(--accent);
+		text-decoration-color:rgba(var(--accent-rgb),.5);
+	}
+}
+
+/* The page, not a submission of it. Sized like a story header used to be, so the
+	panel opens onto the same shape it always did. */
+.page-header {
+	padding:12px 14px 10px;
+	border-bottom:1px solid var(--border-soft);
+}
+
+.page-header-title {
+	font-size:13px;
+	font-weight:500;
+	line-height:1.35;
+}
+
+.page-header-meta {
+	margin-top:3px;
+	color:var(--meta);
+	font-size:11px;
+}
+
+/* One discussion leaves this empty, and an empty line still takes a line's
+	height plus its margin -- a gap under the title with nothing in it. */
+.page-header-meta:empty {
+	display:none;
+}
+
+/* Nothing left to show: no title, no count, no strip. Kept in the tree because
+	the filter banner mounts against it, but it must not draw a rule across the
+	panel above a submission that is now the heading. */
+.page-header-quiet {
+	padding:0;
+	border-bottom:0;
+}
+
+/* The aggregate leads and this is what a reader reaches for, so it sits below the
+	count at metadata weight rather than above it as a masthead. */
+/* The same slide the settings sub-options use, down to the durations, because it
+	is the same gesture: a group opening inside a panel rather than a new surface. */
+.source-strip {
+	display:flex;
+	flex-wrap:wrap;
+	gap:6px;
+	overflow:hidden;
+	max-height:0;
+	opacity:0;
+	margin-top:0;
+	transition:max-height .22s ease, opacity .18s ease, margin-top .22s ease;
+}
+
+/* No max-height here: it is set from the measured content when the strip opens,
+	so a page posted to two places and one posted to twelve both slide for the full
+	duration rather than snapping open against a ceiling. */
+/* Not merely collapsed: with one discussion the strip has nothing to say, so it
+   leaves the layout rather than sitting there as an empty row that could be
+   opened. */
+.source-strip-single {
+	display:none;
+}
+
+.source-strip.is-open {
+	opacity:1;
+	margin-top:8px;
+}
+
+/* Reads as the affordance it is: the count is the thing you press, so it carries
+	a dotted underline rather than looking like the prose around it. */
+.page-header-disclosure {
+	font:inherit;
+	color:inherit;
+	background:none;
+	border:0;
+	padding:0;
+	cursor:pointer;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
+}
+
+.page-header-disclosure[aria-expanded="true"] {
+	text-decoration-style:solid;
+	text-decoration-color:var(--accent);
+}
+
+.source-strip-entry {
+	display:inline-flex;
+	align-items:baseline;
+	gap:5px;
+	padding:2px 7px;
+	border:0;
+	border-radius:999px;
+	background:var(--hover-tint);
+	color:inherit;
+	font:inherit;
+	font-size:11px;
+	cursor:pointer;
+}
+
+/* The pill that is currently filtering. Pressing it again clears, so it reads as
+	a toggle rather than a destination. */
+.source-strip-entry-active {
+	background:var(--active-tint);
+	font-weight:600;
+}
+
+.source-strip-count {
+	color:var(--muted);
+	font-variant-numeric:tabular-nums;
+}
+
+/* Reads like the meta links it sits beneath -- reply, focus -- rather than as a
+   control, because it is an offer to see more of the same thing rather than an
+   action on it. */
+.more-replies {
+	display:block;
+	margin:8px 0 0 8px;
+	padding:0;
+	border:0;
+	background:none;
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
+	color:var(--meta);
+	cursor:pointer;
+}
+
+.more-replies:disabled {
+	cursor:default;
+	opacity:.7;
+}
+
+@media (hover: hover) {
+	.more-replies:hover:not(:disabled) {
+		text-decoration:underline;
+	}
+}
+
+/* Provenance, at the weight of the age beside it. Deliberately not a badge: the
+	reader is looking at one conversation, and where each turn of it happened is
+	available rather than announced. */
+/* No colour of its own: it inherits .meta, which is what the author and the age
+   beside it use. It had --muted, a step darker, so the label and its separator
+   read as a different kind of thing from the line they sit in. */
+.comment-source::before {
+	content:"·";
+	margin-right:4px;
+}
+
+/* Filtered to one discussion, every comment on screen is from it -- so the label
+	is answering a question the reader has already settled, on every line. The
+	banner above says which one. */
+.discussion-filtered .comment-source {
+	display:none;
+}
+
+/* The picker is the first thing a new reader sees, so it borrows the settings
+	panel's spacing and type scale rather than inventing a form of its own. It sits
+	in the sidebar body, which is why it needs its own padding -- the settings panel
+	gets that from its own container. */
+.source-picker {
+	padding:20px 18px;
+	max-width:420px;
+}
+
+.source-picker-title {
+	font-size:15px;
+	font-weight:600;
+	margin-bottom:6px;
+}
+
+.source-picker-intro {
+	color:var(--muted);
+	font-size:12px;
+	line-height:1.45;
+	margin-bottom:14px;
+}
+
+.source-picker-list {
+	margin-bottom:16px;
+}
+
+/* Deliberately identical to .popover-actions and its primary button, restated
+	rather than shared. The submit popover is its own host with its own shadow root,
+	so a rule written there cannot reach in here -- only THEME_CSS crosses, which is
+	why the tokens do and the rules do not. Same values, so the two screens read as
+	one product; if you change one, change both. */
+.source-picker-actions {
+	display:flex;
+	justify-content:flex-end;
+	gap:6px;
+	margin-top:10px;
+}
+
+.source-picker-save {
+	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	padding:5px 10px;
+	border-radius:4px;
+	cursor:pointer;
+	border:1px solid var(--accent);
+	background:var(--accent);
+	color:white;
+}
+
+/* Disabled rather than hidden, so the way out of this screen stays visible along
+	with what it is waiting for. */
+.source-picker-save:disabled {
+	opacity:.6;
+	cursor:default;
 }
 
 /* Indented to clear the checkbox so the text starts under the option's label rather
    than under its box. 13px is the native checkbox width, plus the flex gap. */
 .settings-option-hint {
-    margin:3px 0 0 21px;
-    color:var(--muted);
-    font-size:11px;
-    line-height:1.35;
+	margin:3px 0 0 21px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
 }
 
 /* That hint describes what happens with the setting off. Switched on, it is
@@ -5337,88 +7204,142 @@ header button svg {
    place to keep in step. The hint is the last thing in its group, so the
    sibling combinator reaches nothing else. */
 .settings-option:has(#setting-hide-without-discussion:checked) ~ .settings-option-hint {
-    display:none;
+	display:none;
 }
 
 .settings-option.sub-option + .settings-option-hint {
-    margin-left:41px;
+	margin-left:41px;
 }
 
 /* Shared: the settings panel's BETA pill needs this in the popover, and comment
    rendering needs it in the sidebar. */
 .op-pill {
-    display:inline-block;
-    margin-left:4px;
-    margin-right:4px;
-    padding:1px 4px;
-    border-radius:3px;
-    background:#ff6600;
-    color:white;
-    font-size:9px;
-    font-weight:bold;
-    line-height:1.2;
+	display:inline-block;
+	margin-left:4px;
+	margin-right:4px;
+	padding:1px 4px;
+	border-radius:3px;
+	background:var(--accent);
+	color:white;
+	font-size:9px;
+	font-weight:bold;
+	line-height:1.2;
 }
 
 .hidden {
-    display:none;
+	display:none;
 }
 
 .settings-field + .settings-field {
-    margin-top:10px;
+	margin-top:10px;
 }
 
 .settings-field-label {
-    font-size:11px;
-    color:var(--muted);
-    margin-bottom:4px;
+	font-size:11px;
+	color:var(--muted);
+	margin-bottom:4px;
 }
 
 /* Two panes side by side inside a clipped viewport. Height is set in JS from the
    active pane, because a flex row is always as tall as its tallest child and the
    hidden-sites pane is much shorter than the main one. */
 .settings-panel {
-    overflow-x:hidden;
+	overflow-x:hidden;
     /* The popover no longer clips this, so the panel bounds itself against a
        short viewport rather than running off the bottom of the screen. */
-    max-height:calc(100vh - 120px);
-    overflow-y:auto;
+	max-height:calc(100vh - 120px);
+	overflow-y:auto;
 }
 
 /* The title and credits sit outside the sliding track, so both panes keep them.
    This replaces the .settings-group + .settings-group rule that used to draw the
    separator when credits was itself a group inside the stack. */
 .settings-panes + .settings-credits {
-    margin-top:10px;
-    padding-top:10px;
-    border-top:1px solid var(--surface-divider);
+	margin-top:10px;
+	padding-top:10px;
+	border-top:1px solid var(--surface-divider);
 }
 
 .settings-panes {
-    display:flex;
-    align-items:flex-start;
-    width:200%;
-    overflow:hidden;
-    transition:transform .26s ease, height .26s ease;
+	display:flex;
+	align-items:flex-start;
+	width:200%;
+	overflow:hidden;
+	transition:transform .26s ease, height .26s ease;
 }
 
 .settings-panes.is-secondary {
-    transform:translateX(-50%);
+	transform:translateX(-50%);
 }
 
 .settings-pane {
-    flex:0 0 50%;
-    width:50%;
-    min-width:0;
+	flex:0 0 50%;
+	width:50%;
+	min-width:0;
     /* Delayed on the way out so the outgoing pane stays visible for the whole
        slide, then drops out of the tab order once it is off-screen. */
-    visibility:hidden;
-    transition:visibility 0s linear .26s;
+	visibility:hidden;
+	transition:visibility 0s linear .26s;
 }
 
 .settings-panes:not(.is-secondary) > .settings-pane-primary,
-.settings-panes.is-secondary > .settings-pane-secondary {
-    visibility:visible;
-    transition-delay:0s;
+.settings-panes.is-secondary > .settings-pane-secondary.is-active {
+	visibility:visible;
+	transition-delay:0s;
+}
+
+/* The track is two slots wide and translates by exactly half, so only one second
+	level may be in the flex flow at a time. display:none takes the others out of
+	it entirely rather than stacking them into a third slot the slide cannot reach. */
+.settings-pane-secondary {
+	display:none;
+}
+
+.settings-pane-secondary.is-active {
+	display:block;
+}
+
+/* Small enough to sit in a dropdown, which is the constraint: four rows and a
+	column per source is about what fits before it stops being glanceable. */
+.source-matrix-caption {
+	margin:14px 0 5px;
+	color:var(--muted);
+	font-size:11px;
+}
+
+.source-matrix {
+	width:100%;
+	border-collapse:collapse;
+	font-size:11px;
+}
+
+.source-matrix th,
+.source-matrix td {
+	padding:3px 4px;
+	text-align:center;
+	font-weight:400;
+}
+
+.source-matrix thead th,
+.source-matrix tbody th {
+	color:var(--muted);
+}
+
+.source-matrix tbody th {
+	text-align:left;
+}
+
+.source-matrix tbody tr + tr th,
+.source-matrix tbody tr + tr td {
+	border-top:1px solid var(--surface-divider);
+}
+
+.source-matrix .yes {
+	color:var(--surface-text);
+}
+
+.source-matrix .no {
+	color:var(--muted);
 }
 
 /* A breadcrumb rather than a bare title: the hidden-sites list is a second level
@@ -5427,130 +7348,130 @@ header button svg {
 /* No gap: the chevron animates its own width and margin, and a flex gap would
    still reserve space for it while collapsed, indenting the title on level one. */
 .settings-head {
-    display:flex;
-    align-items:baseline;
-    margin:0 0 8px;
+	display:flex;
+	align-items:baseline;
+	margin:0 0 8px;
 }
 
 /* Collapsed to zero width rather than hidden, so entering the second level slides
    it open and pushes the trail across instead of snapping. */
 .settings-back {
-    flex:0 0 auto;
-    width:0;
-    margin-right:0;
-    padding:0;
-    border:0;
-    overflow:hidden;
-    background:none;
-    color:var(--muted);
-    font-size:15px;
-    line-height:1;
-    opacity:0;
-    cursor:pointer;
-    align-self:center;
-    transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
+	flex:0 0 auto;
+	width:0;
+	margin-right:0;
+	padding:0;
+	border:0;
+	overflow:hidden;
+	background:none;
+	color:var(--muted);
+	font-size:15px;
+	line-height:1;
+	opacity:0;
+	cursor:pointer;
+	align-self:center;
+	transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
 }
 
 .settings-head.is-secondary .settings-back {
-    width:9px;
-    margin-right:5px;
-    opacity:1;
+	width:9px;
+	margin-right:5px;
+	opacity:1;
 }
 
 .settings-crumb-root {
-    padding:0;
-    border:0;
-    background:none;
-    color:inherit;
-    font-size:12px;
-    font-weight:600;
-    line-height:1.3;
+	padding:0;
+	border:0;
+	background:none;
+	color:inherit;
+	font-size:12px;
+	font-weight:600;
+	line-height:1.3;
     /* Inert on the first level, where it is simply the panel's title. */
-    cursor:default;
-    transition:color .2s ease, font-weight .2s ease;
+	cursor:default;
+	transition:color .2s ease, font-weight .2s ease;
 }
 
 /* Enabled only on the second level, where it stops being the title and becomes
    the way back -- so emphasis moves off it and onto the current page. */
 .settings-crumb-root:enabled {
-    cursor:pointer;
-    font-weight:400;
-    color:var(--muted);
-    text-decoration:underline;
-    text-underline-offset:2px;
+	cursor:pointer;
+	font-weight:400;
+	color:var(--muted);
+	text-decoration:underline;
+	text-underline-offset:2px;
 }
 
 /* Always in flow, faded and nudged rather than display:none, so it can animate
    in both directions. Laying it out on the first level costs nothing: the head
    is left-aligned, so an invisible trail shifts nothing. */
 .settings-crumb-tail {
-    display:flex;
-    align-items:baseline;
-    gap:5px;
+	display:flex;
+	align-items:baseline;
+	gap:5px;
     /* The head has no flex gap -- the chevron animates its own -- so the space
        before the separator belongs to the trail. */
-    margin-left:5px;
-    font-size:12px;
-    font-weight:600;
-    line-height:1.3;
-    opacity:0;
-    transform:translateX(-4px);
-    pointer-events:none;
-    transition:opacity .2s ease, transform .2s ease;
+	margin-left:5px;
+	font-size:12px;
+	font-weight:600;
+	line-height:1.3;
+	opacity:0;
+	transform:translateX(-4px);
+	pointer-events:none;
+	transition:opacity .2s ease, transform .2s ease;
 }
 
 .settings-head.is-secondary .settings-crumb-tail {
-    opacity:1;
-    transform:none;
-    pointer-events:auto;
+	opacity:1;
+	transform:none;
+	pointer-events:auto;
 }
 
 .settings-crumb-sep {
-    font-weight:400;
-    color:var(--muted);
+	font-weight:400;
+	color:var(--muted);
 }
 
 .segmented {
-    display:flex;
-    border:1px solid var(--help-border);
-    border-radius:5px;
-    background:var(--help-bg);
-    overflow:hidden;
+	display:flex;
+	border:1px solid var(--help-border);
+	border-radius:5px;
+	background:var(--help-bg);
+	overflow:hidden;
 }
 
 .segment {
-    position:relative;
-    flex:1 1 0;
-    min-width:0;
+	position:relative;
+	flex:1 1 0;
+	min-width:0;
 }
 
 .segment + .segment {
-    border-left:1px solid var(--help-border);
+	border-left:1px solid var(--help-border);
 }
 
 /* Full-bleed rather than display:none so the control stays keyboard reachable and
    arrow keys still move through the group. */
 .segment input {
-    position:absolute;
-    inset:0;
-    width:100%;
-    height:100%;
-    margin:0;
-    opacity:0;
-    cursor:pointer;
+	position:absolute;
+	inset:0;
+	width:100%;
+	height:100%;
+	margin:0;
+	opacity:0;
+	cursor:pointer;
 }
 
 .segment span {
-    display:block;
-    padding:4px 5px;
-    text-align:center;
-    font-size:11px;
-    line-height:1.3;
-    color:var(--help-text);
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
-    transition:background .14s ease, color .14s ease;
+	display:block;
+	padding:4px 5px;
+	text-align:center;
+	font-size:11px;
+	line-height:1.3;
+	color:var(--help-text);
+	white-space:nowrap;
+	overflow:hidden;
+	text-overflow:ellipsis;
+	transition:background .14s ease, color .14s ease;
 }
 
 /* Matches the native checkboxes above rather than the HN orange: orange is
@@ -5561,104 +7482,104 @@ header button svg {
    light system accent, which left the selected label unreadable on the blue. The
    background follows the system accent; the label does not follow it back. */
 .segment input:checked + span {
-    background:#0b63ce;
-    background:AccentColor;
-    color:#fff;
-    font-weight:600;
+	background:#0b63ce;
+	background:AccentColor;
+	color:#fff;
+	font-weight:600;
 }
 
 .segment input:focus-visible + span {
-    outline:2px solid #0b63ce;
-    outline:2px solid AccentColor;
-    outline-offset:-2px;
+	outline:2px solid #0b63ce;
+	outline:2px solid AccentColor;
+	outline-offset:-2px;
 }
 
 .button-designer {
-    display:flex;
-    align-items:stretch;
-    gap:10px;
+	display:flex;
+	align-items:stretch;
+	gap:10px;
 }
 
 /* flex-start so the "Button" label sits level with the top of the preview box
    beside it rather than floating in the middle of the column. */
 .button-designer-controls {
-    flex:1 1 auto;
-    min-width:0;
-    display:flex;
-    flex-direction:column;
-    justify-content:flex-start;
+	flex:1 1 auto;
+	min-width:0;
+	display:flex;
+	flex-direction:column;
+	justify-content:flex-start;
 }
 
 /* align-self so the row is only as wide as its three controls; stretched to the
    column it left the two buttons marooned at opposite edges. */
 .stepper {
-    display:flex;
-    align-items:center;
-    align-self:flex-start;
-    gap:4px;
-    margin-top:8px;
+	display:flex;
+	align-items:center;
+	align-self:flex-start;
+	gap:4px;
+	margin-top:8px;
 }
 
 .stepper-button {
-    flex:0 0 24px;
-    width:24px;
-    height:24px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    padding:0;
-    border:1px solid var(--help-border);
-    border-radius:4px;
-    background:var(--help-bg);
-    color:var(--help-text);
-    font-size:14px;
-    line-height:1;
-    cursor:pointer;
+	flex:0 0 24px;
+	width:24px;
+	height:24px;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	padding:0;
+	border:1px solid var(--help-border);
+	border-radius:4px;
+	background:var(--help-bg);
+	color:var(--help-text);
+	font-size:14px;
+	line-height:1;
+	cursor:pointer;
 }
 
 .stepper-button:disabled {
-    opacity:.4;
-    cursor:default;
+	opacity:.4;
+	cursor:default;
 }
 
 .stepper-value {
-    display:flex;
-    align-items:baseline;
-    gap:1px;
-    padding:0 5px;
-    border:1px solid var(--help-border);
-    border-radius:4px;
-    background:var(--field-bg);
+	display:flex;
+	align-items:baseline;
+	gap:1px;
+	padding:0 5px;
+	border:1px solid var(--help-border);
+	border-radius:4px;
+	background:var(--field-bg);
 }
 
 .stepper-value:focus-within {
-    outline:2px solid #0b63ce;
-    outline:2px solid AccentColor;
-    outline-offset:-1px;
+	outline:2px solid #0b63ce;
+	outline:2px solid AccentColor;
+	outline-offset:-1px;
 }
 
 /* Fixed at three digits' worth: the field accepts anything typed and clamps on
    commit, so it has to hold a number wider than the 64px ceiling without the
    row resizing as you type. */
 .stepper-input {
-    width:24px;
-    padding:3px 0;
-    border:0;
-    background:none;
-    color:var(--field-text);
-    font-family:Menlo, Consolas, monospace;
-    font-size:11px;
-    text-align:right;
+	width:24px;
+	padding:3px 0;
+	border:0;
+	background:none;
+	color:var(--field-text);
+	font-family:Menlo, Consolas, monospace;
+	font-size:11px;
+	text-align:right;
 }
 
 .stepper-input:focus {
-    outline:none;
+	outline:none;
 }
 
 .stepper-unit {
-    font-family:Menlo, Consolas, monospace;
-    font-size:9px;
-    color:var(--muted);
+	font-family:Menlo, Consolas, monospace;
+	font-size:9px;
+	color:var(--muted);
 }
 
 /* A drafting surface: hairline graph grid, the button drawn as line art rather
@@ -5668,54 +7589,62 @@ header button svg {
     /* Sized to clear the 64px maximum button plus its padding and border, and no
        wider -- the controls column is the constraint, and "Squircle" truncates
        before it. */
-    flex:0 0 88px;
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-    justify-content:center;
-    gap:5px;
-    padding:8px 6px;
-    border:1px solid var(--blueprint-line);
-    border-radius:5px;
-    background-color:var(--blueprint-bg);
+	flex:0 0 88px;
+	display:flex;
+	flex-direction:column;
+	align-items:center;
+	justify-content:center;
+	gap:5px;
+	padding:8px 6px;
+	border:1px solid var(--blueprint-line);
+	border-radius:5px;
+	background-color:var(--blueprint-bg);
     background-image:
-        linear-gradient(var(--blueprint-grid) 1px, transparent 1px),
+		linear-gradient(var(--blueprint-grid) 1px, transparent 1px),
         linear-gradient(90deg, var(--blueprint-grid) 1px, transparent 1px);
-    background-size:8px 8px;
-    background-position:center center;
+	background-size:8px 8px;
+	background-position:center center;
 }
 
 /* Fixed so the panel does not jump as the button grows through its range. */
 .button-preview-stage {
-    height:68px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
+	height:68px;
+	display:flex;
+	align-items:center;
+	justify-content:center;
 }
 
 /* Filled rather than drawn as line art: the point of the preview is to show the
    button you will actually get, colour included. The grid behind it still does
    the measuring work. */
 .button-preview-shape {
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    border:0;
-    background:#ff6600;
-    box-shadow:0 1px 4px rgba(0,0,0,.25);
-    color:#fff;
-    font-family:Verdana,sans-serif;
-    font-weight:bold;
-    transition:width .16s ease, height .16s ease, border-radius .16s ease, font-size .16s ease;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	border:0;
+	/* It is a text field now as well as a preview, so it says so on hover and
+	   focus -- an editable thing that looks exactly like an unedittable one is
+	   only discoverable by accident. */
+	cursor:text;
+	/* Both follow the accent rather than assuming white, the same way the real
+		button's mark does -- the preview is meant to be what it will look like. */
+	caret-color:var(--accent-ink);
+	outline-offset:2px;
+	background:var(--accent);
+	box-shadow:0 1px 4px rgba(0,0,0,.25);
+	color:var(--accent-ink);
+	font-family:Verdana,sans-serif;
+	font-weight:bold;
+	transition:width .16s ease, height .16s ease, border-radius .16s ease, font-size .16s ease;
 }
 
 .button-preview-rule {
-    position:relative;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    width:100%;
-    height:9px;
+	position:relative;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	width:100%;
+	height:9px;
 }
 
 /* The rule sits on each box's bottom edge so the side ticks rise from it toward
@@ -5723,95 +7652,109 @@ header button svg {
    ticks pointed away from it. */
 .button-preview-rule::before,
 .button-preview-rule::after {
-    content:"";
-    position:absolute;
-    top:calc(50% - 5px);
-    height:5px;
-    width:calc(50% - 14px);
-    border-bottom:1px solid var(--blueprint-ink);
+	content:"";
+	position:absolute;
+	top:calc(50% - 5px);
+	height:5px;
+	/* Clears the caption, which is now a seven-character hex rather than the two
+		digits the ticks were spaced for. */
+	width:calc(50% - 27px);
+	border-bottom:1px solid var(--blueprint-ink);
 }
 
 .button-preview-rule::before {
-    left:0;
-    border-left:1px solid var(--blueprint-ink);
+	left:0;
+	border-left:1px solid var(--blueprint-ink);
 }
 
 .button-preview-rule::after {
-    right:0;
-    border-right:1px solid var(--blueprint-ink);
+	right:0;
+	border-right:1px solid var(--blueprint-ink);
 }
 
+/* The measure's caption, and the accent field. No box of its own: on a blueprint
+	the dimension is already written into the drawing, so it reads as a value that
+	happens to be typeable rather than as a form control dropped on top. The
+	background is the blueprint's, which is what breaks the rule for the text to
+	sit in. */
 .button-preview-dim {
-    position:relative;
-    padding:0 4px;
-    background:var(--blueprint-bg);
-    color:var(--blueprint-ink);
-    font-family:Menlo, Consolas, monospace;
-    font-size:9px;
+	position:relative;
+	padding:0 4px;
+	background:var(--blueprint-bg);
+	color:var(--blueprint-ink);
+	font-family:Menlo, Consolas, monospace;
+	font-size:9px;
+	white-space:nowrap;
+	cursor:text;
+	outline:0;
+}
+
+.button-preview-dim:focus {
+	color:var(--accent);
 }
 
 /* A text link at the foot of the controls column rather than a button under the
    whole row: it undoes the two controls directly above it, and reads as
    secondary to them. */
 .settings-reset {
-    align-self:flex-end;
-    margin-top:6px;
-    padding:0;
-    border:0;
-    background:none;
-    color:var(--muted);
-    font-size:11px;
-    text-decoration:underline;
-    text-underline-offset:2px;
-    cursor:pointer;
+	align-self:flex-end;
+	margin-top:6px;
+	padding:0;
+	border:0;
+	background:none;
+	color:var(--muted);
+	font-size:11px;
+	text-decoration:underline;
+	text-underline-offset:2px;
+	cursor:pointer;
 }
 
 .settings-link-button {
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    width:100%;
-    padding:6px 8px;
-    border:1px solid var(--help-border);
-    border-radius:4px;
-    background:var(--help-bg);
-    color:var(--help-text);
-    font-size:12px;
-    text-align:left;
-    cursor:pointer;
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	width:100%;
+	padding:6px 8px;
+	border:1px solid var(--help-border);
+	border-radius:4px;
+	background:var(--help-bg);
+	color:var(--help-text);
+	font-size:12px;
+	text-align:left;
+	cursor:pointer;
 }
 
 .settings-link-chevron {
-    font-size:14px;
-    opacity:.6;
+	font-size:14px;
+	opacity:.6;
 }
 
 .settings-blocked-list {
-    margin-top:4px;
+	margin-top:4px;
 }
 
 .settings-blocked-entry {
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:8px;
-    padding:3px 0;
-    font-size:11px;
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	gap:8px;
+	padding:3px 0;
+	font-size:11px;
 }
 
 .settings-blocked-remove {
-    border:0;
-    background:none;
-    color:var(--muted);
-    font-size:14px;
-    line-height:1;
-    padding:0 2px;
-    cursor:pointer;
+	border:0;
+	background:none;
+	color:var(--muted);
+	font-size:14px;
+	line-height:1;
+	padding:0 2px;
+	cursor:pointer;
 }
 
 .settings-blocked-empty {
-    font-size:11px;
-    color:var(--muted);
+	font-size:11px;
+	color:var(--muted);
 }
 `;
 
@@ -5823,30 +7766,30 @@ header button svg {
 ${
 	browse
 		? `<button id="browse-toggle" class="header-wordmark" type="button"
-title="Hacker News and your queue"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
-class="wordmark-root"><b>HN</b>ewhere</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
+title="${escapeHTML(browseLabel())}"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
+class="wordmark-root"><b>Back</b>channel</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
 class="wordmark-tail"><span class="wordmark-sep">/</span>Read more</span></button>`
-		: `<span><b>HN</b>ewhere</span>`
+		: `<span><b>Back</b>channel</span>`
 }
 ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </span>
 
 <div class="header-actions">
-<button id="hide-site" aria-label="Hide HNewhere on this site" title="Hide HNewhere on this site">
+<button id="hide-site" aria-label="Hide Backchannel on this site" title="Hide Backchannel on this site">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path d="M1.4 8S3.9 3.9 8 3.9 14.6 8 14.6 8 12.1 12.1 8 12.1 1.4 8 1.4 8Z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
 <circle cx="8" cy="8" r="1.85" fill="none" stroke="currentColor" stroke-width="1.25"/>
 <line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
 </svg>
 </button>
-<button id="settings-toggle" aria-label="Open HNewhere settings" title="HNewhere settings" aria-expanded="false" aria-controls="settings-panel">
+<button id="settings-toggle" aria-label="Open Backchannel settings" title="Backchannel settings" aria-expanded="false" aria-controls="settings-panel">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>
 </svg>
 </button>
 ${
 	minimize
-		? `<button id="minimize" aria-label="Minimize HNewhere" title="Minimize">
+		? `<button id="minimize" aria-label="Minimize Backchannel" title="Minimize">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <line x1="3.4" y1="8" x2="12.6" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
 </svg>
@@ -5865,7 +7808,7 @@ ${
 <div id="settings-head" class="settings-head">
 <button id="settings-blocked-back" class="settings-back" type="button" aria-label="Back to settings" disabled>&lsaquo;</button>
 <button id="settings-crumb-root" class="settings-crumb-root" type="button" disabled>Settings</button>
-<span id="settings-crumb-tail" class="settings-crumb-tail" aria-hidden="true"><span class="settings-crumb-sep">/</span>Hidden sites</span>
+<span id="settings-crumb-tail" class="settings-crumb-tail" aria-hidden="true"><span class="settings-crumb-sep">/</span><span id="settings-crumb-name">Hidden sites</span></span>
 </div>
 <div id="settings-panes" class="settings-panes">
 
@@ -5884,7 +7827,7 @@ ${
 </div>
 <label class="settings-option">
 <input id="setting-hide-without-discussion" data-setting="hideWithoutDiscussion" type="checkbox">
-<span>Only show the HN button when a discussion exists</span>
+<span>Only show the button when a discussion exists</span>
 </label>
 <div class="settings-suboptions" data-suboptions-of="hideWithoutDiscussion">
 <label class="settings-option sub-option">
@@ -5941,11 +7884,17 @@ Highlights the passages commenters quote, so you can jump between the article an
 </div>
 <button id="settings-reset-button" class="settings-reset" type="button">Reset</button>
 </div>
-<div class="button-preview" aria-hidden="true">
+<div class="button-preview">
 <div class="button-preview-stage">
-<div id="button-preview-shape" class="button-preview-shape">HN</div>
+<div id="button-preview-shape" class="button-preview-shape"
+contenteditable="plaintext-only" spellcheck="false"
+role="textbox" aria-label="Button label, one or two characters"
+title="Type one or two characters">BC</div>
 </div>
-<div class="button-preview-rule"><span id="button-preview-dim" class="button-preview-dim">44</span></div>
+<div class="button-preview-rule"><span id="button-preview-dim" class="button-preview-dim"
+contenteditable="plaintext-only" spellcheck="false" role="textbox"
+aria-label="Accent colour as a hex value"
+title="Type a hex colour">#237140</span></div>
 </div>
 </div>
 </div>
@@ -5953,18 +7902,44 @@ Highlights the passages commenters quote, so you can jump between the article an
 </div>
 
 <div class="settings-group">
-<button id="settings-manage-blocked" class="settings-link-button" type="button">Manage hidden sites<span class="settings-link-chevron">&rsaquo;</span></button>
+<button id="settings-manage-sources" class="settings-link-button" type="button" data-pane="sources" data-pane-name="Sources">Sources<span class="settings-link-chevron">&rsaquo;</span></button>
+</div>
+
+<div class="settings-group">
+<button id="settings-manage-blocked" class="settings-link-button" type="button" data-pane="blocked" data-pane-name="Hidden sites">Manage hidden sites<span class="settings-link-chevron">&rsaquo;</span></button>
 </div>
 </div>
 
-<div class="settings-pane settings-pane-secondary">
+<div class="settings-pane settings-pane-secondary" data-pane="blocked">
 <div id="settings-blocked-list" class="settings-blocked-list"></div>
+</div>
+
+<div class="settings-pane settings-pane-secondary" data-pane="sources">
+${sourceListHTML({ idPrefix: "setting-source-" })}
+<div class="source-matrix-caption">What each source supports</div>
+<table class="source-matrix">
+<thead><tr><th></th>${[...SOURCES.values()].map((source) => `<th>${escapeHTML(source.shortLabel || source.label)}</th>`).join("")}</tr></thead>
+<tbody>
+${["read", "vote", "reply", "submit"]
+	.map(
+		(row) => `<tr><th>${escapeHTML({ read: "Read", vote: "Vote", reply: "Reply", submit: "Submit" }[row])}</th>${[
+			...SOURCES.values(),
+		]
+			.map((source) => {
+				const yes = row === "read" ? true : Boolean(source.capabilities[row]);
+				return `<td class="${yes ? "yes" : "no"}" aria-label="${yes ? "yes" : "no"}">${yes ? "&check;" : "&ndash;"}</td>`;
+			})
+			.join("")}</tr>`,
+	)
+	.join("")}
+</tbody>
+</table>
 </div>
 
 </div>
 
 <div class="settings-credits">
-<a href="${escapeHTML(REPO_URL)}" target="_blank" rel="noopener noreferrer">HNewhere${SCRIPT_VERSION ? " v" + escapeHTML(SCRIPT_VERSION) : ""}</a>
+<a href="${escapeHTML(REPO_URL)}" target="_blank" rel="noopener noreferrer">Backchannel${SCRIPT_VERSION ? " v" + escapeHTML(SCRIPT_VERSION) : ""}</a>
 <a href="${escapeHTML(REPO_URL)}/issues" target="_blank" rel="noopener noreferrer">Report an issue</a>
 </div>
 </div>
@@ -6022,9 +7997,15 @@ Highlights the passages commenters quote, so you can jump between the article an
 				return;
 			}
 
+			// `.is-active`, not just `.settings-pane-secondary`. While hidden sites
+			// was the only second level the two selectors picked the same element;
+			// with more than one they do not, and this took the first in document
+			// order -- the empty blocked list -- and pinned the track to its height.
+			// The pane the reader is looking at was fully rendered and 314px tall
+			// inside a box measured at 0.
 			const active = panes.querySelector(
 				panes.classList.contains("is-secondary")
-					? ".settings-pane-secondary"
+					? ".settings-pane-secondary.is-active"
 					: ".settings-pane-primary",
 			);
 
@@ -6052,8 +8033,27 @@ Highlights the passages commenters quote, so you can jump between the article an
 		const crumbBack = shadow.querySelector("#settings-blocked-back");
 		const crumbRoot = shadow.querySelector("#settings-crumb-root");
 		const crumbTail = shadow.querySelector("#settings-crumb-tail");
+		const crumbName = shadow.querySelector("#settings-crumb-name");
 
-		const showSecondaryPane = (secondary) => {
+		// Takes a pane name, or null for the first level. It used to take a boolean,
+		// which was enough while "hidden sites" was the only second level -- the
+		// track is two slots wide, so exactly one secondary pane may occupy the
+		// second at a time, and the rest are display:none and therefore out of the
+		// flex flow entirely.
+		const showSecondaryPane = (paneName) => {
+			const secondary = Boolean(paneName);
+
+			for (const pane of panes?.querySelectorAll(".settings-pane-secondary") ||
+				[]) {
+				pane.classList.toggle("is-active", pane.dataset.pane === paneName);
+			}
+
+			if (paneName && crumbName) {
+				crumbName.textContent =
+					shadow.querySelector(`[data-pane="${paneName}"][data-pane-name]`)
+						?.dataset.paneName || "";
+			}
+
 			panes?.classList.toggle("is-secondary", secondary);
 
 			// One class drives the whole trail so the chevron, the de-emphasis of
@@ -6087,8 +8087,13 @@ Highlights the passages commenters quote, so you can jump between the article an
 				sizeInput.value = String(size);
 			}
 
-			if (previewDim) {
-				previewDim.textContent = String(size);
+			// The caption under the measure is the accent, not the size: the size is
+			// already in the stepper beside it, and stating it twice cost the one
+			// place a colour could live. Left alone while focused for the same
+			// reason the size field is.
+			if (previewDim && shadow.activeElement !== previewDim) {
+				previewDim.textContent =
+					settings.accentColor ?? activeAccent(detectDarkMode()).accent;
 			}
 
 			if (previewShape) {
@@ -6127,6 +8132,17 @@ Highlights the passages commenters quote, so you can jump between the article an
 
 			applyButtonDesigner(settings);
 
+			const sourceState = normalizeSourceSettings(
+				settings.sources,
+				registeredSourceIds(),
+			);
+
+			for (const input of settingsPanel.querySelectorAll(
+				"input[data-source]",
+			)) {
+				input.checked = Boolean(sourceState[input.dataset.source]);
+			}
+
 			for (const group of suboptionGroups) {
 				const enabled = Boolean(settings[group.dataset.suboptionsOf]);
 
@@ -6158,7 +8174,7 @@ Highlights the passages commenters quote, so you can jump between the article an
 			}
 
 			// Reopening lands on the main pane rather than wherever it was left.
-			showSecondaryPane(false);
+			showSecondaryPane(null);
 		};
 
 		setSettingsOpen(false);
@@ -6196,6 +8212,25 @@ Highlights the passages commenters quote, so you can jump between the article an
 		});
 
 		settingsPanel.addEventListener("change", async (event) => {
+			const sourceInput = event.target.closest("input[data-source]");
+
+			if (sourceInput) {
+				const current = await loadSettings();
+
+				await saveSettings({
+					sources: {
+						...normalizeSourceSettings(current.sources, registeredSourceIds()),
+						[sourceInput.dataset.source]: sourceInput.checked,
+					},
+				});
+
+				// A source turned on mid-visit has never been looked up for this page,
+				// and one turned off may be on screen. Re-running the whole decision is
+				// cheaper to reason about than patching the sidebar in place.
+				await refreshForSourceChange();
+				return;
+			}
+
 			const input = event.target.closest("input[data-setting]");
 
 			if (!input) {
@@ -6228,6 +8263,117 @@ Highlights the passages commenters quote, so you can jump between the article an
 				await onAnnotationChange?.();
 			}
 		});
+
+		if (previewShape) {
+			// Committed on blur and on Enter rather than per keystroke: one character
+			// is a valid mark, so saving as you type would apply "B" on the way to
+			// "BC" and repaint every button twice.
+			const commitMark = async () => {
+				const next = normalizeButtonMark(previewShape.textContent);
+
+				previewShape.textContent = next;
+				applySettingsPanelState(await saveSettings({ buttonMark: next }));
+				await refreshButtonAppearance();
+			};
+
+			previewShape.addEventListener("keydown", (event) => {
+				if (event.key === "Enter") {
+					event.preventDefault();
+					previewShape.blur();
+					return;
+				}
+
+				// contenteditable has no maxlength. Typing past the limit is stopped
+				// here rather than trimmed afterwards, so the field never shows a
+				// character that will not survive.
+				const selection = previewShape.ownerDocument.getSelection();
+				const replacing = selection && !selection.isCollapsed;
+
+				if (
+					event.key.length === 1 &&
+					!event.metaKey &&
+					!event.ctrlKey &&
+					!replacing &&
+					previewShape.textContent.trim().length >= BUTTON_MARK_MAX
+				) {
+					event.preventDefault();
+				}
+			});
+
+			previewShape.addEventListener("blur", () => {
+				commitMark().catch(console.error);
+			});
+
+			// Paste arrives as whatever was on the clipboard, including newlines and
+			// markup. Taken as text and normalised rather than inserted.
+			previewShape.addEventListener("paste", (event) => {
+				event.preventDefault();
+				previewShape.textContent = normalizeButtonMark(
+					event.clipboardData?.getData("text/plain"),
+				);
+			});
+		}
+
+		if (previewDim) {
+			// Committed when the caption is left, the same way the mark is: a hex is
+			// only meaningful once it is whole, and repainting every surface on the
+			// way through "#2", "#23", "#237" would be four wrong colours per one
+			// the reader meant.
+			const commitAccent = async () => {
+				const typed = previewDim.textContent.trim();
+				// Emptying it means "back to the built-in one" rather than "invalid",
+				// which is the only way to undo a colour without having to know what
+				// it replaced.
+				const parsed = typed ? parseHexColor(typed) : null;
+
+				if (typed && !parsed) {
+					// Unparseable: snap back to what is actually painting rather than
+					// storing something the panel cannot use.
+					applySettingsPanelState(await loadSettings());
+					return;
+				}
+
+				const value = parsed ? rgbToHex(parsed) : null;
+
+				applySettingsPanelState(await saveSettings({ accentColor: value }));
+				await refreshAccentOverride();
+			};
+
+			previewDim.addEventListener("keydown", (event) => {
+				if (event.key === "Enter") {
+					event.preventDefault();
+					previewDim.blur();
+					return;
+				}
+
+				// Escape abandons rather than commits, so a half-typed value does not
+				// become the accent because the reader changed their mind.
+				if (event.key === "Escape") {
+					event.preventDefault();
+					loadSettings()
+						.then((settings) => {
+							applySettingsPanelState(settings);
+							previewDim.blur();
+						})
+						.catch(console.error);
+				}
+			});
+
+			previewDim.addEventListener("blur", () => {
+				commitAccent().catch(console.error);
+			});
+
+			// Paste arrives as whatever was on the clipboard. Taken as plain text so
+			// a copied swatch cannot bring markup into a caption.
+			previewDim.addEventListener("paste", (event) => {
+				event.preventDefault();
+				previewDim.textContent = (
+					event.clipboardData?.getData("text/plain") ?? ""
+				)
+					.trim()
+					.slice(0, 7);
+			});
+		}
 
 		for (const button of stepperButtons) {
 			button.onclick = async () => {
@@ -6296,15 +8442,20 @@ Highlights the passages commenters quote, so you can jump between the article an
 
 		if (resetButton) {
 			resetButton.onclick = async () => {
-				// Shape and size only. A button reset should not silently change the
-				// user's theme choice.
+				// What the blueprint draws: shape, size and the accent whose hex is
+				// the measure's caption. Deliberately not the theme, which is a
+				// separate control above and not a property of the button.
 				const settings = await saveSettings({
 					buttonShape: DEFAULT_SETTINGS.buttonShape,
 					buttonSize: DEFAULT_SETTINGS.buttonSize,
+					accentColor: DEFAULT_SETTINGS.accentColor,
 				});
 
 				applySettingsPanelState(settings);
 				await refreshButtonAppearance();
+				// Reaches further than the button: the accent is the panel's, the
+				// article highlights' and the header's as well.
+				await refreshAccentOverride();
 			};
 		}
 
@@ -6341,7 +8492,7 @@ Highlights the passages commenters quote, so you can jump between the article an
 				remove.type = "button";
 				remove.className = "settings-blocked-remove";
 				remove.textContent = "×";
-				remove.setAttribute("aria-label", `Stop hiding HNewhere on ${host}`);
+				remove.setAttribute("aria-label", `Stop hiding Backchannel on ${host}`);
 				remove.onclick = async () => {
 					const next = await loadBlockedSites();
 
@@ -6359,18 +8510,23 @@ Highlights the passages commenters quote, so you can jump between the article an
 
 		await renderBlockedList();
 
-		const manageBlocked = shadow.querySelector("#settings-manage-blocked");
+		for (const entry of settingsPanel.querySelectorAll(
+			".settings-link-button[data-pane]",
+		)) {
+			entry.onclick = async () => {
+				// The blocked list is built on demand rather than kept in sync, so it
+				// has to be rendered before the pane it lives in slides in.
+				if (entry.dataset.pane === "blocked") {
+					await renderBlockedList();
+				}
 
-		if (manageBlocked) {
-			manageBlocked.onclick = async () => {
-				await renderBlockedList();
-				showSecondaryPane(true);
+				showSecondaryPane(entry.dataset.pane);
 			};
 		}
 
 		for (const control of [crumbBack, crumbRoot]) {
 			if (control) {
-				control.onclick = () => showSecondaryPane(false);
+				control.onclick = () => showSecondaryPane(null);
 			}
 		}
 
@@ -6405,26 +8561,26 @@ Highlights the passages commenters quote, so you can jump between the article an
 <style>
 
 #panel {
-    position:fixed;
-    right:0;
-    top:0;
-    height:100vh;
-    width:${width}px;
-    min-width:${isPortraitPhone() ? "0" : "280px"};
-    max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "80vw"};
+	position:fixed;
+	right:0;
+	top:0;
+	height:100vh;
+	width:${width}px;
+	min-width:${isPortraitPhone() ? "0" : "280px"};
+	max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "80vw"};
     /* Without this the 1px border-left is added to the width, so a panel sized to
        the viewport renders a pixel past its left edge. */
-    box-sizing:border-box;
-    background:var(--bg);
-    color:var(--text);
-    z-index:2147483646;
-    display:flex;
-    flex-direction:column;
-    border-left:1px solid var(--border);
-    box-shadow:-3px 0 12px rgba(0,0,0,.15);
-    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-    font-size:13px;
-    overflow:visible;
+	box-sizing:border-box;
+	background:var(--bg);
+	color:var(--text);
+	z-index:2147483646;
+	display:flex;
+	flex-direction:column;
+	border-left:1px solid var(--border);
+	box-shadow:-3px 0 12px rgba(0,0,0,.15);
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+	font-size:13px;
+	overflow:visible;
     /* Shadow DOM encapsulates selectors, not inheritance. Every inherited property
        flows in from the host unless the shadow tree sets its own, so a page that
        centres its body -- victoriametrics.com does -- centres the entire panel,
@@ -6439,17 +8595,17 @@ Highlights the passages commenters quote, so you can jump between the article an
        line-height and the components that care carry their own, so pinning one now
        would restyle every site rather than fix one; and direction says something
        real about a reader's language, which is not ours to overrule. */
-    text-align:left;
-    text-indent:0;
-    text-transform:none;
-    letter-spacing:normal;
-    word-spacing:normal;
-    font-style:normal;
-    font-variant:normal;
-    white-space:normal;
+	text-align:left;
+	text-indent:0;
+	text-transform:none;
+	letter-spacing:normal;
+	word-spacing:normal;
+	font-style:normal;
+	font-variant:normal;
+	white-space:normal;
     /* Reading width for a single block of prose. Never applied to a container: a
        cap on any ancestor of .children narrows every reply nested under it. */
-    --measure:1215px;
+	--measure:1215px;
 }
 
 
@@ -6459,45 +8615,45 @@ ${CHROME_CSS}
 /* Sidebar-only, so deliberately not part of CHROME_CSS: the submit popover has no
    resize handle. #panel is position:fixed, which is already a containing block. */
 #resize-handle {
-    position:absolute;
-    left:0;
-    top:0;
-    bottom:0;
-    width:8px;
-    cursor:col-resize;
-    z-index:3;
+	position:absolute;
+	left:0;
+	top:0;
+	bottom:0;
+	width:8px;
+	cursor:col-resize;
+	z-index:3;
     /* Keeps the browser from turning the drag into a scroll or a page-back swipe
        before the resize handlers see it. */
-    touch-action:none;
+	touch-action:none;
 }
 
 /* A finger needs a far bigger target than a cursor, and an invisible edge strip is
    undiscoverable, so coarse pointers get a wider strip with a visible grip. */
 @media (pointer: coarse) {
-    #resize-handle {
-        width:20px;
-        display:flex;
-        align-items:center;
-        justify-content:center;
-    }
+	#resize-handle {
+		width:20px;
+		display:flex;
+		align-items:center;
+		justify-content:center;
+	}
 
-    #resize-handle::before {
-        content:"";
-        width:4px;
-        height:40px;
-        border-radius:2px;
-        background:var(--grip);
-    }
+	#resize-handle::before {
+		content:"";
+		width:4px;
+		height:40px;
+		border-radius:2px;
+		background:var(--grip);
+	}
 
-    #resize-handle.resize-handle-active::before {
-        background:#ff6600;
-    }
+	#resize-handle.resize-handle-active::before {
+		background:var(--accent);
+	}
 }
 
 
 .submission {
-    margin:0;
-    padding-top:0;
+	margin:0;
+	padding-top:0;
 }
 
 /* A hatched band rather than a rule, in the two places where the panel changes
@@ -6514,37 +8670,83 @@ ${CHROME_CSS}
    short of the panel edge reads as part of the column rather than as a break
    across it, which is the one thing it is for. */
 .next-up::before,
+.submission-detail::before,
 .submission + .submission::before {
-    content:"";
-    display:block;
-    height:15px;
-    box-sizing:content-box;
-    margin:0 -12px 12px;
-    border-top:1px solid var(--border);
-    border-bottom:1px solid var(--border);
+	content:"";
+	display:block;
+	height:15px;
+	box-sizing:content-box;
+	margin:0 -12px 12px;
+	border-top:1px solid var(--border);
+	border-bottom:1px solid var(--border);
     background-image:repeating-linear-gradient(
         315deg,
-        var(--border) 0,
-        var(--border) 1px,
-        transparent 0,
+		var(--border) 0,
+		var(--border) 1px,
+		transparent 0,
         transparent 50%
     );
-    background-size:6px 6px;
+	background-size:6px 6px;
 }
 
 .submission + .submission {
-    margin:16px -12px 0;
-    padding:0 12px;
+	margin:16px -12px 0;
+	padding:0 12px;
+}
+
+/* No negative margin of its own: the band's ::before already bleeds 12px each
+	side, which is exactly the inset #comments gives its contents. The gap above
+	the band comes from the header's padding, so that both sides of it are 12px. */
+.submission-detail-banded {
+	margin-top:0;
+}
+
+/* The band is always here and merely collapsed, so turning a filter on has
+	something to grow from rather than putting a rule on screen in one frame. */
+.submission-detail::before {
+	transition:
+		height .2s ease,
+		opacity .2s ease,
+		margin-bottom .2s ease,
+		border-top-width .2s ease,
+		border-bottom-width .2s ease;
+}
+
+.submission-detail:not(.submission-detail-banded)::before {
+	height:0;
+	opacity:0;
+	margin-bottom:0;
+	border-top-width:0;
+	border-bottom-width:0;
+}
+
+/* The band replaces the header's rule rather than joining it. Two lines between
+	the pills and the submission is one line too many, and the hatched one is the
+	one carrying the meaning. Faded rather than dropped, so it leaves at the same
+	speed the band arrives. */
+.page-header {
+	transition:border-bottom-color .2s ease, padding-bottom .2s ease;
+}
+
+.discussion-filtered .page-header {
+	border-bottom-color:transparent;
+	padding-bottom:12px;
 }
 
 #comments {
 			flex:1 1 auto;
 			min-height:0;
-    overflow:auto;
-    overflow-x:hidden;
+	overflow:auto;
+	overflow-x:hidden;
 			overscroll-behavior:contain;
-    padding:12px 12px 8px;
-    word-wrap:break-word;
+	/* The bottom is deliberately far larger than the top. The panel is fixed to
+		the full viewport height, so a page with a horizontal scrollbar puts that
+		scrollbar over the foot of the list -- and 8px was not enough to scroll the
+		last comment clear of it, which read as the thread being cut off. It also
+		gives a long thread somewhere to end: a list that stops flush against the
+		edge looks truncated even when it is complete. */
+	padding:12px 12px 32px;
+	word-wrap:break-word;
 }
 
 /* Only the comment lists fade. Filtering to a discussion changes which comments
@@ -6552,13 +8754,13 @@ ${CHROME_CSS}
    are the frame around that change, so fading them made the whole sidebar blink
    for what is really an edit to the list underneath. */
 .top-level-comments {
-    opacity:1;
-    transition:opacity .18s ease;
-    will-change:opacity;
+	opacity:1;
+	transition:opacity .18s ease;
+	will-change:opacity;
 }
 
 .comments-transitioning .top-level-comments {
-    opacity:.12;
+	opacity:.12;
 }
 
 /* The 14px indent is the width of the story's vote-arrow column
@@ -6566,33 +8768,33 @@ ${CHROME_CSS}
    composer and every submission. Matching it lines the banner up with them
    instead of with the scroll container. */
 .filter-banner {
-    max-width:720px;
-    margin:12px 0 16px 14px;
-    color:var(--meta);
+	max-width:720px;
+	margin:12px 0 16px 14px;
+	color:var(--meta);
 }
 
 /* Reads as an HN meta line: same 11px Verdana and the same pipe separators as
    "deergomoo 11 hours ago | reply". Adopting the idiom already in use is what
    lets the header drop its uppercase treatment without losing its rank. */
 .filter-banner-head {
-    display:flex;
-    flex-wrap:wrap;
-    align-items:baseline;
-    color:var(--meta);
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
+	display:flex;
+	flex-wrap:wrap;
+	align-items:baseline;
+	color:var(--meta);
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
 }
 
 /* The one piece of contrast in the row, echoing how the story title sits above
    its own grey meta line. Without it every word carries equal weight and the
    label stops reading as a label. */
 .filter-banner-title {
-    color:var(--text);
+	color:var(--text);
 }
 
 .filter-banner-close::before {
-    content:"|";
-    margin:0 5px;
+	content:"|";
+	margin:0 5px;
 }
 
 /* Same chrome as .composer-help, at the panel's own 13px so the quote reads at
@@ -6600,15 +8802,15 @@ ${CHROME_CSS}
    it, which is what separates a focused quote from the comment quotes below --
    those carry the opening mark alone. */
 .filter-banner-quote {
-    margin-top:6px;
-    padding:7px 8px;
-    border:1px solid var(--help-border);
-    border-radius:4px;
-    background:var(--help-bg);
-    color:var(--quote-text);
-    font-size:13px;
-    font-style:italic;
-    line-height:1.5;
+	margin-top:6px;
+	padding:7px 8px;
+	border:1px solid var(--help-border);
+	border-radius:4px;
+	background:var(--help-bg);
+	color:var(--quote-text);
+	font-size:13px;
+	font-style:italic;
+	line-height:1.5;
 }
 
 /* Set above the text size: at 13px the ornament reads as a speck rather than a
@@ -6616,21 +8818,21 @@ ${CHROME_CSS}
    raised comma sits in type. */
 .filter-banner-quote::before,
 .filter-banner-quote::after {
-    color:var(--quote-ornament);
-    font-size:17px;
-    font-style:normal;
-    line-height:0;
-    vertical-align:-2px;
+	color:var(--quote-ornament);
+	font-size:17px;
+	font-style:normal;
+	line-height:0;
+	vertical-align:-2px;
 }
 
 .filter-banner-quote::before {
-    content:"❛";
-    margin-right:3px;
+	content:"❛";
+	margin-right:3px;
 }
 
 .filter-banner-quote::after {
-    content:"❜";
-    margin-left:3px;
+	content:"❜";
+	margin-left:3px;
 }
 
 /* A comment focus has no quotation to mark. The ornaments say "these are somebody
@@ -6639,55 +8841,55 @@ ${CHROME_CSS}
    what it separates from the thread below is unchanged. */
 .filter-banner-quote-comment::before,
 .filter-banner-quote-comment::after {
-    content:none;
+	content:none;
 }
 
 .filter-banner-quote-comment {
-    font-style:normal;
+	font-style:normal;
 }
 
 /* The one piece of contrast in the line, the same job .filter-banner-title does in
    the row above: without it the author reads as part of the sentence. */
 .filter-banner-author {
-    color:var(--text);
+	color:var(--text);
 }
 
 .filter-banner-author::after {
-    content:" — ";
-    color:var(--meta);
+	content:" — ";
+	color:var(--meta);
 }
 
 /* Unboxed, an empty quote was invisible. Boxed, it would render as a stray
    empty rectangle whenever a group carries no quote text. */
 .filter-banner-quote:empty {
-    display:none;
+	display:none;
 }
 
 
 /* A text link on the meta row, not a floating glyph. Same rule as .meta a and
    .composer-help-toggle: no underline until hover, no colour shift. */
 .filter-banner-close {
-    border:0;
-    padding:0;
-    background:none;
-    color:var(--meta);
-    cursor:pointer;
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
-    text-decoration:none;
-    text-underline-offset:2px;
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
+	text-decoration:none;
+	text-underline-offset:2px;
 }
 
 /* Split from :hover deliberately, same as the quote links: keyboard focus must
    show regardless of pointer type. */
 .filter-banner-close:focus-visible {
-    text-decoration:underline;
+	text-decoration:underline;
 }
 
 @media (hover: hover) {
-    .filter-banner-close:hover {
-        text-decoration:underline;
-    }
+	.filter-banner-close:hover {
+		text-decoration:underline;
+	}
 }
 
 /* Indent is deliberately small. Every level costs horizontal space the comment
@@ -6701,50 +8903,56 @@ ${CHROME_CSS}
    deepest reply. A top-only margin cannot accumulate: it still separates siblings,
    and still separates the first reply from its parent's text. */
 .comment {
-    margin:12px 0 0 8px;
-    max-width:100%;
-    overflow-wrap:anywhere;
+	margin:12px 0 0 8px;
+	max-width:100%;
+	overflow-wrap:anywhere;
 }
 
 .top-level-comments > .comment {
-    margin-left:0;
+	margin-left:0;
 }
 
+/* margin-left:0 so the guide lands on the parent's first letter rather than 8px
+	past it. .children sits inside .comment-main, which already starts after the
+	vote slot, so zeroing the margin puts the rule exactly under where the parent's
+	text begins -- which is what makes a column of them read as one hierarchy
+	instead of a slight stagger. */
 .children > .comment {
-    border-left:1px solid var(--border-soft);
-    padding-left:6px;
+	margin-left:0;
+	border-left:1px solid var(--border-soft);
+	padding-left:6px;
 }
 
 /* 2px border + 5px padding lines this up with the 1px + 6px of an ordinary
    child, so gaining or losing the "new" accent never shifts the text. */
 .comment.new-comment {
-			border-left:2px solid rgba(255,102,0,.95);
+			border-left:2px solid rgba(var(--accent-rgb),.95);
 			padding-left:5px;
 			transition:border-left-color .9s ease;
 }
 
 /* A top-level comment has no divider under the accent, so it does fade to nothing. */
 .comment.new-comment.comment-new-seen {
-    border-left-color:transparent;
+	border-left-color:transparent;
 }
 
 /* A child does have one. Fading the accent all the way out erased the nesting line
    with it, so it settles on the divider colour instead of disappearing. */
 .children > .comment.new-comment.comment-new-seen {
-    border-left-color:var(--border-soft);
+	border-left-color:var(--border-soft);
 }
 
 .comment.comment-target {
-    background:rgba(255,102,0,.10);
-    border-radius:6px;
+	background:rgba(var(--accent-rgb),.10);
+	border-radius:6px;
 }
 
 .comment.comment-filter-hidden {
-    display:none !important;
+	display:none !important;
 }
 
 .submission.submission-filter-hidden {
-    display:none !important;
+	display:none !important;
 }
 
 /* Stated rather than left to cursor:auto. The panel used to write an inline
@@ -6753,15 +8961,15 @@ ${CHROME_CSS}
    write is gone, but saying it here means no future ancestor rule can take the
    I-beam away again without being noticed. */
 .text {
-    margin-top:4px;
-    line-height:132%;
-    font-weight:normal;
-    cursor:text;
-    max-width:var(--measure);
+	margin-top:4px;
+	line-height:132%;
+	font-weight:normal;
+	cursor:text;
+	max-width:var(--measure);
 }
 
 .text p {
-    margin:8px 0;
+	margin:8px 0;
 }
 
 /* A comment's first and last element must not decide how far the comment sits from
@@ -6777,12 +8985,12 @@ ${CHROME_CSS}
    to zero, which is why it was the odd one out to begin with. */
 .text > *:first-child,
 .story-text > *:first-child {
-    margin-top:0;
+	margin-top:0;
 }
 
 .text > *:last-child,
 .story-text > *:last-child {
-    margin-bottom:0;
+	margin-bottom:0;
 }
 
 /* A <pre> defaults to white-space:pre, which does not wrap at any width, so a code
@@ -6796,9 +9004,9 @@ ${CHROME_CSS}
    than widening everything around it. */
 .text pre,
 .story-text pre {
-    white-space:pre-wrap;
-    overflow-x:auto;
-    max-width:100%;
+	white-space:pre-wrap;
+	overflow-x:auto;
+	max-width:100%;
 }
 
 /* Browser defaults are 1em, which is 13px here and sits oddly beside the 8px every
@@ -6810,213 +9018,227 @@ ${CHROME_CSS}
 .story-text pre,
 .story-text ul,
 .story-text ol {
-    margin:8px 0;
+	margin:8px 0;
 }
 
 .text ul,
 .text ol,
 .story-text ul,
 .story-text ol {
-    padding-left:22px;
+	padding-left:22px;
 }
 
 .text a {
-    color:var(--link);
+	color:var(--link);
 }
 
 .meta {
-    color:var(--meta);
-    font-size:10px;
+	color:var(--meta);
+	font-size:10px;
 }
 
 .meta a {
-    color:var(--meta);
-    text-decoration:none;
+	color:var(--meta);
+	text-decoration:none;
 }
 
 @media (hover: hover) {
-    .meta a:hover {
-        text-decoration:underline;
-    }
+	.meta a:hover {
+		text-decoration:underline;
+	}
 }
 
 .vote-controls {
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-    width:17px;
-    opacity:1;
-    transition:opacity .15s ease;
+	display:flex;
+	flex-direction:column;
+	align-items:center;
+	width:17px;
+	opacity:1;
+	transition:opacity .15s ease;
 }
 
 .vote-controls-arriving {
-    opacity:0;
+	opacity:0;
 }
 
 .story-table {
-    width:100%;
-    border-collapse:collapse;
-    table-layout:fixed;
+	width:100%;
+	border-collapse:collapse;
+	table-layout:fixed;
 }
 
 .story-table td {
-    padding:0;
-    vertical-align:top;
+	padding:0;
+	vertical-align:top;
 }
 
 .story-votelinks,
 .story-votespacer {
-    width:14px;
+	width:14px;
 }
 
 .story-votelinks {
-    text-align:center;
+	text-align:center;
 }
 
 .story-votelinks .vote-controls {
-    margin-top:3px;
+	margin-top:3px;
+}
+
+/* Sitting against the byline rather than the title, where the 3px that centres it
+	against a 13px title drops it too low. The arrow is 10px on a 14px line, so 2px
+	puts it on the line's centre rather than its top. */
+.story-votelinks-inline .vote-controls {
+	margin-top:2px;
 }
 
 .story-title-cell,
 .story-body-cell {
-    padding-left:2px;
+	padding-left:2px;
 }
 
 .comment-layout {
-    display:flex;
-    align-items:flex-start;
+	display:flex;
+	align-items:flex-start;
+}
+
+/* Collapsed rather than hidden: the slot still exists so the layout is one rule,
+   it just stops reserving width when nothing in the thread can be voted on. */
+.comment-vote-slot-empty {
+	flex-basis:0;
+	width:0;
 }
 
 .comment-vote-slot {
-    flex:0 0 17px;
-    width:17px;
-    display:flex;
-    justify-content:center;
-    align-items:flex-start;
-    padding-top:1px;
+	flex:0 0 17px;
+	width:17px;
+	display:flex;
+	justify-content:center;
+	align-items:flex-start;
+	padding-top:1px;
 }
 
 .comment-main {
-    flex:1 1 auto;
-    min-width:0;
+	flex:1 1 auto;
+	min-width:0;
 }
 
 .vote-button {
-    position:relative;
-    width:10px;
-    height:10px;
-    min-width:10px;
-    border:none;
-    background:none;
-    padding:0;
-    margin:0;
-    color:transparent;
-    cursor:pointer;
-    font-size:0;
-    line-height:1;
+	position:relative;
+	width:10px;
+	height:10px;
+	min-width:10px;
+	border:none;
+	background:none;
+	padding:0;
+	margin:0;
+	color:transparent;
+	cursor:pointer;
+	font-size:0;
+	line-height:1;
 }
 
 .vote-button::before {
-    content:"";
-    position:absolute;
-    left:1px;
-    top:1px;
-    width:0;
-    height:0;
-    border-left:4px solid transparent;
-    border-right:4px solid transparent;
-    border-bottom:7px solid var(--meta);
+	content:"";
+	position:absolute;
+	left:1px;
+	top:1px;
+	width:0;
+	height:0;
+	border-left:4px solid transparent;
+	border-right:4px solid transparent;
+	border-bottom:7px solid var(--meta);
 }
 
 .vote-button-down::before {
-    border-bottom:none;
-    border-top:7px solid var(--meta);
-    top:2px;
+	border-bottom:none;
+	border-top:7px solid var(--meta);
+	top:2px;
 }
 
 /* Split deliberately: the -active colour marks a recorded vote and must apply on
    touch, so only the :hover half is gated. */
 .vote-button-active::before {
-    border-bottom-color:#ff6600;
+	border-bottom-color:var(--accent);
 }
 
 @media (hover: hover) {
-    .vote-button:hover::before {
-        border-bottom-color:#ff6600;
-    }
+	.vote-button:hover::before {
+		border-bottom-color:var(--accent);
+	}
 
-    .vote-button-down:hover::before {
-        border-top-color:#ff6600;
-    }
+	.vote-button-down:hover::before {
+		border-top-color:var(--accent);
+	}
 }
 
 .vote-button-down.vote-button-active::before {
-    border-top-color:var(--muted);
+	border-top-color:var(--muted);
 }
 
 .vote-button-neutral {
-    width:auto;
-    min-width:10px;
-    height:auto;
-    color:var(--meta);
-    font:600 10px/1 Verdana, Geneva, sans-serif;
+	width:auto;
+	min-width:10px;
+	height:auto;
+	color:var(--meta);
+	font:600 10px/1 Verdana, Geneva, sans-serif;
 }
 
 .vote-button-neutral::before {
-    content:none;
+	content:none;
 }
 
 .vote-button-neutral.vote-button-active {
-    color:#ff6600;
+	color:var(--accent);
 }
 
 @media (hover: hover) {
-    .vote-button-neutral:hover {
-        color:#ff6600;
-    }
+	.vote-button-neutral:hover {
+		color:var(--accent);
+	}
 }
 
 .vote-button + .vote-button {
-    margin-top:2px;
+	margin-top:2px;
 }
 
 .vote-button:disabled {
-    opacity:.55;
-    cursor:default;
+	opacity:.55;
+	cursor:default;
 }
 
 .story-vote-status,
 .comment-vote-status {
-    color:var(--meta);
+	color:var(--meta);
 }
 
 /* Sits in the byline as plain text, the way HN's own unvote link does. */
 .vote-unvote-link {
-    background:none;
-    border:0;
-    padding:0;
-    margin:0;
-    color:inherit;
-    font:inherit;
-    cursor:pointer;
+	background:none;
+	border:0;
+	padding:0;
+	margin:0;
+	color:inherit;
+	font:inherit;
+	cursor:pointer;
 }
 
 @media (hover: hover) {
-    .vote-unvote-link:hover {
-        text-decoration:underline;
-    }
+	.vote-unvote-link:hover {
+		text-decoration:underline;
+	}
 }
 
 .vote-controls-pending {
-    opacity:.7;
+	opacity:.7;
 }
 
 .comment-quote-link {
-    color:inherit;
-    cursor:pointer;
-    border-radius:3px;
-    outline:none;
-    transition:background .18s ease, opacity .18s ease, max-height .18s ease, margin .18s ease, padding .18s ease, border-color .18s ease;
+	color:inherit;
+	cursor:pointer;
+	border-radius:3px;
+	outline:none;
+	transition:background .18s ease, opacity .18s ease, max-height .18s ease, margin .18s ease, padding .18s ease, border-color .18s ease;
 }
 
 /* HN ships no quote syntax, so foldQuoteBlocks turns runs of marked lines into
@@ -7031,11 +9253,11 @@ ${CHROME_CSS}
    prose, whatever is on either side of it. */
 .text blockquote,
 .text p.comment-quote-promoted {
-    position:relative;
-    margin:8px 0;
-    padding-left:15px;
-    color:var(--quote-text);
-    font-style:italic;
+	position:relative;
+	margin:8px 0;
+	padding-left:15px;
+	color:var(--quote-text);
+	font-style:italic;
 }
 
 /* The ornaments are written as literal characters, not CSS codepoint escapes.
@@ -7043,22 +9265,22 @@ ${CHROME_CSS}
    digit as an octal escape, which is a syntax error in template strings. */
 .text blockquote::before,
 .text p.comment-quote-promoted::before {
-    content:"❛";
-    position:absolute;
-    left:0;
-    top:0;
-    color:var(--quote-ornament);
-    font-size:15px;
-    font-style:normal;
-    line-height:1.35;
+	content:"❛";
+	position:absolute;
+	left:0;
+	top:0;
+	color:var(--quote-ornament);
+	font-size:15px;
+	font-style:normal;
+	line-height:1.35;
 }
 
 .text blockquote p:first-child {
-    margin-top:0;
+	margin-top:0;
 }
 
 .text blockquote p:last-child {
-    margin-bottom:0;
+	margin-bottom:0;
 }
 
 /* The ornament stays neutral whether or not the quote is linked. The orange
@@ -7074,36 +9296,36 @@ ${CHROME_CSS}
    No backticks in here - this whole stylesheet is inside a template literal. */
 .text blockquote .comment-quote-link-inline,
 .comment-quote-promoted .comment-quote-link-inline {
-    text-decoration:none;
+	text-decoration:none;
 }
 
 /* A hairline. 1.5px was landing on three device pixels at 2x, which read as a rule
    under the text rather than as a mark on it. */
 .comment-quote-link-inline {
-    text-decoration:underline;
-    text-decoration-color:rgba(255,102,0,.32);
-    text-decoration-thickness:1px;
-    text-underline-offset:2px;
+	text-decoration:underline;
+	text-decoration-color:rgba(var(--accent-rgb),.32);
+	text-decoration-thickness:1px;
+	text-underline-offset:2px;
 }
 
 /* Split deliberately: :focus-visible is keyboard navigation and must keep working
    regardless of pointer type, so only the :hover half is gated. */
 .comment-quote-link:focus-visible {
-    background:rgba(255,102,0,.06);
+	background:rgba(var(--accent-rgb),.06);
 }
 
 blockquote.comment-quote-link:focus-visible {
-    background:rgba(255,102,0,.04);
+	background:rgba(var(--accent-rgb),.04);
 }
 
 @media (hover: hover) {
-    .comment-quote-link:hover {
-        background:rgba(255,102,0,.06);
-    }
+	.comment-quote-link:hover {
+		background:rgba(var(--accent-rgb),.06);
+	}
 
-    blockquote.comment-quote-link:hover {
-        background:rgba(255,102,0,.04);
-    }
+	blockquote.comment-quote-link:hover {
+		background:rgba(var(--accent-rgb),.04);
+	}
 }
 
 /* Inside a focused discussion the banner is already showing this sentence, so
@@ -7114,63 +9336,63 @@ blockquote.comment-quote-link:focus-visible {
    The blockquote form collapses instead, below, because there the quote is a
    standalone block rather than part of a sentence. */
 .comment-quote-redundant.comment-quote-link-inline {
-    text-decoration:none;
-    cursor:default;
+	text-decoration:none;
+	cursor:default;
 }
 
 /* Outside the hover media query and more specific than the rules there, so a
    quote the reader cannot usefully click does not light up under the pointer. */
 .comment-quote-redundant.comment-quote-link-inline:hover,
 .comment-quote-redundant.comment-quote-link-inline:focus-visible {
-    background:transparent;
+	background:transparent;
 }
 
 blockquote.comment-quote-redundant {
-    max-height:0;
-    overflow:hidden;
-    margin:0;
-    padding:0;
-    opacity:.08;
+	max-height:0;
+	overflow:hidden;
+	margin:0;
+	padding:0;
+	opacity:.08;
 }
 
 .toggle {
-    cursor:pointer;
+	cursor:pointer;
 }
 
 .story-title {
-    font-size:15px;
-    line-height:1.25;
+	font-size:15px;
+	line-height:1.25;
 }
 
 .story-title a {
-    color:var(--text);
-    text-decoration:none;
-    word-break:break-word;
+	color:var(--text);
+	text-decoration:none;
+	word-break:break-word;
 }
 
 .story-meta {
-    color:var(--meta);
-    font-size:10px;
-    line-height:1.4;
-    padding-top:2px;
+	color:var(--meta);
+	font-size:10px;
+	line-height:1.4;
+	padding-top:2px;
 }
 
 /* Matches .meta a, so the submitter reads the same as any commenter's name. */
 .story-meta a {
-    color:var(--meta);
-    text-decoration:none;
+	color:var(--meta);
+	text-decoration:none;
 }
 
 @media (hover: hover) {
-    .story-meta a:hover {
-        text-decoration:underline;
-    }
+	.story-meta a:hover {
+		text-decoration:underline;
+	}
 }
 
 .story-text {
-    margin:10px 0;
-    line-height:1.45;
-    cursor:text;
+	margin:10px 0;
+	line-height:1.45;
+	cursor:text;
 }
 
 /* The story ran on the browser's default paragraph margin -- 13px against the
@@ -7179,19 +9401,19 @@ blockquote.comment-quote-redundant {
    first-child/last-child rules above, which is what the old p:last-child rule here
    was reaching for. */
 .story-text p {
-    margin:8px 0;
+	margin:8px 0;
 }
 
 .story-text a {
-    color:var(--link);
+	color:var(--link);
 }
 
 /* The cap lives on the wrapper rather than the textarea so the actions row below
    inherits the same width, which is what lets the formatting link sit flush with
    the textarea's right edge instead of the panel's. */
 .comment-composer {
-    margin-top:10px;
-    max-width:720px;
+	margin-top:10px;
+	max-width:720px;
 }
 
 /* Reply boxes are collapsed until their comment's "reply" link is used. Same
@@ -7199,126 +9421,126 @@ blockquote.comment-quote-redundant {
    in CSS, so the ceiling only has to clear the content for the transition to
    finish. Generous because the formatting pane can be open inside it. */
 .reply-composer {
-    overflow:hidden;
-    max-height:600px;
-    opacity:1;
-    transition:max-height .24s ease, opacity .18s ease;
+	overflow:hidden;
+	max-height:600px;
+	opacity:1;
+	transition:max-height .24s ease, opacity .18s ease;
 }
 
 .reply-composer.collapsed {
-    max-height:0;
-    opacity:0;
+	max-height:0;
+	opacity:0;
     /* Nothing inside a collapsed box should be reachable by keyboard. */
-    visibility:hidden;
+	visibility:hidden;
 }
 
 /* Matches .composer-help-toggle: a text link that keeps its underline while the
    thing it toggles is open. */
 .reply-link.is-open {
-    text-decoration:underline;
+	text-decoration:underline;
 }
 
 /* Deliberately monospace-free and plain. HN treats two leading spaces as a code
    block, so a proportional font that hides whitespace would make the one piece of
    formatting that depends on exact spacing impossible to see. */
 .composer-text {
-    display:block;
-    width:100%;
-    box-sizing:border-box;
-    min-height:72px;
+	display:block;
+	width:100%;
+	box-sizing:border-box;
+	min-height:72px;
     /* Both axes, but bounded by the wrapper: a textarea dragged wider than the
        sidebar would just be clipped by #comments' overflow-x:hidden. */
-    max-width:100%;
-    resize:both;
-    padding:6px 7px;
-    border:1px solid var(--field-border);
-    border-radius:4px;
-    background:var(--field-bg);
-    color:var(--field-text);
-    font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	max-width:100%;
+	resize:both;
+	padding:6px 7px;
+	border:1px solid var(--field-border);
+	border-radius:4px;
+	background:var(--field-bg);
+	color:var(--field-text);
+	font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     /* Whitespace is significant to HN's formatter, so never collapse it visually. */
-    white-space:pre-wrap;
-    tab-size:4;
-    cursor:text;
+	white-space:pre-wrap;
+	tab-size:4;
+	cursor:text;
 }
 
 .composer-text:focus {
-    outline:2px solid rgba(255,102,0,.4);
-    outline-offset:-1px;
+	outline:2px solid rgba(var(--accent-rgb),.4);
+	outline-offset:-1px;
 }
 
 .composer-text:disabled {
-    background:var(--field-disabled-bg);
-    color:var(--muted);
+	background:var(--field-disabled-bg);
+	color:var(--muted);
 }
 
 /* space-between rather than a margin on the link, so the button stays left and the
    formatting link stays flush right however either one is relabelled. */
 .composer-actions {
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    gap:8px;
-    margin-top:6px;
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	gap:8px;
+	margin-top:6px;
 }
 
 /* HN renders "add comment" as a real submit input, so it inherits the platform's
    default button chrome. Deliberately left unstyled to match. */
 .composer-submit {
-    cursor:pointer;
+	cursor:pointer;
 }
 
 /* Reads as a text link, so it follows the same rule as .meta a: no underline until
    hover. Being a toggle, it also keeps the underline while the pane is open, which
    is the one place it differs from a plain link. */
 .composer-help-toggle {
-    background:none;
-    border:0;
-    padding:0;
-    color:var(--meta);
-    font-family:Verdana, Geneva, sans-serif;
-    font-size:11px;
-    cursor:pointer;
-    text-decoration:none;
-    text-underline-offset:2px;
+	background:none;
+	border:0;
+	padding:0;
+	color:var(--meta);
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
+	cursor:pointer;
+	text-decoration:none;
+	text-underline-offset:2px;
 }
 
 .composer-help-toggle.is-open {
-    text-decoration:underline;
+	text-decoration:underline;
 }
 
 /* Underline only, no colour shift -- exactly what .meta a does for usernames. */
 @media (hover: hover) {
-    .composer-help-toggle:hover {
-        text-decoration:underline;
-    }
+	.composer-help-toggle:hover {
+		text-decoration:underline;
+	}
 }
 
 .composer-help {
-    margin-top:6px;
-    padding:7px 8px;
-    border:1px solid var(--help-border);
-    border-radius:4px;
-    background:var(--help-bg);
-    color:var(--help-text);
-    font-size:11px;
-    line-height:1.5;
+	margin-top:6px;
+	padding:7px 8px;
+	border:1px solid var(--help-border);
+	border-radius:4px;
+	background:var(--help-bg);
+	color:var(--help-text);
+	font-size:11px;
+	line-height:1.5;
 }
 
 .composer-help p {
-    margin:0;
+	margin:0;
 }
 
 .composer-help p + p {
-    margin-top:5px;
+	margin-top:5px;
 }
 
 .composer-help code {
-    background:var(--code-bg);
-    border-radius:2px;
-    padding:0 3px;
-    font-family:Menlo, Consolas, monospace;
-    font-size:10px;
+	background:var(--code-bg);
+	border-radius:2px;
+	padding:0 3px;
+	font-family:Menlo, Consolas, monospace;
+	font-size:10px;
 }
 
 /* Sits between the button and the formatting link, taking up the slack so the link
@@ -7327,35 +9549,35 @@ blockquote.comment-quote-redundant {
    rather than truncate -- the row grows, which is preferable to hiding half of why
    something failed. */
 .composer-status {
-    flex:1 1 auto;
-    min-width:0;
-    font-size:11px;
-    line-height:1.4;
-    color:var(--status-text);
-    transition:opacity .14s ease;
+	flex:1 1 auto;
+	min-width:0;
+	font-size:11px;
+	line-height:1.4;
+	color:var(--status-text);
+	transition:opacity .14s ease;
 }
 
 /* Held while the message is being swapped, so one state fades out before the next
    fades in rather than the text changing under the reader. */
 .composer-status.is-fading {
-    opacity:0;
+	opacity:0;
 }
 
 .composer-status.error {
-    color:var(--error);
+	color:var(--error);
 }
 
 /* Braille frames rather than a spinning glyph: they animate in place without the
    baseline wobble a rotating character gives you, and need no image or keyframes. */
 .composer-spinner {
-    display:inline-block;
-    width:1em;
-    font-family:Menlo, Consolas, monospace;
-    color:var(--meta);
+	display:inline-block;
+	width:1em;
+	font-family:Menlo, Consolas, monospace;
+	color:var(--meta);
 }
 
 .composer-status a {
-    color:var(--link);
+	color:var(--link);
 }
 
 </style>
@@ -7377,7 +9599,7 @@ ${settingsPanelHTML()}
 <div id="browse-view" class="browse-view">
 <div class="browse-tabs" role="tablist">
 <button id="browse-tab-queue" class="browse-tab" type="button" role="tab" hidden>queue</button>
-<button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front page</button>
+<button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">Hacker News front page</button>
 </div>
 <div id="browse-list"></div>
 </div>
@@ -7688,7 +9910,36 @@ ${settingsPanelHTML()}
 		}
 
 		const storyID = String(story.id);
-		const hnURL = commentURL(story.id);
+		// The discussion supplies its own permalink rather than having an HN URL
+		// assembled from its id, so this stops pointing at HN for a discussion that
+		// is not on HN. Falls back for the front-page rows, which arrive as parsed
+		// HN markup rather than through an adapter.
+		const hnURL = story.permalink || commentURL(story.id);
+
+		// Read through the normalized names first, falling back to the raw Firebase
+		// ones. renderStory has two callers with different shapes: a discussion from
+		// an adapter, and a front-page row parsed straight out of HN's markup, which
+		// never passes through a mapper.
+		// Flag and favourite are Hacker News features. A source without them must
+		// not be given links that would act on an item id Hacker News never issued.
+		const showActions = options.actions !== false;
+		// The title row is dropped when it would only repeat the page header above
+		// it. It carries the only way out to the discussion though, so that link
+		// moves to the meta row rather than disappearing with it.
+		const showTitle = options.showTitle !== false;
+		// Separate from `actions`, which is about voting. A source can allow one and
+		// not the other, and the front-page rows pass neither.
+		const showComposer = options.compose === true;
+		const storyAuthor = story.author ?? story.by;
+		const storyCreatedAt = story.createdAt ?? story.time;
+		const storyCommentCount = story.commentCount ?? story.descendants ?? 0;
+		const storyBodyHTML = story.bodyHTML ?? story.text;
+
+		// Lifted out because it goes in one of two cells: beside the title when
+		// there is one, and beside the byline when there is not.
+		const voteControlsHTML = `<span class="story-vote-controls vote-controls hidden"
+	data-hn-vote-story-id="${escapeHTML(storyID)}"
+	data-hn-vote-item-id="${escapeHTML(storyID)}"></span>`;
 
 		const wrapper = document.createElement("div");
 		wrapper.innerHTML = `
@@ -7696,48 +9947,61 @@ ${settingsPanelHTML()}
 	<div class="story">
 	<table class="story-table" role="presentation">
 	<tbody>
-	<tr>
+	${
+		// Without a title there is no row for the arrow to sit beside, and it was
+		// left in one of its own pointing at an empty cell. It moves down to the
+		// byline instead, which is then the first line there is.
+		showTitle
+			? `<tr>
 	<td class="story-votelinks">
-	<span class="story-vote-controls vote-controls hidden"
-	data-hn-vote-story-id="${escapeHTML(storyID)}"
-	data-hn-vote-item-id="${escapeHTML(storyID)}"></span>
+	${voteControlsHTML}
 	</td>
 	<td class="story-title-cell">
 	<div class="story-title">
-	<a target="_blank"
+	<a target="_blank" rel="noopener noreferrer"
 	href="${escapeHTML(hnURL)}"
-	title="Open discussion on Hacker News">
+	title="Open this discussion where it lives">
 	${escapeHTML(story.title)}
 	</a>
 	</div>
 	</td>
-	</tr>
+	</tr>`
+			: ""
+	}
 	<tr>
-	<td class="story-votespacer"></td>
+	<td class="${showTitle ? "story-votespacer" : "story-votelinks story-votelinks-inline"}">${showTitle ? "" : voteControlsHTML}</td>
 	<td class="story-body-cell">
 	<div class="story-meta">
 	<span class="story-score" data-story-score-id="${escapeHTML(storyID)}" data-story-score="${escapeHTML(String(story.score || 0))}">${story.score || 0}</span> points by
+	${storyAuthor ? authorLinkHTML(story.source, storyAuthor) : ""}
+	<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
+	${showActions ? itemActionLinksHTML(storyID) : ""}
 	${
-		story.by
-			? `<a target="_blank"
-	href="https://news.ycombinator.com/user?id=${encodeURIComponent(story.by)}">${escapeHTML(story.by)}</a>`
-			: ""
+		showTitle
+			? ""
+			: `| <a class="story-open-link" target="_blank" rel="noopener noreferrer"
+	href="${escapeHTML(hnURL)}">open on ${escapeHTML(sourceShortLabel(story))}</a>`
 	}
-	<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(story.time)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
-	${itemActionLinksHTML(storyID)}
 	|
-	${story.descendants || 0} comments
+	${storyCommentCount} comments
 	</div>
 	${
-		story.text
+		storyBodyHTML
 			? `
 	<div class="story-text">
-	${sanitizeHTML(story.text)}
+	${sanitizeHTML(storyBodyHTML)}
 	</div>
 	`
 			: ""
 	}
-	${composerHTML({ label: "add comment", placeholder: "Add a comment…" })}
+	${
+		// A box that cannot send is worse than no box: it invites the reader to
+		// write something and then has nowhere to put it. Reddit ships read-only,
+		// so the composer belongs to sources that can actually reply.
+		showComposer
+			? composerHTML({ label: "add comment", placeholder: "Add a comment…" })
+			: ""
+	}
 	</td>
 	</tr>
 	</tbody>
@@ -8169,35 +10433,38 @@ ${settingsPanelHTML()}
 	// -------------------------
 
 	async function renderChildren(
-		replyIDs,
+		replyKeys,
+		thread,
 		container,
-		storyID,
-		storyAuthor,
+		discussion,
 		seenTime,
-		collapsedIds,
+		collapsedKeys,
 		generation = sidebarGeneration,
-		parentId = null,
+		parentKey = null,
 	) {
 		const batchSize = 5;
 
-		for (let i = 0; i < replyIDs.length; i += batchSize) {
-			const batch = replyIDs.slice(i, i + batchSize);
+		for (let i = 0; i < replyKeys.length; i += batchSize) {
+			const batch = replyKeys.slice(i, i + batchSize);
 
 			await Promise.all(
-				batch.map((id) =>
+				batch.map((key) =>
 					renderComment(
-						id,
+						key,
+						thread,
 						container,
-						storyID,
-						storyAuthor,
+						discussion,
 						seenTime,
-						collapsedIds,
+						collapsedKeys,
 						generation,
-						parentId,
+						parentKey,
 					),
 				),
 			);
 
+			// The frame yield is what makes a thread appear in batches rather than in
+			// one block. A source that returns whole trees resolves getComment
+			// instantly, and without this it would paint everything at once.
 			await new Promise(requestAnimationFrame);
 		}
 	}
@@ -8540,38 +10807,50 @@ ${settingsPanelHTML()}
 	// #endregion hnewhere-test-export
 
 	async function renderComment(
-		id,
+		key,
+		thread,
 		container,
-		storyID,
-		storyAuthor,
+		discussion,
 		seenTime = 0,
-		collapsedIds = new Set(),
+		collapsedKeys = new Set(),
 		generation = sidebarGeneration,
-		parentId = null,
+		parentKey = null,
 	) {
-		const comment = await getItem(id);
+		const comment = await thread.getComment(key);
 
 		if (generation !== sidebarGeneration) {
 			return;
 		}
 
-		if (!comment || comment.deleted || comment.dead) return;
+		if (!comment || comment.deleted) return;
 		const div = document.createElement("div");
 
+		// Two identifiers, deliberately. `comment.key` is identity -- the graph, the
+		// focus filter, collapsed state -- and is source-qualified. `commentID` is
+		// HN's own item number, which the vote, reply and age wiring put into HN
+		// URLs and HN-shaped data attributes, and which a namespaced value would
+		// turn into a 404.
+		const storyID = discussion.id;
+
 		div.className = "comment";
-		div.dataset.commentId = String(comment.id);
+		div.dataset.commentId = comment.key;
 		div.dataset.storyId = String(storyID);
 
 		if (isNewComment(comment, seenTime)) {
 			div.classList.add("new-comment");
 		}
 
-		const replies = comment.kids || [];
+		const replies = comment.replyKeys;
 		const commentID = String(comment.id);
+		const capabilities = getSource(comment.source)?.capabilities || {};
+		// Per thread, not per comment: a blended list where only some comments
+		// reserve the gutter has a ragged left edge, and one where nobody can vote
+		// has a dead column down the whole thing.
+		const threadCanVote = renderedSourcesCanVote();
 
 		div.innerHTML = `
       <div class="comment-layout">
-      <span class="comment-vote-slot">
+      <span class="comment-vote-slot${threadCanVote ? "" : " comment-vote-slot-empty"}">
       <span class="comment-vote-controls vote-controls hidden"
       data-hn-vote-story-id="${escapeHTML(String(storyID))}"
       data-hn-vote-item-id="${escapeHTML(commentID)}"></span>
@@ -8580,33 +10859,48 @@ ${settingsPanelHTML()}
       <div class="comment-main">
       <div class="meta">
 
-      <a target="_blank"
-      href="https://news.ycombinator.com/user?id=${encodeURIComponent(comment.by || "")}">
+      ${authorLinkHTML(comment.source, comment.author)}
 
-      ${escapeHTML(comment.by || "anonymous")}
+		${comment.isOP ? `<span class="op-pill">OP</span>` : ""}
 
-      </a>
+		${
+				// Provenance at metadata weight, beside the author and the age, not as
+				// a badge. Quiet, because the reader is meant to be reading one
+				// conversation rather than two feeds stitched together -- but present,
+				// because a comment from r/science and one from r/conspiracy are not
+				// interchangeable, and removing it would make the sidebar feel coherent
+				// by making it slightly dishonest.
+				//
+				// Roots only. Replies inherit it through the indent guides, and
+				// repeating it on every nested comment would double the weight of the
+				// metadata line to say what the parent already said.
+				parentKey === null && discussion.label && sidebarSourceKeys.size > 1
+					? `<span class="comment-source">${escapeHTML(discussion.label)}</span>`
+					: ""
+			}
 
-      ${
-					comment.by && comment.by === storyAuthor
-						? `<span class="op-pill">OP</span>`
-						: ""
-				}
+		<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span><span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
 
-      <span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.time)}</span><span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
-
-      |
+		${
+				// Reply, flag and favourite are things the reader can *do*, and only
+				// where the source allows it. Reddit is read-only, so offering them
+				// there is an offer that cannot be honoured -- and flag/favourite would
+				// act on an item id Hacker News never issued.
+				capabilities.reply
+					? `|
 
       <a class="reply-link" href="#">
       reply
-      </a>
+		</a>`
+					: ""
+			}
 
       |
 
       <a class="focus-link" href="#">
       focus
       </a>
-      ${itemActionLinksHTML(commentID)}
+		${capabilities.vote ? itemActionLinksHTML(commentID) : ""}
 
       <span class="toggle">
       [–]
@@ -8616,11 +10910,17 @@ ${settingsPanelHTML()}
 
       <div class="comment-content">
        	<div class="text">
-        		${sanitizeHTML(comment.text) || ""}
+        		${sanitizeHTML(comment.bodyHTML) || ""}
        	</div>
-       	<div class="reply-composer collapsed">
+       	${
+					// Collapsed, so it was invisible either way -- but a reply box with
+					// no reply link to open it is markup that can never be reached.
+					capabilities.reply
+						? `<div class="reply-composer collapsed">
        	${composerHTML({ label: "reply", placeholder: "Reply…" })}
-       	</div>
+       	</div>`
+						: ""
+				}
        	<div class="children"></div>
       </div>
       </div>
@@ -8639,13 +10939,21 @@ ${settingsPanelHTML()}
 		foldQuoteBlocks(textElement);
 		wrapLooseCommentText(textElement);
 
+		// `id` and `parentId` keep their names and change what they hold: a
+		// source-qualified key rather than a bare number. Everything downstream --
+		// buildCommentGraph, the focus filter, the annotation groups -- compares
+		// them for identity and never does arithmetic on them, so the rename would
+		// have been churn across a dozen call sites and one test fixture to express
+		// something the values already say.
 		renderedComments.push({
-			id: comment.id,
+			id: comment.key,
+			source: comment.source,
+			discussionKey: discussion.key,
 			storyID,
-			parentId,
-			author: comment.by || "anonymous",
-			time: comment.time || 0,
-			textHTML: comment.text || "",
+			parentId: parentKey,
+			author: comment.author,
+			time: comment.createdAt,
+			textHTML: comment.bodyHTML,
 			element: div,
 			textElement,
 			contentElement: content,
@@ -8654,7 +10962,7 @@ ${settingsPanelHTML()}
 			matchedGroupKeys: new Set(),
 		});
 
-		if (collapsedIds.has(comment.id)) {
+		if (collapsedKeys.has(comment.key)) {
 			content.classList.add("hidden");
 			toggle.textContent = "[+]";
 		}
@@ -8683,7 +10991,7 @@ ${settingsPanelHTML()}
 
 			toggle.textContent = hidden ? "[+]" : "[–]";
 
-			await toggleCollapsed(comment.id, hidden);
+			await toggleCollapsed(comment.key, hidden);
 		};
 
 		const replyButton = div.querySelector(".reply-link");
@@ -8695,164 +11003,564 @@ ${settingsPanelHTML()}
 		// asked for.
 		let composerAPI = null;
 
-		replyButton.onclick = function (event) {
-			event.preventDefault();
+		// Absent on a read-only source, where the link was never rendered.
+		if (replyButton) {
+			replyButton.onclick = function (event) {
+				event.preventDefault();
 
-			const opening = replyComposer.classList.contains("collapsed");
+				const opening = replyComposer.classList.contains("collapsed");
 
-			replyComposer.classList.toggle("collapsed", !opening);
-			replyButton.classList.toggle("is-open", opening);
+				replyComposer.classList.toggle("collapsed", !opening);
+				replyButton.classList.toggle("is-open", opening);
 
-			if (!opening) {
-				return;
-			}
+				if (!opening) {
+					return;
+				}
 
-			// Expanding a collapsed reply box inside a collapsed comment would put it
-			// somewhere invisible, so make sure the comment itself is showing.
-			if (content.classList.contains("hidden")) {
-				content.classList.remove("hidden");
-				toggle.textContent = "[–]";
-				toggleCollapsed(comment.id, false).catch(console.error);
-			}
+				// Expanding a collapsed reply box inside a collapsed comment would put it
+				// somewhere invisible, so make sure the comment itself is showing.
+				if (content.classList.contains("hidden")) {
+					content.classList.remove("hidden");
+					toggle.textContent = "[–]";
+					toggleCollapsed(comment.key, false).catch(console.error);
+				}
 
-			composerAPI ||= wireComposer(
-				replyComposer.querySelector(".comment-composer"),
-				{
-					storyID,
-					parentId: comment.id,
-				},
-			);
+				// comment.id, not comment.key: this becomes HN's own reply URL, and a
+				// namespaced value lands on a 404.
+				composerAPI ||= wireComposer(
+					replyComposer.querySelector(".comment-composer"),
+					{
+						storyID,
+						parentId: comment.id,
+					},
+				);
 
-			composerAPI?.focus();
-		};
+				composerAPI?.focus();
+			};
+		}
 
 		focusButton.onclick = function (event) {
 			event.preventDefault();
-			applyCommentFocus(comment.id);
+			applyCommentFocus(comment.key);
 		};
 
 		if (replies.length) {
 			await renderChildren(
 				replies,
+				thread,
 				children,
-				storyID,
-				storyAuthor,
+				discussion,
 				seenTime,
-				collapsedIds,
+				collapsedKeys,
 				generation,
-				comment.id,
+				comment.key,
 			);
 		}
+
+		mountMoreReplies(comment.more, thread, children, discussion, {
+			seenTime,
+			collapsedKeys,
+			generation,
+			parentKey: comment.key,
+		});
+	}
+
+	// A source that withholds part of a thread says so, and this is the button that
+	// asks for the rest. Optional on both sides: a source with no gaps never sets
+	// `more`, and one that cannot fill them offers no expandMore -- in either case
+	// nothing is drawn, which is why Hacker News needed no changes for this.
+	// Whether any source currently on screen can be voted on. Read off the enabled
+	// sources rather than the rendered comments, so it is stable while a thread is
+	// still painting.
+	function renderedSourcesCanVote() {
+		return [...SOURCES.values()].some(
+			(source) => source.capabilities.vote && sidebarSourceKeys.has(source.id),
+		);
+	}
+
+	function mountMoreReplies(more, thread, container, discussion, context) {
+		if (!more?.ids?.length || typeof thread.expandMore !== "function") {
+			return;
+		}
+
+		let pending = more.ids;
+		let remainingCount = more.count;
+
+		const button = document.createElement("button");
+
+		button.type = "button";
+		button.className = "more-replies";
+		container.appendChild(button);
+
+		const label = () =>
+			`${pluralize(remainingCount, "more reply", "more replies")}`;
+
+		button.textContent = label();
+
+		button.onclick = async () => {
+			if (button.disabled) {
+				return;
+			}
+
+			button.disabled = true;
+			button.textContent = "loading…";
+
+			const { ok, added, remaining } = await thread.expandMore(pending);
+
+			if (context.generation !== sidebarGeneration) {
+				return;
+			}
+
+			// Left standing, and say so. Reddit's budget is a hundred requests per ten
+			// minutes and a long thread can exhaust it, which is a "try again shortly"
+			// rather than a "there was nothing there".
+			if (!ok) {
+				button.disabled = false;
+				button.textContent = label() + " — try again";
+				return;
+			}
+
+			// Rendered before the button so the thread reads in order, and the button
+			// stays beneath whatever it just produced.
+			const holder = document.createElement("div");
+
+			container.insertBefore(holder, button);
+
+			// Direct children of the comment the gap sat under. Their own replies
+			// arrived in the same batch and are already linked, so renderChildren
+			// recurses into them without another request.
+			const directKeys = added
+				.filter((comment) => comment.parentKey === context.parentKey)
+				.map((comment) => comment.key);
+
+			await renderChildren(
+				directKeys,
+				thread,
+				holder,
+				discussion,
+				context.seenTime,
+				context.collapsedKeys,
+				context.generation,
+				context.parentKey,
+			);
+
+			pending = remaining;
+			// Counted against everything that arrived, not just the direct children:
+			// a nested reply is one fewer comment behind the gap too.
+			remainingCount = Math.max(0, remainingCount - added.length);
+
+			// The gap is genuinely closed: the source answered, and either it gave
+			// back nothing or there are no ids left to ask about.
+			if (!pending.length || !added.length) {
+				button.remove();
+				return;
+			}
+
+			button.disabled = false;
+			button.textContent = label();
+		};
 	}
 
 	// -------------------------
 	// Discussion loading
 	// -------------------------
 
-	async function renderSingleDiscussion(story, ui) {
+	async function renderDiscussions(stories, ui) {
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
 		// The observer holds the elements about to be thrown away with the list.
 		stopObservingNewComments();
 		renderedComments = [];
 		ui.body.innerHTML = "";
+		// "submissions on HN" was true while HN was the only source. It stops being
+		// Nothing at rest. This counted submissions back when the panel had no other
+		// way to say there were several; the source strip now names each one and
+		// carries its own count, so a bare "7 discussions" under the wordmark is a
+		// worse version of the row directly beneath it. Still cleared on every
+		// render rather than left alone, because the subtitle carries the loading
+		// stages and must not keep a previous page's text behind them.
 		setSidebarRestingSubtitle(ui, "");
 
 		const generation = sidebarGeneration;
-		const votePromise = isSidebarVisible() ? loadVoteLinks(story.id) : null;
-		const storyElement = renderStory(story, ui.body);
-		mountFilterBanner(storyElement, ui);
+
+		// Every thread first, because the merge needs each discussion's total before
+		// it can place any one comment. They are independent reads, so they overlap
+		// rather than queueing behind each other.
+		const threads = await Promise.all(
+			stories.map((story) => getSource(story.source).loadThread(story)),
+		);
+
+		if (generation !== sidebarGeneration) {
+			return;
+		}
+
+		const headerElement = renderPageHeader(stories, ui.body);
+
+		mountFilterBanner(headerElement, ui);
+
+		// Each discussion's own block -- its score, its author, and on Hacker News
+		// its vote, flag, favourite and composer -- rendered once and revealed by
+		// the strip. The page is the header; a submission is a thing inside it.
+		//
+		// Shown outright when there is only one, because then there is nothing to
+		// disambiguate: its actions are the page's actions, and hiding the composer
+		// behind a filter nobody needs would take away the way to reply.
+		sidebarSourceKeys.clear();
+
+		for (const story of stories) {
+			sidebarSourceKeys.add(story.source);
+		}
+
+		const details = document.createElement("div");
+
+		details.className = "submission-details";
+		ui.body.appendChild(details);
+
+		const pageTitle = stories[0]?.title || "";
+
+		for (const story of stories) {
+			const canVote = Boolean(getSource(story.source)?.capabilities.vote);
+			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
+			// Shown only where it says something the page header does not. Two
+			// submitters can title the same link differently, and that is worth
+			// seeing; the usual case, where they match, was two identical headings
+			// stacked on top of each other.
+			const block = renderStory(story, details, {
+				actions: canVote,
+				compose: canReply,
+				// Always with one discussion: the page header has stood down, so this
+				// title is the only one, and it belongs beside the arrow the way HN
+				// sets it. With several the header names the page, so a submission
+				// only repeats itself when its own title differs.
+				showTitle: stories.length < 2 || story.title !== pageTitle,
+			});
+
+			if (block) {
+				block.classList.add("submission-detail");
+				block.dataset.discussionKey = story.key;
+				block.hidden = stories.length > 1;
+			}
+		}
 
 		const comments = document.createElement("div");
+
 		comments.className = "top-level-comments";
 		ui.body.appendChild(comments);
 
-		// Independent reads, so they resolve together instead of one after the
-		// other in front of the first comment.
-		const [seenTime, collapsedIds] = await Promise.all([
-			getSeenTime(story.id),
-			loadCollapsed(),
-		]);
-
-		await renderChildren(
-			story.kids || [],
-			comments,
-			story.id,
-			story.by,
-			seenTime,
-			collapsedIds,
+		const collapsedKeys = await loadCollapsed();
+		const seenTimes = new Map(
+			await Promise.all(
+				stories.map(async (story) => [story.key, await getSeenTime(story.key)]),
+			),
 		);
 
-		await markSeen(story.id);
+		const context = new Map(
+			stories.map((story, index) => [
+				story.key,
+				{ story, thread: threads[index] },
+			]),
+		);
 
-		if (votePromise && generation === sidebarGeneration) {
-			// The fetch was started before rendering, so this names only whatever is
-			// left of it. It sits between the comments and the annotations because
-			// that is where the reader actually waits for it.
+		const entries = blendRoots(
+			stories.map((story, index) => ({
+				discussionKey: story.key,
+				rootKeys: threads[index].rootKeys,
+			})),
+		);
+
+		// Batched exactly as renderChildren batches, for the same reason: the frame
+		// yield is what makes a long thread appear in pieces rather than in one
+		// block. What differs is that each root carries its own thread and
+		// discussion, because the list they are merged into spans several.
+		const batchSize = 5;
+
+		for (let i = 0; i < entries.length; i += batchSize) {
+			if (generation !== sidebarGeneration) {
+				return;
+			}
+
+			await Promise.all(
+				entries.slice(i, i + batchSize).map((entry) => {
+					const held = context.get(entry.discussionKey);
+
+					return renderComment(
+						entry.key,
+						held.thread,
+						comments,
+						held.story,
+						seenTimes.get(entry.discussionKey) || 0,
+						collapsedKeys,
+						generation,
+					);
+				}),
+			);
+
+			await new Promise(requestAnimationFrame);
+		}
+
+		for (const [index, story] of stories.entries()) {
+			mountMoreReplies(threads[index].rootMore, threads[index], comments, story, {
+				seenTime: seenTimes.get(story.key) || 0,
+				collapsedKeys,
+				generation,
+				parentKey: null,
+			});
+		}
+
+		for (const story of stories) {
+			await markSeen(story.key);
+		}
+
+		// Vote wiring is HN's, and only HN's -- Reddit is read-only, so its
+		// discussions declare no vote capability and are skipped rather than
+		// fetched-and-discarded.
+		for (const story of stories) {
+			if (!isSidebarVisible() || !getSource(story.source)?.capabilities.vote) {
+				continue;
+			}
+
+			if (generation !== sidebarGeneration) {
+				return;
+			}
+
 			setSidebarStage(ui, "votes");
-			hydrateVoteControlsForStory(story.id, await votePromise);
+			hydrateVoteControlsForStory(story.id, await loadVoteLinks(story.id));
 			hydrateDisplayAges(story.id);
 		}
 	}
 
-	async function renderBlendedDiscussion(stories, ui) {
-		clearArticleAnnotations();
-		clearCommentFilter({ animate: false });
-		// The observer holds the elements about to be thrown away with the list.
-		stopObservingNewComments();
-		renderedComments = [];
-		ui.body.innerHTML = "";
-		setSidebarRestingSubtitle(
-			ui,
-			pluralize(stories.length, "submission") + " on HN",
+	// The subject is the page, not any one submission of it. `renderStory` put a
+	// submission's own title and score at the top because there was only ever one;
+	// with several, across several sites, that is trivia sitting where the article
+	// should be.
+	// The pill counts every comment in a discussion, not the roots it happens to
+	// have loaded. Roots made the pills disagree with everything around them: the
+	// header totalled 325 while they summed to 100, and filtering to a pill that
+	// said 26 opened a submission line reading "96 comments".
+	function renderPageHeader(stories, container) {
+		const total = stories.reduce(
+			(sum, story) => sum + (story.commentCount || 0),
+			0,
 		);
 
-		const generation = sidebarGeneration;
+		const wrapper = document.createElement("div");
 
-		for (const [index, story] of stories.entries()) {
-			const votePromise = isSidebarVisible() ? loadVoteLinks(story.id) : null;
-			const section = document.createElement("div");
-			section.className = "submission";
-			section.dataset.storyId = String(story.id);
+		// With one discussion the header steps aside entirely and the submission
+		// below renders the way a Hacker News story does: the arrow, the title and
+		// the subline as one unit. Holding the title up here instead left the arrow
+		// pointing at an empty cell, with our own heading and a rule above it --
+		// which is what stopped it reading like HN.
+		const single = stories.length < 2;
 
-			ui.body.appendChild(section);
+		wrapper.className = single ? "page-header page-header-quiet" : "page-header";
+		wrapper.innerHTML = `
+<div class="page-header-title">${single ? "" : escapeHTML(stories[0]?.title || "")}</div>
+<div class="page-header-meta">${
+	// With one discussion there is nothing to break down and nothing to switch
+	// between, so the header is the title and nothing else: the submission's own
+	// line below it already reads the way a Hacker News story line does, count
+	// and all. "352 comments across 1 discussion", a pill reading "HN 87", and
+	// that line underneath were three headings saying one thing.
+	stories.length > 1
+		? `${escapeHTML(pluralize(total, "comment"))} across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button>`
+		: ""
+}</div>
+<div class="source-strip${stories.length > 1 ? "" : " source-strip-single"}" id="source-strip">
+${stories
+	.map(
+		(story, index) => `
+<button type="button" class="source-strip-entry"
+data-discussion-key="${escapeHTML(story.key)}"
+title="Show only this discussion">
+<span class="source-strip-label">${escapeHTML(story.label)}</span>
+<span class="source-strip-count">${escapeHTML(String(story.commentCount ?? 0))}</span>
+</button>`,
+	)
+	.join("")}
+</div>`;
 
-			const storyElement = renderStory(story, section, {
-				multiple: true,
-				stories,
-			});
+		// Collapsed until asked for. The aggregate is the headline -- "what the
+		// internet said about this page" -- and the breakdown is what a reader
+		// reaches for, so it opens off the count that names it rather than sitting
+		// permanently under the title.
+		const strip = wrapper.querySelector(".source-strip");
+		const disclosure = wrapper.querySelector(".page-header-disclosure");
 
-			if (index === 0) {
-				mountFilterBanner(storyElement, ui);
-			}
+		// Nothing to disclose with a single discussion: no button was rendered, and
+		// the strip stays out of the layout entirely.
+		if (!disclosure) {
+			container.appendChild(wrapper);
 
-			const comments = document.createElement("div");
-			comments.className = "top-level-comments";
-
-			section.appendChild(comments);
-
-			const [seenTime, collapsedIds] = await Promise.all([
-				getSeenTime(story.id),
-				loadCollapsed(),
-			]);
-
-			await renderChildren(
-				story.kids || [],
-				comments,
-				story.id,
-				story.by,
-				seenTime,
-				collapsedIds,
-			);
-
-			await markSeen(story.id);
-
-			if (votePromise && generation === sidebarGeneration) {
-				setSidebarStage(ui, "votes");
-				hydrateVoteControlsForStory(story.id, await votePromise);
-				hydrateDisplayAges(story.id);
-			}
+			return wrapper;
 		}
+
+		const setStripOpen = (open) => {
+			strip.classList.toggle("is-open", open);
+			disclosure.setAttribute("aria-expanded", open ? "true" : "false");
+
+			// Measured rather than left to the CSS ceiling. A max-height animation
+			// only *looks* like a slide while the ceiling is still below the content:
+			// against a fixed 160px, a two-pill strip 22px tall finishes moving about
+			// 30ms into a 220ms transition and reads as a snap. Setting the height it
+			// actually needs makes the motion last as long as the transition does.
+			strip.style.maxHeight = open ? `${strip.scrollHeight}px` : "0px";
+
+			// Collapsed content stays in the layout for the slide, so it has to leave
+			// the tab order by hand or a hidden pill can still be focused.
+			for (const entry of strip.querySelectorAll(".source-strip-entry")) {
+				entry.tabIndex = open ? 0 : -1;
+			}
+		};
+
+		setStripOpen(false);
+
+		disclosure.onclick = () =>
+			setStripOpen(!strip.classList.contains("is-open"));
+
+		// Filtering, not navigating. A pill that opened the thread on Reddit would
+		// be answering "show me this part of the conversation" by sending the reader
+		// out of the conversation -- and the sidebar already knows how to show one
+		// discussion, because a quoted passage and a focused comment do the same
+		// thing. Pressing the active one puts the whole blend back.
+		wrapper.querySelector(".source-strip").addEventListener("click", (event) => {
+			const entry = event.target.closest(".source-strip-entry");
+
+			if (!entry) {
+				return;
+			}
+
+			const key = entry.dataset.discussionKey;
+
+			if (activeCommentFilter?.type === "discussion" && activeCommentFilter.key === key) {
+				clearCommentFilter({ restore: true });
+			} else {
+				applyDiscussionFilter(key);
+			}
+
+			syncFilterAffordances();
+			// Left open on purpose: collapsing the strip out from under the press
+			// that just filtered would take away the control needed to undo it.
+			setStripOpen(true);
+		});
+
+		container.appendChild(wrapper);
+
+		return wrapper;
+	}
+
+	// Which pill is currently doing something, read off the filter rather than
+	// tracked separately, so a filter cleared from the banner leaves the strip
+	// showing the truth.
+	// The story block belonging to whichever discussion is filtered. Driven off
+	// activeCommentFilter rather than tracked separately, so a filter cleared from
+	// the banner leaves the right block showing.
+	function syncSubmissionDetails() {
+		const blocks = sidebarUI?.body?.querySelectorAll(".submission-detail");
+
+		if (!blocks?.length) {
+			return;
+		}
+
+		// One discussion has no ambiguity to resolve, so its block simply stays.
+		if (blocks.length === 1) {
+			blocks[0].hidden = false;
+			return;
+		}
+
+		const active =
+			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
+
+		for (const block of blocks) {
+			const show = block.dataset.discussionKey === active;
+			const wasHidden = block.hidden;
+
+			block.hidden = !show;
+
+			// Filtering to one source puts its submission -- score, author, and
+			// whatever it was posted with -- above a thread that a moment ago was
+			// every source blended together. That is the panel changing subject, which
+			// is the one thing the hatched band is for.
+			if (!show) {
+				block.classList.remove("submission-detail-banded");
+				continue;
+			}
+
+			if (!wasHidden) {
+				block.classList.add("submission-detail-banded");
+				continue;
+			}
+
+			// It was display:none a moment ago, and a transition has nothing to
+			// interpolate from across that. One forced read settles the collapsed
+			// band as a real start value, and the class lands on the next frame --
+			// so the band grows rather than arriving whole.
+			void block.offsetHeight;
+			requestAnimationFrame(() => {
+				block.classList.add("submission-detail-banded");
+			});
+		}
+	}
+
+	// Both of these read activeCommentFilter and nothing else, so they belong on
+	// the same trigger. Kept apart, the strip was synced only by its own click
+	// handler -- so focusing a comment inside a filtered discussion, then pressing
+	// "show all comments", cleared the filter while leaving the pill lit for a
+	// filter that was no longer on.
+	function syncFilterAffordances() {
+		const wrapper = sidebarUI?.body?.querySelector(".source-strip");
+
+		if (wrapper) {
+			syncSourceStripState(wrapper);
+		}
+
+		syncSubmissionDetails();
+		syncSourceBadges();
+	}
+
+	// The badge beside a root comment says which discussion it came from, which is
+	// worth saying in a blend and says nothing once the reader has filtered to one
+	// discussion -- there, every comment on screen is from it.
+	function syncSourceBadges() {
+		sidebarUI?.body?.classList.toggle(
+			"discussion-filtered",
+			activeCommentFilter?.type === "discussion",
+		);
+	}
+
+	function syncSourceStripState(wrapper) {
+		const active =
+			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
+
+		for (const entry of wrapper.querySelectorAll(".source-strip-entry")) {
+			entry.classList.toggle(
+				"source-strip-entry-active",
+				entry.dataset.discussionKey === active,
+			);
+		}
+	}
+
+	// Told apart by `source`, which only a normalized discussion carries. Refs are
+	// HN by construction -- every path that produces one stores an HN item id --
+	// so loading them through the HN adapter is not an assumption, it is what
+	// those ids are.
+	async function resolveDiscussions(items) {
+		const resolved = items.some((item) => item && item.source)
+			? items
+			: (await loadStories(items)).map(hnDiscussion);
+
+		// Filtered here rather than at the lookup, because the lookup is not the only
+		// way in. Arriving from Hacker News reuses the story ids recorded while the
+		// reader was on it, the queue and the reading list carry their own, and
+		// reopening after a comment names one directly -- none of which passed
+		// through discoverAll, so a switched-off source still rendered.
+		const settings = await loadSettings();
+		const enabled = new Set(
+			enabledSourceIds(settings, registeredSourceIds()),
+		);
+
+		return disambiguateLabels(
+			resolved.filter((discussion) => enabled.has(discussion.source)),
+		);
 	}
 
 	async function loadStories(stories) {
@@ -8985,6 +11693,15 @@ ${settingsPanelHTML()}
 			// to load, nothing to annotate, and no per-site state worth recording --
 			// writing "collapsed" here would suppress automatic opening later, on a
 			// page that has since been submitted, for a panel the reader never shut.
+			// Same shape as browseOnly below: the shell is real, the body is not a
+			// discussion. Nothing further applies -- there are no stories to load,
+			// nothing to annotate, and no per-site state worth recording.
+			if (options.setupOnly) {
+				sidebarHasDiscussion = false;
+				renderSourcePicker(ui);
+				return;
+			}
+
 			if (options.browseOnly) {
 				sidebarHasDiscussion = false;
 				renderNoDiscussion(ui);
@@ -9043,10 +11760,14 @@ ${settingsPanelHTML()}
 
 			setSidebarStage(ui, "discussion");
 
-			const loaded = await loadStories(stories);
+			// Two shapes converge here. The page lookup hands over discussions that
+			// are already normalized, because a Reddit one cannot be rebuilt from an
+			// HN id. The queue, the reading list and the reopen-after-commenting path
+			// hand over HN story refs, which still have to be loaded.
+			const loaded = await resolveDiscussions(stories);
 
 			if (!loaded.length) {
-				throw new Error("No HN stories could be loaded");
+				throw new Error("No discussions could be loaded");
 			}
 
 			if (generation !== sidebarGeneration) {
@@ -9055,11 +11776,11 @@ ${settingsPanelHTML()}
 
 			setSidebarStage(ui, "comments");
 
-			if (loaded.length === 1) {
-				await renderSingleDiscussion(loaded[0], ui);
-			} else {
-				await renderBlendedDiscussion(loaded, ui);
-			}
+			// One path, whatever the count. Two renderers meant the panel looked
+			// like a different product depending on how many places a link happened
+			// to be posted to -- a submission header for one, a page header for
+			// several -- and every fix had to be made twice.
+			await renderDiscussions(loaded, ui);
 
 			if (generation === sidebarGeneration) {
 				// Announced only when the pass will actually run, so the sidebar never
@@ -10337,6 +13058,7 @@ ${settingsPanelHTML()}
 
 			setQuoteRedundancy(null, false);
 			updateSubmissionVisibility(null);
+			syncFilterAffordances();
 			sidebarUI?.filterBanner?.classList.add("hidden");
 			if (sidebarUI?.filterBannerQuote) {
 				sidebarUI.filterBannerQuote.textContent = "";
@@ -11719,17 +14441,23 @@ ${settingsPanelHTML()}
 	}
 
 	// #region hnewhere-test-export
-	const HEAT_FILL_LIGHT = {
-		light: "rgba(255,102,0,.025)",
-		medium: "rgba(255,102,0,.045)",
-		heavy: "rgba(255,102,0,.07)",
-	};
+	// Literal channels, not var(--accent-rgb): these paint into the page-side
+	// overlay, which cannot see the panel's variables. Keep them in step with
+	// ACCENT_RGB by hand -- there is no mechanism that can do it here.
+	// Built per paint rather than once at load, so a reader who sets their own
+	// accent gets it on the article too and not only in the panel.
+	function heatFill(dark) {
+		const channels = activeAccent(dark).accentRgb;
+		const alphas = dark
+			? { light: ".035", medium: ".055", heavy: ".075" }
+			: { light: ".025", medium: ".045", heavy: ".07" };
 
-	const HEAT_FILL_DARK = {
-		light: "rgba(255,102,0,.035)",
-		medium: "rgba(255,102,0,.055)",
-		heavy: "rgba(255,102,0,.075)",
-	};
+		return {
+			light: `rgba(${channels},${alphas.light})`,
+			medium: `rgba(${channels},${alphas.medium})`,
+			heavy: `rgba(${channels},${alphas.heavy})`,
+		};
+	}
 
 	// Quote rects paint solid and their layer carries the strength. Painting them
 	// translucent instead made a passage's colour depend on how many people happened
@@ -11738,9 +14466,8 @@ ${settingsPanelHTML()}
 	// layer that is itself partly transparent cannot compound, so every quote reads
 	// the same. How much a passage is discussed is the heat layer's job, and it was
 	// only ever being said twice.
-	const QUOTE_INK = "#ff6600";
 	// Meant to read as a highlighter drawn over the line, not as a tint on it: half
-	// strength puts white paper at rgb(255,178,127). The overlay blends, so orange
+	// strength puts white paper at rgb(173,173,235). The overlay blends, so the accent
 	// cannot touch the glyphs however heavy it gets -- text on a highlight keeps a
 	// contrast ratio above 10 here, against the 4.5 body text is asked for -- which
 	// is what lets this be a real mark rather than the .08 whisper it started as.
@@ -11759,11 +14486,11 @@ ${settingsPanelHTML()}
 			width: rect.width,
 			height: rect.height,
 			borderRadius: "3px",
-			background: QUOTE_INK,
+			background: activeAccent(options.dark).accent,
 		};
 
 		if (variant === "heat") {
-			const palette = options.dark ? HEAT_FILL_DARK : HEAT_FILL_LIGHT;
+			const palette = heatFill(options.dark);
 			style.background = palette[options.bucket] || palette.light;
 		}
 
@@ -11888,7 +14615,7 @@ ${settingsPanelHTML()}
 	// been filtered -- arrives as arguments, so neither caller has to know how the
 	// list transitions or where the reader was standing when they left it.
 	function applyFocusedDiscussion(
-		{ filter, directMatchIds, anchorElement, paintBanner, onFiltered },
+		{ filter, directMatchIds, anchorElement, paintBanner, onFiltered, banner },
 		options = {},
 	) {
 		// Only when entering from the full list. A refresh re-applies a filter that is
@@ -11927,10 +14654,23 @@ ${settingsPanelHTML()}
 			// still see rather than under the cover of the change.
 			onFiltered?.();
 			updateSubmissionVisibility(visibleCommentIds);
+			// Every way into a filter, not just the strip's own press: focusing a
+			// comment or a quoted passage changes what the pills should say too.
+			syncFilterAffordances();
 
 			if (sidebarUI?.filterBanner && sidebarUI?.filterBannerQuote) {
-				sidebarUI.filterBanner.classList.remove("hidden");
-				paintBanner(sidebarUI.filterBannerQuote);
+				// A filter reached from the strip needs no banner: the pill is lit, and
+				// pressing it again is the way out. Saying "Showing r/rust" underneath
+				// it, with its own undo, is the same state and the same control twice.
+				// A quoted passage or a focused comment has no such marker, so there
+				// the banner is the only thing that explains what happened.
+				if (banner === false) {
+					sidebarUI.filterBanner.classList.add("hidden");
+					sidebarUI.filterBannerQuote.textContent = "";
+				} else {
+					sidebarUI.filterBanner.classList.remove("hidden");
+					paintBanner(sidebarUI.filterBannerQuote);
+				}
 			}
 
 		}, options);
@@ -11952,9 +14692,17 @@ ${settingsPanelHTML()}
 			return;
 		}
 
+		// Earliest by timestamp, not first in thread order. Thread order is a
+		// property of one discussion, and a quote group can now hold comments from
+		// several -- so "first" meant "whichever source happened to render first",
+		// which is not a fact about the comments at all.
+		const earliest = [...group.comments].sort(
+			(a, b) => (a.time || 0) - (b.time || 0),
+		)[0];
+
 		const targetMatch =
 			group.comments.find((match) => match.commentId === options.commentId) ||
-			group.comments[0];
+			earliest;
 
 		applyFocusedDiscussion(
 			{
@@ -11971,6 +14719,41 @@ ${settingsPanelHTML()}
 					);
 				},
 				onFiltered: () => setQuoteRedundancy(group, true),
+			},
+			options,
+		);
+	}
+
+	// The third way in, and the plainest: show one discussion out of the blend.
+	// Direct matches are that discussion's roots, and getVisibleCommentIds carries
+	// their subtrees down, so "just r/rust" is the same kind of view a quoted
+	// passage produces rather than a separate mode with its own rules.
+	function applyDiscussionFilter(discussionKey, options = {}) {
+		const roots = renderedComments.filter(
+			(rendered) =>
+				rendered.discussionKey === discussionKey && rendered.parentId === null,
+		);
+
+		// Same bail-out as a missing quote group: a re-render between refreshes can
+		// leave a filter pointing at comments that are no longer in the list.
+		if (!roots.length) {
+			clearCommentFilter(options);
+			return;
+		}
+
+		applyFocusedDiscussion(
+			{
+				filter: { type: "discussion", key: discussionKey },
+				directMatchIds: new Set(roots.map((rendered) => rendered.id)),
+				// The strip is above the list rather than inside it, so there is no
+				// comment to pin the banner to -- it sits at the top, where entering
+				// this filter leaves the reader anyway.
+				anchorElement: null,
+				// No banner. The strip pill above is lit and clears on a second press,
+				// so a line repeating its name with its own "show all comments" is the
+				// same state and the same control a second time.
+				banner: false,
+				paintBanner: () => {},
 			},
 			options,
 		);
@@ -12309,7 +15092,7 @@ ${settingsPanelHTML()}
 				for (const rect of rects) {
 					const node = createHighlightRect(rect, {
 						interactive: true,
-						title: "Show linked Hacker News comments",
+						title: "Show the comments quoting this",
 						onActivate: () => {
 							openFocusedDiscussion(group.key).catch(console.error);
 						},
@@ -12421,6 +15204,7 @@ ${settingsPanelHTML()}
 			"hn-restore-button",
 			"hn-collapse-button",
 			"hn-submit-button",
+			"hn-setup-button",
 		]) {
 			const button = document.getElementById(id);
 
@@ -12449,6 +15233,97 @@ ${settingsPanelHTML()}
 	function teardownForBlockedSite() {
 		teardownSurfaces();
 	}
+
+	// Changing which sources are on changes what the thread is, not what the page
+	// is. With the panel open it is re-rendered in place behind the same cross-fade
+	// the front-page swap uses: the comments go, the new ones arrive as they load.
+	//
+	// It used to tear the panel down and re-run the page pass, which was wrong
+	// twice over. The reader lost their place mid-checkbox, and the pass could take
+	// a branch that produced neither a sidebar nor a button -- so turning a source
+	// off could leave the page with nothing on it at all until a reload.
+	//
+	// Same contract as teardownForBlockedSite: persist before calling.
+	async function refreshForSourceChange() {
+		if (isSidebarVisible() && sidebarUI) {
+			await refreshDiscussionsInPlace(sidebarUI);
+			return;
+		}
+
+		// No panel to preserve -- the settings panel in the submit popover can reach
+		// here too -- so the whole page decision is re-run to update the button.
+		//
+		// runPagePass, not init: init installs the soft-navigation watcher, which
+		// wraps history.pushState, adds a popstate listener and starts an interval,
+		// none of them guarded. Calling it per toggle stacked a poller every time.
+		teardownSurfaces();
+		await runPagePass();
+	}
+
+	// Rebuilds the thread inside the panel the reader is already looking at.
+	async function refreshDiscussionsInPlace(ui) {
+		const generation = ++sidebarGeneration;
+		const comments = ui.shadow?.querySelector("#comments");
+		const settings = await loadSettings();
+
+		const render = () => {
+			if (generation !== sidebarGeneration) {
+				return;
+			}
+
+			(async () => {
+				// Before the branching, because two of the three branches return early
+				// and the wordmark has to be told either way.
+				await refreshBrowseAffordances(ui.shadow);
+
+				// Nothing enabled is a state, not an error: the panel offers the
+				// picker rather than emptying and leaving the reader to guess.
+				// Nothing enabled is a state the reader chose, and the picker is how
+				// they undo it -- so the panel stays and offers it rather than
+				// vanishing and leaving them to find the grey button.
+				if (!enabledSourceIds(settings, registeredSourceIds()).length) {
+					sidebarHasDiscussion = false;
+					renderSourcePicker(ui);
+					return;
+				}
+
+				setSidebarStage(ui, "discussion");
+
+				const discussions = await discoverAll(location.href, settings);
+
+				if (generation !== sidebarGeneration) {
+					return;
+				}
+
+				// No source turned anything up, which is exactly what a page with no
+				// discussion has always looked like: the grey button, offering to
+				// submit. Keeping the panel open around a message would be a third
+				// state that says less than the button it replaced.
+				if (!discussions.length) {
+					sidebarHasDiscussion = false;
+					teardownSurfaces();
+					await runPagePass();
+					return;
+				}
+
+				sidebarHasDiscussion = true;
+				setSidebarStage(ui, "comments");
+				await renderDiscussions(discussions, ui);
+
+				if (generation === sidebarGeneration) {
+					await refreshArticleAnnotations();
+				}
+			})().catch(console.error);
+		};
+
+		if (!comments || prefersReducedMotion()) {
+			render();
+			return;
+		}
+
+		crossFadeCommentsView(comments, render);
+	}
+
 
 	// Shared by both headers. Persists before tearing down, because the teardown
 	// destroys the surface this was clicked in.
@@ -12505,6 +15380,11 @@ ${settingsPanelHTML()}
 				scroll: false,
 				animate: false,
 			});
+		} else if (activeCommentFilter?.type === "discussion") {
+			applyDiscussionFilter(activeCommentFilter.key, {
+				scroll: false,
+				animate: false,
+			});
 		}
 
 		const controller = annotationController;
@@ -12548,7 +15428,19 @@ ${settingsPanelHTML()}
 	// Three feeds because none is sufficient alone: patching history is instant but
 	// only lands where the manager's sandbox shares the page's History object,
 	// popstate covers only back and forward, and the poll catches the rest.
+	let softNavigationWatched = false;
+
 	function watchSoftNavigation() {
+		// Wraps history methods, adds a popstate listener and starts an interval,
+		// none of which can be undone. Installing it twice leaves two pollers racing
+		// on the same page, so it installs once per document however often it is
+		// asked for.
+		if (softNavigationWatched) {
+			return;
+		}
+
+		softNavigationWatched = true;
+
 		let currentHref = location.href;
 		let currentURL = normalizeURL(currentHref);
 		let timer = null;
@@ -12618,7 +15510,11 @@ ${settingsPanelHTML()}
 	// -------------------------
 
 	async function init() {
+		// Before migrateStorage, which writes on its own first run and would make
+		// every fresh install look like an upgrade.
+		await seedSources();
 		await migrateStorage();
+		await migrateSourceKeys();
 
 		// On HN, only record clicked stories, offer the queue, and service popup
 		// bridge actions.
@@ -12722,13 +15618,24 @@ ${settingsPanelHTML()}
 			loadRememberedItemActions(),
 		]);
 
-		// "Only show the HN button when a discussion exists" was chosen before there
+		// "Only show the button when a discussion exists" was chosen before there
 		// was a queue to reach through that button, and taken literally it now hides
 		// the only way to something the reader put there themselves. Its sub-option
 		// says so: hide it, except when something is waiting.
 		const hideButton =
 			settings.hideWithoutDiscussion &&
 			!(settings.showButtonWithQueue && unreadQueueCount(await loadQueue()));
+
+		// Nothing enabled means nothing is looked up: no Algolia, no Firebase, no
+		// requests at all. The button stops being a discussion indicator, because
+		// there is no discussion to indicate, and becomes the way into the picker.
+		if (!enabledSourceIds(settings, registeredSourceIds()).length) {
+			if (!hideButton) {
+				await createSetupButton();
+			}
+
+			return;
+		}
 
 		// Drawn before the lookup, so the page shows something immediately and the
 		// ring covers whatever comes next. Skipped when the reader has asked for no
@@ -12749,33 +15656,40 @@ ${settingsPanelHTML()}
 			last = null;
 		}
 
-		if (
+		// Clicking a story on Hacker News records its id. All that tells us is how
+		// the reader arrived -- which the referrer cannot be relied on for, since
+		// some browsers withhold it -- and arrival decides one thing only: whether
+		// the panel opens itself. It does not decide what the panel shows.
+		//
+		// It used to. This branch opened the recorded id and skipped the lookup,
+		// which was invisible while a page had one discussion and wrong the moment
+		// it could have several: an article resubmitted this morning opened on a
+		// thread from 2024 or one from today depending on which link had been
+		// clicked, with no sign the rest existed.
+		const arrivedFromClick = Boolean(
 			last &&
-			sameURL(last.url, location.href) &&
-			Date.now() - last.timestamp < 300000
-		) {
+				sameURL(last.url, location.href) &&
+				Date.now() - last.timestamp < 300000,
+		);
+
+		if (arrivedFromClick) {
 			await save(STORAGE.last, null);
-
-			settleButtonToDiscussion(pendingButton);
-
-			// Reaching this branch is itself an arrival from HN: the click that
-			// recorded it happened on HN, on a link to this URL. Stated rather than
-			// re-derived from the referrer, which some browsers withhold entirely.
-			await presentDiscussion(
-				last.ids.map((id) => ({ objectID: id })),
-				settings,
-				siteState,
-				true,
-			);
-
-			return;
 		}
 
-		// Otherwise look the URL up now rather than on click. 1.5.3 makes the button's
-		// colour mean "a discussion exists", which is only answerable before it is
-		// drawn. findHN caches per URL for an hour, so this is one request per new
-		// page rather than one per visit.
-		const stories = await findHN(location.href);
+		// Looked up here rather than on click. 1.5.3 makes the button's colour mean
+		// "a discussion exists", which is only answerable before it is drawn. Each
+		// source caches per URL for an hour, so this is one request per source per
+		// new page rather than one per visit.
+		const found = await discoverAll(location.href, settings);
+
+		// The recorded ids stand in only when the lookup comes back with nothing.
+		// They are a discussion we know exists, and a network hiccup on a page the
+		// reader reached from Hacker News should not end in a button offering to
+		// submit it there.
+		const stories =
+			found.length || !arrivedFromClick
+				? found
+				: last.ids.map((id) => ({ objectID: id }));
 
 		const requestedOpen = takeRequestedOpen();
 
@@ -12787,15 +15701,21 @@ ${settingsPanelHTML()}
 			// are doing now. Recorded like any other open they asked for.
 			if (requestedOpen) {
 				destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
-				await openSidebar(stories.map((story) => ({ objectID: story.objectID })));
+				// Passed whole rather than reduced to ids. A Reddit discussion cannot
+				// be rebuilt from an HN item number, and reducing these to refs was
+				// what made that impossible.
+				await openSidebar(stories);
 				return;
 			}
 
+			// Both signals mean the same thing to the auto-open rule, and neither is
+			// sufficient alone: the referrer is withheld by some browsers, and the
+			// recorded click is only kept for five minutes.
 			await presentDiscussion(
-				stories.map((story) => ({ objectID: story.objectID })),
+				stories,
 				settings,
 				siteState,
-				arrivedFromHNReferrer,
+				arrivedFromClick || arrivedFromHNReferrer,
 			);
 			return;
 		}

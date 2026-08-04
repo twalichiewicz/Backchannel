@@ -1,12 +1,182 @@
 # Changelog
 
-All notable changes to HNewhere are documented here.
+All notable changes to Backchannel — formerly HNewhere — are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
+
+## [1.6.0] — 2026-08-04
+
+### Changed
+
+- **HNewhere is now Backchannel.** The name described a product that checked one
+  site. This one asks several, so it is named for what it shows rather than where
+  it looked: the conversation running alongside the page you are reading. The
+  accent colour moves off Hacker News orange for the same reason — the panel
+  speaks for several sources now and should not wear any one of their colours —
+  and the floating button reads **BC** rather than **HN**.
+
+  The repository, the filename and the install URL are unchanged, so an install
+  that auto-updates renames itself in place and keeps everything. Stored settings
+  keep their old key prefix too: renaming them would be invisible to you and
+  would risk your queue and hidden-site list for nothing.
+
+  **If you reinstall by hand rather than letting it update, remove the old
+  HNewhere entry afterwards.** Userscript managers match a manual install on the
+  script's name, so a rename arrives as a second script rather than a new version
+  of the first — and both would run, on every page, at once.
+
+### Added
+
+- **Reddit, and a source picker.** HNewhere told you what Hacker News said about
+  a page. It now tells you what the internet said: Hacker News and Reddit —
+  every subreddit a link was posted to — merged into one conversation rather
+  than presented as two feeds. Each source is a checkbox, including Hacker News
+  itself, so a reader who wants only one gets only one. A fresh install opens on
+  the picker; an existing install keeps Hacker News on and sees no change.
+- **Reddit is marked BETA**, the way annotations are. It works, and there is more
+  of it to come — no front page, no writing, and long threads fill in on request
+  rather than arriving whole.
+- **Reddit is read-only and off by default.** Enabling it sends the pages you
+  visit to reddit.com, and if you are signed in to Reddit those requests arrive
+  as your account — Reddit sets a second session cookie, `reddit_session`, which
+  unlike `token_v2` is `SameSite=None` and travels cross-site. Signed out they
+  carry a long-lived device identifier instead. That is a real trade, and it is
+  stated where the checkbox is rather than in a document nobody opens. Nothing is ever posted to Reddit on your behalf.
+  When reddit.com declines the request the sidebar falls back to a cookie-free
+  archive mirror, so the comments still arrive.
+- **The floating button's label is yours.** It read `HN` when Hacker News was the
+  only source and `BC` after the rename, and neither is right for everyone. The
+  preview in the settings panel is now the field: click it and type one or two
+  characters. It is the preview precisely so the mark is edited on the thing it
+  applies to, at the size and colour it will actually be.
+- **The accent colour is yours.** The measure under the button in Settings used
+  to caption the button's width, which the stepper beside it already states.
+  It carries the accent's hex instead, and you can type over it: leaving the
+  field applies it, Enter commits, Escape abandons, and emptying it goes back to
+  the built-in colour.
+
+  The panel keeps its accent as a pair — one value for a light background and a
+  lifted one for a dark background, where the light value reads muddy — so a
+  colour you type has to become a pair too. Each half is walked until it clears
+  4.5:1 against the panel it sits on, which is what body text is asked for. How
+  far it has to move depends entirely on what you type: the built-in green needs
+  a sixteen-point lift to be legible on the dark panel, a pale green needs none,
+  and yellow has to come down to be legible on the light one. The header behind
+  it goes the other way and is held to the same bar behind white.
+
+  The mark on the button follows too, black or white depending on what it is
+  sitting on. That was worth fixing regardless: the dark theme's accent is
+  lifted, which makes it a light colour, and white on it was 2.9:1 — a mark you
+  had to look for.
+
+- **A single blended thread.** Top-level comments from every discussion are
+  interleaved by where each one ranks within its own discussion, so a big thread
+  contributes proportionally more without an upvote ever being compared to a
+  point — Hacker News publishes no comment scores, so that comparison was never
+  available. Reply trees stay intact beneath their own root, and the source sits
+  in the byline at the weight of the timestamp: available, not announced.
+
+### Fixed
+
+- **Long Reddit threads are no longer truncated in silence.** Reddit returns a
+  large thread in pieces and marks the gaps; those gaps now say how many replies
+  are behind them and fill in when asked. A gap that cannot be filled — the rate
+  budget runs out on a very long thread — says so and stays, rather than
+  disappearing as though there had been nothing there.
+- **Indent guides line up with the comment they belong to.** They sat eight
+  pixels past the parent's first letter, which read as a slight stagger down a
+  long thread.
+- **Reply, flag and favourite no longer appear on comments that cannot take
+  them.** They are offered where the source supports them and nowhere else; on
+  Reddit they would have acted on an item id Hacker News never issued.
+- **A switched-off source stays off, whichever way the panel is opened.** The URL
+  lookup consulted your sources; arriving from Hacker News, opening something
+  from the queue and reopening a thread after commenting did not, so a source you
+  had turned off could still fill the sidebar. Every path goes through one check
+  now.
+- **The front page is only offered when Hacker News is on.** It is Hacker News'
+  own page, so with that source off the tab goes — and with an empty queue there
+  is nothing behind the wordmark at all, so the wordmark goes too rather than
+  opening onto an empty list.
+- **A single discussion gets a single heading.** The page header, a source pill
+  and the submission's own line were three headings saying one thing. With one
+  discussion the page header steps aside entirely and the submission reads the
+  way a Hacker News story does: the arrow, the title and the subline as one
+  unit, count and all.
+- **A failed lookup is no longer cached as "no discussion".** `request()`
+  resolves null on an error, a timeout or a bad response, so a moment offline
+  stored an empty result for the full hour and left a page showing a grey button
+  long after the connection came back.
+- **Reddit no longer offers a comment box.** Every Reddit submission carried
+  *Add a comment…* and a button to send it, on a source that ships read-only. A
+  box that cannot send is worse than no box: it invites you to write something
+  and then has nowhere to put it. The composer now follows the source's reply
+  capability, and the reply box under each comment goes the same way — its link
+  was already hidden, so the box could never be opened anyway.
+- **A resubmitted link leads with the discussion happening now.** Instances of a
+  story were ordered by how many comments each had, so an article posted again
+  this morning opened on a thread from December 2024 — that one had 49 comments
+  against today's 11 — and the conversation you could still join sat behind it.
+  They are ordered by when they were posted now, and size only settles a tie.
+  Nothing is hidden either way, so the older thread is one pill away whatever
+  its size.
+- **Repeated submissions are told apart by date.** A link posted to the same
+  site twice gave two pills both reading "HN", which named neither of them.
+  They carry the month they were posted where they would otherwise read the
+  same — `HN · Aug 2026`, `HN · Dec 2024`, `HN · Nov 2024`. A lone discussion
+  keeps its bare label, and subreddits already differ so they are left alone
+  unless one carries two posts.
+- **The pills count comments, not the roots they had loaded.** They disagreed
+  with everything around them — the header totalled 325 while the pills summed
+  to 100, and filtering to a pill marked 26 opened a submission line reading
+  "96 comments".
+- **The filter controls agree with the filter.** The source strip was updated by
+  its own press and nothing else, so filtering to a discussion, focusing a
+  comment inside it and then pressing *show all comments* cleared the filter
+  while leaving the pill lit for one that was no longer on.
+- **The upvote arrow sits beside the line it belongs to.** Where a submission's
+  title repeats the page header it is dropped, and the arrow was left in a row
+  of its own pointing at an empty cell. It moves down to the byline, which is
+  then the first line the submission has.
+
+### Changed
+
+- **The accent is green.** `#237140`, in place of the indigo the rename first
+  landed on. The indigo said nothing about conversation.
+- **The front page tab says whose front page it is.** It read *front page*,
+  which was unambiguous while Hacker News was the only source. The queue beside
+  it stays unqualified, because it is not any source's.
+- **The discussion count is gone from under the wordmark.** It counted
+  submissions when the panel had no other way to say there were several. The
+  source strip names every one and carries its own count, so "7 discussions"
+  above it was a worse version of the row beneath.
+- **Filtering to a source no longer explains itself twice.** Pressing a pill lit
+  that pill and then said *Showing r/programming* underneath it with its own
+  *show all comments* — the same state and the same control, one line apart. The
+  banner stays for a quoted passage and a focused comment, which have no marker
+  of their own. The hatched divider that marks a change of subject appears above
+  the revealed submission instead, and the source label beside each comment goes
+  while the filter is on, since every comment on screen is from it.
+- **The Reddit note in Settings is shorter.** It said the source was read-only,
+  which the table directly beneath it shows in three columns, and that Reddit
+  can tie your browsing to your account, which restated the sentence before it.
+
+- **One sidebar, whatever the page turns up.** A single discussion used to get a
+  submission header and several got a page header, so the panel looked like a
+  different product depending on how many places a link happened to reach. The
+  page is the header now; each submission's own score, author and actions sit
+  beneath it, and the source strip is how you get to one of them.
+- The quoted-passage tooltip picks the earliest comment by time rather than the
+  first in thread order, which stopped meaning anything once a passage could be
+  quoted from more than one discussion.
+- Checking a page no longer fetches every submission's full item up front. The
+  search result already carries the title, score, comment count and author, and
+  only the comment list needs more — so a page check costs the two requests it
+  always did, rather than two plus one per submission found.
 
 ## [1.5.8] — 2026-08-02
 
