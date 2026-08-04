@@ -6602,7 +6602,7 @@ header button svg {
 
 .page-header-title {
 	font-size:13px;
-	font-weight:600;
+	font-weight:500;
 	line-height:1.35;
 }
 
