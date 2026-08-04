@@ -2526,8 +2526,16 @@ ${
 		}
 
 		return dark
-			? { accent: ACCENT_DARK, accentRgb: ACCENT_DARK_RGB }
-			: { accent: ACCENT, accentRgb: ACCENT_RGB };
+			? {
+					accent: ACCENT_DARK,
+					accentRgb: ACCENT_DARK_RGB,
+					ink: readableInk(parseHexColor(ACCENT_DARK)),
+				}
+			: {
+					accent: ACCENT,
+					accentRgb: ACCENT_RGB,
+					ink: readableInk(parseHexColor(ACCENT)),
+				};
 	}
 	// #endregion hnewhere-test-export
 
@@ -2556,6 +2564,7 @@ ${
 		const properties = {
 			"--accent": null,
 			"--accent-rgb": null,
+			"--accent-ink": null,
 			"--header-bg": null,
 			"--subtitle-stage": null,
 		};
@@ -2567,6 +2576,7 @@ ${
 
 			properties["--accent"] = half.accent;
 			properties["--accent-rgb"] = half.accentRgb;
+			properties["--accent-ink"] = half.ink;
 			properties["--subtitle-stage"] = half.subtitleStage;
 			// Light follows the accent through var(--header-bg:var(--accent)); dark
 			// is a literal in the stylesheet and has to be replaced outright.
@@ -2786,6 +2796,17 @@ ${
 		return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 	}
 
+	// Whichever of black or white the colour underneath can actually carry. The
+	// accent is the reader's to set now, and the mark sits directly on it -- a pale
+	// accent with white on it is a button with no legible mark at all. True of the
+	// built-in pair too: the dark green carries black at 7.1:1 and white at 2.9.
+	function readableInk(rgb) {
+		return contrastRatio(rgb, { r: 255, g: 255, b: 255 }) >=
+			contrastRatio(rgb, { r: 0, g: 0, b: 0 })
+			? "#ffffff"
+			: "#000000";
+	}
+
 	function contrastRatio(a, b) {
 		const first = relativeLuminance(a);
 		const second = relativeLuminance(b);
@@ -2857,11 +2878,13 @@ ${
 			light: {
 				accent: rgbToHex(hslToRgb(light)),
 				accentRgb: Object.values(hslToRgb(light)).join(","),
+				ink: readableInk(hslToRgb(light)),
 				subtitleStage: tint(hsl, 0.82, 0.45),
 			},
 			dark: {
 				accent: rgbToHex(hslToRgb(dark)),
 				accentRgb: Object.values(hslToRgb(dark)).join(","),
+				ink: readableInk(hslToRgb(dark)),
 				headerBg: rgbToHex(hslToRgb(headerDark)),
 				subtitleStage: tint(hsl, 0.65, 0.35),
 			},
@@ -3045,14 +3068,20 @@ ${
 		// variant carries the accent -- the greys mean "nothing found here" and are
 		// not the reader's colour to set.
 		const dark = detectDarkMode();
-
-		button.dataset.hnewhereVariant = variant;
-		button.style.background =
+		const background =
 			variant === "active"
 				? activeAccent(dark).accent
 				: dark
 					? style.darkBackground
 					: style.background;
+
+		button.dataset.hnewhereVariant = variant;
+		button.style.background = background;
+		// The mark sits on that background, so its colour is decided by it rather
+		// than fixed at white. The greys go through the same test as the accent --
+		// #b8b8b8 carries black, #4a4a4a carries white -- so one rule covers every
+		// variant instead of the accent being a special case.
+		button.style.color = readableInk(parseHexColor(background));
 		button.style.boxShadow = style.boxShadow;
 		button.title = style.title;
 	}
@@ -6021,6 +6050,9 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 		one of their colours. One token, so changing the brand is one line. */
 	--accent:#237140;
 	--accent-rgb:35,113,64;
+	/* What reads on the accent, for the mark that sits directly on it. White here
+		because #237140 carries white at 6:1 and black at 3.5. */
+	--accent-ink:#ffffff;
 	--surface:#fff;
 	--surface-text:#222;
 	--surface-border:#d6d6d6;
@@ -6080,6 +6112,10 @@ Leave url blank to submit a question for discussion. If there is no url, text wi
 		against #1e1e1e is 2.8:1 and unreadable. This clears 5.6:1. */
 	--accent:#3fa96a;
 	--accent-rgb:63,169,106;
+	/* Black, not white. The lifted accent is a light colour by construction -- it
+		has to be, to read on #1e1e1e -- and it carries black at 7.1:1 against
+		white's 2.9. */
+	--accent-ink:#000000;
 	--surface:#2a2a2a;
 	--surface-text:#dcdcdc;
 	--surface-border:#454545;
@@ -7525,11 +7561,13 @@ header button svg {
 	   focus -- an editable thing that looks exactly like an unedittable one is
 	   only discoverable by accident. */
 	cursor:text;
-	caret-color:#fff;
+	/* Both follow the accent rather than assuming white, the same way the real
+		button's mark does -- the preview is meant to be what it will look like. */
+	caret-color:var(--accent-ink);
 	outline-offset:2px;
 	background:var(--accent);
 	box-shadow:0 1px 4px rgba(0,0,0,.25);
-	color:#fff;
+	color:var(--accent-ink);
 	font-family:Verdana,sans-serif;
 	font-weight:bold;
 	transition:width .16s ease, height .16s ease, border-radius .16s ease, font-size .16s ease;
