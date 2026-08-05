@@ -1905,6 +1905,18 @@
 
 		return story?.source ? null : commentURL(story?.id);
 	}
+
+	// What a story's own row should be titled. `story.title` is what one person
+	// typed into a submit box, so it earns the slot only when it is doing a job
+	// the content's own title cannot: telling two discussions of one page apart.
+	//
+	// With a single discussion there is nothing to tell apart. With a source that
+	// assembles several people's posts there is no submitted title at all, which
+	// is why the fallback is the page rather than the empty string the collective
+	// honestly carries.
+	function storyTitle(story, page, disambiguating) {
+		return (disambiguating && story?.title) || page;
+	}
 	// #endregion hnewhere-test-export
 
 	// Where a name links to, decided by the source the name came from. It used to
@@ -3719,14 +3731,24 @@ ${
 	// Submission helpers
 	// -------------------------
 
-	// og:title first because it is what the author wrote for sharing, whereas
-	// document.title routinely carries a " | Site Name" tail that only wastes
-	// characters against HN's limit.
-	function suggestedSubmissionTitle() {
+	// #region hnewhere-test-export
+	// The content's own name, which is what the panel shows once it reads more
+	// than one source. og:title first because it is what the author wrote for
+	// sharing, whereas document.title routinely carries a " | Site Name" tail.
+	//
+	// The hostname floor is load-bearing. It is what makes an empty header
+	// unreachable rather than merely unlikely -- and unlikely was not enough: a
+	// Bluesky collective is honestly titled "" because nobody titled it, the sort
+	// is time-descending, and the header used to read whichever submission landed
+	// first.
+	//
+	// `doc` is a parameter for the same reason parseFrontPage takes one: it makes
+	// the precedence testable without a live page.
+	function pageTitle(doc = document) {
 		const candidates = [
-			document.querySelector('meta[property="og:title"]')?.content,
-			document.querySelector('meta[name="twitter:title"]')?.content,
-			document.title,
+			doc.querySelector('meta[property="og:title"]')?.content,
+			doc.querySelector('meta[name="twitter:title"]')?.content,
+			doc.title,
 			location.hostname,
 		];
 
@@ -3734,11 +3756,19 @@ ${
 			const trimmed = (candidate || "").trim().replace(/\s+/g, " ");
 
 			if (trimmed) {
-				return trimmed.slice(0, HN_TITLE_LIMIT);
+				return trimmed;
 			}
 		}
 
 		return "";
+	}
+	// #endregion hnewhere-test-export
+
+	// The cap lives here rather than in pageTitle: 80 characters is HN's submit
+	// box, not a property of what the page is called, and the panel's header has
+	// no such limit.
+	function suggestedSubmissionTitle() {
+		return pageTitle().slice(0, HN_TITLE_LIMIT);
 	}
 
 	// Fills the circle bottom-to-top, then leaves a plain orange button behind. Uses
@@ -10449,6 +10479,11 @@ ${settingsPanelHTML()}
 		// URL: they arrive as parsed HN markup rather than through an adapter,
 		// and carry no `source` to say otherwise.
 		const hnURL = discussionURL(story);
+		// Supplied by the caller, because only it knows whether this story is being
+		// shown to tell two discussions apart -- which is the one job a submitted
+		// title does that the content's own title cannot. Falls back to the story's
+		// own title so renderStory stays usable without the option.
+		const title = options.title ?? story.title;
 
 		// Read through the normalized names first, falling back to the raw Firebase
 		// ones. renderStory has two callers with different shapes: a discussion from
@@ -10497,9 +10532,9 @@ ${settingsPanelHTML()}
 			? `<a target="_blank" rel="noopener noreferrer"
 	href="${escapeHTML(hnURL)}"
 	title="Open this discussion where it lives">
-	${escapeHTML(story.title)}
+	${escapeHTML(title)}
 	</a>`
-			: escapeHTML(story.title)
+			: escapeHTML(title)
 	}
 	</div>
 	</td>
@@ -11756,11 +11791,22 @@ ${settingsPanelHTML()}
 		details.className = "submission-details";
 		ui.body.appendChild(details);
 
-		const pageTitle = stories[0]?.title || "";
+		// The content's own name, not whichever submission sorted first. That used
+		// to read stories[0].title, which put one submitter's framing where the
+		// page's name belongs -- and rendered nothing at all once a Bluesky
+		// collective, honestly titled "" because nobody titled it, could sort to
+		// the front of a time-descending list.
+		const page = pageTitle();
+		// A submitted title is an identifier only when there is another discussion
+		// to tell it apart from. syncSubmissionDetails shows a lone block
+		// unconditionally and hides all but the filtered one when there are
+		// several, so this is exactly when the slot does that job.
+		const disambiguating = stories.length > 1;
 
 		for (const story of stories) {
 			const canVote = Boolean(getSource(story.source)?.capabilities.vote);
 			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
+			const resolved = storyTitle(story, page, disambiguating);
 			// Shown only where it says something the page header does not. Two
 			// submitters can title the same link differently, and that is worth
 			// seeing; the usual case, where they match, was two identical headings
@@ -11768,11 +11814,12 @@ ${settingsPanelHTML()}
 			const block = renderStory(story, details, {
 				actions: canVote,
 				compose: canReply,
+				title: resolved,
 				// Always with one discussion: the page header has stood down, so this
 				// title is the only one, and it belongs beside the arrow the way HN
-				// sets it. With several the header names the page, so a submission
+				// sets it. With several the header names the content, so a submission
 				// only repeats itself when its own title differs.
-				showTitle: stories.length < 2 || story.title !== pageTitle,
+				showTitle: !disambiguating || resolved !== page,
 			});
 
 			if (block) {
@@ -11894,7 +11941,7 @@ ${settingsPanelHTML()}
 
 		wrapper.className = single ? "page-header page-header-quiet" : "page-header";
 		wrapper.innerHTML = `
-<div class="page-header-title">${single ? "" : escapeHTML(stories[0]?.title || "")}</div>
+<div class="page-header-title">${single ? "" : escapeHTML(pageTitle())}</div>
 <div class="page-header-meta">${
 	// With one discussion there is nothing to break down and nothing to switch
 	// between, so the header is the title and nothing else: the submission's own

@@ -27,6 +27,14 @@ use to detect updates, so every release bumps it.
 
 ### Changed
 
+- **The header names the page, not one person's submission.** It used to show
+  whichever submission happened to sort first, so visiting a page could hand you
+  an unrelated stranger's framing as the page's own name — on `example.com`, an
+  r/WindowsHelp thread title. Once the panel reads several sources it
+  generalizes, and the generalization of a title is the title of the content.
+  The title someone submitted under still appears where it is doing a job the
+  page's title cannot: identifying which discussion you have filtered down to.
+
 - **Links point at the repository's real name.** The install and update URLs
   named `HNewhere`, and worked only because GitHub redirects the old name — a
   redirect that ends the moment anything is created there, which would strand
