@@ -2372,15 +2372,11 @@ ${
 		// third party that is not Bluesky. Bluesky itself is only ever asked about
 		// the posts Constellation names.
 		//
-		// Every clause here was measured, not assumed -- the spike's §8 has the
-		// numbers. The last sentence is the one Reddit's caveat could not make and
-		// it was the blocking question: signed in to bsky.app in Safari, the cookie
-		// jar for that origin is empty, so there is no credential for a cross-site
-		// request to carry. public.api.bsky.app returns byte-identical responses to
-		// a Cookie header, an Authorization header and neither, and answers 501 to
-		// the only auth-gated method -- it has no authenticated mode to leak into.
+		// Measured, not assumed. Signed in to bsky.app the cookie jar is empty, and
+		// public.api.bsky.app answers identically to a cookie, a bearer token and
+		// neither. Numbers in the spike's §8.
 		caveat:
-			"Sends each page you visit to Constellation, an independent index of Bluesky links, rather than to Bluesky itself — with no identifier attached. Bluesky's own API is then asked only for the posts Constellation names, never for the page you are on. Signed in or not, these requests carry no account: Bluesky sets no cookies at all.",
+			"Sends each page you visit to Constellation, an independent index of Bluesky links, not to Bluesky. Bluesky is asked only about the posts Constellation names. Signed in or out, these requests carry no account.",
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => "https://bsky.app/profile/" + encodeURIComponent(handle),
