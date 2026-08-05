@@ -1917,6 +1917,19 @@
 	function storyTitle(story, page, disambiguating) {
 		return (disambiguating && story?.title) || page;
 	}
+
+	// Closing the strip means "show me everything again". The strip is the only
+	// control that undoes a discussion filter, so collapsing it while one is
+	// active left the reader in a filtered thread with nothing on screen saying
+	// so and nothing to press to undo it -- the same hazard the strip's own click
+	// handler avoids by refusing to auto-collapse after a press.
+	//
+	// Only a discussion filter is cleared. A quote filter came from the article
+	// and a comment filter from the banner; the strip closing says nothing about
+	// either, and clearing them would undo something the reader did elsewhere.
+	function stripCloseClearsFilter(opening, filter) {
+		return !opening && filter?.type === "discussion";
+	}
 	// #endregion hnewhere-test-export
 
 	// Where a name links to, decided by the source the name came from. It used to
@@ -12001,8 +12014,18 @@ title="Show only this discussion">
 
 		setStripOpen(false);
 
-		disclosure.onclick = () =>
-			setStripOpen(!strip.classList.contains("is-open"));
+		disclosure.onclick = () => {
+			const opening = !strip.classList.contains("is-open");
+
+			// Put the whole blend back before the strip goes, so the reader is never
+			// left filtered with the only control that undoes it off screen.
+			if (stripCloseClearsFilter(opening, activeCommentFilter)) {
+				clearCommentFilter({ restore: true });
+				syncFilterAffordances();
+			}
+
+			setStripOpen(opening);
+		};
 
 		// Filtering, not navigating. A pill that opened the thread on Reddit would
 		// be answering "show me this part of the conversation" by sending the reader
