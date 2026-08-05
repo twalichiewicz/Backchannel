@@ -9556,12 +9556,29 @@ ${CHROME_CSS}
 	padding-left:6px;
 }
 
-/* 2px border + 5px padding lines this up with the 1px + 6px of an ordinary
-   child, so gaining or losing the "new" accent never shifts the text. */
+/* The accent is a colour, never a width. Widening the border to 2px and shrinking
+   the padding to 5px held a child's text still, because 2+5 is 1+6 -- but a
+   top-level comment has neither a border nor a padding to trade against, so it
+   moved 7px right the moment it counted as new. And only the colour was ever
+   reverted when the accent cleared, so every comment the reader had already read
+   kept a doubled guide for good. That is what "the indent guides look too thick"
+   was: not a wrong declaration, an un-reverted one. */
 .comment.new-comment {
-			border-left:2px solid rgba(var(--accent-rgb),.95);
-			padding-left:5px;
-			transition:border-left-color .9s ease;
+	border-left-color:rgba(var(--accent-rgb),.95);
+	transition:border-left-color .9s ease;
+}
+
+/* Top level has no guide to recolour, so the accent is painted outside the border
+   box, where it takes no layout space at all. It lands inside the 12px #comments
+   already insets its contents by, rather than over anything.
+
+   1px, matching a child's guide exactly. Every rule down the left edge of this
+   panel is one hairline whatever it is saying -- grey for nesting, accent for
+   unread -- so the accent reads as a change of colour and never as a change of
+   weight. */
+.top-level-comments > .comment.new-comment {
+	box-shadow:-1px 0 0 rgba(var(--accent-rgb),.95);
+	transition:box-shadow .9s ease;
 }
 
 /* A top-level comment has no divider under the accent, so it does fade to nothing. */
@@ -9569,8 +9586,13 @@ ${CHROME_CSS}
 	border-left-color:transparent;
 }
 
+.top-level-comments > .comment.new-comment.comment-new-seen {
+	box-shadow:-1px 0 0 transparent;
+}
+
 /* A child does have one. Fading the accent all the way out erased the nesting line
-   with it, so it settles on the divider colour instead of disappearing. */
+   with it, so it settles on the divider colour instead of disappearing. Last of
+   the three, so it outranks the transparent rule at equal specificity. */
 .children > .comment.new-comment.comment-new-seen {
 	border-left-color:var(--border-soft);
 }
