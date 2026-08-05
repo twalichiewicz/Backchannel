@@ -472,6 +472,7 @@
 	// Long enough to survive a slow HN, short enough that an abandoned popup's
 	// payload does not sit in storage indefinitely.
 	const BRIDGE_PAYLOAD_TTL = 10 * 60 * 1000;
+	// #region hnewhere-test-export
 	const TRACKING_PARAMS = new Set([
 		"utm_source",
 		"utm_medium",
@@ -481,6 +482,7 @@
 		"fbclid",
 		"gclid",
 	]);
+	// #endregion hnewhere-test-export
 
 	let sidebar = null;
 	let sidebarUI = null;
@@ -1646,6 +1648,138 @@
 		return current === "loid" ? "archive" : "off";
 	}
 
+	// Bluesky is read through a backlink index rather than through Bluesky,
+	// because app.bsky.feed.searchPosts answers 403 without credentials and does
+	// not move for any header. Constellation walks the AT Protocol firehose and
+	// records every link it sees by target, collection and JSON path.
+
+	// The exact string to ask Constellation about -- deliberately not
+	// normalizeURL's output, which strips the trailing slash.
+	//
+	// Constellation folds nothing: measured on one article, the URL as-is found
+	// 29 posters, without the slash 1, without `www.` 0. And across 22 front-page
+	// URLs tested against all eight scheme x www x slash variants, the page's own
+	// URL found the maximum 22 times out of 22 -- because whoever posted the link
+	// copied the same address bar the reader is looking at, and Bluesky does not
+	// rewrite it.
+	//
+	// Tracking parameters are the one thing worth removing: the reader's copy may
+	// carry a campaign tag the poster's did not. The fragment goes for the same
+	// reason and is never part of what was shared.
+	function bskyTarget(url) {
+		try {
+			const parsed = new URL(url);
+
+			for (const key of [...parsed.searchParams.keys()]) {
+				if (TRACKING_PARAMS.has(key.toLowerCase())) {
+					parsed.searchParams.delete(key);
+				}
+			}
+
+			parsed.hash = "";
+
+			return parsed.href;
+		} catch {
+			return "";
+		}
+	}
+
+	// did and rkey together, because neither identifies a post alone. parseSourceKey
+	// splits on the first colon and a did is full of them, which is exactly the
+	// case its round-trip test was written for.
+	function bskyKeyFromRecord(record) {
+		return sourceKey("bsky", `${record?.did || ""}/${record?.rkey || ""}`);
+	}
+
+	// at://did/app.bsky.feed.post/rkey -> the key form. The inverse of
+	// bskyURIFromKey, for the path where a post arrives already hydrated.
+	function bskyKeyFromURI(uri) {
+		const match = /^at:\/\/([^/]+)\/[^/]+\/(.+)$/.exec(String(uri || ""));
+
+		return match ? sourceKey("bsky", `${match[1]}/${match[2]}`) : sourceKey("bsky", "");
+	}
+
+	function bskyURIFromKey(key) {
+		const parsed = parseSourceKey(key);
+
+		if (parsed?.source !== "bsky") {
+			return null;
+		}
+
+		const cut = parsed.id.lastIndexOf("/");
+
+		if (cut < 1 || cut === parsed.id.length - 1) {
+			return null;
+		}
+
+		return `at://${parsed.id.slice(0, cut)}/app.bsky.feed.post/${parsed.id.slice(cut + 1)}`;
+	}
+
+	// The same floor redditHitPasses applies, for the same reason. 79% of the
+	// posts linking a page have no reply at all -- they are bots dropping a link,
+	// and admitting one lights the button and delivers nothing.
+	function bskyPostPasses(post) {
+		return (post?.replyCount ?? 0) > 0;
+	}
+
+	// Seconds, matching every other createdAt in the shape. Bluesky publishes an
+	// ISO string; HN and Reddit publish unix seconds, and the renderer does the
+	// arithmetic in seconds.
+	function bskyTime(post) {
+		const parsed = Date.parse(post?.record?.createdAt || "");
+
+		return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : 0;
+	}
+
+	// One discussion per URL, not one per post. Bluesky has no thread for a link:
+	// 29 people posted one measured article as 29 unrelated posts, most with no
+	// replies. Rendering those as 29 discussions would put 29 entries in the
+	// source strip and, because blendPosition scores a one-comment discussion at
+	// exactly 0.5, clump every one of them at the same point in the merged list.
+	//
+	// As one discussion with N roots they spread across it properly, which is
+	// what blendPosition was written to do.
+	//
+	// Returns null rather than an empty discussion when nothing was admitted, so
+	// discover can return [] and the panel never learns Bluesky was asked.
+	function bskyCollective(url, posts) {
+		const admitted = (posts || []).filter(bskyPostPasses);
+
+		if (!admitted.length) {
+			return null;
+		}
+
+		const replies = admitted.reduce((total, post) => total + (post.replyCount ?? 0), 0);
+
+		return {
+			source: "bsky",
+			// normalizeURL here, where bskyTarget is used for the query: this is
+			// identity, and the trailing slash must not split one page in two. It
+			// folds no generic `www.` -- HOST_ALIASES lists only x.com and
+			// twitter.com -- which costs nothing, because discover is called with
+			// the one URL the reader is on and the key never leaves the panel.
+			key: sourceKey("bsky", normalizeURL(url)),
+			id: normalizeURL(url),
+			title: "",
+			// Nobody authored a collective. NON_AUTHORS already contains "", so
+			// nothing tries to link it to a profile.
+			author: "",
+			// null, not a sum. Likes across unrelated posts are not one score, and
+			// a number here would be sorted and displayed as though they were --
+			// the argument hnComment already makes about HN's absent comment score.
+			score: null,
+			commentCount: admitted.length + replies,
+			createdAt: Math.min(...admitted.map((post) => bskyTime(post))),
+			// Bluesky has no page showing everything that linked a URL. Rather than
+			// invent one, this says so and renderStory prints an unlinked title.
+			permalink: null,
+			articleURL: url,
+			label: "Bluesky",
+			bodyHTML: "",
+			rootKeys: admitted.map((post) => bskyKeyFromURI(post.uri)),
+		};
+	}
+
 	// A registry rather than a pair of branches. HN is an entry, not a base case:
 	// the moment a source is special-cased the renderer starts learning what a
 	// source is, which is the thing this whole seam exists to prevent.
@@ -2184,6 +2318,10 @@ ${
 	// Folded onto one name rather than searched for twice, and because normalizeURL
 	// is applied to both sides -- the address in hand and every hit it is measured
 	// against -- it does not matter which way round the two arrive.
+	// #region hnewhere-test-export
+	// Wrapped with normalizeURL below rather than separately: normalizeURL reads
+	// this map, so exporting the function without it is a ReferenceError the
+	// moment a test calls it.
 	const HOST_ALIASES = new Map([
 		["x.com", "twitter.com"],
 		["www.x.com", "twitter.com"],
@@ -2218,6 +2356,7 @@ ${
 			return "";
 		}
 	}
+	// #endregion hnewhere-test-export
 
 	// -------------------------
 	// Site suppression
