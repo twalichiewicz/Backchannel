@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.0
+// @version      1.6.1
 // @license      MIT
-// @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
-// @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
-// @homepageURL  https://github.com/twalichiewicz/HNewhere
-// @supportURL   https://github.com/twalichiewicz/HNewhere/issues
+// @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
+// @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
+// @homepageURL  https://github.com/twalichiewicz/Backchannel
+// @supportURL   https://github.com/twalichiewicz/Backchannel/issues
 // @description  See what everyone's talking about.
 // @include      http://*
 // @include      https://*
@@ -430,7 +430,7 @@
 	const HN_ORIGIN = "https://news.ycombinator.com";
 	// #endregion hnewhere-test-export
 
-	const REPO_URL = "https://github.com/twalichiewicz/HNewhere";
+	const REPO_URL = "https://github.com/twalichiewicz/Backchannel";
 
 	// Read back from the manager rather than written out a second time, so the
 	// version in settings cannot drift from the @version header. Wrapped because

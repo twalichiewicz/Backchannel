@@ -8,8 +8,8 @@ fix ships as a new version that existing installs pick up automatically.
 
 | Version | Supported |
 | ------- | --------- |
-| 1.6.0   | Yes       |
-| < 1.6.0 | No        |
+| 1.6.1   | Yes       |
+| < 1.6.1 | No        |
 
 Your installed version is shown at the bottom of the settings panel.
 

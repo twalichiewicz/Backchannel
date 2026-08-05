@@ -8,9 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
-## [Unreleased] — 1.6.1
+## [1.6.1] — 2026-08-05
 
 ### Changed
+
+- **Links point at the repository's real name.** The install and update URLs
+  named `HNewhere`, and worked only because GitHub redirects the old name — a
+  redirect that ends the moment anything is created there, which would strand
+  every installed copy's auto-update. Nothing about your install changes; it
+  updates itself as usual.
 
 - **The excluded-domain list says what it means.** Six Google patterns collapse
   into one, and the loopback exclusion covers the whole `127.*` range rather
@@ -564,7 +570,7 @@ use to detect updates, so every release bumps it.
 - Scrolling that the panel does on your behalf now stops when you have asked for
   reduced motion. Jumping to a quoted passage, to the focus banner, and back again
   were all animated regardless.
-- **[#39](https://github.com/twalichiewicz/HNewhere/issues/39)** — comments sat at
+- **[#39](https://github.com/twalichiewicz/Backchannel/issues/39)** — comments sat at
   different distances from one another depending on what each one happened to end
   with: 12px after a single paragraph, 18px after a quote, 20px after a
   multi-paragraph comment. The same thing set the gap under a comment's byline,
@@ -609,7 +615,7 @@ use to detect updates, so every release bumps it.
 
 ### Fixed
 
-- **[#35](https://github.com/twalichiewicz/HNewhere/issues/35)** — the discussion
+- **[#35](https://github.com/twalichiewicz/Backchannel/issues/35)** — the discussion
   lookup ran once, when the script loaded. On a site that navigates without
   reloading — GitHub, and anything else built on Turbo or a client-side router —
   whichever answer it computed first was the one it kept. Landing on a subpage
@@ -624,7 +630,7 @@ use to detect updates, so every release bumps it.
   always arrives but only covers back and forward; a poll catches the rest. A
   fragment, an added tracking parameter, and a burst of pushes that ends where it
   started are all still the same page, and leave the sidebar alone.
-- **[#37](https://github.com/twalichiewicz/HNewhere/issues/37)** — a comment's
+- **[#37](https://github.com/twalichiewicz/Backchannel/issues/37)** — a comment's
   text had no line length of its own, and ran to whatever width the panel had
   been dragged to. It now takes a 1215px measure. The composer keeps the narrower
   720px it already had, which is sized to an input rather than to reading.
@@ -753,7 +759,7 @@ use to detect updates, so every release bumps it.
 
 ### Fixed
 
-- **[#32](https://github.com/twalichiewicz/HNewhere/issues/32)** — host pages
+- **[#32](https://github.com/twalichiewicz/Backchannel/issues/32)** — host pages
   with single-key shortcuts (GitHub's `s` for search, for instance) stole focus
   while typing in HNewhere's fields. Events leaving a shadow root are retargeted,
   so those pages saw HNewhere's container rather than a text field and their
@@ -790,17 +796,20 @@ Numerous small improvements.
 ---
 
 Releases before 1.4.7 are recorded in the
-[GitHub releases](https://github.com/twalichiewicz/HNewhere/releases) and the
+[GitHub releases](https://github.com/twalichiewicz/Backchannel/releases) and the
 commit history. Entries for 1.4.7 through 1.5.3 are summarized from their release
 commits rather than written at the time.
 
-[1.5.7]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.6...v1.5.7
-[1.5.6]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.5...v1.5.6
-[1.5.5]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.4...v1.5.5
-[1.5.4]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.3...v1.5.4
-[1.5.3]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.2...v1.5.3
-[1.5.2]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.1...v1.5.2
-[1.5.1]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.0...v1.5.1
-[1.5.0]: https://github.com/twalichiewicz/HNewhere/compare/v1.4.8...v1.5.0
-[1.4.8]: https://github.com/twalichiewicz/HNewhere/compare/v1.4.7...v1.4.8
-[1.4.7]: https://github.com/twalichiewicz/HNewhere/compare/v1.4.6...v1.4.7
+[1.6.1]: https://github.com/twalichiewicz/Backchannel/compare/v1.6.0...v1.6.1
+[1.6.0]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.8...v1.6.0
+[1.5.8]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.7...v1.5.8
+[1.5.7]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.6...v1.5.7
+[1.5.6]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.5...v1.5.6
+[1.5.5]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.4...v1.5.5
+[1.5.4]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.3...v1.5.4
+[1.5.3]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.2...v1.5.3
+[1.5.2]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/twalichiewicz/Backchannel/compare/v1.4.8...v1.5.0
+[1.4.8]: https://github.com/twalichiewicz/Backchannel/compare/v1.4.7...v1.4.8
+[1.4.7]: https://github.com/twalichiewicz/Backchannel/compare/v1.4.6...v1.4.7
