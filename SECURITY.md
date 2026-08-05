@@ -82,13 +82,15 @@ Worth stating plainly, because the permissions are broad by necessity:
   cuts both ways and is worth knowing in both directions: there is no advertising
   business behind it, and also no company behind it.
 
-  Measured 2026-08-05: none of these hosts sets a cookie, the entire path works
-  with no account, and no response carries a `viewer` object identifying a
-  caller. **Not yet measured:** whether a signed-in bsky.app session rides along
-  on a cross-site request anyway, the way Reddit's `SameSite=None` cookie turned
-  out to. Bluesky authenticates with tokens in local storage rather than cookies,
-  which a userscript request would not attach — but that is reasoning, not
-  measurement, and the Reddit case is exactly why the distinction matters.
+  Measured 2026-08-05, and the Reddit case above is exactly why it was measured
+  rather than assumed. **Signed in to Bluesky, the cookie jar for `bsky.app` is
+  empty** — it authenticates with tokens in local storage, which the browser
+  never attaches to a request. There is no credential for these requests to
+  carry, signed in or out. Separately, `public.api.bsky.app` returns
+  byte-identical responses whether handed a cookie, a bearer token or nothing at
+  all, and answers `501 Method Not Implemented` to the one auth-gated method
+  tried: it has no authenticated mode to leak into. Two independent reasons,
+  either of which would be sufficient.
 - **It stores data locally** through `GM.getValue` / `GM.setValue` — settings,
   per-site sidebar widths, collapsed threads, seen-comment timestamps, and
   remembered votes. Nothing is sent anywhere except the hosts above.

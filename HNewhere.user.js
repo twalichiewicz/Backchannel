@@ -2355,15 +2355,15 @@ ${
 		// third party that is not Bluesky. Bluesky itself is only ever asked about
 		// the posts Constellation names.
 		//
-		// Every clause here was measured on 2026-08-05 and is recorded in the
-		// spike's §8.1 -- including that the whole path works with no account and
-		// that none of the three hosts sets a cookie. What is NOT yet measured is
-		// whether a signed-in reader's GM.xmlHttpRequest carries their session
-		// anyway, the way Reddit's SameSite=None loid turned out to. If the probe
-		// in docs/spikes/bluesky-identity-probe.user.js shows that it does, this
-		// string needs the sentence Reddit's caveat has.
+		// Every clause here was measured, not assumed -- the spike's §8 has the
+		// numbers. The last sentence is the one Reddit's caveat could not make and
+		// it was the blocking question: signed in to bsky.app in Safari, the cookie
+		// jar for that origin is empty, so there is no credential for a cross-site
+		// request to carry. public.api.bsky.app returns byte-identical responses to
+		// a Cookie header, an Authorization header and neither, and answers 501 to
+		// the only auth-gated method -- it has no authenticated mode to leak into.
 		caveat:
-			"Sends each page you visit to Constellation, an independent index of Bluesky links, rather than to Bluesky itself. Bluesky's own API is then asked only for the posts Constellation names, never for the page you are on. Neither host sets a cookie, and no account is needed to read any of it.",
+			"Sends each page you visit to Constellation, an independent index of Bluesky links, rather than to Bluesky itself — with no identifier attached. Bluesky's own API is then asked only for the posts Constellation names, never for the page you are on. Signed in or not, these requests carry no account: Bluesky sets no cookies at all.",
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => "https://bsky.app/profile/" + encodeURIComponent(handle),
