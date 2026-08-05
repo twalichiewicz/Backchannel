@@ -2266,12 +2266,57 @@ ${
 	// off because a second way in existed; there is no second backlink index, so a
 	// failure here means Bluesky contributes nothing and says nothing about it.
 	// Nothing a reader could do would change the outcome.
+	//
+	// Silent to the reader, not to the console. Four different failures land here
+	// -- a host the manager has not been granted, a header it refuses to set, a
+	// service that is down, a body that is not JSON -- and they are
+	// indistinguishable from "this page has no Bluesky posts", which is the
+	// overwhelmingly common and entirely correct answer. Without these lines
+	// there is no way to tell a working source from a blocked one.
 	async function bskyJSON(url, headers) {
-		try {
-			const text = await requestText(url, headers);
+		const attempt = async (sent) => {
+			try {
+				return await requestText(url, sent);
+			} catch (error) {
+				console.warn("Backchannel bsky: request threw", url, error);
 
-			return text ? JSON.parse(text) : null;
+				return "";
+			}
+		};
+
+		let text = await attempt(headers);
+
+		// Managers disagree about custom headers, and some fail the whole request
+		// rather than dropping the one they will not set -- Safari's Userscripts
+		// was already flagged as unverified here. Constellation asks callers to
+		// identify themselves but does not require it, so one retry without the
+		// header beats contributing nothing, and the warning names the cause where
+		// a silent success would hide it.
+		if (!text && headers) {
+			text = await attempt(undefined);
+
+			if (text) {
+				console.warn(
+					"Backchannel bsky: this manager refused a custom header; retried without the User-Agent Constellation asks for",
+				);
+			}
+		}
+
+		if (!text) {
+			console.warn(
+				"Backchannel bsky: empty response from",
+				url,
+				"— the manager may not have been granted this host",
+			);
+
+			return null;
+		}
+
+		try {
+			return JSON.parse(text);
 		} catch {
+			console.warn("Backchannel bsky: response was not JSON", url, text.slice(0, 120));
+
 			return null;
 		}
 	}
