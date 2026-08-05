@@ -1780,6 +1780,72 @@
 		};
 	}
 
+	// Bluesky publishes a like count per post, so unlike HN there is a real number
+	// to report and it is not invented. A post and a reply are the same record
+	// type, which is why one mapper serves both.
+	function bskyComment(post, discussion, parentKey, rootAuthorDID) {
+		const key = bskyKeyFromURI(post?.uri);
+		const did = post?.author?.did || "";
+
+		// Judged against the root post's author, not the discussion's -- a
+		// collective has no author, and "the person who posted this link replying
+		// to you" is the signal worth marking.
+		//
+		// Omitting rootAuthorDID means this post IS the root, and a root is its own
+		// OP. That is deliberately not the same as passing null, which is a root
+		// that arrived without a did: resolving with `||` would fall back to each
+		// node's own did and mark the entire thread as OP.
+		const owner = rootAuthorDID === undefined ? did : rootAuthorDID;
+
+		return {
+			source: "bsky",
+			key,
+			id: key.slice("bsky:".length),
+			discussionKey: discussion?.key,
+			parentKey: parentKey || null,
+			author: post?.author?.handle || "",
+			// Bluesky's rich-text facets are dropped here, so a link inside a post
+			// renders as text rather than an anchor. A deliberate first cut, and the
+			// reason this escapes rather than sanitizes.
+			bodyHTML: escapeHTML(post?.record?.text || ""),
+			score: post?.likeCount ?? 0,
+			createdAt: bskyTime(post),
+			isOP: Boolean(did) && did === owner,
+			deleted: false,
+			replyKeys: [],
+		};
+	}
+
+	// Walks a getPostThread response into the flat map getComment reads. The
+	// response is a union: notFoundPost and blockedPost carry no author and no
+	// text, and rendering one would put an authorless comment in the thread.
+	function indexBskyThread(node, discussion, byKey, parentKey, rootAuthorDID) {
+		const post = node?.post;
+
+		if (!post?.uri) {
+			return;
+		}
+
+		const key = bskyKeyFromURI(post.uri);
+		// The root names the owner for everything beneath it. `undefined` means
+		// "this node is the root"; null means a root that carried no did, and marks
+		// nobody rather than everybody.
+		const ownerDID =
+			rootAuthorDID === undefined ? post?.author?.did || null : rootAuthorDID;
+		const comment = bskyComment(post, discussion, parentKey, ownerDID);
+
+		byKey.set(key, comment);
+
+		for (const reply of node.replies || []) {
+			if (!reply?.post?.uri) {
+				continue;
+			}
+
+			comment.replyKeys.push(bskyKeyFromURI(reply.post.uri));
+			indexBskyThread(reply, discussion, byKey, key, ownerDID);
+		}
+	}
+
 	// A registry rather than a pair of branches. HN is an entry, not a base case:
 	// the moment a source is special-cased the renderer starts learning what a
 	// source is, which is the thing this whole seam exists to prevent.
@@ -2556,6 +2622,7 @@ ${
 		return template.innerHTML;
 	}
 
+	// #region hnewhere-test-export
 	function escapeHTML(value) {
 		return String(value || "")
 			.replace(/&/g, "&amp;")
@@ -2564,6 +2631,7 @@ ${
 			.replace(/"/g, "&quot;")
 			.replace(/'/g, "&#039;");
 	}
+	// #endregion hnewhere-test-export
 
 	function pluralize(value, singular, plural = singular + "s") {
 		return value + " " + (value === 1 ? singular : plural);
