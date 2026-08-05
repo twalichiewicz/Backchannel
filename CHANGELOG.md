@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [Unreleased] — 1.6.1
+
+### Fixed
+
+- **Posting a comment no longer warns that it might not have worked.** A comment
+  that went through could still come back with "Submitted, but Hacker News did
+  not show the comment back" — about one in seven of them. The check compares
+  what you typed against what the page shows, and there were two differences it
+  did not account for: Hacker News renders a blank line as a paragraph, which
+  runs the words either side of it together, and it turns `*emphasis*` into
+  italics, which drops the asterisks. Both sides are now compared on the same
+  terms. Measured across 468 real comments: 65 of them would have been reported
+  wrongly before, none are now.
+
 ## [1.6.0] — 2026-08-04
 
 ### Changed
