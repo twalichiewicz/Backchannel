@@ -1635,28 +1635,186 @@
 		return (index + 1) / (total + 1);
 	}
 
+	// A discussion's standing: what it earned, discounted by how long ago it earned
+	// it -- not erased by it. The decay is a power law rather than an exponential
+	// for exactly that reason. An exponential half-life drives an old discussion
+	// geometrically toward nothing, which is the model that says old means invalid;
+	// a power law falls toward a floor instead. A thread that drew 761 comments in
+	// 2013 is still the best conversation about the page it was about. It simply
+	// should not be the only conversation at the head of the list.
+	//
+	// Votes are log-scaled because raw they are not comparable across venues.
+	// r/todayilearned is a default subreddit and answers in thousands where Hacker
+	// News answers in hundreds: 1916 against 102 is a 19x gap raw and a 1.6x one in
+	// log10, which is the honest distance between them. Bibliometrics has the
+	// identical problem -- a cell-biology paper out-cites a maths paper by
+	// construction -- and solves it by scoring against a same-field reference set.
+	// Without a per-subreddit corpus to compare against, log-scaling is the
+	// approximation available.
+	//
+	// Quality and age deliberately pull against each other. On the measured
+	// fixture the 2013 thread stands at 0.515 against the day-old HN thread's
+	// 4.807: its merit recovers most of what its age costs, which is the point. A
+	// rule where they did not fight would be "newest first" wearing a costume.
+	// Three orders, and there is deliberately no fourth called "Score". HN
+	// publishes no comment points at any endpoint, so a score sort would have to
+	// invent a number for one of the three sources. "Best" already is the
+	// score-ordered blend, honestly named: each platform's own ranking -- HN's
+	// `kids` order, Reddit's sort=top -- read as a percentile, which is the only
+	// comparison available across sources that carry different currencies.
+	const SORT_MODES = [
+		{ id: "best", label: "Best" },
+		{ id: "newest", label: "Newest" },
+		{ id: "oldest", label: "Oldest" },
+	];
+
+	const STANDING_GRAVITY = 1;
+	const STANDING_ARRIVAL_BOOST = 1.5;
+	// A day. Long enough that a thread posted last night is still live when the
+	// reader wakes up, short enough that "live" means what it says.
+	const STANDING_LIVE_WINDOW = 86400;
+	const SECONDS_PER_YEAR = 31557600;
+
+	// Arrival wins by a nose rather than dominating: it decides between discussions
+	// that are otherwise close, and leaves the merit ordering beneath them intact.
+	//
+	// Being live is deliberately NOT a factor here. It was, at 1.5x, and that was
+	// wrong twice over. Too small to do its job -- on the measured page the archive
+	// led a live thread by 1.70x and stayed ahead -- and wrong in kind, because
+	// "there is a conversation happening right now" is not a quantity to be traded
+	// off against thirteen years of accumulated votes. It is a different question,
+	// so blendRoots asks it separately and sorts on it first.
+	function standing(discussion, newestCommentAt, options = {}) {
+		if (!discussion) {
+			return 1;
+		}
+
+		const now = options.now ?? Math.floor(Date.now() / 1000);
+		// Floored at zero, so a date in the future cannot earn a bonus for it.
+		// Reddit and HN publish server timestamps, but a Bluesky record carries a
+		// createdAt the posting client asserted and nothing stops it being tomorrow.
+		const ageYears =
+			Math.max(now - (discussion.createdAt || now), 0) / SECONDS_PER_YEAR;
+
+		// null is omitted, never scored as zero. bskyCollective reports null because
+		// likes across unrelated posts are not one score, and hnComment reports null
+		// because HN publishes no comment points at any endpoint. Ranking either as
+		// though it scored badly would punish a source for being honest.
+		const votes =
+			discussion.score == null
+				? 0
+				: Math.log10(1 + Math.max(discussion.score, 0));
+		const comments = Math.log10(1 + Math.max(discussion.commentCount || 0, 0));
+
+		let value = (1 + votes + comments) / (1 + ageYears) ** STANDING_GRAVITY;
+
+		if (options.arrivedFrom && discussion.source === options.arrivedFrom) {
+			value *= STANDING_ARRIVAL_BOOST;
+		}
+
+		return value;
+	}
+
+	// Roots only, and deliberately. Two of the three sources fetch replies lazily,
+	// so a walk of everything loaded would answer differently depending on how far
+	// the reader had scrolled -- and "is this conversation live" must not depend on
+	// that. Every source knows all of its roots up front.
+	//
+	// It reads the thread rather than the rendered list because standing is computed
+	// before anything is on screen. newestCommentTime is the other one and they are
+	// not interchangeable: it walks rendered comments, which carry `time`.
+	function newestThreadComment(thread) {
+		let newest = 0;
+
+		for (const time of thread?.rootTimes?.values() || []) {
+			if (time > newest) {
+				newest = time;
+			}
+		}
+
+		return newest;
+	}
+
+	// Asked once and answered the same way everywhere: the blend sorts on it, the
+	// bookends are drawn around it, and the source strip labels it. One function so
+	// those three can never disagree about which discussions are live.
+	function isDiscussionLive(thread, now) {
+		const newest = newestThreadComment(thread);
+
+		return Boolean(newest) && now - newest <= STANDING_LIVE_WINDOW;
+	}
+
 	// Proportionality falls out of the fraction rather than needing a weighting
 	// term: a discussion with ten times the comments has ten times as many of them
 	// inside any span of the merged list.
-	function blendRoots(groups) {
+	//
+	// Dividing by standing is what stops that being the whole story. Proportional
+	// in aggregate is correct -- the 2013 thread genuinely owns 92% of the entries
+	// on the measured page, and still does. But at the *head* the bare fraction
+	// structurally favours the larger discussion, because 1/285 beats 1/18 however
+	// good the smaller one is. standing is what lets a small current thread compete
+	// there without evicting the archive from the rest of the list.
+	//
+	// A group with no story weighs 1, which keeps blendRoots(groups) a pure
+	// position blend. That is not only for the tests: it is the honest answer
+	// before a thread has loaded, when there is nothing yet to weigh.
+	function blendRoots(groups, options = {}) {
 		const entries = [];
+		const now = options.now ?? Math.floor(Date.now() / 1000);
 
 		for (const group of groups) {
 			const total = group.rootKeys.length;
+			const weight = group.story
+				? standing(group.story, newestThreadComment(group.thread), options)
+				: 1;
+			// Only a group that carries a story can be live. A bare position blend
+			// has no thread to ask, and answering "not live" for it is what keeps
+			// blendRoots(groups) behaving exactly as it always did.
+			const live = Boolean(group.story) && isDiscussionLive(group.thread, now);
 
 			group.rootKeys.forEach((key, index) => {
 				entries.push({
 					key,
 					discussionKey: group.discussionKey,
-					position: blendPosition(index, total),
+					position: blendPosition(index, total) / weight,
+					createdAt: group.thread?.rootTimes?.get(key) || 0,
+					live,
 					size: total,
 				});
 			});
 		}
 
 		// Larger discussion first on a tie, so the thread with more to read leads --
-		// the same argument compareStoriesByDiscussion makes one level up.
-		return entries.sort((a, b) => a.position - b.position || b.size - a.size);
+		// the same argument compareStoriesByDiscussion makes one level up. Kept as
+		// the tie-break on all three orders, because two comments posted in the same
+		// second are as much a tie as two equal positions.
+		if (options.sort === "newest") {
+			return entries.sort((a, b) => b.createdAt - a.createdAt || b.size - a.size);
+		}
+
+		if (options.sort === "oldest") {
+			return entries.sort((a, b) => a.createdAt - b.createdAt || b.size - a.size);
+		}
+
+		// Anything else is "best", including absent -- which is what every reader
+		// upgrading into this version has until they touch the control.
+		//
+		// Live first, as a tier rather than as a weight. A conversation happening
+		// right now is not worth some number of upvotes that a big enough archive
+		// could out-argue: it is the thing the reader opened the panel to find. As a
+		// 1.5x multiplier it lost to a thirteen-year-old thread with 284 roots, which
+		// is precisely the case it existed for.
+		//
+		// Sorting it first is also what makes the live comments one contiguous run,
+		// which is what lets the list bookend them instead of tagging every comment
+		// inside them. Merit still orders each tier, and several sources live on the
+		// same day interleave within the first by standing as they always did.
+		return entries.sort(
+			(a, b) =>
+				Number(b.live) - Number(a.live) ||
+				a.position - b.position ||
+				b.size - a.size,
+		);
 	}
 
 	// 403 is the only demotion, and it is specific: it is what Reddit returns to a
