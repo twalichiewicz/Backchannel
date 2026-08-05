@@ -8,6 +8,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.2] — 2026-08-05
+
+### Changed
+
+- **The blended list knows what year it is.** Opening the panel on the Wikipedia
+  article for Western Sahara — posted to Hacker News the day before — led with a
+  comment from September 2013, and with fourteen more from the same thread before
+  the current one got a word in. The merge ranked each comment by where it sat in
+  its own discussion and nothing else, so a 284-comment thread from 2013 beat a
+  17-comment thread from yesterday simply by being bigger.
+
+  A discussion is now weighed by what it earned, discounted by how long ago it
+  earned it. Old is not the same as invalid: that 2013 thread drew 761 comments
+  and 1,916 votes, and it is still the best conversation about the page. It keeps
+  its place in the list and most of the list — it just no longer owns the top of
+  it. Votes count on a log scale, because 1,916 upvotes in a default subreddit
+  and 102 points on Hacker News were never the same currency, and the discount for
+  age is gentle enough that a genuinely good old thread outranks a mediocre new
+  one.
+
+- **A conversation happening right now comes first, full stop.** If any
+  discussion has had a comment in the last day, all of it leads the list —
+  ahead of the archive whatever the archive has accumulated. It is not weighed
+  against thirteen years of votes, because that is not a trade worth making: a
+  live conversation is the thing you opened the panel to find. The live stretch
+  is bookended, so you can see where it starts and ends, and several sites
+  talking about the same page on the same day all sit inside it.
+
+- **The discussion you came from goes first among those.** Arriving from Hacker
+  News puts the Hacker News thread at the top, and the same for Reddit and
+  Bluesky.
+
+- **The submission date only appears where it is still telling you something.**
+  When one page has been submitted twice, each discussion is labelled with its
+  month so you can tell them apart. That label sat beside a comment's own age —
+  "HN · Aug 2026, 1 minute ago" — and beside the LIVE marker, saying the same
+  thing twice and saying the weaker half first. It now drops wherever what's next
+  to it already says when, and stays on an older discussion, where it is the only
+  thing separating that thread from the current one.
+
+- **Blended comments arrive in the order they were ranked.** They were rendered
+  five at a time and appended in whichever order the sites answered — and they
+  do not answer at the same speed, since Reddit sends a whole thread at once
+  while Hacker News is asked for one comment at a time. A comment could land up
+  to four places from where the ranking put it. Never visible on a page with a
+  single discussion, because there every answer takes equally long.
+
+- **Indent guides stop thickening as you read.** The orange accent on a new
+  comment widened its guide from 1px to 2px, and clearing the accent only put the
+  colour back — so every comment you had already read kept a doubled guide for
+  good. The accent is now a colour rather than a width. Top-level comments were
+  also being pushed 7px to the right by it and left there, which is why a thread
+  read over two sittings had a ragged left edge.
+
+- **Less air above the panel title.** Two 12px margins were stacked where one was
+  meant to be.
+
+### Added
+
+- **Sort the whole list by Best, Newest or Oldest.** A dropdown under the
+  header, and only where there is something to choose: a page with one
+  discussion arrives in that site's own order, which is inherited rather than
+  invented. Newest and Oldest ignore which site a comment came from and order
+  everything by time.
+
+  There is no "Score". Hacker News publishes no comment scores at any endpoint,
+  so one would have to be invented for a third of the sources. Best already is
+  the score-ordered blend, honestly named: each site's own ranking, read as a
+  position rather than a number.
+
 ## [1.6.1] — 2026-08-05
 
 ### Added
