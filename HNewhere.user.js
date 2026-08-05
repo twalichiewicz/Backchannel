@@ -1673,6 +1673,26 @@
 	function sourceShortLabel(story) {
 		return getSource(story?.source)?.shortLabel || story?.label || "the site";
 	}
+
+	// Where a discussion's own header links to, or null when there is nowhere
+	// honest to send anyone. `permalink` is nullable in DISCUSSION_SHAPE for
+	// exactly this: a collective assembled from several posts has no page of its
+	// own, and the old fallback built a Hacker News item URL from whatever id the
+	// discussion happened to carry -- rendering "open on Bluesky" pointed at HN.
+	//
+	// The absence of `source` is what identifies a front-page row: those are
+	// parsed out of HN's markup rather than produced by a mapper, they carry no
+	// permalink, and their discussion genuinely is the HN item their id names.
+	//
+	// Same answer authorProfileURL gives for a name that is not a person: return
+	// null, and let the caller print text instead of linking to nowhere.
+	function discussionURL(story) {
+		if (story?.permalink) {
+			return story.permalink;
+		}
+
+		return story?.source ? null : commentURL(story?.id);
+	}
 	// #endregion hnewhere-test-export
 
 	// Where a name links to, decided by the source the name came from. It used to
@@ -3368,9 +3388,11 @@ ${
 		);
 	}
 
+	// #region hnewhere-test-export
 	function commentURL(storyID) {
 		return HN_ORIGIN + "/item?id=" + storyID;
 	}
+	// #endregion hnewhere-test-export
 
 	function submitURL(url, title) {
 		return (
@@ -10002,11 +10024,12 @@ ${settingsPanelHTML()}
 		}
 
 		const storyID = String(story.id);
-		// The discussion supplies its own permalink rather than having an HN URL
-		// assembled from its id, so this stops pointing at HN for a discussion that
-		// is not on HN. Falls back for the front-page rows, which arrive as parsed
-		// HN markup rather than through an adapter.
-		const hnURL = story.permalink || commentURL(story.id);
+		// null when the discussion has no page of its own. Both uses below are
+		// conditional on it, so a source without one renders text rather than a
+		// link to somewhere it is not. Front-page rows still get their HN item
+		// URL: they arrive as parsed HN markup rather than through an adapter,
+		// and carry no `source` to say otherwise.
+		const hnURL = discussionURL(story);
 
 		// Read through the normalized names first, falling back to the raw Firebase
 		// ones. renderStory has two callers with different shapes: a discussion from
@@ -10050,11 +10073,15 @@ ${settingsPanelHTML()}
 	</td>
 	<td class="story-title-cell">
 	<div class="story-title">
-	<a target="_blank" rel="noopener noreferrer"
+	${
+		hnURL
+			? `<a target="_blank" rel="noopener noreferrer"
 	href="${escapeHTML(hnURL)}"
 	title="Open this discussion where it lives">
 	${escapeHTML(story.title)}
-	</a>
+	</a>`
+			: escapeHTML(story.title)
+	}
 	</div>
 	</td>
 	</tr>`
@@ -10069,7 +10096,9 @@ ${settingsPanelHTML()}
 	<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
 	${showActions ? itemActionLinksHTML(storyID) : ""}
 	${
-		showTitle
+		// The separator belongs to the link, so a source with no page of its own
+		// renders neither rather than leaving a bare pipe pointing nowhere.
+		showTitle || !hnURL
 			? ""
 			: `| <a class="story-open-link" target="_blank" rel="noopener noreferrer"
 	href="${escapeHTML(hnURL)}">open on ${escapeHTML(sourceShortLabel(story))}</a>`
