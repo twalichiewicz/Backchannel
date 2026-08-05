@@ -12,6 +12,8 @@
 // @include      https://*
 // @exclude      *://localhost/*
 // @exclude      *://localhost:*/*
+// @exclude      *://127.0.0.1/*
+// @exclude      *://127.0.0.1:*/*
 // @exclude      *://127.*.*.*/*
 // @exclude      https://*.google.*/*
 // @exclude      https://chatgpt.com/

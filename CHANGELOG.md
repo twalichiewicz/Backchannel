@@ -42,12 +42,19 @@ use to detect updates, so every release bumps it.
   updates itself as usual.
 
 - **The excluded-domain list says what it means.** Six Google patterns collapse
-  into one, and the loopback exclusion covers the whole `127.*` range rather
-  than a single address. Both it and `localhost` now cover a port, so a dev
-  server on `:3000` is excluded — which it was not before, and that was the
-  common case. `*.bank.com` came out: it matched one registered domain and no
-  actual bank, while the runtime block list has covered banking properly all
-  along. Thanks to the reporter of #52 for the audit.
+  into one, and both `localhost` and loopback now cover a port, so a dev server
+  on `:3000` is excluded — which it was not before, and that was the common
+  case. `*.bank.com` came out: it matched one registered domain and no actual
+  bank, while the runtime block list has covered banking properly all along.
+  Thanks to the reporter of #52 for the audit.
+
+  Loopback is listed three ways on purpose. `127.*.*.*` covers the whole range
+  under Violentmonkey and Safari, and covers **nothing** under Tampermonkey,
+  which rewrites a trailing wildcard in a hostname into a list of real TLDs —
+  correct for `*.google.*`, useless for an address whose last part is a number.
+  The literal `127.0.0.1` rules sit alongside it so the case everyone actually
+  hits is excluded in every manager. An unusual loopback address under
+  Tampermonkey still reaches the runtime guard, which refuses any IP literal.
 
 - **The shape every source is read through is written down.** Nothing you can
   see changes. It used to be asserted twice, in two styles, with nothing
