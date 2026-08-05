@@ -1774,7 +1774,11 @@
 			// the one URL the reader is on and the key never leaves the panel.
 			key: sourceKey("bsky", normalizeURL(url)),
 			id: normalizeURL(url),
-			title: "",
+			// Names itself, because there is no submitter to borrow a title from.
+			// Only ever seen when a reader has filtered to it: with one discussion
+			// storyTitle uses the page's own title instead, since nothing needs
+			// telling apart.
+			title: "Bluesky comments",
 			// Nobody authored a collective. NON_AUTHORS already contains "", so
 			// nothing tries to link it to a profile.
 			author: "",
@@ -1783,7 +1787,14 @@
 			// the argument hnComment already makes about HN's absent comment score.
 			score: null,
 			commentCount: admitted.length + replies,
-			createdAt: Math.min(...admitted.map((post) => bskyTime(post))),
+			// The newest, not the oldest. A collective was never submitted, so it
+			// has no submission date; the only honest timestamp is when the
+			// conversation last moved, which is what the panel labels it as.
+			//
+			// Only the roots are known at this point -- replies are fetched per root,
+			// later -- so this is the newest post rather than the newest comment. It
+			// can therefore be too old, never too new.
+			createdAt: Math.max(...admitted.map((post) => bskyTime(post))),
 			// Bluesky has no page showing everything that linked a URL. Rather than
 			// invent one, this says so and renderStory prints an unlinked title.
 			permalink: null,
@@ -2353,6 +2364,10 @@ ${
 		label: "Bluesky",
 		shortLabel: "Bluesky",
 		beta: true,
+		// HN and Reddit date a submission, so a bare age reads as "posted then".
+		// A collective was never posted, and its timestamp is the last thing that
+		// happened in it, which has to be said or the number means the wrong thing.
+		ageLabel: "Last comment",
 		// The surprising part, said where it is ticked: the page URL goes to a
 		// third party that is not Bluesky. Bluesky itself is only ever asked about
 		// the posts Constellation names.
@@ -10516,6 +10531,12 @@ ${settingsPanelHTML()}
 		const showComposer = options.compose === true;
 		const storyAuthor = story.author ?? story.by;
 		const storyCreatedAt = story.createdAt ?? story.time;
+		// Read through ?? rather than ||, because 0 points is a real measurement
+		// and null is the absence of one. Front-page rows carry neither key and
+		// come through as undefined, which reads as absent -- correct, since the
+		// row's score is rendered by the browse renderer instead.
+		const storyScore = story.score ?? story.points;
+		const ageLabel = getSource(story.source)?.ageLabel || "";
 		const storyCommentCount = story.commentCount ?? story.descendants ?? 0;
 		const storyBodyHTML = story.bodyHTML ?? story.text;
 
@@ -10560,9 +10581,24 @@ ${settingsPanelHTML()}
 	<td class="${showTitle ? "story-votespacer" : "story-votelinks story-votelinks-inline"}">${showTitle ? "" : voteControlsHTML}</td>
 	<td class="story-body-cell">
 	<div class="story-meta">
-	<span class="story-score" data-story-score-id="${escapeHTML(storyID)}" data-story-score="${escapeHTML(String(story.score || 0))}">${story.score || 0}</span> points by
-	${storyAuthor ? authorLinkHTML(story.source, storyAuthor) : ""}
-	<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
+	${
+		// null is not zero. A source can have no number worth reporting -- likes
+		// summed across strangers are not one score -- and "0 points" states a
+		// measurement that was never taken. The whole phrase goes, not just the
+		// digit, because "points" with nothing in front of it is worse.
+		storyScore === null || storyScore === undefined
+			? ""
+			: `<span class="story-score" data-story-score-id="${escapeHTML(storyID)}" data-story-score="${escapeHTML(String(storyScore))}">${storyScore}</span> points `
+	}${
+		// "by" belongs to the name, so a discussion nobody authored drops both
+		// rather than trailing a preposition into the timestamp.
+		storyAuthor ? `by ${authorLinkHTML(story.source, storyAuthor)} ` : ""
+	}${
+		// HN and Reddit date a submission and a bare age reads correctly. A source
+		// whose timestamp means something else says which, or the number is read
+		// as the wrong fact.
+		ageLabel ? escapeHTML(ageLabel) + " " : ""
+	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
 	${showActions ? itemActionLinksHTML(storyID) : ""}
 	${
 		// The separator belongs to the link, so a source with no page of its own
@@ -11822,19 +11858,21 @@ ${settingsPanelHTML()}
 			const canVote = Boolean(getSource(story.source)?.capabilities.vote);
 			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
 			const resolved = storyTitle(story, page, disambiguating);
-			// Shown only where it says something the page header does not. Two
-			// submitters can title the same link differently, and that is worth
-			// seeing; the usual case, where they match, was two identical headings
-			// stacked on top of each other.
 			const block = renderStory(story, details, {
 				actions: canVote,
 				compose: canReply,
 				title: resolved,
-				// Always with one discussion: the page header has stood down, so this
-				// title is the only one, and it belongs beside the arrow the way HN
-				// sets it. With several the header names the content, so a submission
-				// only repeats itself when its own title differs.
-				showTitle: !disambiguating || resolved !== page,
+				// Always. These blocks are hidden unless the reader has filtered to
+				// one, so the title is the heading of the thing they asked for, and a
+				// meta line with no heading above it reads as though the panel lost
+				// something.
+				//
+				// It was once suppressed when it matched the header, back when the
+				// header showed a submission's title and the match meant a literal
+				// duplicate. The header names the content now, so a submitter using
+				// the article's own title -- the common case -- was silently costing
+				// the block its heading.
+				showTitle: true,
 			});
 
 			if (block) {
