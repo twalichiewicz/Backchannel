@@ -1271,6 +1271,14 @@
 		label: { type: "string" },
 		bodyHTML: { type: "string" },
 		rootKeys: { type: "array" },
+		// Unix seconds, positionally matching rootKeys. Empty means "ask the
+		// thread", exactly as an empty rootKeys does -- HN and Reddit learn their
+		// roots' times when loadThread reads them, and only Bluesky knows them at
+		// discovery, because its roots are the posts discover already holds.
+		//
+		// Carried at all because the blend needs a time per root before it can order
+		// anything, and two of the three sources fetch comments lazily.
+		rootTimes: { type: "array" },
 	};
 
 	const COMMENT_SHAPE = {
@@ -1364,6 +1372,8 @@
 			label: "HN",
 			bodyHTML: story.text || "",
 			rootKeys: (story.kids || []).map((id) => sourceKey("hn", id)),
+			// The item carries kids but not their times. loadThread reads those.
+			rootTimes: [],
 		};
 	}
 
@@ -1389,6 +1399,7 @@
 			// Deliberately empty. The roots live on the Firebase item, and loadThread
 			// is where that is fetched -- which is the whole point of the split.
 			rootKeys: [],
+			rootTimes: [],
 		};
 	}
 
@@ -1491,7 +1502,10 @@
 			// comment, and r/science and r/conspiracy are not interchangeable.
 			label: post.subreddit_name_prefixed || "r/" + (post.subreddit || ""),
 			bodyHTML: unescapeRedditHTML(post.selftext_html),
+			// The listing carries no comments at all -- loadThread fetches the tree,
+			// and every root's time arrives with it.
 			rootKeys: [],
+			rootTimes: [],
 		};
 	}
 
@@ -1805,6 +1819,11 @@
 			label: "Bluesky",
 			bodyHTML: "",
 			rootKeys: admitted.map((post) => bskyKeyFromURI(post.uri)),
+			// Known here for free: a collective's roots *are* the posts discover
+			// already holds, so the blend can order them without loadThread fetching
+			// a single one. That matters -- Bluesky charges a getPostThread per root
+			// and fills it lazily for exactly that reason.
+			rootTimes: admitted.map((post) => bskyTime(post)),
 		};
 	}
 
@@ -2076,8 +2095,31 @@ ${
 						sourceKey("hn", id),
 					);
 
+			// Roots eagerly; replies stay one at a time. The blend needs a time per
+			// root before it can place any of them, and HN publishes comment times
+			// nowhere but on the item itself -- so these are read rather than
+			// guessed at.
+			//
+			// Close to free in practice. They are the same requests the renderer
+			// makes moments later in batches of five, they go out in parallel here,
+			// and getItem caches -- so the renderer reads every one of them back
+			// without a second call. What it costs is that first paint waits for all
+			// the roots rather than the first five.
+			const rootItems = await Promise.all(
+				roots.map((key) => {
+					const parsed = parseSourceKey(key);
+
+					return parsed ? getItem(Number(parsed.id)) : null;
+				}),
+			);
+
+			const rootTimes = new Map(
+				roots.map((key, index) => [key, rootItems[index]?.time || 0]),
+			);
+
 			return {
 				rootKeys: roots,
+				rootTimes,
 				async getComment(key) {
 					const parsed = parseSourceKey(key);
 
@@ -2260,6 +2302,11 @@ ${
 
 			return {
 				rootKeys: index.rootKeys,
+				// Free here: the whole tree arrived in one response, so every root's
+				// time is already in the map getComment reads.
+				rootTimes: new Map(
+					index.rootKeys.map((key) => [key, index.byKey.get(key)?.createdAt || 0]),
+				),
 				rootMore: index.rootMore,
 				async getComment(key) {
 					return index.byKey.get(key) || null;
@@ -2504,6 +2551,14 @@ ${
 
 			return {
 				rootKeys: discussion.rootKeys,
+				// Carried from discovery rather than fetched. The subtrees stay lazy,
+				// which is the whole point of this adapter's shape.
+				rootTimes: new Map(
+					(discussion.rootKeys || []).map((key, index) => [
+						key,
+						discussion.rootTimes?.[index] || 0,
+					]),
+				),
 				async getComment(key) {
 					if (byKey.has(key)) {
 						return byKey.get(key) || null;
