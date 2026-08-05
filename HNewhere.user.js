@@ -10,18 +10,14 @@
 // @description  See what everyone's talking about.
 // @include      http://*
 // @include      https://*
-// @exclude      http://localhost/*
-// @exclude      https://localhost/*
-// @exclude      https://www.google.com/*
-// @exclude      https://www.google.*/*
+// @exclude      *://localhost/*
+// @exclude      *://localhost:*/*
+// @exclude      *://127.*.*.*/*
+// @exclude      https://*.google.*/*
 // @exclude      https://chatgpt.com/
 // @exclude      https://claude.ai/
 // @exclude      https://x.com/
-// @exclude      https://*.google.com/*
-// @exclude      https://accounts.google.com/*
-// @exclude      https://mail.google.com/*
 // @exclude      https://mail.*.*/*
-// @exclude      https://*.bank.com/*
 // @exclude      https://*.googleusercontent.com/*
 // @exclude      https://*.doubleclick.net/*
 // @exclude      https://*.facebook.com/*
@@ -38,11 +34,9 @@
 // @exclude      https://*.stripe.com/*
 // @exclude      https://console.aws.amazon.com/*
 // @exclude      https://portal.azure.com/*
-// @exclude      https://console.cloud.google.com/*
 // @exclude      https://*.netflix.com/*
 // @exclude      https://web.whatsapp.com/*
 // @exclude      https://*.instagram.com/*
-// @exclude      *://127.0.0.1/*
 // @exclude      *://*/*.pdf
 // @grant        GM.getValue
 // @grant        GM.setValue
@@ -2122,6 +2116,7 @@ ${
 	// Deliberately conservative. A missed site shows a button that does nothing
 	// useful, which is a far cheaper mistake than suppressing a site people
 	// genuinely read articles on, and adding an entry is a one-line change.
+	// #region hnewhere-test-export
 	const HIDDEN_HOST_PATTERNS = [
 		// Mail
 		/^(mail|inbox|webmail|email)\./,
@@ -2171,6 +2166,7 @@ ${
 		/(^|\.)(duckduckgo|bing|baidu|yandex|ecosia|startpage|qwant)\.com$/,
 		/^search\./,
 	];
+	// #endregion hnewhere-test-export
 
 	const HIDDEN_PATH_PATTERNS = [
 		/^\/(login|log-in|signin|sign-in|signup|sign-up|register|logout|log-out|sign-out)(\/|$)/,

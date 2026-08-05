@@ -10,6 +10,16 @@ use to detect updates, so every release bumps it.
 
 ## [Unreleased] — 1.6.1
 
+### Changed
+
+- **The excluded-domain list says what it means.** Six Google patterns collapse
+  into one, and the loopback exclusion covers the whole `127.*` range rather
+  than a single address. Both it and `localhost` now cover a port, so a dev
+  server on `:3000` is excluded — which it was not before, and that was the
+  common case. `*.bank.com` came out: it matched one registered domain and no
+  actual bank, while the runtime block list has covered banking properly all
+  along. Thanks to the reporter of #52 for the audit.
+
 ### Fixed
 
 - **Posting a comment no longer warns that it might not have worked.** A comment
