@@ -2065,6 +2065,40 @@
 		return SOURCES.get(id) || null;
 	}
 
+	// Which source the reader came from, or null for a typed address, a bookmark,
+	// or anywhere unregistered. Null is a real answer rather than a failure: with
+	// no arrival context the blend correctly leads with whichever discussion has
+	// the most standing, whatever year it is from.
+	//
+	// Host equality against a declared list, never a substring test. Every one of
+	// reddit.com.evil.test, notreddit.com and ?q=reddit.com contains the string,
+	// and admitting any of them would hand a stranger the top of the list.
+	//
+	// Origins live on each source rather than in a table here, so a fourth source
+	// brings its own and cannot be forgotten. Subdomains are not inferred:
+	// news.ycombinator.com is listed because it is real, and guessing at
+	// beta.news.ycombinator.com is how a lookalike gets admitted later.
+	//
+	// referrerIsHN is deliberately left alone. It answers a different question --
+	// whether to auto-open at all -- and has its own suite in auto-open.html.
+	function arrivalSource(referrer = document.referrer) {
+		let host;
+
+		try {
+			host = new URL(referrer).hostname.toLowerCase();
+		} catch {
+			return null;
+		}
+
+		for (const source of SOURCES.values()) {
+			if ((source.origins || []).some((origin) => origin.toLowerCase() === host)) {
+				return source.id;
+			}
+		}
+
+		return null;
+	}
+
 	// The platform a discussion opens on, which is not the same as the label that
 	// tells two discussions apart. A Reddit thread's label is its subreddit, so
 	// this link read "open on r/programmingcirclejerk" where Hacker News read
@@ -2222,6 +2256,9 @@ ${
 
 	registerSource({
 		id: "hn",
+		// What a referrer has to match for arrivalSource to call this the source
+		// the reader came from. Bare hostnames, compared for equality.
+		origins: ["news.ycombinator.com"],
 		label: "Hacker News",
 		shortLabel: "HN",
 		caveat:
@@ -2371,6 +2408,9 @@ ${
 
 	registerSource({
 		id: "reddit",
+		// All four are real places a reader clicks a link from, and Reddit does not
+		// redirect between them before the referrer is written.
+		origins: ["reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com"],
 		label: "Reddit",
 		shortLabel: "Reddit",
 		beta: true,
@@ -2604,6 +2644,9 @@ ${
 
 	registerSource({
 		id: "bsky",
+		// The app, not the PDS or the AppView. A reader clicks a link from
+		// bsky.app; nothing navigates out of public.api.bsky.app.
+		origins: ["bsky.app"],
 		label: "Bluesky",
 		shortLabel: "Bluesky",
 		beta: true,
