@@ -428,6 +428,15 @@
 		// from "chose the default colour" -- and a later change to the brand reaches
 		// everyone who has not picked their own.
 		accentColor: null,
+		// "best" is the weighted blend: each comment's position inside its own
+		// discussion, divided by that discussion's standing. "newest" and "oldest"
+		// ignore discussion membership and sort on time alone.
+		//
+		// Global rather than per-thread, like theme: a reader who wants newest wants
+		// it on the next page too. loadSettings' spread supplies it for anyone
+		// upgrading, and blendRoots reads anything unrecognised as "best", so there
+		// is nothing to migrate.
+		commentSort: "best",
 	};
 
 	// #region hnewhere-test-export
@@ -497,6 +506,12 @@
 	// Which sources the open sidebar is showing, so per-thread decisions -- the vote
 	// gutter, for one -- do not have to walk the comment list to find out.
 	const sidebarSourceKeys = new Set();
+	// Which discussions are still being added to, keyed to their label, by the same
+	// 24h window blendRoots sorts on. Held here rather than recomputed so the strip
+	// pill, the bookends and the ordering can never disagree about which
+	// conversations are live -- and the label is kept alongside because filtering to
+	// one discussion has to re-word the bookend to name only that one.
+	const liveDiscussions = new Map();
 	let annotationController = null;
 	// Tagged rather than a bare group key: a focused discussion can now be entered
 	// two ways -- through a quoted passage, or through a comment -- and everything
@@ -1232,15 +1247,26 @@
 			counts.set(discussion.label, (counts.get(discussion.label) ?? 0) + 1);
 		}
 
+		// baseLabel is the name before any date was added, kept on every discussion
+		// whether or not one was. It is what to say where the date is not doing the
+		// job it was added for: telling two submissions of the same page apart. The
+		// live run is the case -- a run is current by definition, so stamping "Aug
+		// 2026" on it says nothing and reads as though there might be a historical
+		// one.
+		//
+		// Deliberately not in DISCUSSION_SHAPE. That contract describes what a source
+		// adapter must produce, and this is derived here, after every adapter has
+		// already answered.
 		return discussions.map((discussion) => {
 			if ((counts.get(discussion.label) ?? 0) < 2 || !discussion.createdAt) {
-				return discussion;
+				return { ...discussion, baseLabel: discussion.label };
 			}
 
 			const when = new Date(discussion.createdAt * 1000);
 
 			return {
 				...discussion,
+				baseLabel: discussion.label,
 				label: `${discussion.label} · ${when.toLocaleString(undefined, {
 					month: "short",
 					year: "numeric",
@@ -7956,6 +7982,41 @@ header button svg {
 	text-decoration-color:var(--accent);
 }
 
+/* Its own row under the header's rule, at metadata weight, hard against the left
+	margin -- the panel reads down one left edge and a control floating opposite it
+	starts a second column.
+
+	No left padding, unlike .page-header's 14px. That inset exists to clear the vote
+	gutter a comment reserves; this row has no gutter to clear, so taking it would
+	indent the control past the LIVE marker it sits directly above and read as a
+	second, narrower column. */
+.page-sort {
+	display:flex;
+	align-items:center;
+	gap:6px;
+	padding:8px 0 0;
+	font-size:11px;
+	color:var(--meta);
+}
+
+.page-sort-select {
+	font:inherit;
+	color:var(--text);
+	background:var(--bg);
+	border:1px solid var(--border);
+	border-radius:4px;
+	padding:2px 4px;
+	cursor:pointer;
+}
+
+/* Gone while filtered, rather than disabled. A greyed control invites the reader
+	to work out why it will not move; an absent one says the question does not
+	arise here, which is the truth -- there is no blend to order. */
+.list-filtered .page-sort {
+	display:none;
+}
+
+
 .source-strip-entry {
 	display:inline-flex;
 	align-items:baseline;
@@ -8022,6 +8083,122 @@ header button svg {
 /* Filtered to one discussion, every comment on screen is from it -- so the label
 	is answering a question the reader has already settled, on every line. The
 	banner above says which one. */
+/* Metadata weight, like the source label it sits beside -- but filled rather than
+	plain, because it reports a state that changes rather than naming something
+	fixed. Small enough that a list of them reads as texture, not as alarm. */
+.live-pill {
+	margin-left:6px;
+	padding:0 4px;
+	border-radius:3px;
+	font-size:10px;
+	font-weight:600;
+	letter-spacing:.04em;
+	vertical-align:1px;
+	color:var(--header-text);
+	background:rgba(var(--accent-rgb),.95);
+}
+
+/* The pulse is decoration and must not run for a reader who asked for no motion.
+	Written as an opt-in rather than as a rule plus a suppression, so a later edit
+	cannot reintroduce it by deleting something. */
+@media (prefers-reduced-motion: no-preference) {
+	.live-pill {
+		animation:live-pulse 2s ease-in-out infinite;
+	}
+}
+
+@keyframes live-pulse {
+	50% { opacity:.55; }
+}
+
+/* Bookends around the live run. A rule with a word sitting on it, drawn in the
+	accent, rather than the hatched band used between submissions -- that band says
+	"different subject now", and these say "same subject, still being written".
+	Full bleed like the band, because a marker that stops short of the panel edge
+	reads as part of the column rather than as a line across it. */
+/* line-height is an odd number of pixels on purpose, and it is the whole reason
+	the rule is reliably visible. The row is a flex box centring a 1px child, so the
+	child sits at (contentHeight - 1) / 2 -- and under line-height:1 the content box
+	measured 11.007px, which put the rule on a half pixel. A 1px line straddling two
+	device rows is drawn at half strength on each, and at 35% alpha that is close
+	enough to nothing that the rule looked absent until some later reflow happened
+	to land it on a whole pixel. Which is exactly how it behaved: missing on load,
+	present after filtering and back.
+
+	13px makes the content box 13px whatever the children do -- both are smaller --
+	so the rule centres at 6px, on a pixel, every time. */
+.live-bookend {
+	display:flex;
+	align-items:center;
+	gap:6px;
+	margin:0 -12px;
+	padding:10px 12px 0;
+	font-size:11px;
+	color:var(--meta);
+	line-height:13px;
+}
+
+/* flex-basis 24px with shrink 0, not "1 1 auto". An empty element's auto basis is
+	zero, so under 1 1 auto the rule only ever occupied what the text left over --
+	and once the text filled the row it was allotted nothing and disappeared, which
+	is a rule that vanishes at exactly the widths a long label makes likely. Now it
+	is the text that gives way instead.
+
+	(Backticks would end the template literal this stylesheet is written in.) */
+/* .5 rather than .35. Even landing on a whole pixel, a hairline at a third
+	strength is easy to lose against the panel, and this one is carrying the right
+	edge of a marker the reader is meant to notice. */
+.live-bookend::after {
+	content:"";
+	flex:1 0 24px;
+	height:1px;
+	background:rgba(var(--accent-rgb),.5);
+}
+
+/* min-width:0 is what lets it. A flex item will not shrink below its content
+	width without it, whatever its flex-shrink says, so the row would overflow
+	rather than the label ellipsing. */
+.live-bookend-text {
+	min-width:0;
+	overflow:hidden;
+	text-overflow:ellipsis;
+	white-space:nowrap;
+}
+
+/* The closing rule leads instead of trailing, so the pair reads as a bracket
+	around the run rather than as two identical headings. */
+.live-bookend-close {
+	padding:14px 12px 0;
+	flex-direction:row-reverse;
+}
+
+.live-bookend-mark {
+	padding:0 4px;
+	border-radius:3px;
+	font-size:10px;
+	font-weight:600;
+	letter-spacing:.04em;
+	color:var(--header-text);
+	background:rgba(var(--accent-rgb),.95);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.live-bookend-mark {
+		animation:live-pulse 2s ease-in-out infinite;
+	}
+}
+
+/* The run is a statement about what is on screen. Filtered to a discussion that
+	is not live -- or into a quote or comment focus, which is a slice rather than a
+	discussion -- there is nothing left for it to describe.
+
+	After .live-bookend, not before it. Both are one class, so the cascade settles
+	this on source order alone, and stated first it lost to display:flex and the
+	marker stayed on screen with its label stripped. */
+.live-bookend-hidden {
+	display:none;
+}
+
 .discussion-filtered .comment-source {
 	display:none;
 }
@@ -11822,10 +11999,23 @@ ${settingsPanelHTML()}
 				// Roots only. Replies inherit it through the indent guides, and
 				// repeating it on every nested comment would double the weight of the
 				// metadata line to say what the parent already said.
+				// baseLabel while the discussion is live, so this reads "HN" beside a
+				// comment posted a minute ago rather than "HN · Aug 2026 1 minute ago",
+				// which says the same thing twice and says the weaker half first.
+				//
+				// The date stays on an archived discussion, where it is the only thing
+				// distinguishing this comment's thread from another submission of the
+				// same page -- and where it is genuinely news, because a comment left an
+				// hour ago on a thread from 2013 is not the same as one on today's.
 				parentKey === null && discussion.label && sidebarSourceKeys.size > 1
-					? `<span class="comment-source">${escapeHTML(discussion.label)}</span>`
+					? `<span class="comment-source">${escapeHTML(
+							liveDiscussions.has(discussion.key)
+								? discussion.baseLabel || discussion.label
+								: discussion.label,
+						)}</span>`
 					: ""
 			}
+
 
 		<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span><span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
 
@@ -12131,6 +12321,12 @@ ${settingsPanelHTML()}
 
 		const generation = sidebarGeneration;
 
+		// Read once per render and passed down, rather than reached for at each use.
+		// Two things below need it -- the blend's order and the control that sets
+		// it -- and a second read could answer differently from the first if the
+		// reader changed it mid-render.
+		const settings = await loadSettings();
+
 		// Every thread first, because the merge needs each discussion's total before
 		// it can place any one comment. They are independent reads, so they overlap
 		// rather than queueing behind each other.
@@ -12142,7 +12338,28 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		const headerElement = renderPageHeader(stories, ui.body);
+		// Before the header, because the source strip names each discussion and is
+		// where a LIVE badge belongs first. Computed from the same window and the
+		// same helper standing uses, so the badge cannot contradict the ranking.
+		liveDiscussions.clear();
+
+		const liveNow = Math.floor(Date.now() / 1000);
+
+		stories.forEach((story, index) => {
+			if (isDiscussionLive(threads[index], liveNow)) {
+				// baseLabel, not label: the run is current by definition, so the date
+				// disambiguateLabels adds is answering a question nobody asked here.
+				liveDiscussions.set(story.key, story.baseLabel || story.label || "");
+			}
+		});
+
+		const headerElement = renderPageHeader(stories, ui.body, {
+			sort: settings.commentSort,
+			// The whole panel, not a re-sort in place. Changing the order changes
+			// which comment each batch renders, and renderDiscussions is what owns
+			// that -- reaching into the list from here would be a second renderer.
+			onSortChange: () => renderDiscussions(stories, ui),
+		});
 
 		mountFilterBanner(headerElement, ui);
 
@@ -12223,12 +12440,38 @@ ${settingsPanelHTML()}
 			]),
 		);
 
+		// story and thread both, because standing reads the discussion's score and
+		// age and the thread's newest comment. Both are already to hand -- the
+		// `context` map above is built from exactly this pair.
 		const entries = blendRoots(
 			stories.map((story, index) => ({
 				discussionKey: story.key,
 				rootKeys: threads[index].rootKeys,
+				story,
+				thread: threads[index],
 			})),
+			{
+				sort: settings.commentSort,
+				arrivedFrom: arrivalSource(),
+			},
 		);
+
+		// Where the live run ends. "best" sorts live first, so the live comments are
+		// one contiguous block at the head of the list and it can be bookended
+		// rather than tagged comment by comment -- which is the honest shape, since
+		// being live is a fact about a conversation and not about each remark in it.
+		//
+		// Only "best" groups them. Newest and oldest interleave live and archived
+		// comments by design, so there is no run to draw a line around and the
+		// bookends stay off.
+		const liveRunEnd =
+			(settings.commentSort || "best") === "best"
+				? entries.reduce((last, entry, index) => (entry.live ? index : last), -1)
+				: -1;
+
+		if (liveRunEnd >= 0) {
+			comments.appendChild(liveBookend("open"));
+		}
 
 		// Batched exactly as renderChildren batches, for the same reason: the frame
 		// yield is what makes a long thread appear in pieces rather than in one
@@ -12241,24 +12484,70 @@ ${settingsPanelHTML()}
 				return;
 			}
 
-			await Promise.all(
-				entries.slice(i, i + batchSize).map((entry) => {
-					const held = context.get(entry.discussionKey);
+			const batch = entries.slice(i, i + batchSize);
 
-					return renderComment(
-						entry.key,
-						held.thread,
-						comments,
-						held.story,
-						seenTimes.get(entry.discussionKey) || 0,
-						collapsedKeys,
-						generation,
-					);
-				}),
+			// Fetched together, then appended one at a time in the order the blend put
+			// them. renderComment awaits getComment before it builds its element, so a
+			// batch rendered straight through Promise.all appends in whichever order
+			// the sources answer -- and they do not answer at the same speed: Reddit
+			// resolves from a tree already in memory, HN from a request cache, Bluesky
+			// from the network. On a blend that put comments up to four places from
+			// where the ranking had them, and it never showed on a single-source thread
+			// because there every answer takes the same time.
+			//
+			// Warming first is what keeps the second pass cheap: every getComment below
+			// is a cache read, so the list still paints in batches rather than serially.
+			await Promise.all(
+				batch.map((entry) =>
+					context.get(entry.discussionKey).thread.getComment(entry.key),
+				),
 			);
+
+			for (const entry of batch) {
+				if (generation !== sidebarGeneration) {
+					return;
+				}
+
+				const held = context.get(entry.discussionKey);
+
+				await renderComment(
+					entry.key,
+					held.thread,
+					comments,
+					held.story,
+					seenTimes.get(entry.discussionKey) || 0,
+					collapsedKeys,
+					generation,
+				);
+			}
 
 			await new Promise(requestAnimationFrame);
 		}
+
+		// Placed against the comment that follows the run, not against a batch
+		// boundary. Roots render five at a time, so closing inside the loop sealed
+		// the marker after whichever batch happened to contain the last live comment
+		// -- which swept up to four archived ones inside the run and said they were
+		// live. Anchoring to the first comment after the run cannot drift with the
+		// batch size, and appending covers the case where the run is the whole list.
+		if (liveRunEnd >= 0) {
+			const firstAfter = entries[liveRunEnd + 1]?.key;
+			// Read off the dataset rather than matched with an attribute selector: a
+			// comment key is source-qualified and carries a colon, and building a
+			// selector around one means escaping it correctly forever.
+			const anchor = firstAfter
+				? [...comments.children].find(
+						(node) => node.dataset?.commentId === firstAfter,
+					) || null
+				: null;
+
+			comments.insertBefore(liveBookend("close"), anchor);
+		}
+
+		// Both are in the tree now, so they can be worded. Called rather than written
+		// inline, so the first painting of the run goes through exactly the path every
+		// later filter change goes through.
+		syncLiveBookends();
 
 		for (const [index, story] of stories.entries()) {
 			mountMoreReplies(threads[index].rootMore, threads[index], comments, story, {
@@ -12381,7 +12670,73 @@ ${settingsPanelHTML()}
 	// have loaded. Roots made the pills disagree with everything around them: the
 	// header totalled 325 while they summed to 100, and filtering to a pill that
 	// said 26 opened a submission line reading "96 comments".
-	function renderPageHeader(stories, container) {
+	// Which live discussions the reader can actually see, which is not the same as
+	// which are live. Filtering to one discussion hides the rest, and a bookend that
+	// went on naming a hidden conversation would be describing something that is no
+	// longer on screen.
+	//
+	// A quote or comment focus shows an arbitrary slice of a thread rather than a
+	// whole discussion, so there is no run to delimit and this answers empty --
+	// which is what takes the bookends off entirely.
+	function visibleLiveLabels() {
+		const filter = activeCommentFilter;
+
+		if (!filter) {
+			return [...liveDiscussions.values()].filter(Boolean);
+		}
+
+		if (filter.type !== "discussion") {
+			return [];
+		}
+
+		const label = liveDiscussions.get(filter.key);
+
+		return liveDiscussions.has(filter.key) ? [label].filter(Boolean) : [];
+	}
+
+	// Two rules with a word on them, opening and closing. Deliberately not the
+	// hatched band the panel uses between submissions: that one says "different
+	// subject now", and this says "the same subject, still being written". A band
+	// here would read as the list breaking in two.
+	function liveBookend(edge) {
+		const node = document.createElement("div");
+
+		node.className = `live-bookend live-bookend-${edge}`;
+		node.dataset.liveBookend = edge;
+
+		if (edge === "open") {
+			node.innerHTML = `<span class="live-bookend-mark">LIVE</span><span class="live-bookend-text"></span>`;
+		} else {
+			node.innerHTML = `<span class="live-bookend-text">end of the live discussion</span>`;
+		}
+
+		return node;
+	}
+
+	// Re-read on every filter change rather than written once at render. The run is
+	// a statement about what is on screen, and the filter is what changes that.
+	function syncLiveBookends() {
+		const host = sidebarUI?.body;
+
+		if (!host) {
+			return;
+		}
+
+		const labels = visibleLiveLabels();
+		const named = labels.length ? ` in ${labels.join(", ")}` : "";
+
+		for (const node of host.querySelectorAll("[data-live-bookend]")) {
+			node.classList.toggle("live-bookend-hidden", !labels.length);
+
+			if (node.dataset.liveBookend === "open") {
+				node.querySelector(".live-bookend-text").textContent =
+					`happening now${named}`;
+			}
+		}
+	}
+
+	function renderPageHeader(stories, container, options = {}) {
+		const sort = options.sort || "best";
 		const total = stories.reduce(
 			(sum, story) => sum + (story.commentCount || 0),
 			0,
@@ -12410,17 +12765,27 @@ ${settingsPanelHTML()}
 		: ""
 }</div>
 <div class="source-strip${stories.length > 1 ? "" : " source-strip-single"}" id="source-strip">
-${stories
+${
+	// A live entry drops the date and reads "HN 21 LIVE"; an archived one keeps it
+	// and reads "HN · Aug 2026 2". The date is there to tell two submissions of one
+	// page apart, and against a live entry it cannot: two threads both current
+	// would both be stamped with this month, which separates nothing. LIVE is the
+	// distinction at that point, and it is doing the job the date was added for.
+	//
+	// It still earns its place on an archived entry, where "Aug 2026" and "Sep
+	// 2013" are exactly what tells them apart.
+	stories
 	.map(
 		(story, index) => `
 <button type="button" class="source-strip-entry"
 data-discussion-key="${escapeHTML(story.key)}"
 title="Show only this discussion">
-<span class="source-strip-label">${escapeHTML(story.label)}</span>
-<span class="source-strip-count">${escapeHTML(String(story.commentCount ?? 0))}</span>
+<span class="source-strip-label">${escapeHTML(liveDiscussions.has(story.key) ? story.baseLabel || story.label : story.label)}</span>
+<span class="source-strip-count">${escapeHTML(String(story.commentCount ?? 0))}</span>${liveDiscussions.has(story.key) ? `<span class="live-pill">LIVE</span>` : ""}
 </button>`,
 	)
-	.join("")}
+	.join("")
+}
 </div>`;
 
 		// Collapsed until asked for. The aggregate is the headline -- "what the
@@ -12429,6 +12794,7 @@ title="Show only this discussion">
 		// permanently under the title.
 		const strip = wrapper.querySelector(".source-strip");
 		const disclosure = wrapper.querySelector(".page-header-disclosure");
+
 
 		// Nothing to disclose with a single discussion: no button was rendered, and
 		// the strip stays out of the layout entirely.
@@ -12498,6 +12864,46 @@ title="Show only this discussion">
 		});
 
 		container.appendChild(wrapper);
+
+		// Below the header's rule, not on its meta line. The header names the page
+		// and counts what is on it -- facts about the article. This orders the merged
+		// list, which is a fact about the list, and the rule between them is the
+		// boundary it belongs on the far side of.
+		//
+		// Only rendered here, which is to say only when there are several
+		// discussions. A single thread arrives in its own platform's order and that
+		// ordering is inherited rather than invented, so there is nothing here to
+		// choose between.
+		const sortRow = document.createElement("div");
+
+		sortRow.className = "page-sort";
+		sortRow.innerHTML = `
+<label class="page-sort-label" for="comment-sort">Sort</label>
+<select class="page-sort-select" id="comment-sort">${SORT_MODES.map(
+			(mode) =>
+				`<option value="${mode.id}"${mode.id === sort ? " selected" : ""}>${mode.label}</option>`,
+		).join("")}</select>`;
+
+		// Saved before the re-render, so the order the reader is looking at is the
+		// order the next page opens in. Re-renders through the ordinary path rather
+		// than re-sorting the DOM in place: blendRoots is the only thing that knows
+		// the rule, and a second ordering implementation here would be one to keep in
+		// step with it forever.
+		sortRow.querySelector(".page-sort-select").onchange = async (event) => {
+			const next = event.target.value;
+
+			if (next === sort) {
+				return;
+			}
+
+			await saveSettings({ commentSort: next });
+
+			if (typeof options.onSortChange === "function") {
+				await options.onSortChange(next);
+			}
+		};
+
+		container.appendChild(sortRow);
 
 		return wrapper;
 	}
@@ -12579,6 +12985,13 @@ title="Show only this discussion">
 			"discussion-filtered",
 			activeCommentFilter?.type === "discussion",
 		);
+
+		// Any filter, not only a discussion one. The sort control orders the merged
+		// list, and none of the three filters leaves a merged list on screen: a
+		// discussion filter leaves one source's thread in its own order, and a quote
+		// or comment focus leaves a slice of one conversation. Offering to re-order
+		// what is showing would be offering something the control does not do.
+		sidebarUI?.body?.classList.toggle("list-filtered", Boolean(activeCommentFilter));
 	}
 
 	function syncSourceStripState(wrapper) {
@@ -14132,6 +14545,10 @@ title="Show only this discussion">
 		positionFilterBannerForComment(null);
 
 		transitionCommentList(() => {
+			// activeCommentFilter is already null above, so this restores the full
+			// wording rather than needing to be told what was cleared.
+			syncLiveBookends();
+
 			for (const rendered of renderedComments) {
 				rendered.element.classList.remove("comment-filter-hidden");
 
@@ -15718,6 +16135,11 @@ title="Show only this discussion">
 		positionFilterBannerForComment(anchorElement);
 
 		transitionCommentList(() => {
+			// Inside the transition with the comments themselves. The bookends delimit
+			// a run of them, so a marker re-worded a beat early or late reads as
+			// belonging to the list it is no longer describing.
+			syncLiveBookends();
+
 			for (const rendered of renderedComments) {
 				rendered.element.classList.toggle(
 					"comment-filter-hidden",
