@@ -1786,6 +1786,9 @@
 			// a number here would be sorted and displayed as though they were --
 			// the argument hnComment already makes about HN's absent comment score.
 			score: null,
+			// An estimate, and low. replyCount is direct replies only, so a reply to
+			// a reply is not in it. reconcileWholeThreads corrects this from the
+			// rendered thread; this is what the pill says until then.
 			commentCount: admitted.length + replies,
 			// The newest, not the oldest. A collective was never submitted, so it
 			// has no submission date; the only honest timestamp is when the
@@ -1961,6 +1964,22 @@
 		}
 
 		return newest;
+	}
+
+	// How many comments actually arrived for a discussion. Only meaningful for a
+	// source whose whole thread arrives at once: HN and Reddit fill in on request,
+	// so what is on screen is a fraction of what exists and their own counts are
+	// the honest ones.
+	function renderedCommentCount(comments, discussionKey) {
+		let count = 0;
+
+		for (const comment of comments || []) {
+			if (comment.discussionKey === discussionKey) {
+				count += 1;
+			}
+		}
+
+		return count;
 	}
 	// #endregion hnewhere-test-export
 
@@ -2388,6 +2407,11 @@ ${
 		// happened in it. Named, because with Bluesky as the only source the panel
 		// otherwise says "Last comment" with nothing saying whose.
 		ageLabel: "Last Bluesky comment",
+		// getPostThread returns a root's whole subtree in one request, so once the
+		// thread has rendered, what is on screen is the discussion. That is not
+		// true of HN or Reddit, which is why it is declared rather than assumed:
+		// it licenses correcting the count and the age from the rendered list.
+		threadArrivesWhole: true,
 		// The surprising part, said where it is ticked: the page URL goes to a
 		// third party that is not Bluesky. Bluesky itself is only ever asked about
 		// the posts Constellation names.
@@ -10625,7 +10649,7 @@ ${settingsPanelHTML()}
 	href="${escapeHTML(hnURL)}">open on ${escapeHTML(sourceShortLabel(story))}</a>`
 	}
 	|
-	${storyCommentCount} comments
+	<span class="story-comment-count">${storyCommentCount}</span> comments
 	</div>
 	${
 		storyBodyHTML
@@ -11963,10 +11987,10 @@ ${settingsPanelHTML()}
 			});
 		}
 
-		// Now that the replies are on screen, the byline can say when the
-		// conversation actually last moved. Until here it carried the newest root
-		// post, which is the newest thing discover was able to see.
-		syncCollectiveAges(stories);
+		// Now that the replies are on screen, the count and the age can say what is
+		// actually there. Until here both carried what discover could see, which is
+		// root posts and their direct reply counts.
+		reconcileWholeThreads(stories, ui);
 
 		for (const story of stories) {
 			await markSeen(story.key);
@@ -11990,37 +12014,80 @@ ${settingsPanelHTML()}
 		}
 	}
 
-	// Only sources that label their age have one to correct. HN and Reddit date a
-	// submission, which does not move, and are left alone.
-	function syncCollectiveAges(stories) {
-		const blocks = sidebarUI?.body?.querySelectorAll(".submission-detail");
+	// discover sees root posts and their direct reply counts, never the replies,
+	// so both numbers a collective carries are estimates. The age is the newest
+	// post rather than the newest comment, and the count misses every nested reply
+	// because replyCount counts direct ones only: one live thread read "4
+	// comments" above five of them.
+	//
+	// Once the thread has rendered, what is on screen is the discussion, so both
+	// are corrected from it. Only sources declaring threadArrivesWhole are
+	// touched, because for everyone else the rendered list is a fraction of what
+	// exists and correcting from it would be the bug rather than the fix.
+	//
+	// commentCount is written back onto the story, not just into the markup, so
+	// the pill, the submission line and the header total keep agreeing with each
+	// other the way they are meant to.
+	function reconcileWholeThreads(stories, ui) {
+		const body = ui?.body;
 
-		if (!blocks?.length) {
+		if (!body) {
 			return;
 		}
 
+		let corrected = false;
+
 		for (const story of stories) {
-			if (!getSource(story.source)?.ageLabel) {
+			if (!getSource(story.source)?.threadArrivesWhole) {
+				continue;
+			}
+
+			const count = renderedCommentCount(renderedComments, story.key);
+
+			if (!count) {
 				continue;
 			}
 
 			const newest = newestCommentTime(renderedComments, story.key);
 
-			if (!newest) {
-				continue;
-			}
+			story.commentCount = count;
+			corrected = true;
 
-			for (const block of blocks) {
+			for (const block of body.querySelectorAll(".submission-detail")) {
 				if (block.dataset.discussionKey !== story.key) {
 					continue;
 				}
 
 				const age = block.querySelector(".item-age");
+				const shown = block.querySelector(".story-comment-count");
 
-				if (age) {
+				if (age && newest) {
 					age.textContent = timeAgo(newest);
 				}
+
+				if (shown) {
+					shown.textContent = String(count);
+				}
 			}
+
+			for (const pill of body.querySelectorAll(".source-strip-entry")) {
+				if (pill.dataset.discussionKey === story.key) {
+					const shown = pill.querySelector(".source-strip-count");
+
+					if (shown) {
+						shown.textContent = String(count);
+					}
+				}
+			}
+		}
+
+		const total = corrected && body.querySelector(".page-header-total");
+
+		if (total) {
+			total.textContent = pluralize(
+				stories.reduce((sum, story) => sum + (story.commentCount || 0), 0),
+				"comment",
+			);
 		}
 	}
 
@@ -12057,7 +12124,7 @@ ${settingsPanelHTML()}
 	// and all. "352 comments across 1 discussion", a pill reading "HN 87", and
 	// that line underneath were three headings saying one thing.
 	stories.length > 1
-		? `${escapeHTML(pluralize(total, "comment"))} across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button>`
+		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button>`
 		: ""
 }</div>
 <div class="source-strip${stories.length > 1 ? "" : " source-strip-single"}" id="source-strip">
