@@ -7616,8 +7616,12 @@ header button svg {
 
 /* The page, not a submission of it. Sized like a story header used to be, so the
 	panel opens onto the same shape it always did. */
+/* No top padding of its own. #comments already insets its contents by 12px, and
+	stacking a second 12px here put 24px of air above the panel's first line -- more
+	than the gap under it. The bottom padding stays, because it separates the title
+	block from the comments rather than from the chrome. */
 .page-header {
-	padding:12px 14px 10px;
+	padding:0 14px 10px;
 	border-bottom:1px solid var(--border-soft);
 }
 
