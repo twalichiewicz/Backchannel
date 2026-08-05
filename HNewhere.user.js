@@ -1238,6 +1238,102 @@
 		});
 	}
 
+	// The shared shape, written once as data. Two mappers agreed on it by being
+	// written carefully, which is not the same as anything checking -- and a third
+	// source would have agreed with whichever one its author happened to read.
+	//
+	// `nullable` is the column that earns its place. `score` and `permalink` look
+	// required from the two sources that exist, and are not: a source can have no
+	// number worth reporting and no page of its own to link to. Nothing declared
+	// that, and renderStory quietly assumed a permalink until someone looked.
+	const DISCUSSION_SHAPE = {
+		source: { type: "string" },
+		key: { type: "string" },
+		id: { type: ["number", "string"] },
+		title: { type: "string" },
+		author: { type: "string" },
+		score: { type: "number", nullable: true },
+		commentCount: { type: "number" },
+		createdAt: { type: "number" },
+		permalink: { type: "string", nullable: true },
+		articleURL: { type: "string" },
+		label: { type: "string" },
+		bodyHTML: { type: "string" },
+		rootKeys: { type: "array" },
+	};
+
+	const COMMENT_SHAPE = {
+		source: { type: "string" },
+		key: { type: "string" },
+		id: { type: ["number", "string"] },
+		discussionKey: { type: "string" },
+		parentKey: { type: "string", nullable: true },
+		author: { type: "string" },
+		bodyHTML: { type: "string" },
+		// null, not 0. HN publishes no comment score at any endpoint, so there is
+		// no number to report -- and a 0 would be indexed, sorted and displayed as
+		// though there were.
+		score: { type: "number", nullable: true },
+		createdAt: { type: "number" },
+		isOP: { type: "boolean" },
+		deleted: { type: "boolean" },
+		replyKeys: { type: "array" },
+	};
+
+	// Returns problems rather than throwing, so one run names every field that is
+	// wrong instead of the first.  An empty array is conformance.
+	//
+	// Reports present-but-undefined separately from missing: they arrive from
+	// different mistakes -- a forgotten key versus a lookup that returned nothing
+	// -- and the fix is different.
+	function shapeProblems(shape, value) {
+		if (!value || typeof value !== "object") {
+			return ["not an object"];
+		}
+
+		const problems = [];
+
+		for (const [field, rule] of Object.entries(shape)) {
+			if (!Object.prototype.hasOwnProperty.call(value, field)) {
+				problems.push(`${field}: missing`);
+				continue;
+			}
+
+			const actual = value[field];
+
+			if (actual === undefined) {
+				problems.push(`${field}: undefined`);
+				continue;
+			}
+
+			if (actual === null) {
+				if (!rule.nullable) {
+					problems.push(`${field}: null, not declared nullable`);
+				}
+
+				continue;
+			}
+
+			const allowed = [].concat(rule.type);
+			const found = Array.isArray(actual) ? "array" : typeof actual;
+
+			if (!allowed.includes(found)) {
+				problems.push(`${field}: ${found}, expected ${allowed.join("|")}`);
+			}
+		}
+
+		// An extra field is a problem too. The renderer reads what it was told to
+		// read, so a mapper that invents one has written something no source is
+		// obliged to provide and nothing is obliged to display.
+		for (const field of Object.keys(value)) {
+			if (!shape[field]) {
+				problems.push(`${field}: not in the shape`);
+			}
+		}
+
+		return problems;
+	}
+
 	// The shared shape every source is read through. Written as two mappers rather
 	// than one adapter method because they are pure -- the fetching lives in the
 	// adapter, the shape lives here, and only one of those is testable without a

@@ -20,6 +20,12 @@ use to detect updates, so every release bumps it.
   actual bank, while the runtime block list has covered banking properly all
   along. Thanks to the reporter of #52 for the audit.
 
+- **The shape every source is read through is written down.** Nothing you can
+  see changes. It used to be asserted twice, in two styles, with nothing
+  requiring a definition to exist — so a third source would have been checked
+  against whichever of the two its author happened to read. It is now one table,
+  and every source is checked against it mechanically.
+
 ### Fixed
 
 - **Posting a comment no longer warns that it might not have worked.** A comment
