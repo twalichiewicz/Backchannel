@@ -1943,6 +1943,25 @@
 	function stripCloseClearsFilter(opening, filter) {
 		return !opening && filter?.type === "discussion";
 	}
+
+	// When a collective last moved. It has no submission date, so its byline
+	// carries the newest thing in it instead, and discover cannot know that: it
+	// sees the root posts and their reply counts, never the replies. So the
+	// number starts as the newest post and is corrected once they have rendered.
+	//
+	// 0 means nothing has rendered for this discussion yet, which the caller
+	// reads as "leave the number alone" rather than as a date in 1970.
+	function newestCommentTime(comments, discussionKey) {
+		let newest = 0;
+
+		for (const comment of comments || []) {
+			if (comment.discussionKey === discussionKey && comment.time > newest) {
+				newest = comment.time;
+			}
+		}
+
+		return newest;
+	}
 	// #endregion hnewhere-test-export
 
 	// Where a name links to, decided by the source the name came from. It used to
@@ -2366,8 +2385,9 @@ ${
 		beta: true,
 		// HN and Reddit date a submission, so a bare age reads as "posted then".
 		// A collective was never posted, and its timestamp is the last thing that
-		// happened in it, which has to be said or the number means the wrong thing.
-		ageLabel: "Last comment",
+		// happened in it. Named, because with Bluesky as the only source the panel
+		// otherwise says "Last comment" with nothing saying whose.
+		ageLabel: "Last Bluesky comment",
 		// The surprising part, said where it is ticked: the page URL goes to a
 		// third party that is not Bluesky. Bluesky itself is only ever asked about
 		// the posts Constellation names.
@@ -11943,6 +11963,11 @@ ${settingsPanelHTML()}
 			});
 		}
 
+		// Now that the replies are on screen, the byline can say when the
+		// conversation actually last moved. Until here it carried the newest root
+		// post, which is the newest thing discover was able to see.
+		syncCollectiveAges(stories);
+
 		for (const story of stories) {
 			await markSeen(story.key);
 		}
@@ -11962,6 +11987,40 @@ ${settingsPanelHTML()}
 			setSidebarStage(ui, "votes");
 			hydrateVoteControlsForStory(story.id, await loadVoteLinks(story.id));
 			hydrateDisplayAges(story.id);
+		}
+	}
+
+	// Only sources that label their age have one to correct. HN and Reddit date a
+	// submission, which does not move, and are left alone.
+	function syncCollectiveAges(stories) {
+		const blocks = sidebarUI?.body?.querySelectorAll(".submission-detail");
+
+		if (!blocks?.length) {
+			return;
+		}
+
+		for (const story of stories) {
+			if (!getSource(story.source)?.ageLabel) {
+				continue;
+			}
+
+			const newest = newestCommentTime(renderedComments, story.key);
+
+			if (!newest) {
+				continue;
+			}
+
+			for (const block of blocks) {
+				if (block.dataset.discussionKey !== story.key) {
+					continue;
+				}
+
+				const age = block.querySelector(".item-age");
+
+				if (age) {
+					age.textContent = timeAgo(newest);
+				}
+			}
 		}
 	}
 
