@@ -1,27 +1,25 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.0
+// @version      1.6.1
 // @license      MIT
-// @updateURL    https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
-// @downloadURL  https://raw.githubusercontent.com/twalichiewicz/HNewhere/main/HNewhere.user.js
-// @homepageURL  https://github.com/twalichiewicz/HNewhere
-// @supportURL   https://github.com/twalichiewicz/HNewhere/issues
+// @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
+// @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
+// @homepageURL  https://github.com/twalichiewicz/Backchannel
+// @supportURL   https://github.com/twalichiewicz/Backchannel/issues
 // @description  See what everyone's talking about.
 // @include      http://*
 // @include      https://*
-// @exclude      http://localhost/*
-// @exclude      https://localhost/*
-// @exclude      https://www.google.com/*
-// @exclude      https://www.google.*/*
+// @exclude      *://localhost/*
+// @exclude      *://localhost:*/*
+// @exclude      *://127.0.0.1/*
+// @exclude      *://127.0.0.1:*/*
+// @exclude      *://127.*.*.*/*
+// @exclude      https://*.google.*/*
 // @exclude      https://chatgpt.com/
 // @exclude      https://claude.ai/
 // @exclude      https://x.com/
-// @exclude      https://*.google.com/*
-// @exclude      https://accounts.google.com/*
-// @exclude      https://mail.google.com/*
 // @exclude      https://mail.*.*/*
-// @exclude      https://*.bank.com/*
 // @exclude      https://*.googleusercontent.com/*
 // @exclude      https://*.doubleclick.net/*
 // @exclude      https://*.facebook.com/*
@@ -38,11 +36,9 @@
 // @exclude      https://*.stripe.com/*
 // @exclude      https://console.aws.amazon.com/*
 // @exclude      https://portal.azure.com/*
-// @exclude      https://console.cloud.google.com/*
 // @exclude      https://*.netflix.com/*
 // @exclude      https://web.whatsapp.com/*
 // @exclude      https://*.instagram.com/*
-// @exclude      *://127.0.0.1/*
 // @exclude      *://*/*.pdf
 // @grant        GM.getValue
 // @grant        GM.setValue
@@ -52,6 +48,8 @@
 // @connect      news.ycombinator.com
 // @connect      www.reddit.com
 // @connect      arctic-shift.photon-reddit.com
+// @connect      public.api.bsky.app
+// @connect      constellation.microcosm.blue
 // @run-at       document-end
 // @noframes
 // ==/UserScript==
@@ -436,7 +434,7 @@
 	const HN_ORIGIN = "https://news.ycombinator.com";
 	// #endregion hnewhere-test-export
 
-	const REPO_URL = "https://github.com/twalichiewicz/HNewhere";
+	const REPO_URL = "https://github.com/twalichiewicz/Backchannel";
 
 	// Read back from the manager rather than written out a second time, so the
 	// version in settings cannot drift from the @version header. Wrapped because
@@ -478,6 +476,7 @@
 	// Long enough to survive a slow HN, short enough that an abandoned popup's
 	// payload does not sit in storage indefinitely.
 	const BRIDGE_PAYLOAD_TTL = 10 * 60 * 1000;
+	// #region hnewhere-test-export
 	const TRACKING_PARAMS = new Set([
 		"utm_source",
 		"utm_medium",
@@ -487,6 +486,7 @@
 		"fbclid",
 		"gclid",
 	]);
+	// #endregion hnewhere-test-export
 
 	let sidebar = null;
 	let sidebarUI = null;
@@ -1139,11 +1139,16 @@
 		});
 	}
 
-	function requestText(url) {
+	// `headers` is optional and passed straight through. Constellation asks
+	// callers to identify themselves in a User-Agent; some managers forbid setting
+	// that header and drop it silently, which is acceptable -- it is a request,
+	// not a requirement -- and is why this stays one helper rather than two.
+	function requestText(url, headers) {
 		return new Promise((resolve) => {
 			GM.xmlHttpRequest({
 				method: "GET",
 				url,
+				headers,
 				timeout: 10000,
 				anonymous: false,
 				onload: function (response) {
@@ -1242,6 +1247,102 @@
 				})}`,
 			};
 		});
+	}
+
+	// The shared shape, written once as data. Two mappers agreed on it by being
+	// written carefully, which is not the same as anything checking -- and a third
+	// source would have agreed with whichever one its author happened to read.
+	//
+	// `nullable` is the column that earns its place. `score` and `permalink` look
+	// required from the two sources that exist, and are not: a source can have no
+	// number worth reporting and no page of its own to link to. Nothing declared
+	// that, and renderStory quietly assumed a permalink until someone looked.
+	const DISCUSSION_SHAPE = {
+		source: { type: "string" },
+		key: { type: "string" },
+		id: { type: ["number", "string"] },
+		title: { type: "string" },
+		author: { type: "string" },
+		score: { type: "number", nullable: true },
+		commentCount: { type: "number" },
+		createdAt: { type: "number" },
+		permalink: { type: "string", nullable: true },
+		articleURL: { type: "string" },
+		label: { type: "string" },
+		bodyHTML: { type: "string" },
+		rootKeys: { type: "array" },
+	};
+
+	const COMMENT_SHAPE = {
+		source: { type: "string" },
+		key: { type: "string" },
+		id: { type: ["number", "string"] },
+		discussionKey: { type: "string" },
+		parentKey: { type: "string", nullable: true },
+		author: { type: "string" },
+		bodyHTML: { type: "string" },
+		// null, not 0. HN publishes no comment score at any endpoint, so there is
+		// no number to report -- and a 0 would be indexed, sorted and displayed as
+		// though there were.
+		score: { type: "number", nullable: true },
+		createdAt: { type: "number" },
+		isOP: { type: "boolean" },
+		deleted: { type: "boolean" },
+		replyKeys: { type: "array" },
+	};
+
+	// Returns problems rather than throwing, so one run names every field that is
+	// wrong instead of the first.  An empty array is conformance.
+	//
+	// Reports present-but-undefined separately from missing: they arrive from
+	// different mistakes -- a forgotten key versus a lookup that returned nothing
+	// -- and the fix is different.
+	function shapeProblems(shape, value) {
+		if (!value || typeof value !== "object") {
+			return ["not an object"];
+		}
+
+		const problems = [];
+
+		for (const [field, rule] of Object.entries(shape)) {
+			if (!Object.prototype.hasOwnProperty.call(value, field)) {
+				problems.push(`${field}: missing`);
+				continue;
+			}
+
+			const actual = value[field];
+
+			if (actual === undefined) {
+				problems.push(`${field}: undefined`);
+				continue;
+			}
+
+			if (actual === null) {
+				if (!rule.nullable) {
+					problems.push(`${field}: null, not declared nullable`);
+				}
+
+				continue;
+			}
+
+			const allowed = [].concat(rule.type);
+			const found = Array.isArray(actual) ? "array" : typeof actual;
+
+			if (!allowed.includes(found)) {
+				problems.push(`${field}: ${found}, expected ${allowed.join("|")}`);
+			}
+		}
+
+		// An extra field is a problem too. The renderer reads what it was told to
+		// read, so a mapper that invents one has written something no source is
+		// obliged to provide and nothing is obliged to display.
+		for (const field of Object.keys(value)) {
+			if (!shape[field]) {
+				problems.push(`${field}: not in the shape`);
+			}
+		}
+
+		return problems;
 	}
 
 	// The shared shape every source is read through. Written as two mappers rather
@@ -1556,6 +1657,223 @@
 		return current === "loid" ? "archive" : "off";
 	}
 
+	// Bluesky is read through a backlink index rather than through Bluesky,
+	// because app.bsky.feed.searchPosts answers 403 without credentials and does
+	// not move for any header. Constellation walks the AT Protocol firehose and
+	// records every link it sees by target, collection and JSON path.
+	//
+	// The hosts and the fetch helper live beside registerSource, outside this
+	// region. Everything here is a pure mapper, and the UA string has to read
+	// SCRIPT_VERSION, which is not exported -- a const in here referencing it
+	// would throw the moment the test harness evaluated the region.
+
+	// The exact string to ask Constellation about -- deliberately not
+	// normalizeURL's output, which strips the trailing slash.
+	//
+	// Constellation folds nothing: measured on one article, the URL as-is found
+	// 29 posters, without the slash 1, without `www.` 0. And across 22 front-page
+	// URLs tested against all eight scheme x www x slash variants, the page's own
+	// URL found the maximum 22 times out of 22 -- because whoever posted the link
+	// copied the same address bar the reader is looking at, and Bluesky does not
+	// rewrite it.
+	//
+	// Tracking parameters are the one thing worth removing: the reader's copy may
+	// carry a campaign tag the poster's did not. The fragment goes for the same
+	// reason and is never part of what was shared.
+	function bskyTarget(url) {
+		try {
+			const parsed = new URL(url);
+
+			for (const key of [...parsed.searchParams.keys()]) {
+				if (TRACKING_PARAMS.has(key.toLowerCase())) {
+					parsed.searchParams.delete(key);
+				}
+			}
+
+			parsed.hash = "";
+
+			return parsed.href;
+		} catch {
+			return "";
+		}
+	}
+
+	// did and rkey together, because neither identifies a post alone. parseSourceKey
+	// splits on the first colon and a did is full of them, which is exactly the
+	// case its round-trip test was written for.
+	function bskyKeyFromRecord(record) {
+		return sourceKey("bsky", `${record?.did || ""}/${record?.rkey || ""}`);
+	}
+
+	// at://did/app.bsky.feed.post/rkey -> the key form. The inverse of
+	// bskyURIFromKey, for the path where a post arrives already hydrated.
+	function bskyKeyFromURI(uri) {
+		const match = /^at:\/\/([^/]+)\/[^/]+\/(.+)$/.exec(String(uri || ""));
+
+		return match ? sourceKey("bsky", `${match[1]}/${match[2]}`) : sourceKey("bsky", "");
+	}
+
+	function bskyURIFromKey(key) {
+		const parsed = parseSourceKey(key);
+
+		if (parsed?.source !== "bsky") {
+			return null;
+		}
+
+		const cut = parsed.id.lastIndexOf("/");
+
+		if (cut < 1 || cut === parsed.id.length - 1) {
+			return null;
+		}
+
+		return `at://${parsed.id.slice(0, cut)}/app.bsky.feed.post/${parsed.id.slice(cut + 1)}`;
+	}
+
+	// The same floor redditHitPasses applies, for the same reason. 79% of the
+	// posts linking a page have no reply at all -- they are bots dropping a link,
+	// and admitting one lights the button and delivers nothing.
+	function bskyPostPasses(post) {
+		return (post?.replyCount ?? 0) > 0;
+	}
+
+	// Seconds, matching every other createdAt in the shape. Bluesky publishes an
+	// ISO string; HN and Reddit publish unix seconds, and the renderer does the
+	// arithmetic in seconds.
+	function bskyTime(post) {
+		const parsed = Date.parse(post?.record?.createdAt || "");
+
+		return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : 0;
+	}
+
+	// One discussion per URL, not one per post. Bluesky has no thread for a link:
+	// 29 people posted one measured article as 29 unrelated posts, most with no
+	// replies. Rendering those as 29 discussions would put 29 entries in the
+	// source strip and, because blendPosition scores a one-comment discussion at
+	// exactly 0.5, clump every one of them at the same point in the merged list.
+	//
+	// As one discussion with N roots they spread across it properly, which is
+	// what blendPosition was written to do.
+	//
+	// Returns null rather than an empty discussion when nothing was admitted, so
+	// discover can return [] and the panel never learns Bluesky was asked.
+	function bskyCollective(url, posts) {
+		const admitted = (posts || []).filter(bskyPostPasses);
+
+		if (!admitted.length) {
+			return null;
+		}
+
+		const replies = admitted.reduce((total, post) => total + (post.replyCount ?? 0), 0);
+
+		return {
+			source: "bsky",
+			// normalizeURL here, where bskyTarget is used for the query: this is
+			// identity, and the trailing slash must not split one page in two. It
+			// folds no generic `www.` -- HOST_ALIASES lists only x.com and
+			// twitter.com -- which costs nothing, because discover is called with
+			// the one URL the reader is on and the key never leaves the panel.
+			key: sourceKey("bsky", normalizeURL(url)),
+			id: normalizeURL(url),
+			// Names itself, because there is no submitter to borrow a title from.
+			// Only ever seen when a reader has filtered to it: with one discussion
+			// storyTitle uses the page's own title instead, since nothing needs
+			// telling apart.
+			title: "Bluesky comments",
+			// Nobody authored a collective. NON_AUTHORS already contains "", so
+			// nothing tries to link it to a profile.
+			author: "",
+			// null, not a sum. Likes across unrelated posts are not one score, and
+			// a number here would be sorted and displayed as though they were --
+			// the argument hnComment already makes about HN's absent comment score.
+			score: null,
+			// An estimate, and low. replyCount is direct replies only, so a reply to
+			// a reply is not in it. reconcileWholeThreads corrects this from the
+			// rendered thread; this is what the pill says until then.
+			commentCount: admitted.length + replies,
+			// The newest, not the oldest. A collective was never submitted, so it
+			// has no submission date; the only honest timestamp is when the
+			// conversation last moved, which is what the panel labels it as.
+			//
+			// Only the roots are known at this point -- replies are fetched per root,
+			// later -- so this is the newest post rather than the newest comment. It
+			// can therefore be too old, never too new.
+			createdAt: Math.max(...admitted.map((post) => bskyTime(post))),
+			// Bluesky has no page showing everything that linked a URL. Rather than
+			// invent one, this says so and renderStory prints an unlinked title.
+			permalink: null,
+			articleURL: url,
+			label: "Bluesky",
+			bodyHTML: "",
+			rootKeys: admitted.map((post) => bskyKeyFromURI(post.uri)),
+		};
+	}
+
+	// Bluesky publishes a like count per post, so unlike HN there is a real number
+	// to report and it is not invented. A post and a reply are the same record
+	// type, which is why one mapper serves both.
+	function bskyComment(post, discussion, parentKey, rootAuthorDID) {
+		const key = bskyKeyFromURI(post?.uri);
+		const did = post?.author?.did || "";
+
+		// Judged against the root post's author, not the discussion's -- a
+		// collective has no author, and "the person who posted this link replying
+		// to you" is the signal worth marking.
+		//
+		// Omitting rootAuthorDID means this post IS the root, and a root is its own
+		// OP. That is deliberately not the same as passing null, which is a root
+		// that arrived without a did: resolving with `||` would fall back to each
+		// node's own did and mark the entire thread as OP.
+		const owner = rootAuthorDID === undefined ? did : rootAuthorDID;
+
+		return {
+			source: "bsky",
+			key,
+			id: key.slice("bsky:".length),
+			discussionKey: discussion?.key,
+			parentKey: parentKey || null,
+			author: post?.author?.handle || "",
+			// Bluesky's rich-text facets are dropped here, so a link inside a post
+			// renders as text rather than an anchor. A deliberate first cut, and the
+			// reason this escapes rather than sanitizes.
+			bodyHTML: escapeHTML(post?.record?.text || ""),
+			score: post?.likeCount ?? 0,
+			createdAt: bskyTime(post),
+			isOP: Boolean(did) && did === owner,
+			deleted: false,
+			replyKeys: [],
+		};
+	}
+
+	// Walks a getPostThread response into the flat map getComment reads. The
+	// response is a union: notFoundPost and blockedPost carry no author and no
+	// text, and rendering one would put an authorless comment in the thread.
+	function indexBskyThread(node, discussion, byKey, parentKey, rootAuthorDID) {
+		const post = node?.post;
+
+		if (!post?.uri) {
+			return;
+		}
+
+		const key = bskyKeyFromURI(post.uri);
+		// The root names the owner for everything beneath it. `undefined` means
+		// "this node is the root"; null means a root that carried no did, and marks
+		// nobody rather than everybody.
+		const ownerDID =
+			rootAuthorDID === undefined ? post?.author?.did || null : rootAuthorDID;
+		const comment = bskyComment(post, discussion, parentKey, ownerDID);
+
+		byKey.set(key, comment);
+
+		for (const reply of node.replies || []) {
+			if (!reply?.post?.uri) {
+				continue;
+			}
+
+			comment.replyKeys.push(bskyKeyFromURI(reply.post.uri));
+			indexBskyThread(reply, discussion, byKey, key, ownerDID);
+		}
+	}
+
 	// A registry rather than a pair of branches. HN is an entry, not a base case:
 	// the moment a source is special-cased the renderer starts learning what a
 	// source is, which is the thing this whole seam exists to prevent.
@@ -1582,6 +1900,86 @@
 	// parsed out of HN's markup and never pass through a source.
 	function sourceShortLabel(story) {
 		return getSource(story?.source)?.shortLabel || story?.label || "the site";
+	}
+
+	// Where a discussion's own header links to, or null when there is nowhere
+	// honest to send anyone. `permalink` is nullable in DISCUSSION_SHAPE for
+	// exactly this: a collective assembled from several posts has no page of its
+	// own, and the old fallback built a Hacker News item URL from whatever id the
+	// discussion happened to carry -- rendering "open on Bluesky" pointed at HN.
+	//
+	// The absence of `source` is what identifies a front-page row: those are
+	// parsed out of HN's markup rather than produced by a mapper, they carry no
+	// permalink, and their discussion genuinely is the HN item their id names.
+	//
+	// Same answer authorProfileURL gives for a name that is not a person: return
+	// null, and let the caller print text instead of linking to nowhere.
+	function discussionURL(story) {
+		if (story?.permalink) {
+			return story.permalink;
+		}
+
+		return story?.source ? null : commentURL(story?.id);
+	}
+
+	// What a story's own row should be titled. `story.title` is what one person
+	// typed into a submit box, so it earns the slot only when it is doing a job
+	// the content's own title cannot: telling two discussions of one page apart.
+	//
+	// With a single discussion there is nothing to tell apart. With a source that
+	// assembles several people's posts there is no submitted title at all, which
+	// is why the fallback is the page rather than the empty string the collective
+	// honestly carries.
+	function storyTitle(story, page, disambiguating) {
+		return (disambiguating && story?.title) || page;
+	}
+
+	// Closing the strip means "show me everything again". The strip is the only
+	// control that undoes a discussion filter, so collapsing it while one is
+	// active left the reader in a filtered thread with nothing on screen saying
+	// so and nothing to press to undo it -- the same hazard the strip's own click
+	// handler avoids by refusing to auto-collapse after a press.
+	//
+	// Only a discussion filter is cleared. A quote filter came from the article
+	// and a comment filter from the banner; the strip closing says nothing about
+	// either, and clearing them would undo something the reader did elsewhere.
+	function stripCloseClearsFilter(opening, filter) {
+		return !opening && filter?.type === "discussion";
+	}
+
+	// When a collective last moved. It has no submission date, so its byline
+	// carries the newest thing in it instead, and discover cannot know that: it
+	// sees the root posts and their reply counts, never the replies. So the
+	// number starts as the newest post and is corrected once they have rendered.
+	//
+	// 0 means nothing has rendered for this discussion yet, which the caller
+	// reads as "leave the number alone" rather than as a date in 1970.
+	function newestCommentTime(comments, discussionKey) {
+		let newest = 0;
+
+		for (const comment of comments || []) {
+			if (comment.discussionKey === discussionKey && comment.time > newest) {
+				newest = comment.time;
+			}
+		}
+
+		return newest;
+	}
+
+	// How many comments actually arrived for a discussion. Only meaningful for a
+	// source whose whole thread arrives at once: HN and Reddit fill in on request,
+	// so what is on screen is a fraction of what exists and their own counts are
+	// the honest ones.
+	function renderedCommentCount(comments, discussionKey) {
+		let count = 0;
+
+		for (const comment of comments || []) {
+			if (comment.discussionKey === discussionKey) {
+				count += 1;
+			}
+		}
+
+		return count;
 	}
 	// #endregion hnewhere-test-export
 
@@ -1931,6 +2329,212 @@ ${
 		},
 	});
 
+	const BSKY_APPVIEW = "https://public.api.bsky.app/xrpc";
+	const CONSTELLATION = "https://constellation.microcosm.blue";
+
+	// Constellation carries this traffic for free and asks callers to name
+	// themselves. One header is the whole cost of honouring that. Read back from
+	// the manager for the same reason the settings panel does: a second hardcoded
+	// version string is a second thing to forget.
+	const CONSTELLATION_UA = `Backchannel/${SCRIPT_VERSION || "dev"} (github.com/twalichiewicz/Backchannel)`;
+
+	// No auth, no cookies and no fallback tier. Reddit demotes loid -> archive ->
+	// off because a second way in existed; there is no second backlink index, so a
+	// failure here means Bluesky contributes nothing and says nothing about it.
+	// Nothing a reader could do would change the outcome.
+	//
+	// Silent to the reader, not to the console. Four different failures land here
+	// -- a host the manager has not been granted, a header it refuses to set, a
+	// service that is down, a body that is not JSON -- and they are
+	// indistinguishable from "this page has no Bluesky posts", which is the
+	// overwhelmingly common and entirely correct answer. Without these lines
+	// there is no way to tell a working source from a blocked one.
+	async function bskyJSON(url, headers) {
+		const attempt = async (sent) => {
+			try {
+				return await requestText(url, sent);
+			} catch (error) {
+				console.warn("Backchannel bsky: request threw", url, error);
+
+				return "";
+			}
+		};
+
+		let text = await attempt(headers);
+
+		// Managers disagree about custom headers, and some fail the whole request
+		// rather than dropping the one they will not set -- Safari's Userscripts
+		// was already flagged as unverified here. Constellation asks callers to
+		// identify themselves but does not require it, so one retry without the
+		// header beats contributing nothing, and the warning names the cause where
+		// a silent success would hide it.
+		if (!text && headers) {
+			text = await attempt(undefined);
+
+			if (text) {
+				console.warn(
+					"Backchannel bsky: this manager refused a custom header; retried without the User-Agent Constellation asks for",
+				);
+			}
+		}
+
+		if (!text) {
+			console.warn(
+				"Backchannel bsky: empty response from",
+				url,
+				"— the manager may not have been granted this host",
+			);
+
+			return null;
+		}
+
+		try {
+			return JSON.parse(text);
+		} catch {
+			console.warn("Backchannel bsky: response was not JSON", url, text.slice(0, 120));
+
+			return null;
+		}
+	}
+
+	registerSource({
+		id: "bsky",
+		label: "Bluesky",
+		shortLabel: "Bluesky",
+		beta: true,
+		// HN and Reddit date a submission, so a bare age reads as "posted then".
+		// A collective was never posted, and its timestamp is the last thing that
+		// happened in it. Named, because with Bluesky as the only source the panel
+		// otherwise says "Last comment" with nothing saying whose.
+		ageLabel: "Last Bluesky comment",
+		// getPostThread returns a root's whole subtree in one request, so once the
+		// thread has rendered, what is on screen is the discussion. That is not
+		// true of HN or Reddit, which is why it is declared rather than assumed:
+		// it licenses correcting the count and the age from the rendered list.
+		threadArrivesWhole: true,
+		// The surprising part, said where it is ticked: the page URL goes to a
+		// third party that is not Bluesky. Bluesky itself is only ever asked about
+		// the posts Constellation names.
+		//
+		// Measured, not assumed. Signed in to bsky.app the cookie jar is empty, and
+		// public.api.bsky.app answers identically to a cookie, a bearer token and
+		// neither. Numbers in the spike's §8.
+		caveat:
+			"Sends each page you visit to Constellation, an independent index of Bluesky links, not to Bluesky. Bluesky is asked only about the posts Constellation names. Signed in or out, these requests carry no account.",
+		capabilities: { vote: false, reply: false, submit: false },
+
+		profileURL: (handle) => "https://bsky.app/profile/" + encodeURIComponent(handle),
+
+		// One request answers the common case. Most pages have no Bluesky posts,
+		// and /links/all settles that while also naming which paths hold records --
+		// so empty paths cost nothing and the path list need not be hardcoded,
+		// which matters because a guessed path silently returns zero. Measured on
+		// one live article: four distinct paths, and the fully-qualified facet form
+		// alone held 83 records a guessed `.facets[].features[].uri` would miss.
+		async discover(url) {
+			const target = bskyTarget(url);
+
+			if (!target) {
+				return [];
+			}
+
+			const encoded = encodeURIComponent(target);
+			const headers = { "User-Agent": CONSTELLATION_UA };
+			const all = await bskyJSON(`${CONSTELLATION}/links/all?target=${encoded}`, headers);
+			const paths = all?.links?.["app.bsky.feed.post"];
+
+			if (!paths) {
+				return [];
+			}
+
+			const uris = new Set();
+
+			for (const [path, stat] of Object.entries(paths)) {
+				if (!stat?.records) {
+					continue;
+				}
+
+				const source = encodeURIComponent(`app.bsky.feed.post:${path.replace(/^\./, "")}`);
+				// One page per path. The response carries a cursor and this does not
+				// follow it: 100 posts from a single path is already far past what a
+				// reader will scroll, and the admission rule discards most of them.
+				// A page busy enough to truncate here is one where the roots shown are
+				// the popular ones anyway.
+				const page = await bskyJSON(
+					`${CONSTELLATION}/xrpc/blue.microcosm.links.getBacklinks?subject=${encoded}&source=${source}&limit=100`,
+					headers,
+				);
+
+				for (const record of page?.records || []) {
+					uris.add(`at://${record.did}/${record.collection}/${record.rkey}`);
+				}
+			}
+
+			if (!uris.size) {
+				return [];
+			}
+
+			// 25 per call is the endpoint's limit, and it returns the reply counts
+			// the admission rule needs alongside the record. Measured on one live
+			// article this was 141 URIs in six calls, of which six posts survived
+			// admission -- the rest were bots dropping a link.
+			const posts = [];
+			const list = [...uris];
+
+			for (let i = 0; i < list.length; i += 25) {
+				const query = list
+					.slice(i, i + 25)
+					.map((uri) => "uris=" + encodeURIComponent(uri))
+					.join("&");
+				const batch = await bskyJSON(`${BSKY_APPVIEW}/app.bsky.feed.getPosts?${query}`);
+
+				posts.push(...(batch?.posts || []));
+			}
+
+			const collective = bskyCollective(url, posts);
+
+			return collective ? [collective] : [];
+		},
+
+		// Roots are known already; only the subtrees are lazy. One getPostThread
+		// per root, fetched the first time that root is asked for, and it fills the
+		// root and its whole conversation at once.
+		async loadThread(discussion) {
+			const byKey = new Map();
+
+			return {
+				rootKeys: discussion.rootKeys,
+				async getComment(key) {
+					if (byKey.has(key)) {
+						return byKey.get(key) || null;
+					}
+
+					const uri = bskyURIFromKey(key);
+
+					if (!uri) {
+						return null;
+					}
+
+					const thread = await bskyJSON(
+						`${BSKY_APPVIEW}/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=10&parentHeight=0`,
+					);
+
+					if (!thread?.thread) {
+						// Remembered as absent, so a failed root is not refetched for
+						// every reply the renderer then asks about.
+						byKey.set(key, null);
+
+						return null;
+					}
+
+					indexBskyThread(thread.thread, discussion, byKey, null);
+
+					return byKey.get(key) || null;
+				},
+			};
+		},
+	});
+
 	// The discovery entry point. With one source registered it is a fan-out of
 	// one, and the current lookup still goes through findHN directly because the
 	// button only needs to know whether a discussion exists. This is where a
@@ -2074,6 +2678,10 @@ ${
 	// Folded onto one name rather than searched for twice, and because normalizeURL
 	// is applied to both sides -- the address in hand and every hit it is measured
 	// against -- it does not matter which way round the two arrive.
+	// #region hnewhere-test-export
+	// Wrapped with normalizeURL below rather than separately: normalizeURL reads
+	// this map, so exporting the function without it is a ReferenceError the
+	// moment a test calls it.
 	const HOST_ALIASES = new Map([
 		["x.com", "twitter.com"],
 		["www.x.com", "twitter.com"],
@@ -2108,6 +2716,7 @@ ${
 			return "";
 		}
 	}
+	// #endregion hnewhere-test-export
 
 	// -------------------------
 	// Site suppression
@@ -2122,6 +2731,7 @@ ${
 	// Deliberately conservative. A missed site shows a button that does nothing
 	// useful, which is a far cheaper mistake than suppressing a site people
 	// genuinely read articles on, and adding an entry is a one-line change.
+	// #region hnewhere-test-export
 	const HIDDEN_HOST_PATTERNS = [
 		// Mail
 		/^(mail|inbox|webmail|email)\./,
@@ -2171,6 +2781,7 @@ ${
 		/(^|\.)(duckduckgo|bing|baidu|yandex|ecosia|startpage|qwant)\.com$/,
 		/^search\./,
 	];
+	// #endregion hnewhere-test-export
 
 	const HIDDEN_PATH_PATTERNS = [
 		/^\/(login|log-in|signin|sign-in|signup|sign-up|register|logout|log-out|sign-out)(\/|$)/,
@@ -2305,6 +2916,7 @@ ${
 		return template.innerHTML;
 	}
 
+	// #region hnewhere-test-export
 	function escapeHTML(value) {
 		return String(value || "")
 			.replace(/&/g, "&amp;")
@@ -2313,6 +2925,7 @@ ${
 			.replace(/"/g, "&quot;")
 			.replace(/'/g, "&#039;");
 	}
+	// #endregion hnewhere-test-export
 
 	function pluralize(value, singular, plural = singular + "s") {
 		return value + " " + (value === 1 ? singular : plural);
@@ -3188,14 +3801,24 @@ ${
 	// Submission helpers
 	// -------------------------
 
-	// og:title first because it is what the author wrote for sharing, whereas
-	// document.title routinely carries a " | Site Name" tail that only wastes
-	// characters against HN's limit.
-	function suggestedSubmissionTitle() {
+	// #region hnewhere-test-export
+	// The content's own name, which is what the panel shows once it reads more
+	// than one source. og:title first because it is what the author wrote for
+	// sharing, whereas document.title routinely carries a " | Site Name" tail.
+	//
+	// The hostname floor is load-bearing. It is what makes an empty header
+	// unreachable rather than merely unlikely -- and unlikely was not enough: a
+	// Bluesky collective is honestly titled "" because nobody titled it, the sort
+	// is time-descending, and the header used to read whichever submission landed
+	// first.
+	//
+	// `doc` is a parameter for the same reason parseFrontPage takes one: it makes
+	// the precedence testable without a live page.
+	function pageTitle(doc = document) {
 		const candidates = [
-			document.querySelector('meta[property="og:title"]')?.content,
-			document.querySelector('meta[name="twitter:title"]')?.content,
-			document.title,
+			doc.querySelector('meta[property="og:title"]')?.content,
+			doc.querySelector('meta[name="twitter:title"]')?.content,
+			doc.title,
 			location.hostname,
 		];
 
@@ -3203,11 +3826,19 @@ ${
 			const trimmed = (candidate || "").trim().replace(/\s+/g, " ");
 
 			if (trimmed) {
-				return trimmed.slice(0, HN_TITLE_LIMIT);
+				return trimmed;
 			}
 		}
 
 		return "";
+	}
+	// #endregion hnewhere-test-export
+
+	// The cap lives here rather than in pageTitle: 80 characters is HN's submit
+	// box, not a property of what the page is called, and the panel's header has
+	// no such limit.
+	function suggestedSubmissionTitle() {
+		return pageTitle().slice(0, HN_TITLE_LIMIT);
 	}
 
 	// Fills the circle bottom-to-top, then leaves a plain orange button behind. Uses
@@ -3276,9 +3907,11 @@ ${
 		);
 	}
 
+	// #region hnewhere-test-export
 	function commentURL(storyID) {
 		return HN_ORIGIN + "/item?id=" + storyID;
 	}
+	// #endregion hnewhere-test-export
 
 	function submitURL(url, title) {
 		return (
@@ -9910,11 +10543,17 @@ ${settingsPanelHTML()}
 		}
 
 		const storyID = String(story.id);
-		// The discussion supplies its own permalink rather than having an HN URL
-		// assembled from its id, so this stops pointing at HN for a discussion that
-		// is not on HN. Falls back for the front-page rows, which arrive as parsed
-		// HN markup rather than through an adapter.
-		const hnURL = story.permalink || commentURL(story.id);
+		// null when the discussion has no page of its own. Both uses below are
+		// conditional on it, so a source without one renders text rather than a
+		// link to somewhere it is not. Front-page rows still get their HN item
+		// URL: they arrive as parsed HN markup rather than through an adapter,
+		// and carry no `source` to say otherwise.
+		const hnURL = discussionURL(story);
+		// Supplied by the caller, because only it knows whether this story is being
+		// shown to tell two discussions apart -- which is the one job a submitted
+		// title does that the content's own title cannot. Falls back to the story's
+		// own title so renderStory stays usable without the option.
+		const title = options.title ?? story.title;
 
 		// Read through the normalized names first, falling back to the raw Firebase
 		// ones. renderStory has two callers with different shapes: a discussion from
@@ -9932,6 +10571,12 @@ ${settingsPanelHTML()}
 		const showComposer = options.compose === true;
 		const storyAuthor = story.author ?? story.by;
 		const storyCreatedAt = story.createdAt ?? story.time;
+		// Read through ?? rather than ||, because 0 points is a real measurement
+		// and null is the absence of one. Front-page rows carry neither key and
+		// come through as undefined, which reads as absent -- correct, since the
+		// row's score is rendered by the browse renderer instead.
+		const storyScore = story.score ?? story.points;
+		const ageLabel = getSource(story.source)?.ageLabel || "";
 		const storyCommentCount = story.commentCount ?? story.descendants ?? 0;
 		const storyBodyHTML = story.bodyHTML ?? story.text;
 
@@ -9958,11 +10603,15 @@ ${settingsPanelHTML()}
 	</td>
 	<td class="story-title-cell">
 	<div class="story-title">
-	<a target="_blank" rel="noopener noreferrer"
+	${
+		hnURL
+			? `<a target="_blank" rel="noopener noreferrer"
 	href="${escapeHTML(hnURL)}"
 	title="Open this discussion where it lives">
-	${escapeHTML(story.title)}
-	</a>
+	${escapeHTML(title)}
+	</a>`
+			: escapeHTML(title)
+	}
 	</div>
 	</td>
 	</tr>`
@@ -9972,18 +10621,35 @@ ${settingsPanelHTML()}
 	<td class="${showTitle ? "story-votespacer" : "story-votelinks story-votelinks-inline"}">${showTitle ? "" : voteControlsHTML}</td>
 	<td class="story-body-cell">
 	<div class="story-meta">
-	<span class="story-score" data-story-score-id="${escapeHTML(storyID)}" data-story-score="${escapeHTML(String(story.score || 0))}">${story.score || 0}</span> points by
-	${storyAuthor ? authorLinkHTML(story.source, storyAuthor) : ""}
-	<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
+	${
+		// null is not zero. A source can have no number worth reporting -- likes
+		// summed across strangers are not one score -- and "0 points" states a
+		// measurement that was never taken. The whole phrase goes, not just the
+		// digit, because "points" with nothing in front of it is worse.
+		storyScore === null || storyScore === undefined
+			? ""
+			: `<span class="story-score" data-story-score-id="${escapeHTML(storyID)}" data-story-score="${escapeHTML(String(storyScore))}">${storyScore}</span> points `
+	}${
+		// "by" belongs to the name, so a discussion nobody authored drops both
+		// rather than trailing a preposition into the timestamp.
+		storyAuthor ? `by ${authorLinkHTML(story.source, storyAuthor)} ` : ""
+	}${
+		// HN and Reddit date a submission and a bare age reads correctly. A source
+		// whose timestamp means something else says which, or the number is read
+		// as the wrong fact.
+		ageLabel ? escapeHTML(ageLabel) + " " : ""
+	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
 	${showActions ? itemActionLinksHTML(storyID) : ""}
 	${
-		showTitle
+		// The separator belongs to the link, so a source with no page of its own
+		// renders neither rather than leaving a bare pipe pointing nowhere.
+		showTitle || !hnURL
 			? ""
 			: `| <a class="story-open-link" target="_blank" rel="noopener noreferrer"
 	href="${escapeHTML(hnURL)}">open on ${escapeHTML(sourceShortLabel(story))}</a>`
 	}
 	|
-	${storyCommentCount} comments
+	<span class="story-comment-count">${storyCommentCount}</span> comments
 	</div>
 	${
 		storyBodyHTML
@@ -11216,23 +11882,37 @@ ${settingsPanelHTML()}
 		details.className = "submission-details";
 		ui.body.appendChild(details);
 
-		const pageTitle = stories[0]?.title || "";
+		// The content's own name, not whichever submission sorted first. That used
+		// to read stories[0].title, which put one submitter's framing where the
+		// page's name belongs -- and rendered nothing at all once a Bluesky
+		// collective, honestly titled "" because nobody titled it, could sort to
+		// the front of a time-descending list.
+		const page = pageTitle();
+		// A submitted title is an identifier only when there is another discussion
+		// to tell it apart from. syncSubmissionDetails shows a lone block
+		// unconditionally and hides all but the filtered one when there are
+		// several, so this is exactly when the slot does that job.
+		const disambiguating = stories.length > 1;
 
 		for (const story of stories) {
 			const canVote = Boolean(getSource(story.source)?.capabilities.vote);
 			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
-			// Shown only where it says something the page header does not. Two
-			// submitters can title the same link differently, and that is worth
-			// seeing; the usual case, where they match, was two identical headings
-			// stacked on top of each other.
+			const resolved = storyTitle(story, page, disambiguating);
 			const block = renderStory(story, details, {
 				actions: canVote,
 				compose: canReply,
-				// Always with one discussion: the page header has stood down, so this
-				// title is the only one, and it belongs beside the arrow the way HN
-				// sets it. With several the header names the page, so a submission
-				// only repeats itself when its own title differs.
-				showTitle: stories.length < 2 || story.title !== pageTitle,
+				title: resolved,
+				// Always. These blocks are hidden unless the reader has filtered to
+				// one, so the title is the heading of the thing they asked for, and a
+				// meta line with no heading above it reads as though the panel lost
+				// something.
+				//
+				// It was once suppressed when it matched the header, back when the
+				// header showed a submission's title and the match meant a literal
+				// duplicate. The header names the content now, so a submitter using
+				// the article's own title -- the common case -- was silently costing
+				// the block its heading.
+				showTitle: true,
 			});
 
 			if (block) {
@@ -11307,6 +11987,11 @@ ${settingsPanelHTML()}
 			});
 		}
 
+		// Now that the replies are on screen, the count and the age can say what is
+		// actually there. Until here both carried what discover could see, which is
+		// root posts and their direct reply counts.
+		reconcileWholeThreads(stories, ui);
+
 		for (const story of stories) {
 			await markSeen(story.key);
 		}
@@ -11326,6 +12011,83 @@ ${settingsPanelHTML()}
 			setSidebarStage(ui, "votes");
 			hydrateVoteControlsForStory(story.id, await loadVoteLinks(story.id));
 			hydrateDisplayAges(story.id);
+		}
+	}
+
+	// discover sees root posts and their direct reply counts, never the replies,
+	// so both numbers a collective carries are estimates. The age is the newest
+	// post rather than the newest comment, and the count misses every nested reply
+	// because replyCount counts direct ones only: one live thread read "4
+	// comments" above five of them.
+	//
+	// Once the thread has rendered, what is on screen is the discussion, so both
+	// are corrected from it. Only sources declaring threadArrivesWhole are
+	// touched, because for everyone else the rendered list is a fraction of what
+	// exists and correcting from it would be the bug rather than the fix.
+	//
+	// commentCount is written back onto the story, not just into the markup, so
+	// the pill, the submission line and the header total keep agreeing with each
+	// other the way they are meant to.
+	function reconcileWholeThreads(stories, ui) {
+		const body = ui?.body;
+
+		if (!body) {
+			return;
+		}
+
+		let corrected = false;
+
+		for (const story of stories) {
+			if (!getSource(story.source)?.threadArrivesWhole) {
+				continue;
+			}
+
+			const count = renderedCommentCount(renderedComments, story.key);
+
+			if (!count) {
+				continue;
+			}
+
+			const newest = newestCommentTime(renderedComments, story.key);
+
+			story.commentCount = count;
+			corrected = true;
+
+			for (const block of body.querySelectorAll(".submission-detail")) {
+				if (block.dataset.discussionKey !== story.key) {
+					continue;
+				}
+
+				const age = block.querySelector(".item-age");
+				const shown = block.querySelector(".story-comment-count");
+
+				if (age && newest) {
+					age.textContent = timeAgo(newest);
+				}
+
+				if (shown) {
+					shown.textContent = String(count);
+				}
+			}
+
+			for (const pill of body.querySelectorAll(".source-strip-entry")) {
+				if (pill.dataset.discussionKey === story.key) {
+					const shown = pill.querySelector(".source-strip-count");
+
+					if (shown) {
+						shown.textContent = String(count);
+					}
+				}
+			}
+		}
+
+		const total = corrected && body.querySelector(".page-header-total");
+
+		if (total) {
+			total.textContent = pluralize(
+				stories.reduce((sum, story) => sum + (story.commentCount || 0), 0),
+				"comment",
+			);
 		}
 	}
 
@@ -11354,7 +12116,7 @@ ${settingsPanelHTML()}
 
 		wrapper.className = single ? "page-header page-header-quiet" : "page-header";
 		wrapper.innerHTML = `
-<div class="page-header-title">${single ? "" : escapeHTML(stories[0]?.title || "")}</div>
+<div class="page-header-title">${single ? "" : escapeHTML(pageTitle())}</div>
 <div class="page-header-meta">${
 	// With one discussion there is nothing to break down and nothing to switch
 	// between, so the header is the title and nothing else: the submission's own
@@ -11362,7 +12124,7 @@ ${settingsPanelHTML()}
 	// and all. "352 comments across 1 discussion", a pill reading "HN 87", and
 	// that line underneath were three headings saying one thing.
 	stories.length > 1
-		? `${escapeHTML(pluralize(total, "comment"))} across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button>`
+		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button>`
 		: ""
 }</div>
 <div class="source-strip${stories.length > 1 ? "" : " source-strip-single"}" id="source-strip">
@@ -11414,8 +12176,18 @@ title="Show only this discussion">
 
 		setStripOpen(false);
 
-		disclosure.onclick = () =>
-			setStripOpen(!strip.classList.contains("is-open"));
+		disclosure.onclick = () => {
+			const opening = !strip.classList.contains("is-open");
+
+			// Put the whole blend back before the strip goes, so the reader is never
+			// left filtered with the only control that undoes it off screen.
+			if (stripCloseClearsFilter(opening, activeCommentFilter)) {
+				clearCommentFilter({ restore: true });
+				syncFilterAffordances();
+			}
+
+			setStripOpen(opening);
+		};
 
 		// Filtering, not navigating. A pill that opened the thread on Reddit would
 		// be answering "show me this part of the conversation" by sending the reader
@@ -12391,16 +13163,48 @@ title="Show only this discussion">
 		return null;
 	}
 
+	// #region hnewhere-test-export
 	// Comparison key for "did HN echo our comment back". Whitespace and case are
 	// normalized because HN reflows the text into paragraphs, and only a prefix is
 	// used because it wraps long comments in markup this cannot see through.
+	//
+	// Emphasis markers go too, because HN eats them: a comment typed `*minimum*`
+	// comes back as `<i>minimum</i>`, whose text has no asterisks. Both sides pass
+	// through here, so dropping them from both is what makes the two comparable.
+	// Measured at 15 of 468 real comments on one thread.
 	function commentMatchKey(text) {
 		return (text || "")
+			.replace(/[*_]/g, "")
 			.replace(/\s+/g, " ")
 			.trim()
 			.toLowerCase()
 			.slice(0, 120);
 	}
+
+	// `textContent` runs the text either side of a block boundary together with no
+	// separator, so a comment whose author left a blank line reads back as
+	// "transport:Cambridge" where they typed "transport:" and then "Cambridge". A
+	// paragraph is whitespace to a reader and has to be whitespace here too.
+	//
+	// Measured on a 468-comment thread: 50 of 65 false "unconfirmed" reports were
+	// this alone, before emphasis was accounted for at all.
+	//
+	// Clones first. The nodes handed here are the live comment list on a page the
+	// reader is looking at, and this is a read.
+	function commentNodeText(node) {
+		if (!node) {
+			return "";
+		}
+
+		const copy = node.cloneNode(true);
+
+		for (const block of copy.querySelectorAll("p, pre, div, br")) {
+			block.before(" ");
+		}
+
+		return copy.textContent || "";
+	}
+	// #endregion hnewhere-test-export
 
 	function reportCommentResultAfterReload() {
 		let stored = null;
@@ -12447,7 +13251,7 @@ title="Show only this discussion">
 
 		if (needle) {
 			for (const node of document.querySelectorAll(".commtext")) {
-				if (commentMatchKey(node.textContent).startsWith(needle.slice(0, 60))) {
+				if (commentMatchKey(commentNodeText(node)).startsWith(needle.slice(0, 60))) {
 					found = true;
 					break;
 				}

@@ -8,8 +8,8 @@ fix ships as a new version that existing installs pick up automatically.
 
 | Version | Supported |
 | ------- | --------- |
-| 1.6.0   | Yes       |
-| < 1.6.0 | No        |
+| 1.6.1   | Yes       |
+| < 1.6.1 | No        |
 
 Your installed version is shown at the bottom of the settings panel.
 
@@ -42,6 +42,8 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Hacker News | `hn.algolia.com`, `hacker-news.firebaseio.com`, `news.ycombinator.com` | the URL of each page you visit, with no persistent identifier attached |
   | Reddit | `www.reddit.com` | the URL of each page you visit. **Signed in to Reddit, these requests arrive authenticated as your account**; signed out, they carry a long-lived device identifier |
   | Reddit (fallback) | `arctic-shift.photon-reddit.com` | the URL of each page you visit, with no identifier. Used automatically when reddit.com declines the request |
+  | Bluesky (discovery) | `constellation.microcosm.blue` | the URL of each page you visit, with no identifier attached |
+  | Bluesky | `public.api.bsky.app` | post identifiers only — **never the URL of the page you are on** |
   | *no source enabled* | none | nothing — the script performs no lookup at all |
 
 - **`@connect` is a ceiling, not a statement of use.** The header is static, so
@@ -68,6 +70,27 @@ Worth stating plainly, because the permissions are broad by necessity:
   session.
 - **Reddit is read-only.** No voting, no replying, no submitting. Nothing is ever
   posted to Reddit on your behalf.
+- **Bluesky is off by default, read-only, and needs no account.** The trade is a
+  different shape from Reddit's, and better in one specific way: the page you are
+  reading is disclosed to *Constellation*, not to Bluesky. Bluesky's own API is
+  asked only which posts Constellation named, so it learns which posts you looked
+  at and not which page you are on.
+
+  Constellation is run by the [microcosm](https://microcosm.blue) project — a
+  small independent operator rather than a company, self-hostable, and it asks
+  callers to identify themselves in a `User-Agent`, which this script does. That
+  cuts both ways and is worth knowing in both directions: there is no advertising
+  business behind it, and also no company behind it.
+
+  Measured 2026-08-05, and the Reddit case above is exactly why it was measured
+  rather than assumed. **Signed in to Bluesky, the cookie jar for `bsky.app` is
+  empty** — it authenticates with tokens in local storage, which the browser
+  never attaches to a request. There is no credential for these requests to
+  carry, signed in or out. Separately, `public.api.bsky.app` returns
+  byte-identical responses whether handed a cookie, a bearer token or nothing at
+  all, and answers `501 Method Not Implemented` to the one auth-gated method
+  tried: it has no authenticated mode to leak into. Two independent reasons,
+  either of which would be sufficient.
 - **It stores data locally** through `GM.getValue` / `GM.setValue` — settings,
   per-site sidebar widths, collapsed threads, seen-comment timestamps, and
   remembered votes. Nothing is sent anywhere except the hosts above.

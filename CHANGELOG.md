@@ -8,6 +8,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.1] — 2026-08-05
+
+### Added
+
+- **Bluesky, as a third source.** Bluesky has no thread for a link — a page that
+  got attention was posted by dozens of people as dozens of separate posts — so
+  it arrives as one conversation rather than one entry per poster, with each
+  post and its replies merged into the same thread as everything else. Posts
+  with no replies are left out; on one measured article that removed 135 of 141,
+  nearly all of them bots reposting links.
+
+- **It is read without an account and without cookies.** Discovery goes to
+  Constellation, an independent index of which posts link which URLs, because
+  Bluesky's own search needs credentials. Bluesky is then asked only about the
+  posts Constellation names, never about the page you are on. Off until you turn
+  it on, marked BETA, and read-only.
+
+### Changed
+
+- **The header names the page, not one person's submission.** It used to show
+  whichever submission happened to sort first, so visiting a page could hand you
+  an unrelated stranger's framing as the page's own name — on `example.com`, an
+  r/WindowsHelp thread title. Once the panel reads several sources it
+  generalizes, and the generalization of a title is the title of the content.
+  The title someone submitted under still appears where it is doing a job the
+  page's title cannot: identifying which discussion you have filtered down to.
+
+- **Links point at the repository's real name.** The install and update URLs
+  named `HNewhere`, and worked only because GitHub redirects the old name — a
+  redirect that ends the moment anything is created there, which would strand
+  every installed copy's auto-update. Nothing about your install changes; it
+  updates itself as usual.
+
+- **The excluded-domain list says what it means.** Six Google patterns collapse
+  into one, and both `localhost` and loopback now cover a port, so a dev server
+  on `:3000` is excluded — which it was not before, and that was the common
+  case. `*.bank.com` came out: it matched one registered domain and no actual
+  bank, while the runtime block list has covered banking properly all along.
+  Thanks to the reporter of #52 for the audit.
+
+  Loopback is listed three ways on purpose. `127.*.*.*` covers the whole range
+  under Violentmonkey and Safari, and covers **nothing** under Tampermonkey,
+  which rewrites a trailing wildcard in a hostname into a list of real TLDs —
+  correct for `*.google.*`, useless for an address whose last part is a number.
+  The literal `127.0.0.1` rules sit alongside it so the case everyone actually
+  hits is excluded in every manager. An unusual loopback address under
+  Tampermonkey still reaches the runtime guard, which refuses any IP literal.
+
+- **The shape every source is read through is written down.** Nothing you can
+  see changes. It used to be asserted twice, in two styles, with nothing
+  requiring a definition to exist — so a third source would have been checked
+  against whichever of the two its author happened to read. It is now one table,
+  and every source is checked against it mechanically.
+
+### Fixed
+
+- **Posting a comment no longer warns that it might not have worked.** A comment
+  that went through could still come back with "Submitted, but Hacker News did
+  not show the comment back" — about one in seven of them. The check compares
+  what you typed against what the page shows, and there were two differences it
+  did not account for: Hacker News renders a blank line as a paragraph, which
+  runs the words either side of it together, and it turns `*emphasis*` into
+  italics, which drops the asterisks. Both sides are now compared on the same
+  terms. Measured across 468 real comments: 65 of them would have been reported
+  wrongly before, none are now.
+
 ## [1.6.0] — 2026-08-04
 
 ### Changed
@@ -534,7 +600,7 @@ use to detect updates, so every release bumps it.
 - Scrolling that the panel does on your behalf now stops when you have asked for
   reduced motion. Jumping to a quoted passage, to the focus banner, and back again
   were all animated regardless.
-- **[#39](https://github.com/twalichiewicz/HNewhere/issues/39)** — comments sat at
+- **[#39](https://github.com/twalichiewicz/Backchannel/issues/39)** — comments sat at
   different distances from one another depending on what each one happened to end
   with: 12px after a single paragraph, 18px after a quote, 20px after a
   multi-paragraph comment. The same thing set the gap under a comment's byline,
@@ -579,7 +645,7 @@ use to detect updates, so every release bumps it.
 
 ### Fixed
 
-- **[#35](https://github.com/twalichiewicz/HNewhere/issues/35)** — the discussion
+- **[#35](https://github.com/twalichiewicz/Backchannel/issues/35)** — the discussion
   lookup ran once, when the script loaded. On a site that navigates without
   reloading — GitHub, and anything else built on Turbo or a client-side router —
   whichever answer it computed first was the one it kept. Landing on a subpage
@@ -594,7 +660,7 @@ use to detect updates, so every release bumps it.
   always arrives but only covers back and forward; a poll catches the rest. A
   fragment, an added tracking parameter, and a burst of pushes that ends where it
   started are all still the same page, and leave the sidebar alone.
-- **[#37](https://github.com/twalichiewicz/HNewhere/issues/37)** — a comment's
+- **[#37](https://github.com/twalichiewicz/Backchannel/issues/37)** — a comment's
   text had no line length of its own, and ran to whatever width the panel had
   been dragged to. It now takes a 1215px measure. The composer keeps the narrower
   720px it already had, which is sized to an input rather than to reading.
@@ -723,7 +789,7 @@ use to detect updates, so every release bumps it.
 
 ### Fixed
 
-- **[#32](https://github.com/twalichiewicz/HNewhere/issues/32)** — host pages
+- **[#32](https://github.com/twalichiewicz/Backchannel/issues/32)** — host pages
   with single-key shortcuts (GitHub's `s` for search, for instance) stole focus
   while typing in HNewhere's fields. Events leaving a shadow root are retargeted,
   so those pages saw HNewhere's container rather than a text field and their
@@ -760,17 +826,20 @@ Numerous small improvements.
 ---
 
 Releases before 1.4.7 are recorded in the
-[GitHub releases](https://github.com/twalichiewicz/HNewhere/releases) and the
+[GitHub releases](https://github.com/twalichiewicz/Backchannel/releases) and the
 commit history. Entries for 1.4.7 through 1.5.3 are summarized from their release
 commits rather than written at the time.
 
-[1.5.7]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.6...v1.5.7
-[1.5.6]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.5...v1.5.6
-[1.5.5]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.4...v1.5.5
-[1.5.4]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.3...v1.5.4
-[1.5.3]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.2...v1.5.3
-[1.5.2]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.1...v1.5.2
-[1.5.1]: https://github.com/twalichiewicz/HNewhere/compare/v1.5.0...v1.5.1
-[1.5.0]: https://github.com/twalichiewicz/HNewhere/compare/v1.4.8...v1.5.0
-[1.4.8]: https://github.com/twalichiewicz/HNewhere/compare/v1.4.7...v1.4.8
-[1.4.7]: https://github.com/twalichiewicz/HNewhere/compare/v1.4.6...v1.4.7
+[1.6.1]: https://github.com/twalichiewicz/Backchannel/compare/v1.6.0...v1.6.1
+[1.6.0]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.8...v1.6.0
+[1.5.8]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.7...v1.5.8
+[1.5.7]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.6...v1.5.7
+[1.5.6]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.5...v1.5.6
+[1.5.5]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.4...v1.5.5
+[1.5.4]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.3...v1.5.4
+[1.5.3]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.2...v1.5.3
+[1.5.2]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/twalichiewicz/Backchannel/compare/v1.4.8...v1.5.0
+[1.4.8]: https://github.com/twalichiewicz/Backchannel/compare/v1.4.7...v1.4.8
+[1.4.7]: https://github.com/twalichiewicz/Backchannel/compare/v1.4.6...v1.4.7

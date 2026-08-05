@@ -32,6 +32,9 @@ no persistent identifier attached.
 - Reddit sends the pages you visit to reddit.com, and if you're
 signed in to Reddit, those requests arrive as your account. Signed out, they carry a long-lived device identifier
 instead.
+- Bluesky sends the pages you visit to Constellation, an independent index of
+Bluesky links, not to Bluesky. Bluesky is asked only about the posts
+Constellation names. No account is needed and neither host sets a cookie.
 
 Webmail, banking, auth flows, and cloud consoles are excluded outright.
 
