@@ -10,6 +10,21 @@ use to detect updates, so every release bumps it.
 
 ## [1.6.1] — 2026-08-05
 
+### Added
+
+- **Bluesky, as a third source.** Bluesky has no thread for a link — a page that
+  got attention was posted by dozens of people as dozens of separate posts — so
+  it arrives as one conversation rather than one entry per poster, with each
+  post and its replies merged into the same thread as everything else. Posts
+  with no replies are left out; on one measured article that removed 135 of 141,
+  nearly all of them bots reposting links.
+
+- **It is read without an account and without cookies.** Discovery goes to
+  Constellation, an independent index of which posts link which URLs, because
+  Bluesky's own search needs credentials. Bluesky is then asked only about the
+  posts Constellation names, never about the page you are on. Off until you turn
+  it on, marked BETA, and read-only.
+
 ### Changed
 
 - **Links point at the repository's real name.** The install and update URLs

@@ -42,6 +42,8 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Hacker News | `hn.algolia.com`, `hacker-news.firebaseio.com`, `news.ycombinator.com` | the URL of each page you visit, with no persistent identifier attached |
   | Reddit | `www.reddit.com` | the URL of each page you visit. **Signed in to Reddit, these requests arrive authenticated as your account**; signed out, they carry a long-lived device identifier |
   | Reddit (fallback) | `arctic-shift.photon-reddit.com` | the URL of each page you visit, with no identifier. Used automatically when reddit.com declines the request |
+  | Bluesky (discovery) | `constellation.microcosm.blue` | the URL of each page you visit, with no identifier attached |
+  | Bluesky | `public.api.bsky.app` | post identifiers only — **never the URL of the page you are on** |
   | *no source enabled* | none | nothing — the script performs no lookup at all |
 
 - **`@connect` is a ceiling, not a statement of use.** The header is static, so
@@ -68,6 +70,25 @@ Worth stating plainly, because the permissions are broad by necessity:
   session.
 - **Reddit is read-only.** No voting, no replying, no submitting. Nothing is ever
   posted to Reddit on your behalf.
+- **Bluesky is off by default, read-only, and needs no account.** The trade is a
+  different shape from Reddit's, and better in one specific way: the page you are
+  reading is disclosed to *Constellation*, not to Bluesky. Bluesky's own API is
+  asked only which posts Constellation named, so it learns which posts you looked
+  at and not which page you are on.
+
+  Constellation is run by the [microcosm](https://microcosm.blue) project — a
+  small independent operator rather than a company, self-hostable, and it asks
+  callers to identify themselves in a `User-Agent`, which this script does. That
+  cuts both ways and is worth knowing in both directions: there is no advertising
+  business behind it, and also no company behind it.
+
+  Measured 2026-08-05: none of these hosts sets a cookie, the entire path works
+  with no account, and no response carries a `viewer` object identifying a
+  caller. **Not yet measured:** whether a signed-in bsky.app session rides along
+  on a cross-site request anyway, the way Reddit's `SameSite=None` cookie turned
+  out to. Bluesky authenticates with tokens in local storage rather than cookies,
+  which a userscript request would not attach — but that is reasoning, not
+  measurement, and the Reddit case is exactly why the distinction matters.
 - **It stores data locally** through `GM.getValue` / `GM.setValue` — settings,
   per-site sidebar widths, collapsed threads, seen-comment timestamps, and
   remembered votes. Nothing is sent anywhere except the hosts above.

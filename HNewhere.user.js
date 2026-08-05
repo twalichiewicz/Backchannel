@@ -46,6 +46,8 @@
 // @connect      news.ycombinator.com
 // @connect      www.reddit.com
 // @connect      arctic-shift.photon-reddit.com
+// @connect      public.api.bsky.app
+// @connect      constellation.microcosm.blue
 // @run-at       document-end
 // @noframes
 // ==/UserScript==
@@ -1135,11 +1137,16 @@
 		});
 	}
 
-	function requestText(url) {
+	// `headers` is optional and passed straight through. Constellation asks
+	// callers to identify themselves in a User-Agent; some managers forbid setting
+	// that header and drop it silently, which is acceptable -- it is a request,
+	// not a requirement -- and is why this stays one helper rather than two.
+	function requestText(url, headers) {
 		return new Promise((resolve) => {
 			GM.xmlHttpRequest({
 				method: "GET",
 				url,
+				headers,
 				timeout: 10000,
 				anonymous: false,
 				onload: function (response) {
@@ -1652,6 +1659,11 @@
 	// because app.bsky.feed.searchPosts answers 403 without credentials and does
 	// not move for any header. Constellation walks the AT Protocol firehose and
 	// records every link it sees by target, collection and JSON path.
+	//
+	// The hosts and the fetch helper live beside registerSource, outside this
+	// region. Everything here is a pure mapper, and the UA string has to read
+	// SCRIPT_VERSION, which is not exported -- a const in here referencing it
+	// would throw the moment the test harness evaluated the region.
 
 	// The exact string to ask Constellation about -- deliberately not
 	// normalizeURL's output, which strips the trailing slash.
@@ -2236,6 +2248,161 @@ ${
 					// comment that is already on screen, so every reply it returns has a
 					// parent in the map and nothing was ever a root.
 					return { ok: true, added, remaining: ids.slice(100) };
+				},
+			};
+		},
+	});
+
+	const BSKY_APPVIEW = "https://public.api.bsky.app/xrpc";
+	const CONSTELLATION = "https://constellation.microcosm.blue";
+
+	// Constellation carries this traffic for free and asks callers to name
+	// themselves. One header is the whole cost of honouring that. Read back from
+	// the manager for the same reason the settings panel does: a second hardcoded
+	// version string is a second thing to forget.
+	const CONSTELLATION_UA = `Backchannel/${SCRIPT_VERSION || "dev"} (github.com/twalichiewicz/Backchannel)`;
+
+	// No auth, no cookies and no fallback tier. Reddit demotes loid -> archive ->
+	// off because a second way in existed; there is no second backlink index, so a
+	// failure here means Bluesky contributes nothing and says nothing about it.
+	// Nothing a reader could do would change the outcome.
+	async function bskyJSON(url, headers) {
+		try {
+			const text = await requestText(url, headers);
+
+			return text ? JSON.parse(text) : null;
+		} catch {
+			return null;
+		}
+	}
+
+	registerSource({
+		id: "bsky",
+		label: "Bluesky",
+		shortLabel: "Bluesky",
+		beta: true,
+		// The surprising part, said where it is ticked: the page URL goes to a
+		// third party that is not Bluesky. Bluesky itself is only ever asked about
+		// the posts Constellation names.
+		//
+		// Every clause here was measured on 2026-08-05 and is recorded in the
+		// spike's §8.1 -- including that the whole path works with no account and
+		// that none of the three hosts sets a cookie. What is NOT yet measured is
+		// whether a signed-in reader's GM.xmlHttpRequest carries their session
+		// anyway, the way Reddit's SameSite=None loid turned out to. If the probe
+		// in docs/spikes/bluesky-identity-probe.user.js shows that it does, this
+		// string needs the sentence Reddit's caveat has.
+		caveat:
+			"Sends each page you visit to Constellation, an independent index of Bluesky links, rather than to Bluesky itself. Bluesky's own API is then asked only for the posts Constellation names, never for the page you are on. Neither host sets a cookie, and no account is needed to read any of it.",
+		capabilities: { vote: false, reply: false, submit: false },
+
+		profileURL: (handle) => "https://bsky.app/profile/" + encodeURIComponent(handle),
+
+		// One request answers the common case. Most pages have no Bluesky posts,
+		// and /links/all settles that while also naming which paths hold records --
+		// so empty paths cost nothing and the path list need not be hardcoded,
+		// which matters because a guessed path silently returns zero. Measured on
+		// one live article: four distinct paths, and the fully-qualified facet form
+		// alone held 83 records a guessed `.facets[].features[].uri` would miss.
+		async discover(url) {
+			const target = bskyTarget(url);
+
+			if (!target) {
+				return [];
+			}
+
+			const encoded = encodeURIComponent(target);
+			const headers = { "User-Agent": CONSTELLATION_UA };
+			const all = await bskyJSON(`${CONSTELLATION}/links/all?target=${encoded}`, headers);
+			const paths = all?.links?.["app.bsky.feed.post"];
+
+			if (!paths) {
+				return [];
+			}
+
+			const uris = new Set();
+
+			for (const [path, stat] of Object.entries(paths)) {
+				if (!stat?.records) {
+					continue;
+				}
+
+				const source = encodeURIComponent(`app.bsky.feed.post:${path.replace(/^\./, "")}`);
+				// One page per path. The response carries a cursor and this does not
+				// follow it: 100 posts from a single path is already far past what a
+				// reader will scroll, and the admission rule discards most of them.
+				// A page busy enough to truncate here is one where the roots shown are
+				// the popular ones anyway.
+				const page = await bskyJSON(
+					`${CONSTELLATION}/xrpc/blue.microcosm.links.getBacklinks?subject=${encoded}&source=${source}&limit=100`,
+					headers,
+				);
+
+				for (const record of page?.records || []) {
+					uris.add(`at://${record.did}/${record.collection}/${record.rkey}`);
+				}
+			}
+
+			if (!uris.size) {
+				return [];
+			}
+
+			// 25 per call is the endpoint's limit, and it returns the reply counts
+			// the admission rule needs alongside the record. Measured on one live
+			// article this was 141 URIs in six calls, of which six posts survived
+			// admission -- the rest were bots dropping a link.
+			const posts = [];
+			const list = [...uris];
+
+			for (let i = 0; i < list.length; i += 25) {
+				const query = list
+					.slice(i, i + 25)
+					.map((uri) => "uris=" + encodeURIComponent(uri))
+					.join("&");
+				const batch = await bskyJSON(`${BSKY_APPVIEW}/app.bsky.feed.getPosts?${query}`);
+
+				posts.push(...(batch?.posts || []));
+			}
+
+			const collective = bskyCollective(url, posts);
+
+			return collective ? [collective] : [];
+		},
+
+		// Roots are known already; only the subtrees are lazy. One getPostThread
+		// per root, fetched the first time that root is asked for, and it fills the
+		// root and its whole conversation at once.
+		async loadThread(discussion) {
+			const byKey = new Map();
+
+			return {
+				rootKeys: discussion.rootKeys,
+				async getComment(key) {
+					if (byKey.has(key)) {
+						return byKey.get(key) || null;
+					}
+
+					const uri = bskyURIFromKey(key);
+
+					if (!uri) {
+						return null;
+					}
+
+					const thread = await bskyJSON(
+						`${BSKY_APPVIEW}/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=10&parentHeight=0`,
+					);
+
+					if (!thread?.thread) {
+						// Remembered as absent, so a failed root is not refetched for
+						// every reply the renderer then asks about.
+						byKey.set(key, null);
+
+						return null;
+					}
+
+					indexBskyThread(thread.thread, discussion, byKey, null);
+
+					return byKey.get(key) || null;
 				},
 			};
 		},
