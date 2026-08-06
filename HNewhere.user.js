@@ -118,6 +118,28 @@
 		}
 	}
 
+	const QUEUE_KEY_MIGRATION = "HNewhere:migrated_queue_keys";
+
+	// Runs after migrateSourceKeys for the reason that one runs after
+	// migrateStorage: this rewrites what is in the current namespace, and those two
+	// are what put it there.
+	//
+	// A failure leaves the flag unwritten and the queue as it was, so the next
+	// session tries again. queueKey falls back to normalizing the stored url, so
+	// the list keeps working in the meantime.
+	async function migrateQueue() {
+		if (await load(QUEUE_KEY_MIGRATION, false)) {
+			return;
+		}
+
+		try {
+			await saveQueue(migrateQueueKeys(await loadQueue(), normalizeURL));
+			await save(QUEUE_KEY_MIGRATION, 1);
+		} catch (e) {
+			console.error("Backchannel queue key migration failed:", e);
+		}
+	}
+
 	const SOURCE_SEED_MIGRATION = "HNewhere:seeded_sources";
 
 	// Which keys prove a reader was here before this release.
@@ -643,13 +665,22 @@
 	// a browser. The URL comparison arrives as an argument for the same reason
 	// referrerIsHN takes its referrer -- the real one normalizes, and normalizeURL
 	// lives outside this region.
+	// Keyed on the article, not on the submission of it. The item number was a
+	// sound identity while Hacker News was the only source that could put anything
+	// in a queue, and stops being one the moment anything else can: a Lobsters
+	// short_id of "97laur" and an HN item number would share a namespace, and the
+	// same page saved from each would sit in the list twice.
+	//
+	// The key arrives on the story rather than being computed here, for the reason
+	// the region comment gives: normalizeURL lives outside this region, and the
+	// Story mappers have already applied it.
 	function addToQueue(entries, story, now) {
 		const list = Array.isArray(entries) ? entries : [];
 
 		// Saving something twice is not an error and not a second copy, and it does
 		// not move it: a story saved an hour ago keeps its place in the line, which
 		// is what having a line is for.
-		if (list.some((entry) => entry.id === story.id)) {
+		if (list.some((entry) => entry.key === story.key)) {
 			return list;
 		}
 
@@ -657,10 +688,17 @@
 		// queue is the same list as the front page with most of it filtered out, so
 		// a row in it has to be able to say the same things -- and a queue entry is
 		// read days after it was made, long after the page it came from is gone.
+		//
+		// `source` and `permalink` are kept for the same reason and are load-bearing
+		// twice over: the row draws its comment link from the permalink, and
+		// refreshQueueEntries asks the source whether it is one it can refresh.
 		return [
 			...list,
 			{
 				id: story.id,
+				key: story.key,
+				source: story.source,
+				permalink: story.permalink || "",
 				url: story.url,
 				title: story.title,
 				by: story.by || "",
@@ -674,9 +712,30 @@
 		];
 	}
 
-	function removeFromQueue(entries, id) {
+	function removeFromQueue(entries, key) {
 		return (Array.isArray(entries) ? entries : []).filter(
-			(entry) => entry.id !== id,
+			(entry) => entry.key !== key,
+		);
+	}
+
+	// Every stored entry rewritten to carry what identifies it now. Pure and local:
+	// a queue entry has always kept the story's url, so the new key is derivable
+	// from what is already on disk and nothing has to be re-fetched to be migrated.
+	// `normalize` is injected for the region's usual reason.
+	//
+	// Everything already in a queue is a Hacker News story, because Hacker News was
+	// the only source that could put one there.
+	function migrateQueueKeys(entries, normalize) {
+		return (Array.isArray(entries) ? entries : []).map((entry) =>
+			entry.key
+				? entry
+				: {
+						...entry,
+						key: normalize(entry.url || ""),
+						source: entry.source || "hn",
+						permalink:
+							entry.permalink || "https://news.ycombinator.com/item?id=" + entry.id,
+					},
 		);
 	}
 
@@ -1328,6 +1387,47 @@
 		replyKeys: { type: "array" },
 	};
 
+	// A row on a front page or in the queue, which is a different object from a
+	// Discussion: it is a *submission* of a page, described well enough to be
+	// listed and read later, not a conversation to be walked. Undeclared until
+	// now, and three places knew it independently -- parseFrontPageRow built it,
+	// addToQueue copied a subset of it, renderBrowseRow read it -- which is the
+	// situation DISCUSSION_SHAPE was written to prevent one level down.
+	//
+	// Two fields differ from DISCUSSION_SHAPE deliberately.
+	//
+	// `permalink` is NOT nullable here. A collective has no page of its own and a
+	// Discussion has to say so; a front-page row always came from one submission,
+	// and that submission always has a page. Anything unable to name one is not a
+	// row.
+	//
+	// `key` is normalizeURL(url), not sourceKey(source, id). What a reader queues
+	// is an article, not a submission of it -- so the same page reaching the queue
+	// from Hacker News and from somewhere else is one entry, and having read it
+	// once you have read it, whichever list it came off.
+	//
+	// time/descendants rather than createdAt/commentCount, unlike everything in
+	// DISCUSSION_SHAPE. That is Firebase's vocabulary and it is what every stored
+	// queue has held since queues existed. Renaming here would rewrite reader data
+	// to no end.
+	const STORY_SHAPE = {
+		source: { type: "string" },
+		key: { type: "string" },
+		id: { type: ["number", "string"] },
+		// The page, which is what the title links to. For an Ask HN this is the
+		// discussion, because for an Ask HN those are the same thing.
+		url: { type: "string" },
+		title: { type: "string" },
+		by: { type: "string" },
+		// Nullable for the reason it is in DISCUSSION_SHAPE: a source can have no
+		// number worth reporting, and a displayed 0 would claim it scored nothing.
+		score: { type: "number", nullable: true },
+		time: { type: "number" },
+		descendants: { type: "number" },
+		site: { type: "string" },
+		permalink: { type: "string" },
+	};
+
 	// Returns problems rather than throwing, so one run names every field that is
 	// wrong instead of the first.  An empty array is conformance.
 	//
@@ -1429,6 +1529,27 @@
 			// is where that is fetched -- which is the whole point of the split.
 			rootKeys: [],
 			rootTimes: [],
+		};
+	}
+
+	// A front-page row into a Story. parseFrontPageRow is left alone and mapped
+	// here rather than extended: it reads markup and this shapes the result, which
+	// is the same split discover and the Discussion mappers already have. It also
+	// keeps the parser free of commentURL, which its own comment says it cannot
+	// reach from inside the region it runs in.
+	function hnStory(row) {
+		return {
+			source: "hn",
+			key: normalizeURL(row.url),
+			id: row.id,
+			url: row.url,
+			title: row.title,
+			by: row.by,
+			score: row.score,
+			time: row.time,
+			descendants: row.descendants,
+			site: row.site,
+			permalink: commentURL(row.id),
 		};
 	}
 
@@ -3504,7 +3625,9 @@ ${
 		const doc = html
 			? new DOMParser().parseFromString(html, "text/html")
 			: null;
-		const stories = doc ? parseFrontPage(doc) : [];
+		// Shaped here rather than at the row, so everything a browse row is handed
+		// carries an identity and a permalink whatever list it came from.
+		const stories = doc ? parseFrontPage(doc).map(hnStory) : [];
 
 		// A failed fetch, or markup we could not read, falls back to whatever is
 		// stored however old. Yesterday's front page is a worse answer than today's
@@ -6080,11 +6203,16 @@ ${
 			// "remove" is what that is called there.
 			const queuedLabel = options.inQueue ? "remove" : "queued";
 
+			// The article, not the submission. Queueing a page already queued from
+			// somewhere else is the same page and reads as already queued, which is
+			// what a reading list means by "already have it".
+			const key = queueKey(story);
+
 			// Read once per row rather than passed in, so a row rendered after
 			// something was queued elsewhere still opens in the right state.
 			loadQueue()
 				.then((entries) => {
-					saveButton.textContent = entries.some((e) => e.id === story.id)
+					saveButton.textContent = entries.some((e) => queueKey(e) === key)
 						? queuedLabel
 						: "queue";
 				})
@@ -6096,11 +6224,11 @@ ${
 			// changes, because the story is still on the front page either way.
 			saveButton.onclick = async () => {
 				const entries = await loadQueue();
-				const already = entries.some((e) => e.id === story.id);
+				const already = entries.some((e) => queueKey(e) === key);
 
 				await saveQueue(
 					already
-						? removeFromQueue(entries, story.id)
+						? removeFromQueue(entries, key)
 						: addToQueue(entries, story, Date.now()),
 				);
 
@@ -6121,8 +6249,15 @@ ${
 			// would have read coming from HN itself -- which is what makes automatic
 			// opening, and "only when arriving from Hacker News", apply to a story
 			// opened from here without either of them knowing this path exists.
+			//
+			// `source` is what stops the ids being misread. They are recovered as
+			// Algolia refs -- `{ objectID: id }` -- when discovery on the landing page
+			// comes back empty, which is only meaningful for Hacker News. Without it,
+			// a row from anywhere else whose discovery then failed would offer the
+			// reader a Hacker News item whose number is that source's own id.
 			const record = save(STORAGE.last, {
 				url: story.url,
+				source: story.source || "hn",
 				ids: [String(story.id)],
 				timestamp: Date.now(),
 			});
@@ -6547,12 +6682,25 @@ ${
 	async function refreshQueueEntries(entries) {
 		const fetched = [];
 
+		// Hacker News only, and asked rather than assumed. This reads Firebase, which
+		// knows about HN items and nothing else -- handed a Lobsters short_id it
+		// would fetch /v0/item/97laur.json, get null, and leave the entry alone,
+		// which is the right outcome reached by wasting a request per entry per
+		// draw. An absent source is HN, for entries stored before there was one.
+		//
+		// A non-HN entry keeps its stored numbers, which is honest: the row says
+		// what it said when it was queued, rather than silently claiming to be
+		// current.
+		const refreshable = (entry) => !entry.source || entry.source === "hn";
+
 		for (let i = 0; i < entries.length; i += QUEUE_REFRESH_BATCH) {
 			fetched.push(
 				...(await Promise.all(
 					entries
 						.slice(i, i + QUEUE_REFRESH_BATCH)
-						.map((entry) => getItem(entry.id).catch(() => null)),
+						.map((entry) =>
+							refreshable(entry) ? getItem(entry.id).catch(() => null) : null,
+						),
 				)),
 			);
 		}
@@ -14789,10 +14937,15 @@ title="Show only this discussion">
 			return;
 		}
 
-		const queued = new Set((await loadQueue()).map((entry) => entry.id));
+		const queued = new Set((await loadQueue()).map(queueKey));
 
 		for (const row of rows) {
-			const story = parseFrontPageRow(row);
+			// Shaped rather than used raw. This is the other place a story enters the
+			// queue, and an entry made here has to be indistinguishable from one made
+			// in the panel -- same key, so the two lists agree about what is already
+			// saved, and same permalink, so the row can draw its comment link.
+			const parsed = parseFrontPageRow(row);
+			const story = parsed ? hnStory(parsed) : null;
 			const subline = row.nextElementSibling?.querySelector(".subline, .subtext");
 
 			// A job post has no subline worth appending to and cannot be read later in
@@ -14801,22 +14954,24 @@ title="Show only this discussion">
 				continue;
 			}
 
+			const key = queueKey(story);
+
 			const link = document.createElement("a");
 			link.href = "#";
 			link.className = "hnewhere-save-link";
-			link.textContent = queued.has(story.id) ? "queued" : "queue";
+			link.textContent = queued.has(key) ? "queued" : "queue";
 
 			link.onclick = async (event) => {
 				event.preventDefault();
 
 				const entries = await loadQueue();
-				const already = entries.some((entry) => entry.id === story.id);
+				const already = entries.some((entry) => queueKey(entry) === key);
 
 				// The same control both ways. A row is the only place this story
 				// appears, so making the reader hunt elsewhere to undo a misclick
 				// would be the wrong half of a pair.
 				const next = already
-					? removeFromQueue(entries, story.id)
+					? removeFromQueue(entries, key)
 					: addToQueue(entries, story, Date.now());
 
 				await saveQueue(next);
@@ -14866,6 +15021,15 @@ title="Show only this discussion">
 	// -------------------------
 	// URL helpers
 	// -------------------------
+
+	// What identifies a story to the queue, tolerating an entry that predates the
+	// key. migrateQueue fills those in at startup, so the fallback should never
+	// fire in practice -- it is here because a queue can also arrive from another
+	// profile through storage sync, having been written by a version that had no
+	// key to write.
+	function queueKey(story) {
+		return story.key || normalizeURL(story.url || "");
+	}
 
 	function sameURL(a, b) {
 		return normalizeURL(a) === normalizeURL(b);
@@ -17757,6 +17921,7 @@ title="Show only this discussion">
 		await seedSources();
 		await migrateStorage();
 		await migrateSourceKeys();
+		await migrateQueue();
 
 		// On HN, only record clicked stories, offer the queue, and service popup
 		// bridge actions.
@@ -17928,8 +18093,17 @@ title="Show only this discussion">
 		// They are a discussion we know exists, and a network hiccup on a page the
 		// reader reached from Hacker News should not end in a button offering to
 		// submit it there.
+		//
+		// Hacker News only, and that qualifier is load-bearing the moment a browse
+		// row can come from anywhere else. These are recovered as Algolia refs,
+		// which only Hacker News can be read as -- a Lobsters short_id rebuilt this
+		// way would present as HN item "97laur", a submission that has never
+		// existed. An absent source is Hacker News, for records written before there
+		// was one.
+		const recoverable = arrivedFromClick && (!last.source || last.source === "hn");
+
 		const stories =
-			found.length || !arrivedFromClick
+			found.length || !recoverable
 				? found
 				: last.ids.map((id) => ({ objectID: id }));
 
