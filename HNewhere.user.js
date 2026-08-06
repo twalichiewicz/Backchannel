@@ -1553,6 +1553,79 @@
 		};
 	}
 
+	// Lobsters publishes exactly the fields a row needs and no mapping is
+	// interesting except the date: created_at is an ISO string with an offset,
+	// where every other source and the whole of standing speak unix seconds.
+	function lobstersStory(story) {
+		return {
+			source: "lobsters",
+			key: normalizeURL(story.url),
+			id: story.short_id,
+			url: story.url,
+			title: story.title || "",
+			by: story.submitter_user || "",
+			score: story.score ?? 0,
+			time: Math.floor(new Date(story.created_at).getTime() / 1000) || 0,
+			descendants: story.comment_count ?? 0,
+			site: hostLabel(story.url),
+			permalink: story.short_id_url || story.comments_url || "",
+		};
+	}
+
+	// A Lemmy row is spread over three objects: the post carries the link, the
+	// counts carry the numbers, and the creator carries the name.
+	function lemmyStory(view) {
+		const post = view.post || {};
+
+		return {
+			source: "lemmy",
+			key: normalizeURL(post.url),
+			id: post.id,
+			url: post.url || "",
+			title: post.name || "",
+			by: view.creator?.name || "",
+			score: view.counts?.score ?? 0,
+			time: Math.floor(new Date(post.published).getTime() / 1000) || 0,
+			descendants: view.counts?.comments ?? 0,
+			site: hostLabel(post.url),
+			// ap_id is the post's canonical federated address, which is its home
+			// instance's URL for it. Built from lemmy.world instead, the link would
+			// send the reader to whichever instance we happened to search from.
+			permalink: post.ap_id || "",
+		};
+	}
+
+	// The subreddit rather than the host, and only here. Everywhere else the site
+	// label answers "where does this link go", which the URL already says on a
+	// Reddit row too -- but which subreddit put it there is the thing a reader
+	// weighs, exactly as redditDiscussion argues one level down.
+	function redditStory(post) {
+		return {
+			source: "reddit",
+			key: normalizeURL(post.url),
+			id: post.id,
+			url: post.url || "",
+			title: post.title || "",
+			by: post.author || "",
+			score: post.score ?? 0,
+			time: post.created_utc ?? 0,
+			descendants: post.num_comments ?? 0,
+			site: post.subreddit_name_prefixed || "r/" + (post.subreddit || ""),
+			permalink: "https://www.reddit.com" + (post.permalink || ""),
+		};
+	}
+
+	// What Hacker News prints in brackets after a title. Its own rule, applied to
+	// sources that publish no such field: strip a leading www., keep everything
+	// else. An unparseable URL gets no bracket rather than an empty one.
+	function hostLabel(url) {
+		try {
+			return new URL(url).hostname.replace(/^www\./, "");
+		} catch {
+			return "";
+		}
+	}
+
 	// score is null, not 0. HN's API does not carry comment points at any
 	// endpoint, so there is no number to report -- and a 0 would be indexed,
 	// sorted and displayed as though there were.
@@ -2824,6 +2897,27 @@ ${
 			return (await findHN(url)).map(algoliaDiscussion);
 		},
 
+		// Fetched anonymously like everything else the sidebar reads -- the browser
+		// strips HN's SameSite cookie from a cross-site GM request -- which for this
+		// page costs nothing. The front page is the same for everyone; only the vote
+		// arrows would differ, and those are replayed from vote memory anyway.
+		//
+		// One page, where this used to take a page number. The blend fetches every
+		// source once and pages through the merged pool locally, so HN's own ?p=
+		// pagination has nowhere left to surface: page 2 of a blend is made of rows
+		// that lost on page 1, not of one source's next thirty.
+		async frontPage() {
+			const html = await requestText(HN_ORIGIN + "/news");
+
+			if (!html) {
+				return [];
+			}
+
+			return parseFrontPage(
+				new DOMParser().parseFromString(html, "text/html"),
+			).map(hnStory);
+		},
+
 		// Returns a reader, not a tree. HN charges one request per comment, so the
 		// renderer has to be able to ask for them one at a time and paint between
 		// answers -- a source that returns whole trees satisfies the same interface
@@ -2955,6 +3049,13 @@ ${
 		return { json: archive.json, tier: "archive" };
 	}
 
+	// Wider than `origins`, and for a different question. Those are places a reader
+	// clicks a link *from*; these are places Reddit keeps its own content, which is
+	// what a front-page row has to point away from to be worth listing. redd.it
+	// covers i./v./preview., the three that carry the images and clips making up
+	// nearly half of r/popular.
+	const REDDIT_SELF_HOSTS = ["reddit.com", "redd.it"];
+
 	registerSource({
 		id: "reddit",
 		// All four are real places a reader clicks a link from, and Reddit does not
@@ -3023,6 +3124,26 @@ ${
 				// hint, and this comparison is the answer.
 				.filter((post) => normalizeURL(post.url) === target)
 				.map(redditDiscussion);
+		},
+
+		// limit=100 for twenty rows. r/popular is 80% Reddit's own content --
+		// measured at 80 of 100, 44 of them bare media -- so the fetch has to be
+		// deep enough that what survives the filter is still worth blending.
+		//
+		// No archive fallback, unlike discover. Arctic Shift is a historical index
+		// of what was posted, not a live ranking, so there is no second tier that
+		// could answer "what is on Reddit's front page right now". Without a usable
+		// loid this correctly contributes nothing rather than contributing
+		// yesterday.
+		async frontPage() {
+			const result = await redditFetch("/r/popular.json?limit=100");
+			const posts = (result?.json?.data?.children || []).map(
+				(child) => child.data,
+			);
+
+			return posts
+				.filter((post) => post?.id && isOffSiteLink(post.url, REDDIT_SELF_HOSTS))
+				.map(redditStory);
 		},
 
 		async loadThread(discussion) {
@@ -3394,6 +3515,19 @@ ${
 				.map(lobstersDiscussion);
 		},
 
+		// The one source that needs no filtering and no depth. Lobsters is invite-
+		// only and tightly scoped, so its hottest page is 25 rows of links and
+		// essentially all of them are already what the blend wants. A text post
+		// carries an empty url, which isOffSiteLink rejects on the URL constructor
+		// throwing -- so the filter is here for that case alone.
+		async frontPage() {
+			const stories = await lobstersJSON("https://lobste.rs/hottest.json");
+
+			return (Array.isArray(stories) ? stories : [])
+				.filter((story) => isOffSiteLink(story.url, ["lobste.rs"]))
+				.map(lobstersStory);
+		},
+
 		async loadThread(discussion) {
 			const story = await lobstersJSON(
 				`https://lobste.rs/s/${encodeURIComponent(discussion.id)}.json`,
@@ -3584,6 +3718,25 @@ ${
 				.map(lemmyDiscussion);
 		},
 
+		// Active rather than Hot. Lemmy's Hot decays hard on submission age, so it
+		// answers with the last two hours of one instance's traffic; Active weighs
+		// recent comment activity, which across a federated network is closer to
+		// what the other three sources mean by a front page.
+		//
+		// limit=50 for sixteen rows, and the loss is images: measured at 42% bare
+		// pictrs files. Every Lemmy instance serves its own images from a /pictrs/
+		// path, and a federated post carries whichever instance's host, so this has
+		// to be a path test -- a host list cannot enumerate the network.
+		async frontPage() {
+			const res = await lemmyJSON(
+				"https://lemmy.world/api/v3/post/list?sort=Active&type_=All&limit=50",
+			);
+
+			return (res?.posts || [])
+				.filter((view) => isOffSiteLink(view.post?.url, [], ["/pictrs/"]))
+				.map(lemmyStory);
+		},
+
 		async loadThread(discussion) {
 			const res = await lemmyJSON(
 				`https://lemmy.world/api/v3/comment/list?post_id=${encodeURIComponent(discussion.id)}&type_=All&sort=Top&max_depth=8&limit=300`,
@@ -3759,54 +3912,89 @@ ${
 
 	// Five minutes, where findHN caches an hour. What findHN stores is which
 	// submissions exist for a URL, and that does not change; a ranking is the one
-	// thing on HN that changes continuously, and a front page half an hour old is
-	// a different front page.
+	// thing on a front page that changes continuously, and a front page half an
+	// hour old is a different front page.
 	const FRONT_PAGE_TTL = 5 * 60 * 1000;
 
-	// Fetched anonymously like everything else the sidebar reads -- the browser
-	// strips HN's SameSite cookie from a cross-site GM request -- which for this
-	// page costs nothing. The front page is the same for everyone; only the vote
-	// arrows would differ, and those are replayed from vote memory anyway.
-	async function loadFrontPage(options = {}) {
-		// Cached a page at a time, the way findHN caches a URL at a time. One entry
-		// holding every page would expire the whole run together, so paging back to
-		// where you were would refetch a page you read a moment ago.
-		const page = Math.max(1, Number(options.page) || 1);
-		const cacheKey = FRONT_PAGE_CACHE_KEY + ":" + page;
+	// Which enabled sources have a front page to contribute. Declared by having
+	// the method rather than listed here, so a seventh source answers this
+	// question by existing -- the same reason discover is a method and not a
+	// branch. Bluesky and Wikipedia rank posts and citations respectively, not
+	// URLs, so neither implements it and neither appears.
+	function frontPageSourceIds(settings) {
+		return enabledSourceIds(settings, registeredSourceIds()).filter(
+			(id) => typeof getSource(id)?.frontPage === "function",
+		);
+	}
+
+	// Every enabled front page, blended into one list.
+	//
+	// One deep fetch and no pagination outward. The link-shaped filter already
+	// forces depth -- Reddit needs 100 rows to yield 20 -- so the pool that comes
+	// back is ~90 rows where a single page shows 30, and paging through it costs
+	// nothing further. The alternative, re-fetching each source's page 2 on More,
+	// would also have to re-blend against cumulative depth or page 2's rows would
+	// outrank page 1's.
+	//
+	// Keyed on which sources answered, not on a page number. A blend of three
+	// sources is a different list from a blend of four, and a reader who switches
+	// one off should not be served the ranking that included it.
+	//
+	// Every source is asked at once and a thrown adapter costs only its own rows.
+	// One source being down is the case this has to survive well: with four of
+	// them the odds that all four are up are meaningfully worse than for any one,
+	// so a fan-out that failed whole would be less reliable than the single fetch
+	// it replaces.
+	async function loadFrontPages(options = {}) {
+		const settings = options.settings || (await loadSettings());
+		const ids = frontPageSourceIds(settings);
+
+		if (!ids.length) {
+			return { rows: [], sources: [] };
+		}
+
+		const cacheKey = FRONT_PAGE_CACHE_KEY + ":" + ids.join(",");
 		const cached = await load(cacheKey, null);
 
 		if (
 			!options.force &&
-			cached?.stories?.length &&
+			cached?.rows?.length &&
 			Date.now() - cached.timestamp < FRONT_PAGE_TTL
 		) {
-			return { stories: cached.stories, nextPage: cached.nextPage ?? null, page };
+			return { rows: cached.rows, sources: cached.sources || ids };
 		}
 
-		const html = await requestText(HN_ORIGIN + "/news?p=" + page);
-		const doc = html
-			? new DOMParser().parseFromString(html, "text/html")
-			: null;
-		// Shaped here rather than at the row, so everything a browse row is handed
-		// carries an identity and a permalink whatever list it came from.
-		const stories = doc ? parseFrontPage(doc).map(hnStory) : [];
+		const lists = await Promise.all(
+			ids.map(async (id) => {
+				try {
+					return (await getSource(id).frontPage()) || [];
+				} catch (e) {
+					console.warn("Backchannel " + id + " front page failed:", e);
+					return [];
+				}
+			}),
+		);
 
-		// A failed fetch, or markup we could not read, falls back to whatever is
-		// stored however old. Yesterday's front page is a worse answer than today's
-		// and a far better one than an empty panel that does not say why.
-		if (!stories.length) {
-			return {
-				stories: cached?.stories || [],
-				nextPage: cached?.nextPage ?? null,
-				page,
-			};
+		// Empty lists are dropped rather than blended. blendPosition divides by
+		// total + 1, so an empty list contributes nothing either way -- but the
+		// names are what the panel reports as "what you are looking at", and a
+		// source that answered with nothing is not part of this list.
+		const answered = ids.filter((id, index) => lists[index].length);
+		const rows = mergeStoriesByURL(
+			blendStories(lists.filter((list) => list.length)),
+		);
+
+		// Every source failing falls back to whatever is stored however old. The
+		// same judgement the single-source version made: a stale front page is a
+		// worse answer than a fresh one and a far better one than an empty panel
+		// that does not say why.
+		if (!rows.length) {
+			return { rows: cached?.rows || [], sources: cached?.sources || [] };
 		}
 
-		const nextPage = parseFrontPageNextPage(doc);
+		await save(cacheKey, { timestamp: Date.now(), rows, sources: answered });
 
-		await save(cacheKey, { timestamp: Date.now(), stories, nextPage });
-
-		return { stories, nextPage, page };
+		return { rows, sources: answered };
 	}
 
 	// -------------------------
@@ -4072,6 +4260,18 @@ ${
 
 	function pluralize(value, singular, plural = singular + "s") {
 		return value + " " + (value === 1 ? singular : plural);
+	}
+
+	// "a, b and c" -- no serial comma, matching the prose everywhere else in the
+	// panel. Intl.ListFormat would localise this, and is deliberately not used:
+	// every other sentence the sidebar writes is an English literal, so a list
+	// that alone spoke the reader's locale would read as a translation bug.
+	function joinWithAnd(items) {
+		if (items.length < 3) {
+			return items.join(" and ");
+		}
+
+		return items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
 	}
 
 	// #region hnewhere-test-export
@@ -6324,6 +6524,40 @@ ${
 	// and no story text, and a rank sits in front. Same classes, so a browse row
 	// and the story at the top of a discussion read as the same kind of object.
 	function renderBrowseRow(story, container, rank, options = {}) {
+		// One comment link per source carrying this page, the lead first. With a
+		// single source this is the line it has always been; with two it becomes
+		// "HN 211 comments · Lobsters 24 comments", which is the merged row saying
+		// what merging it bought.
+		//
+		// Counts stay per source and are never added up. standing log-scales votes
+		// precisely because a Reddit number and an HN number are not the same unit,
+		// and a summed total would undo at display time what the blend was careful
+		// about at ranking time.
+		const discussions = [story, ...(options.also || [])];
+		const labelled = discussions.length > 1;
+		const commentLinks = discussions
+			.filter((each) => each.permalink)
+			.map(
+				(each) =>
+					`<a class="browse-comments-link" href="${escapeHTML(each.permalink)}"
+	target="_blank" rel="noopener noreferrer">${
+		labelled ? escapeHTML(sourceShortLabel(each)) + " " : ""
+	}${escapeHTML(pluralize(each.descendants, "comment"))}</a>`,
+			)
+			.join(`<span class="browse-comments-sep">·</span>`);
+
+		// Only where the reader has an account that can act. Every source declares
+		// its capabilities, and HN is the only one with any -- so flag and favorite
+		// appear on an HN row and nowhere else, rather than on a Lobsters row where
+		// pressing them would post to Hacker News about a story it does not have.
+		//
+		// An absent source is Hacker News: a queue entry stored before this release
+		// carries no source field, and every one of those is an HN story.
+		const actions =
+			!story.source || getSource(story.source)?.capabilities?.vote
+				? itemActionLinksHTML(story.id)
+				: "";
+
 		// HN's own order and HN's own punctuation: the age follows the author on a
 		// bare space, the actions come next, and the comment count closes the line.
 		// `75 points by AlexeyBrin 3 hours ago | hide | 11 comments`.
@@ -6335,10 +6569,9 @@ ${
 	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
 	|
 	<button class="browse-save-link" type="button">queue</button>
-	${itemActionLinksHTML(story.id)}
+	${actions}
 	|
-	<a class="browse-comments-link" href="${escapeHTML(commentURL(story.id))}"
-	target="_blank" rel="noopener noreferrer">${escapeHTML(pluralize(story.descendants, "comment"))}</a>`;
+	${commentLinks}`;
 
 		const row = document.createElement("div");
 		row.className = "story browse-row";
@@ -6446,9 +6679,10 @@ ${
 	}
 
 	let queueHasItems = false;
-	// Whether there is a front page to show at all, which is Hacker News being on.
-	// Cached for the same reason queueHasItems is: renderBrowseView picks a tab
-	// synchronously and cannot wait on a settings read to do it.
+	// Whether there is a front page to show at all, which is now any enabled source
+	// having one rather than Hacker News being on. Cached for the same reason
+	// queueHasItems is: renderBrowseView picks a tab synchronously and cannot wait
+	// on a settings read to do it.
 	let frontPageAvailable = true;
 
 	// What is actually behind the wordmark, in one place because three of them set
@@ -6456,17 +6690,30 @@ ${
 	// refreshBrowseAffordances when the sources change. Kept as two literals, the
 	// last writer won, and a wordmark went on naming Hacker News after it had been
 	// switched off and its front page tab had already gone.
+	//
+	// Plural at one source as well as four. Computing the number would mean the
+	// tab renaming itself as sources are toggled, and "front pages" describes the
+	// place rather than counting what is in it -- the way a newsstand is a
+	// newsstand with one paper on it.
+	//
+	// Lower case, like the tab it describes and like `queue` beside it. It named
+	// Hacker News before, where the capitals were a proper noun rather than a
+	// style, so dropping the name drops them with it.
 	function browseLabel() {
-		return frontPageAvailable ? "Hacker News and your queue" : "Your queue";
+		return frontPageAvailable ? "front pages and your queue" : "Your queue";
 	}
 
 	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
 	// rather than the ui object because a browse row only knows the tree it is in.
-	// The front page behind the wordmark is Hacker News' own, parsed from its
-	// markup. With Hacker News switched off there is no front page to show, so the
-	// tab goes -- and if the queue is empty too there is nothing behind the
-	// wordmark at all, so the wordmark goes with it rather than opening onto an
-	// empty list under a tab for a source the reader turned off.
+	// The front page behind the wordmark is every enabled source's own, blended.
+	// With none of them switched on there is no front page to show, so the tab goes
+	// -- and if the queue is empty too there is nothing behind the wordmark at all,
+	// so the wordmark goes with it rather than opening onto an empty list under a
+	// tab for sources the reader turned off.
+	//
+	// A reader with only Bluesky and Wikipedia enabled is in exactly that position,
+	// and correctly: neither ranks URLs, so neither has a front page, and the tab
+	// is as absent as it is with everything off.
 	async function refreshBrowseAffordances(root) {
 		const frontTab = root?.querySelector?.("#browse-tab-front");
 		const wordmark = root?.querySelector?.("#browse-toggle");
@@ -6476,10 +6723,7 @@ ${
 		}
 
 		const settings = await loadSettings();
-		frontPageAvailable = enabledSourceIds(
-			settings,
-			registeredSourceIds(),
-		).includes("hn");
+		frontPageAvailable = frontPageSourceIds(settings).length > 0;
 
 		if (frontTab) {
 			frontTab.hidden = !frontPageAvailable;
@@ -6969,11 +7213,11 @@ ${
 		// place until the new ones are ready, so switching back and forth does not
 		// blank the list each time.
 		if (!list.childElementCount) {
-			list.textContent = "Loading Hacker News…";
+			list.textContent = "Loading front pages…";
 		}
 
 		const requested = browsePage;
-		const { stories, nextPage, page } = await loadFrontPage({ page: requested });
+		const { rows, sources } = await loadFrontPages();
 
 		// A second click while the first was still in flight, so this answer is for
 		// a page nobody is waiting for any more.
@@ -6981,27 +7225,61 @@ ${
 			return;
 		}
 
-		if (!stories.length) {
-			list.textContent = "Could not reach Hacker News.";
+		if (!rows.length) {
+			// Names who was asked rather than who failed. With four sources fanned
+			// out, "could not reach Reddit" would be wrong three times out of four,
+			// and the reader's question is about the empty list in front of them.
+			list.textContent = "Could not reach any front page.";
 			return;
 		}
 
+		// Paged out of the pool already in hand rather than fetched per page, so
+		// More is instant and costs nothing. Clamped rather than trusted: browsePage
+		// survives a round trip to the discussion, so a reader who was on page 3 of
+		// a longer blend can come back to a shorter one.
+		const lastPage = Math.max(1, Math.ceil(rows.length / FRONT_PAGE_SIZE));
+		const page = Math.min(requested, lastPage);
+		const start = (page - 1) * FRONT_PAGE_SIZE;
+
+		// Written back, not just used. browsePage survives the round trip to a
+		// discussion and back, so leaving it past the end would have prev navigate
+		// from a page that is not the one on screen.
+		browsePage = page;
+
 		list.replaceChildren();
-		stories.forEach((story, index) =>
-			renderBrowseRow(story, list, (page - 1) * FRONT_PAGE_SIZE + index + 1),
-		);
+		rows
+			.slice(start, start + FRONT_PAGE_SIZE)
+			.forEach((row, index) =>
+				renderBrowseRow(row.story, list, start + index + 1, { also: row.also }),
+			);
 
 		// These rows never pass through the vote hydration, which is what carries
 		// remembered favorite and flag state onto a discussion. Put on here instead,
 		// once the list exists.
 		refreshAllItemActionControls();
 
-		renderBrowseNav(list, { page, nextPage }, (target) => {
-			// Back to the top: the reader asked for a different page, not for the same
-			// place in a new one.
-			scrollBrowseToTop(ui);
-			renderBrowseView(ui, { page: target }).catch(console.error);
-		});
+		// Only worth saying with more than one, and only naming what actually
+		// answered. A source that was asked and returned nothing is not in this
+		// list, because the line is describing what the reader is looking at.
+		if (sources.length > 1) {
+			const note = document.createElement("div");
+			note.className = "browse-blend-note";
+			note.textContent =
+				"Blended from " +
+				joinWithAnd(sources.map((id) => getSource(id)?.label || id));
+			list.appendChild(note);
+		}
+
+		renderBrowseNav(
+			list,
+			{ page, nextPage: page < lastPage ? page + 1 : null },
+			(target) => {
+				// Back to the top: the reader asked for a different page, not for the same
+				// place in a new one.
+				scrollBrowseToTop(ui);
+				renderBrowseView(ui, { page: target }).catch(console.error);
+			},
+		);
 	}
 
 	async function renderBrowseView(ui, options = {}) {
@@ -8256,7 +8534,7 @@ header {
 /* The bar hangs off the queue rather than sitting between the two as a sibling
    rule, so that hiding the queue takes the bar with it. As `+` it would stay
    attached to whichever tab came second and leave a leading bar in front of
-   Front page on its own. */
+   front pages on its own. */
 #browse-tab-queue::after {
 	content:"|";
     /* HN's own ratio, measured off it: 3.28px each side of the bar at 9.33px
@@ -8309,6 +8587,27 @@ header {
    corrected. */
 .browse-row-read {
 	opacity:.5;
+}
+
+/* Between two sources' comment links on a merged row. A middot rather than the
+   pipe the rest of the meta line uses, because those separate actions and this
+   separates two halves of one fact -- how much conversation this page has, and
+   where. Padded rather than spaced in the markup, so the line wraps between the
+   links instead of before a floating dot. */
+.browse-comments-sep {
+	padding:0 4px;
+	color:var(--meta);
+}
+
+/* Which front pages this list came from, at the bottom rather than the top: it
+   answers a question the reader only has after looking, and a header saying what
+   is coming would push the first row down on every open to say something most
+   readers already know. Named sources only, and only when there are several --
+   with one enabled this is the front page it has always been and says nothing. */
+.browse-blend-note {
+	margin:12px 0 0 var(--browse-indent);
+	color:var(--meta);
+	font-size:11px;
 }
 
 /* A rank column wide enough for two digits and the stop after them, which is
@@ -11680,7 +11979,7 @@ ${settingsPanelHTML()}
 <div id="browse-view" class="browse-view">
 <div class="browse-tabs" role="tablist">
 <button id="browse-tab-queue" class="browse-tab" type="button" role="tab" hidden>queue</button>
-<button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">Hacker News front page</button>
+<button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front pages</button>
 </div>
 <div id="browse-list"></div>
 </div>
@@ -15272,23 +15571,11 @@ title="Show only this discussion">
 			.filter(Boolean);
 	}
 
-	// HN paginates with a single "More" link carrying ?p=N, and offers nothing
-	// pointing backwards -- the page you came from is simply N-1, which is why only
-	// this direction has to be read off the page. Its absence is how the last page
-	// announces itself, so a missing link is the answer rather than a parse failure.
-	function parseFrontPageNextPage(doc) {
-		const href = doc.querySelector("a.morelink")?.getAttribute("href");
-
-		if (!href) {
-			return null;
-		}
-
-		const page = Number(
-			new URL(href, HN_ORIGIN + "/news").searchParams.get("p"),
-		);
-
-		return Number.isFinite(page) && page > 1 ? page : null;
-	}
+	// parseFrontPageNextPage lived here and is gone. It read HN's "More" link to
+	// find the next ?p=, which the blend has nowhere to use: every source is
+	// fetched once to a fixed depth and the merged pool is paged locally, so page 2
+	// is made of rows that lost on page 1 rather than of Hacker News' next thirty.
+	// Kept as a note rather than as dead code with passing tests behind it.
 
 	// #endregion hnewhere-test-export
 
