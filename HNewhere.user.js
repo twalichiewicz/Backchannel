@@ -9053,6 +9053,13 @@ header button svg {
 	opacity:1;
 }
 
+/* Separates the source checkboxes from the support table below them. */
+.sources-divider {
+	border:none;
+	border-top:1px solid var(--surface-divider);
+	margin:14px 0;
+}
+
 /* A breadcrumb rather than a bare title: the hidden-sites list is a second level
    of the same panel, so the trail is what says where you are and how to get back.
    Sits outside the sliding track, so it survives the transition. */
@@ -9627,6 +9634,7 @@ title="Type a hex colour">#237140</span></div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
 ${sourceListHTML({ idPrefix: "setting-source-" })}
+<hr class="sources-divider">
 <div class="source-matrix-caption">What each source supports</div>
 <div class="source-matrix-scroll">
 <table class="source-matrix">
@@ -9647,7 +9655,7 @@ ${["read", "vote", "reply", "submit"]
 </tbody>
 </table>
 </div>
-<div class="sources-slow-note" id="sources-slow-note">Lemmy, Wikipedia and Bluesky load slower — with them on, comments can take a moment to all appear.</div>
+<div class="sources-slow-note" id="sources-slow-note">Certain sources take longer to fetch comments, so they may take a moment to appear.</div>
 </div>
 
 </div>
