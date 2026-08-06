@@ -8889,8 +8889,8 @@ header button svg {
    rendering needs it in the sidebar. */
 .op-pill {
 	display:inline-block;
-	margin-left:4px;
-	margin-right:4px;
+	margin-left:1px;
+	margin-right:1px;
 	padding:1px 4px;
 	border-radius:3px;
 	background:var(--accent);
