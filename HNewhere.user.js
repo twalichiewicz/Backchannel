@@ -7241,6 +7241,26 @@ ${
 		}
 	}
 
+	// The byline under the tab, or nothing. Its own function because two callers
+	// set it and they mean opposite things: the front page names what it blended,
+	// and the queue clears it -- a queue is one list of one reader's saving and
+	// was never blended from anywhere.
+	function setBlendNote(ui, sources) {
+		const note = ui?.shadow?.querySelector("#browse-blend-note");
+
+		if (!note) {
+			return;
+		}
+
+		note.hidden = sources.length < 2;
+
+		if (!note.hidden) {
+			note.textContent =
+				"Blended from " +
+				joinWithAnd(sources.map((id) => getSource(id)?.label || id));
+		}
+	}
+
 	async function renderFrontPageView(ui, list) {
 		// Only on a first paint. Re-entering with rows already up leaves them in
 		// place until the new ones are ready, so switching back and forth does not
@@ -7257,6 +7277,14 @@ ${
 		if (browsePage !== requested || browseTab !== "front") {
 			return;
 		}
+
+		// Only worth saying with more than one, and only naming what actually
+		// answered. A source that was asked and returned nothing is not in this
+		// list, because the line is describing what the reader is looking at.
+		//
+		// Set here rather than appended to the list, because it lives above it now
+		// and has to survive the replaceChildren below.
+		setBlendNote(ui, sources);
 
 		if (!rows.length) {
 			// Names who was asked rather than who failed. With four sources fanned
@@ -7290,18 +7318,6 @@ ${
 		// remembered favorite and flag state onto a discussion. Put on here instead,
 		// once the list exists.
 		refreshAllItemActionControls();
-
-		// Only worth saying with more than one, and only naming what actually
-		// answered. A source that was asked and returned nothing is not in this
-		// list, because the line is describing what the reader is looking at.
-		if (sources.length > 1) {
-			const note = document.createElement("div");
-			note.className = "browse-blend-note";
-			note.textContent =
-				"Blended from " +
-				joinWithAnd(sources.map((id) => getSource(id)?.label || id));
-			list.appendChild(note);
-		}
 
 		renderBrowseNav(
 			list,
@@ -7345,6 +7361,11 @@ ${
 		refreshQueueCount(ui.shadow);
 
 		if (browseTab === "queue") {
+			// Cleared on the way in rather than left for the queue to overwrite. The
+			// byline sits above the list and outlives it, so a stale "Blended from
+			// ..." would otherwise stay under the tab and describe the front page
+			// while the reader is looking at their queue.
+			setBlendNote(ui, []);
 			await renderQueueView(ui, list);
 			return;
 		}
@@ -8682,15 +8703,30 @@ header {
 	color:var(--meta);
 }
 
-/* Which front pages this list came from, at the bottom rather than the top: it
-   answers a question the reader only has after looking, and a header saying what
-   is coming would push the first row down on every open to say something most
-   readers already know. Named sources only, and only when there are several --
-   with one enabled this is the front page it has always been and says nothing. */
+/* Which front pages this list came from, as a byline under the tab rather than a
+   footnote after the rows. 'front pages' names the place and this names the
+   places, so it belongs against the tab it qualifies -- and a reader deciding
+   whether to trust an ordering wants to know what went into it before reading
+   it, not after.
+
+   Named sources only, and only when there are several: with one enabled this is
+   the front page it has always been and the line says nothing.
+
+   The negative top margin is what keeps the tabs' own spacing out of this. The
+   tabs keep the 10px they have always had, so the queue tab and the
+   single-source front page -- neither of which has a byline -- sit exactly where
+   they did; this tucks up into that gap rather than adding to it. Done this way
+   rather than with :has() on the tabs, because the byline appears and disappears
+   while the panel is open and some browsers do not re-evaluate :has() on that. */
 .browse-blend-note {
-	margin:12px 0 0 var(--browse-indent);
+	margin:-6px 0 10px var(--browse-indent);
 	color:var(--meta);
 	font-size:11px;
+	font-family:Verdana, Geneva, sans-serif;
+}
+
+.browse-blend-note[hidden] {
+	display:none;
 }
 
 /* A rank column wide enough for two digits and the stop after them, which is
@@ -12064,6 +12100,7 @@ ${settingsPanelHTML()}
 <button id="browse-tab-queue" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">queue</button>
 <button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front pages</button>
 </div>
+<div id="browse-blend-note" class="browse-blend-note" hidden></div>
 <div id="browse-list"></div>
 </div>
 <div id="next-up" class="next-up hidden"></div>

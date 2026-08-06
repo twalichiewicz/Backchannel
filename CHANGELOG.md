@@ -19,7 +19,7 @@ use to detect updates, so every release bumps it.
   rank-fraction over log-scaled standing that already merges a page's comments,
   because a front page is already that source's own ranking. Bluesky and
   Wikipedia do not appear: neither ranks URLs, so neither has a front page to
-  contribute.
+  contribute. A byline under the tab names which ones went in.
 - A page on more than one front page is one row, not two. Hacker News and
   Lobsters shared three of twenty-five URLs on the day this was built, which as
   two adjacent identical titles read as the panel repeating itself. The merged
