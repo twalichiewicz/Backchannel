@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.2
+// @version      1.6.3
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -50,6 +50,9 @@
 // @connect      arctic-shift.photon-reddit.com
 // @connect      public.api.bsky.app
 // @connect      constellation.microcosm.blue
+// @connect      lobste.rs
+// @connect      en.wikipedia.org
+// @connect      lemmy.world
 // @run-at       document-end
 // @noframes
 // ==/UserScript==
@@ -1644,6 +1647,231 @@
 		return { rootKeys, byKey, hiddenCount: 0, rootMore: null };
 	}
 
+	// Lobsters returns a story's whole comment tree in one /s/<id>.json, flat with
+	// a parent_comment short_id -- the same shape the Reddit archive arrives in, so
+	// the nesting is rebuilt the way redditThreadIndexFromFlat does it.
+	function lobstersComment(raw, discussion) {
+		return {
+			source: "lobsters",
+			key: sourceKey("lobsters", raw.short_id),
+			id: raw.short_id,
+			discussionKey: discussion.key,
+			parentKey: raw.parent_comment
+				? sourceKey("lobsters", raw.parent_comment)
+				: null,
+			author: raw.commenting_user || "",
+			bodyHTML: raw.comment || "",
+			score: raw.score ?? null,
+			createdAt: Math.floor(Date.parse(raw.created_at) / 1000) || 0,
+			isOP: (raw.commenting_user || "") === discussion.author,
+			deleted: Boolean(raw.is_deleted),
+			replyKeys: [],
+		};
+	}
+
+	function lobstersDiscussion(story) {
+		return {
+			source: "lobsters",
+			key: sourceKey("lobsters", story.short_id),
+			id: story.short_id,
+			title: story.title || "",
+			author: story.submitter_user || "",
+			score: story.score ?? null,
+			commentCount: story.comment_count ?? 0,
+			createdAt: Math.floor(Date.parse(story.created_at) / 1000) || 0,
+			permalink: story.comments_url,
+			articleURL: story.url || "",
+			label: "Lobsters",
+			bodyHTML: story.description || "",
+			rootKeys: [],
+			rootTimes: [],
+		};
+	}
+
+	// Same rebuild-from-flat as the Reddit archive: index every comment, then hang
+	// each under its parent's replyKeys, and anything whose parent is absent from
+	// the page becomes a root rather than being dropped.
+	function lobstersThreadIndex(story, discussion) {
+		const byKey = new Map();
+		const rootKeys = [];
+
+		for (const raw of story.comments || []) {
+			if (!raw?.short_id) {
+				continue;
+			}
+
+			byKey.set(
+				sourceKey("lobsters", raw.short_id),
+				lobstersComment(raw, discussion),
+			);
+		}
+
+		for (const comment of byKey.values()) {
+			const parent = comment.parentKey && byKey.get(comment.parentKey);
+
+			if (parent) {
+				parent.replyKeys.push(comment.key);
+			} else {
+				rootKeys.push(comment.key);
+			}
+		}
+
+		return { rootKeys, byKey, hiddenCount: 0, rootMore: null };
+	}
+
+	// Wikipedia has no comment API. exturlusage names the Talk and Project pages
+	// that link a URL, and prop=revisions dates each -- so the source is one
+	// Bluesky-style collective whose roots are those pages, newest edit first. The
+	// per-page data rides on the discussion because the roots are known here and
+	// loadThread fetches nothing.
+	function wikipediaCollective(pageURL, pages, timeByTitle) {
+		if (!pages.length) {
+			return null;
+		}
+
+		const rootKeys = [];
+		const rootTimes = [];
+		const wikiPages = [];
+		let newest = 0;
+
+		for (const page of pages) {
+			const time = timeByTitle.get(page.title) || 0;
+
+			rootKeys.push(sourceKey("wikipedia", String(page.pageid)));
+			rootTimes.push(time);
+			wikiPages.push({ pageid: page.pageid, title: page.title, time });
+
+			if (time > newest) {
+				newest = time;
+			}
+		}
+
+		return {
+			source: "wikipedia",
+			key: sourceKey("wikipedia", "linksearch:" + pageURL),
+			id: "linksearch:" + pageURL,
+			title: "",
+			author: "",
+			score: null,
+			commentCount: pages.length,
+			createdAt: newest,
+			permalink: "https://en.wikipedia.org/wiki/Special:LinkSearch/" + pageURL,
+			articleURL: pageURL,
+			label: "Wikipedia",
+			bodyHTML: "",
+			rootKeys,
+			rootTimes,
+			wikiPages,
+		};
+	}
+
+	// Lemmy is Reddit-shaped: a community is a subreddit, a post a submission, and
+	// one URL is often cross-posted to several communities across the federated
+	// network. A well-federated instance sees the whole threadiverse, so discovery
+	// queries one and every hit is its own discussion.
+	function lemmyHost(actorId) {
+		try {
+			return new URL(actorId).hostname;
+		} catch {
+			return "";
+		}
+	}
+
+	// name for a local user, name@instance for a federated one -- the way Lemmy
+	// prints a handle, and what a profile link needs to resolve.
+	function lemmyHandle(creator) {
+		const name = creator?.name || "";
+		const host = lemmyHost(creator?.actor_id);
+
+		return host && host !== "lemmy.world" ? name + "@" + host : name;
+	}
+
+	function lemmyDiscussion(postView) {
+		const post = postView.post || {};
+		const community = postView.community || {};
+		const host = lemmyHost(community.actor_id);
+
+		return {
+			source: "lemmy",
+			key: sourceKey("lemmy", post.id),
+			id: post.id,
+			title: post.name || "",
+			author: lemmyHandle(postView.creator),
+			score: postView.counts?.score ?? null,
+			commentCount: postView.counts?.comments ?? 0,
+			createdAt: Math.floor(Date.parse(post.published) / 1000) || 0,
+			// The instance's own view resolves even when the post originated on a
+			// smaller server the reader has never heard of.
+			permalink: "https://lemmy.world/post/" + post.id,
+			articleURL: post.url || "",
+			// !community@instance -- how Lemmy names one, and what tells apart the
+			// several communities a link gets cross-posted to.
+			label: "!" + (community.name || "") + (host ? "@" + host : ""),
+			bodyHTML: escapeHTML(post.body || ""),
+			rootKeys: [],
+			rootTimes: [],
+			// Carried for OP: Lemmy is topic-based, so the post's author replying is
+			// a real signal, the way it is on HN and Reddit -- unlike the Bluesky
+			// collective, which has no single poster.
+			creatorId: post.creator_id,
+		};
+	}
+
+	// Lemmy threads via a materialized path: "0.<id>" is a root, "0.<parent>.<id>"
+	// a reply. The immediate parent is the id before this one in the path.
+	function lemmyComment(commentView, discussion) {
+		const comment = commentView.comment || {};
+		const parts = String(comment.path || "0").split(".");
+		const parentId = parts.length > 2 ? parts[parts.length - 2] : null;
+		const removed = Boolean(comment.deleted || comment.removed);
+
+		return {
+			source: "lemmy",
+			key: sourceKey("lemmy", comment.id),
+			id: comment.id,
+			discussionKey: discussion.key,
+			parentKey: parentId ? sourceKey("lemmy", parentId) : null,
+			author: lemmyHandle(commentView.creator),
+			bodyHTML: removed ? "" : escapeHTML(comment.content || ""),
+			score: commentView.counts?.score ?? null,
+			createdAt: Math.floor(Date.parse(comment.published) / 1000) || 0,
+			isOP:
+				Boolean(commentView.creator?.id) &&
+				commentView.creator.id === discussion.creatorId,
+			deleted: removed,
+			replyKeys: [],
+		};
+	}
+
+	// Flat list rebuilt into the map getComment reads -- the same shape as the
+	// Reddit archive builder, nesting by the path's parent id. A comment whose
+	// parent is beyond the fetched depth becomes a root rather than vanishing.
+	function lemmyThreadIndex(comments, discussion) {
+		const byKey = new Map();
+		const rootKeys = [];
+
+		for (const commentView of comments || []) {
+			if (!commentView?.comment?.id) {
+				continue;
+			}
+
+			const comment = lemmyComment(commentView, discussion);
+			byKey.set(comment.key, comment);
+		}
+
+		for (const comment of byKey.values()) {
+			const parent = comment.parentKey && byKey.get(comment.parentKey);
+
+			if (parent) {
+				parent.replyKeys.push(comment.key);
+			} else {
+				rootKeys.push(comment.key);
+			}
+		}
+
+		return { rootKeys, byKey, hiddenCount: 0, rootMore: null };
+	}
+
 	// Where a comment sits in its own discussion, as a fraction. This is the whole
 	// ordering rule for a blended thread, and what it carefully never does is
 	// compare a Reddit upvote to an HN point -- HN's API carries no comment score
@@ -2014,19 +2242,8 @@
 	// Bluesky publishes a like count per post, so unlike HN there is a real number
 	// to report and it is not invented. A post and a reply are the same record
 	// type, which is why one mapper serves both.
-	function bskyComment(post, discussion, parentKey, rootAuthorDID) {
+	function bskyComment(post, discussion, parentKey) {
 		const key = bskyKeyFromURI(post?.uri);
-		const did = post?.author?.did || "";
-
-		// Judged against the root post's author, not the discussion's -- a
-		// collective has no author, and "the person who posted this link replying
-		// to you" is the signal worth marking.
-		//
-		// Omitting rootAuthorDID means this post IS the root, and a root is its own
-		// OP. That is deliberately not the same as passing null, which is a root
-		// that arrived without a did: resolving with `||` would fall back to each
-		// node's own did and mark the entire thread as OP.
-		const owner = rootAuthorDID === undefined ? did : rootAuthorDID;
 
 		return {
 			source: "bsky",
@@ -2041,7 +2258,11 @@
 			bodyHTML: escapeHTML(post?.record?.text || ""),
 			score: post?.likeCount ?? 0,
 			createdAt: bskyTime(post),
-			isOP: Boolean(did) && did === owner,
+			// No OP on Bluesky. Discovery aggregates many people's separate posts
+			// about a URL -- a user-based collective, not one topic's thread -- so
+			// there is no single original poster to mark. Judging each root as its
+			// own OP put the pill on nearly every line, where it meant nothing.
+			isOP: false,
 			deleted: false,
 			replyKeys: [],
 		};
@@ -2050,7 +2271,7 @@
 	// Walks a getPostThread response into the flat map getComment reads. The
 	// response is a union: notFoundPost and blockedPost carry no author and no
 	// text, and rendering one would put an authorless comment in the thread.
-	function indexBskyThread(node, discussion, byKey, parentKey, rootAuthorDID) {
+	function indexBskyThread(node, discussion, byKey, parentKey) {
 		const post = node?.post;
 
 		if (!post?.uri) {
@@ -2058,12 +2279,7 @@
 		}
 
 		const key = bskyKeyFromURI(post.uri);
-		// The root names the owner for everything beneath it. `undefined` means
-		// "this node is the root"; null means a root that carried no did, and marks
-		// nobody rather than everybody.
-		const ownerDID =
-			rootAuthorDID === undefined ? post?.author?.did || null : rootAuthorDID;
-		const comment = bskyComment(post, discussion, parentKey, ownerDID);
+		const comment = bskyComment(post, discussion, parentKey);
 
 		byKey.set(key, comment);
 
@@ -2073,7 +2289,7 @@
 			}
 
 			comment.replyKeys.push(bskyKeyFromURI(reply.post.uri));
-			indexBskyThread(reply, discussion, byKey, key, ownerDID);
+			indexBskyThread(reply, discussion, byKey, key);
 		}
 	}
 
@@ -2263,21 +2479,45 @@
 				(source) => `
 <label class="settings-option">
 <input${idPrefix ? ` id="${escapeHTML(idPrefix + source.id)}"` : ""} data-source="${escapeHTML(source.id)}" type="checkbox">
-<span>${escapeHTML(source.label)}${source.beta ? ` <span class="op-pill">BETA</span>` : ""}</span>
+<span>${escapeHTML(source.label)}${source.beta ? ` <span class="op-pill">BETA</span>` : ""}${source.slow ? ` <span class="op-pill op-pill-slow" tabindex="0" role="note" aria-label="Slower comment fetch source">⧗<span class="op-pill-tip" aria-hidden="true">Slower comment fetch source</span></span>` : ""}</span>
 </label>
 ${
 	source.caveat
-		? `<div class="settings-option-hint">${escapeHTML(source.caveat)}</div>`
+		? `<div class="settings-option-hint">${escapeHTML(source.caveat)}${source.slow ? `<p class="settings-option-hint-slow">This source takes longer to fetch comments, so they may take a moment to appear.</p>` : ""}</div>`
 		: ""
 }`,
 			)
 			.join("");
 	}
 
+	// The caveat under a source collapses once its box is ticked. The CSS :has()
+	// rule handles that on render, but some browsers do not re-evaluate :has() on a
+	// live toggle, so the is-acknowledged class is set from JS wherever a source
+	// checkbox renders or changes -- which the toggle handlers already run through.
+	function syncSourceHint(input) {
+		const option = input?.closest(".settings-option");
+		const hint = option?.nextElementSibling;
+
+		if (hint && hint.classList.contains("settings-option-hint")) {
+			hint.classList.toggle("is-acknowledged", input.checked);
+		}
+
+		// The slower-fetch pill lives in the label and shows only once enabled.
+		option?.classList.toggle("settings-option-on", Boolean(input?.checked));
+	}
+
 	function enabledSources(settings) {
 		return enabledSourceIds(settings, registeredSourceIds()).map((id) =>
 			SOURCES.get(id),
 		);
+	}
+
+	// One flag (source.slow) marks the sources that fetch comments slowly -- Lemmy,
+	// Wikipedia and Bluesky, each several calls or a large read. It drives the
+	// per-source caveat note, the pill shown once the source is enabled, and the
+	// "still loading" subtitle.
+	function isSlowSource(id) {
+		return Boolean(getSource(id)?.slow);
 	}
 
 	registerSource({
@@ -2288,7 +2528,7 @@ ${
 		label: "Hacker News",
 		shortLabel: "HN",
 		caveat:
-			"Sends each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
+			"Will send each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
 		capabilities: { vote: true, reply: true, submit: true },
 
 		profileURL: (author) =>
@@ -2445,7 +2685,7 @@ ${
 		// SameSite=None and rides along. Signed out it carries only the device id.
 		// The wording says which, because the difference is the whole trade.
 		caveat:
-			"Sends each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds.",
+			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds.",
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (author) =>
@@ -2675,6 +2915,7 @@ ${
 		origins: ["bsky.app"],
 		label: "Bluesky",
 		shortLabel: "Bluesky",
+		slow: true,
 		beta: true,
 		// HN and Reddit date a submission, so a bare age reads as "posted then".
 		// A collective was never posted, and its timestamp is the last thing that
@@ -2694,7 +2935,7 @@ ${
 		// public.api.bsky.app answers identically to a cookie, a bearer token and
 		// neither. Numbers in the spike's §8.
 		caveat:
-			"Sends each page you visit to Constellation, an independent index of Bluesky links, not to Bluesky. Bluesky is asked only about the posts Constellation names. Signed in or out, these requests carry no account.",
+			"Will send each page you visit to Constellation, an independent index of Bluesky links, not to Bluesky. Bluesky is asked only about the posts Constellation names. Signed in or out, these requests carry no account.",
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => "https://bsky.app/profile/" + encodeURIComponent(handle),
@@ -2817,6 +3058,268 @@ ${
 		},
 	});
 
+	// Lobsters has no URL search, but /domains/<host>.json lists a domain's
+	// submissions, so discover fetches those and keeps the exact-URL matches -- the
+	// same "query is a hint, the comparison is the answer" check the other sources
+	// apply. Only the host reaches lobste.rs, never the page's full address.
+	async function lobstersJSON(url) {
+		const result = await requestWithMeta(url);
+
+		return result.ok ? result.json : null;
+	}
+
+	registerSource({
+		id: "lobsters",
+		origins: ["lobste.rs"],
+		label: "Lobsters",
+		shortLabel: "Lobsters",
+		beta: true,
+		// The whole comment tree arrives in one /s/<id>.json, so once it has
+		// rendered, what is on screen is the discussion -- the same licence Bluesky
+		// declares for correcting the count and age from the rendered list.
+		threadArrivesWhole: true,
+		// lobster_trap is SameSite=Lax, so it does not ride a cross-site background
+		// request the way Reddit's SameSite=None session does -- measured, as that
+		// one was. And discover sends only the host, never the page's full address.
+		caveat:
+			"Will send the domain of each page you visit to lobste.rs, not the full address. Signed in or out, these requests carry no account.",
+		capabilities: { vote: false, reply: false, submit: false },
+
+		profileURL: (user) => "https://lobste.rs/~" + encodeURIComponent(user),
+
+		async discover(url) {
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return [];
+			}
+
+			let host;
+
+			try {
+				host = new URL(url).hostname;
+			} catch {
+				return [];
+			}
+
+			const stories = await lobstersJSON(
+				`https://lobste.rs/domains/${encodeURIComponent(host)}.json`,
+			);
+
+			return (Array.isArray(stories) ? stories : [])
+				.filter((story) => normalizeURL(story.url) === target)
+				.map(lobstersDiscussion);
+		},
+
+		async loadThread(discussion) {
+			const story = await lobstersJSON(
+				`https://lobste.rs/s/${encodeURIComponent(discussion.id)}.json`,
+			);
+			const index = lobstersThreadIndex(story || { comments: [] }, discussion);
+
+			return {
+				rootKeys: index.rootKeys,
+				// The whole tree arrived, so every root's time is already known.
+				rootTimes: new Map(
+					index.rootKeys.map((key) => [key, index.byKey.get(key)?.createdAt || 0]),
+				),
+				async getComment(key) {
+					return index.byKey.get(key) || null;
+				},
+			};
+		},
+	});
+
+	async function wikipediaJSON(url) {
+		const result = await requestWithMeta(url);
+
+		return result.ok ? result.json : null;
+	}
+
+	// A linking page rendered as one root comment: the page is the voice, linked to
+	// itself and dated by its last edit. No author, because a page is not a person.
+	// escapeHTML lives outside the test-export region, which is why this builder is
+	// here and wikipediaCollective stays pure.
+	function wikipediaRootComment(page, discussion) {
+		const href =
+			"https://en.wikipedia.org/wiki/" +
+			encodeURIComponent(page.title.replace(/ /g, "_"));
+
+		return {
+			source: "wikipedia",
+			key: sourceKey("wikipedia", String(page.pageid)),
+			id: page.pageid,
+			discussionKey: discussion.key,
+			parentKey: null,
+			author: "",
+			bodyHTML: `<a target="_blank" rel="noopener noreferrer" href="${escapeHTML(href)}">${escapeHTML(page.title)}</a> links this page.`,
+			score: null,
+			createdAt: page.time || 0,
+			isOP: false,
+			deleted: false,
+			replyKeys: [],
+		};
+	}
+
+	registerSource({
+		id: "wikipedia",
+		origins: ["en.wikipedia.org"],
+		label: "Wikipedia",
+		shortLabel: "Wikipedia",
+		slow: true,
+		beta: true,
+		// A collective was never posted; its byline is the last edit among the pages
+		// that cite the URL. Named so the panel does not read "Last comment".
+		ageLabel: "Last active on Wikipedia",
+		// The roots are known at discovery and carried on the discussion, so the
+		// whole thing is on screen as soon as it renders.
+		threadArrivesWhole: true,
+		caveat:
+			"Will send each page you visit to Wikipedia's API to find pages that link it. No account, signed in or out.",
+		capabilities: { vote: false, reply: false, submit: false },
+
+		async discover(url) {
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return [];
+			}
+
+			const api = "https://en.wikipedia.org/w/api.php";
+			const query = target.replace(/^https?:\/\//, "");
+			const ext = await wikipediaJSON(
+				`${api}?action=query&list=exturlusage&eunamespace=${encodeURIComponent("1|3|4|5")}&euquery=${encodeURIComponent(query)}&eulimit=100&format=json&formatversion=2`,
+			);
+
+			// The euquery is a hint; this comparison is the answer, the same check the
+			// other sources apply to their own search results.
+			const rows = (ext?.query?.exturlusage || []).filter(
+				(row) => normalizeURL(row.url) === target,
+			);
+			const pages = [...new Map(rows.map((row) => [row.pageid, row])).values()];
+
+			if (!pages.length) {
+				return [];
+			}
+
+			// Dates every page in batches of 50. The last edit is an approximate
+			// "last active", which is all the blend needs to place the roots.
+			const times = new Map();
+
+			for (let i = 0; i < pages.length; i += 50) {
+				const titles = pages
+					.slice(i, i + 50)
+					.map((page) => page.title)
+					.join("|");
+				const rev = await wikipediaJSON(
+					`${api}?action=query&prop=revisions&rvprop=timestamp&format=json&formatversion=2&titles=${encodeURIComponent(titles)}`,
+				);
+
+				for (const page of rev?.query?.pages || []) {
+					const stamp = page.revisions?.[0]?.timestamp;
+
+					if (stamp) {
+						times.set(page.title, Math.floor(Date.parse(stamp) / 1000));
+					}
+				}
+			}
+
+			const collective = wikipediaCollective(url, pages, times);
+
+			return collective ? [collective] : [];
+		},
+
+		async loadThread(discussion) {
+			const byKey = new Map();
+
+			for (const page of discussion.wikiPages || []) {
+				const comment = wikipediaRootComment(page, discussion);
+				byKey.set(comment.key, comment);
+			}
+
+			return {
+				rootKeys: discussion.rootKeys,
+				rootTimes: new Map(
+					(discussion.rootKeys || []).map((key, index) => [
+						key,
+						discussion.rootTimes?.[index] || 0,
+					]),
+				),
+				async getComment(key) {
+					return byKey.get(key) || null;
+				},
+			};
+		},
+	});
+
+	async function lemmyJSON(url) {
+		const result = await requestWithMeta(url);
+
+		return result.ok ? result.json : null;
+	}
+
+	registerSource({
+		id: "lemmy",
+		// The instances a reader is most likely to arrive from. Not exhaustive --
+		// Lemmy has thousands -- but arrival is only a blend hint, and discovery
+		// reaches the whole network regardless of which instance the reader was on.
+		origins: [
+			"lemmy.world",
+			"lemmy.ml",
+			"sh.itjust.works",
+			"lemm.ee",
+			"programming.dev",
+			"beehaw.org",
+		],
+		label: "Lemmy",
+		shortLabel: "Lemmy",
+		slow: true,
+		beta: true,
+		caveat:
+			"Will send each page you visit to lemmy.world, a large Lemmy instance whose federation reaches across the network. No account, signed in or out.",
+		capabilities: { vote: false, reply: false, submit: false },
+
+		profileURL: (handle) => "https://lemmy.world/u/" + handle,
+
+		// One well-federated instance sees posts from across the threadiverse, so a
+		// single search covers "all Lemmy servers" in practice. type_=Url matches the
+		// submitted address; the normalizeURL comparison is the correctness check the
+		// other sources apply to their own search results.
+		async discover(url) {
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return [];
+			}
+
+			const res = await lemmyJSON(
+				`https://lemmy.world/api/v3/search?q=${encodeURIComponent(url)}&type_=Url&listing_type=All&limit=20`,
+			);
+
+			return (res?.posts || [])
+				.filter((postView) => normalizeURL(postView.post?.url) === target)
+				.map(lemmyDiscussion);
+		},
+
+		async loadThread(discussion) {
+			const res = await lemmyJSON(
+				`https://lemmy.world/api/v3/comment/list?post_id=${encodeURIComponent(discussion.id)}&type_=All&sort=Top&max_depth=8&limit=300`,
+			);
+			const index = lemmyThreadIndex(res?.comments || [], discussion);
+
+			return {
+				rootKeys: index.rootKeys,
+				// The tree arrived in one call, so every root's time is known.
+				rootTimes: new Map(
+					index.rootKeys.map((key) => [key, index.byKey.get(key)?.createdAt || 0]),
+				),
+				async getComment(key) {
+					return index.byKey.get(key) || null;
+				},
+			};
+		},
+	});
+
 	// The discovery entry point. With one source registered it is a fan-out of
 	// one, and the current lookup still goes through findHN directly because the
 	// button only needs to know whether a discussion exists. This is where a
@@ -2825,17 +3328,90 @@ ${
 	// Sources are independent: one failing must never blank a sidebar that has
 	// something else to show, so a rejected discover contributes nothing rather
 	// than rejecting the whole lookup.
+	// A source that never settles must not freeze the button for the others. A
+	// request awaiting a manager's @connect approval slips past the per-request
+	// timeout -- it never starts, so ontimeout never fires -- and under Promise.all
+	// one such source would block every other, Hacker News included, leaving the
+	// nub spinning for good. Each source gets a ceiling; past it, it contributes
+	// nothing rather than holding up the whole lookup. 12s clears the 10s per-request
+	// timeout, so a source whose request merely times out still returns normally --
+	// only a genuine hang is cut off.
+	const DISCOVER_CEILING_MS = 12000;
+
+	function discoverWithCeiling(promise, sourceId) {
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => {
+				console.warn("Backchannel " + sourceId + " discovery timed out");
+				resolve([]);
+			}, DISCOVER_CEILING_MS);
+
+			promise.then(
+				(value) => {
+					clearTimeout(timer);
+					resolve(value);
+				},
+				() => {
+					clearTimeout(timer);
+					resolve([]);
+				},
+			);
+		});
+	}
+
 	async function discoverAll(url, settings) {
 		const results = await Promise.all(
 			enabledSources(settings).map((source) =>
-				source.discover(url).catch((e) => {
-					console.error("Backchannel " + source.id + " discovery failed:", e);
-					return [];
-				}),
+				discoverWithCeiling(
+					source.discover(url).catch((e) => {
+						console.error("Backchannel " + source.id + " discovery failed:", e);
+						return [];
+					}),
+					source.id,
+				),
 			),
 		);
 
-		return results.flat().sort(compareStoriesByDiscussion);
+		// filter(Boolean) so a source that ever returns a nullish entry cannot throw
+		// the comparator and, with it, the whole page pass.
+		return results.flat().filter(Boolean).sort(compareStoriesByDiscussion);
+	}
+
+	// The same protection for the second phase, loading a discussion's comments. The
+	// blend waits for every thread before it can place any comment, so one slow or
+	// hung source would hold the whole panel hostage. Past the ceiling that source
+	// yields an empty reader and the rest renders. More headroom than discovery,
+	// because a thread can be several reads.
+	const THREAD_CEILING_MS = 20000;
+
+	function emptyThreadReader() {
+		return {
+			rootKeys: [],
+			rootTimes: new Map(),
+			async getComment() {
+				return null;
+			},
+		};
+	}
+
+	function loadThreadWithCeiling(story) {
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => {
+				console.warn("Backchannel " + story.source + " comments timed out");
+				resolve(emptyThreadReader());
+			}, THREAD_CEILING_MS);
+
+			Promise.resolve(getSource(story.source).loadThread(story)).then(
+				(reader) => {
+					clearTimeout(timer);
+					resolve(reader || emptyThreadReader());
+				},
+				(error) => {
+					clearTimeout(timer);
+					console.error("Backchannel " + story.source + " comments failed:", error);
+					resolve(emptyThreadReader());
+				},
+			);
+		});
 	}
 
 	async function findHN(url) {
@@ -6840,8 +7416,15 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			save.disabled = !list.querySelector("input[data-source]:checked");
 		};
 
-		list.addEventListener("change", syncSave);
+		list.addEventListener("change", (event) => {
+			syncSave();
+			syncSourceHint(event.target.closest("input[data-source]"));
+		});
 		syncSave();
+
+		for (const input of list.querySelectorAll("input[data-source]")) {
+			syncSourceHint(input);
+		}
 
 		save.onclick = async () => {
 			const chosen = {};
@@ -8265,6 +8848,14 @@ header button svg {
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
+	max-height:8rem;
+	overflow:hidden;
+	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
+}
+
+/* The slower-fetch note, added as its own paragraph under a slow source's caveat. */
+.settings-option-hint-slow {
+	margin:6px 0 0;
 }
 
 /* That hint describes what happens with the setting off. Switched on, it is
@@ -8277,6 +8868,19 @@ header button svg {
 	display:none;
 }
 
+/* Ticking a source is the acknowledgement its caveat was asking for, so the caveat
+   collapses away once checked -- a quieter panel, and the room reclaimed. Two ways
+   in, because some browsers apply :has() on render but do not re-evaluate it when a
+   checkbox is toggled live: the :has() selector covers the render, and the
+   is-acknowledged class, set from JS on every toggle, covers the live change. Both
+   reach only this source's own hint, never the next one's. */
+.settings-option:has(input[data-source]:checked) + .settings-option-hint,
+.settings-option-hint.is-acknowledged {
+	max-height:0;
+	margin-top:0;
+	opacity:0;
+}
+
 .settings-option.sub-option + .settings-option-hint {
 	margin-left:41px;
 }
@@ -8285,8 +8889,8 @@ header button svg {
    rendering needs it in the sidebar. */
 .op-pill {
 	display:inline-block;
-	margin-left:4px;
-	margin-right:4px;
+	margin-left:1px;
+	margin-right:1px;
 	padding:1px 4px;
 	border-radius:3px;
 	background:var(--accent);
@@ -8294,6 +8898,43 @@ header button svg {
 	font-size:9px;
 	font-weight:bold;
 	line-height:1.2;
+}
+
+/* The slower-fetch pill: the BETA pill's shape but muted, shown only once the
+   source is enabled, with its meaning behind a hover/focus tip -- a tap on mobile
+   focuses it, so that reveals the tip too. */
+.op-pill-slow {
+	display:none;
+	position:relative;
+	background:var(--muted);
+	font-weight:400;
+	cursor:default;
+}
+
+.settings-option-on .op-pill-slow {
+	display:inline-block;
+}
+
+.op-pill-tip {
+	position:absolute;
+	bottom:calc(100% + 6px);
+	left:50%;
+	transform:translateX(-50%);
+	white-space:nowrap;
+	padding:4px 6px;
+	border-radius:4px;
+	background:var(--surface-text);
+	color:var(--surface);
+	font-size:10px;
+	opacity:0;
+	pointer-events:none;
+	transition:opacity .15s ease;
+	z-index:3;
+}
+
+.op-pill-slow:hover .op-pill-tip,
+.op-pill-slow:focus .op-pill-tip {
+	opacity:1;
 }
 
 .hidden {
@@ -8377,9 +9018,19 @@ header button svg {
 	font-size:11px;
 }
 
+/* One column per source, so the table outgrows a dropdown once there are a few
+   sources. Rather than shrink the columns past reading, the table keeps its
+   natural width and this wrapper scrolls it sideways. */
+.source-matrix-scroll {
+	overflow-x:auto;
+	overscroll-behavior-x:contain;
+}
+
 .source-matrix {
-	width:100%;
-	border-collapse:collapse;
+	width:auto;
+	min-width:100%;
+	border-collapse:separate;
+	border-spacing:0;
 	font-size:11px;
 }
 
@@ -8388,6 +9039,7 @@ header button svg {
 	padding:3px 4px;
 	text-align:center;
 	font-weight:400;
+	white-space:nowrap;
 }
 
 .source-matrix thead th,
@@ -8397,6 +9049,18 @@ header button svg {
 
 .source-matrix tbody th {
 	text-align:left;
+}
+
+/* The row labels (Read/Vote/…) stay put while the source columns scroll under
+   them, so you never lose track of which row you are reading. Opaque and above
+   the scrolling cells, with a divider marking the frozen edge. */
+.source-matrix thead th:first-child,
+.source-matrix tbody th {
+	position:sticky;
+	left:0;
+	z-index:1;
+	background:var(--surface);
+	border-right:1px solid var(--surface-divider);
 }
 
 .source-matrix tbody tr + tr th,
@@ -8410,6 +9074,13 @@ header button svg {
 
 .source-matrix .no {
 	color:var(--muted);
+}
+
+/* Separates the source checkboxes from the support table below them. */
+.sources-divider {
+	border:none;
+	border-top:1px solid var(--surface-divider);
+	margin:14px 0;
 }
 
 /* A breadcrumb rather than a bare title: the hidden-sites list is a second level
@@ -8986,7 +9657,9 @@ title="Type a hex colour">#237140</span></div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
 ${sourceListHTML({ idPrefix: "setting-source-" })}
+<hr class="sources-divider">
 <div class="source-matrix-caption">What each source supports</div>
+<div class="source-matrix-scroll">
 <table class="source-matrix">
 <thead><tr><th></th>${[...SOURCES.values()].map((source) => `<th>${escapeHTML(source.shortLabel || source.label)}</th>`).join("")}</tr></thead>
 <tbody>
@@ -9004,6 +9677,7 @@ ${["read", "vote", "reply", "submit"]
 	.join("")}
 </tbody>
 </table>
+</div>
 </div>
 
 </div>
@@ -9211,6 +9885,7 @@ ${["read", "vote", "reply", "submit"]
 				"input[data-source]",
 			)) {
 				input.checked = Boolean(sourceState[input.dataset.source]);
+				syncSourceHint(input);
 			}
 
 			for (const group of suboptionGroups) {
@@ -9285,6 +9960,10 @@ ${["read", "vote", "reply", "submit"]
 			const sourceInput = event.target.closest("input[data-source]");
 
 			if (sourceInput) {
+				// Collapse (or restore) this source's caveat immediately, without
+				// waiting on :has() re-evaluation the browser may not do live.
+				syncSourceHint(sourceInput);
+
 				const current = await loadSettings();
 
 				await saveSettings({
@@ -12330,8 +13009,39 @@ ${settingsPanelHTML()}
 		// Every thread first, because the merge needs each discussion's total before
 		// it can place any one comment. They are independent reads, so they overlap
 		// rather than queueing behind each other.
+		//
+		// While they load, name the slow sources still outstanding, so a lag reads as
+		// a specific source rather than a stall. "loading comments…" holds while a fast
+		// source is still in; once only slow ones remain, they are named.
+		const pending = new Set(stories.map((story) => story.key));
+		const slowKeys = new Set(
+			stories
+				.filter((story) => isSlowSource(story.source))
+				.map((story) => story.key),
+		);
+		const nameByKey = new Map(
+			stories.map((story) => [
+				story.key,
+				getSource(story.source)?.shortLabel || story.source || "",
+			]),
+		);
+		const updateLoadingLabel = () => {
+			if (pending.size && [...pending].every((key) => slowKeys.has(key))) {
+				const names = [...new Set([...pending].map((key) => nameByKey.get(key)))];
+				setSidebarLoadingLabel(ui, "still loading " + joinNames(names) + "…");
+			}
+		};
+
+		updateLoadingLabel();
+
 		const threads = await Promise.all(
-			stories.map((story) => getSource(story.source).loadThread(story)),
+			stories.map((story) =>
+				loadThreadWithCeiling(story).then((reader) => {
+					pending.delete(story.key);
+					updateLoadingLabel();
+					return reader;
+				}),
+			),
 		);
 
 		if (generation !== sidebarGeneration) {
@@ -13122,6 +13832,30 @@ title="Show only this discussion">
 		if (!ui.activeStage) {
 			writeSidebarSubtitle(ui.headerSubtitle, text);
 		}
+	}
+
+	// Same shimmer treatment as a stage, but for a custom label -- so the subtitle
+	// can name the slow sources still loading rather than the generic stage. Marked
+	// as the comments stage so clearSidebarStage still ends it.
+	function setSidebarLoadingLabel(ui, text) {
+		const element = ui?.headerSubtitle;
+
+		if (!element || !text) {
+			return;
+		}
+
+		ui.activeStage = "comments";
+		writeSidebarSubtitle(element, text);
+		element.classList.add("header-subtitle-stage");
+		element.classList.toggle("header-subtitle-loading", !prefersReducedMotion());
+	}
+
+	function joinNames(names) {
+		if (names.length <= 1) {
+			return names[0] || "";
+		}
+
+		return names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
 	}
 
 	// Still one open at a time, but the guard hands the in-flight run back rather

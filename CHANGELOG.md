@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.3] — 2026-08-06
+
+### Added
+
+- Adds Lobsters. A page's submissions there join the blended thread. Read-only; only the domain reaches lobste.rs, no account.
+- Adds Wikipedia. The Talk and project pages that cite or debate a page, collected as one discussion, newest first. Read-only, no account.
+- Adds Lemmy. Read across the federated network from one well-connected instance, so a link discussed in any community surfaces. Read-only, no account.
+
+### Changed
+
+- A source's caveat collapses once you enable it — checking the box is the acknowledgement, and the panel gets quieter.
+- The what-each-source-supports table scrolls sideways, row labels pinned, as more sources are added.
+- Lemmy, Wikipedia and Bluesky are marked as slower to load: the Sources page says so, and while comments load the status line names any still outstanding.
+
+### Fixed
+
+- Bluesky comments no longer all read "OP". A discussion there is many people's separate posts, so there is no single poster to mark; the topic-based sources still do.
+- A slow or unreachable source no longer freezes the button or the comment panel. Each source has a time ceiling and drops out rather than holding up the rest.
+
 ## [1.6.2] — 2026-08-05
 
 ### Changed
