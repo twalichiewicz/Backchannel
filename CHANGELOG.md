@@ -20,10 +20,12 @@ use to detect updates, so every release bumps it.
 
 - A source's caveat collapses once you enable it — checking the box is the acknowledgement, and the panel gets quieter.
 - The what-each-source-supports table scrolls sideways, row labels pinned, as more sources are added.
+- Lemmy, Wikipedia and Bluesky are marked as slower to load: the Sources page says so, and while comments load the status line names any still outstanding.
 
 ### Fixed
 
 - Bluesky comments no longer all read "OP". A discussion there is many people's separate posts, so there is no single poster to mark; the topic-based sources still do.
+- A slow or unreachable source no longer freezes the button or the comment panel. Each source has a time ceiling and drops out rather than holding up the rest.
 
 ## [1.6.2] — 2026-08-05
 

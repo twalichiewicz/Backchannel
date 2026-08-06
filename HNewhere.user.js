@@ -2508,6 +2508,17 @@ ${
 		);
 	}
 
+	// One flag drives both the "still loading" subtitle and the Sources-page notice.
+	// Lemmy, Wikipedia and Bluesky each make several calls or a large fetch; the rest
+	// are a single quick request.
+	function isSlowSource(id) {
+		return Boolean(getSource(id)?.slow);
+	}
+
+	function enabledSlowSources(settings) {
+		return enabledSources(settings).filter((source) => source?.slow);
+	}
+
 	registerSource({
 		id: "hn",
 		// What a referrer has to match for arrivalSource to call this the source
@@ -2903,6 +2914,7 @@ ${
 		origins: ["bsky.app"],
 		label: "Bluesky",
 		shortLabel: "Bluesky",
+		slow: true,
 		beta: true,
 		// HN and Reddit date a submission, so a bare age reads as "posted then".
 		// A collective was never posted, and its timestamp is the last thing that
@@ -3153,6 +3165,7 @@ ${
 		origins: ["en.wikipedia.org"],
 		label: "Wikipedia",
 		shortLabel: "Wikipedia",
+		slow: true,
 		beta: true,
 		// A collective was never posted; its byline is the last edit among the pages
 		// that cite the URL. Named so the panel does not read "Last comment".
@@ -3259,6 +3272,7 @@ ${
 		],
 		label: "Lemmy",
 		shortLabel: "Lemmy",
+		slow: true,
 		beta: true,
 		caveat:
 			"Sends each page you visit to lemmy.world, a large Lemmy instance whose federation reaches across the network. No account, signed in or out.",
@@ -3313,17 +3327,90 @@ ${
 	// Sources are independent: one failing must never blank a sidebar that has
 	// something else to show, so a rejected discover contributes nothing rather
 	// than rejecting the whole lookup.
+	// A source that never settles must not freeze the button for the others. A
+	// request awaiting a manager's @connect approval slips past the per-request
+	// timeout -- it never starts, so ontimeout never fires -- and under Promise.all
+	// one such source would block every other, Hacker News included, leaving the
+	// nub spinning for good. Each source gets a ceiling; past it, it contributes
+	// nothing rather than holding up the whole lookup. 12s clears the 10s per-request
+	// timeout, so a source whose request merely times out still returns normally --
+	// only a genuine hang is cut off.
+	const DISCOVER_CEILING_MS = 12000;
+
+	function discoverWithCeiling(promise, sourceId) {
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => {
+				console.warn("Backchannel " + sourceId + " discovery timed out");
+				resolve([]);
+			}, DISCOVER_CEILING_MS);
+
+			promise.then(
+				(value) => {
+					clearTimeout(timer);
+					resolve(value);
+				},
+				() => {
+					clearTimeout(timer);
+					resolve([]);
+				},
+			);
+		});
+	}
+
 	async function discoverAll(url, settings) {
 		const results = await Promise.all(
 			enabledSources(settings).map((source) =>
-				source.discover(url).catch((e) => {
-					console.error("Backchannel " + source.id + " discovery failed:", e);
-					return [];
-				}),
+				discoverWithCeiling(
+					source.discover(url).catch((e) => {
+						console.error("Backchannel " + source.id + " discovery failed:", e);
+						return [];
+					}),
+					source.id,
+				),
 			),
 		);
 
-		return results.flat().sort(compareStoriesByDiscussion);
+		// filter(Boolean) so a source that ever returns a nullish entry cannot throw
+		// the comparator and, with it, the whole page pass.
+		return results.flat().filter(Boolean).sort(compareStoriesByDiscussion);
+	}
+
+	// The same protection for the second phase, loading a discussion's comments. The
+	// blend waits for every thread before it can place any comment, so one slow or
+	// hung source would hold the whole panel hostage. Past the ceiling that source
+	// yields an empty reader and the rest renders. More headroom than discovery,
+	// because a thread can be several reads.
+	const THREAD_CEILING_MS = 20000;
+
+	function emptyThreadReader() {
+		return {
+			rootKeys: [],
+			rootTimes: new Map(),
+			async getComment() {
+				return null;
+			},
+		};
+	}
+
+	function loadThreadWithCeiling(story) {
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => {
+				console.warn("Backchannel " + story.source + " comments timed out");
+				resolve(emptyThreadReader());
+			}, THREAD_CEILING_MS);
+
+			Promise.resolve(getSource(story.source).loadThread(story)).then(
+				(reader) => {
+					clearTimeout(timer);
+					resolve(reader || emptyThreadReader());
+				},
+				(error) => {
+					clearTimeout(timer);
+					console.error("Backchannel " + story.source + " comments failed:", error);
+					resolve(emptyThreadReader());
+				},
+			);
+		});
 	}
 
 	async function findHN(url) {
@@ -8946,6 +9033,26 @@ header button svg {
 	color:var(--muted);
 }
 
+/* A quiet, persistent heads-up at the foot of the Sources page: the slow sources
+   fill comments in over a moment rather than at once. Collapsed until one is ticked,
+   then it eases in -- driven from JS off the checkboxes, not :has(), for the reason
+   the caveats are. */
+.sources-slow-note {
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.4;
+	max-height:0;
+	opacity:0;
+	overflow:hidden;
+	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
+}
+
+.sources-slow-note.is-visible {
+	max-height:6rem;
+	margin-top:14px;
+	opacity:1;
+}
+
 /* A breadcrumb rather than a bare title: the hidden-sites list is a second level
    of the same panel, so the trail is what says where you are and how to get back.
    Sits outside the sliding track, so it survives the transition. */
@@ -9540,6 +9647,7 @@ ${["read", "vote", "reply", "submit"]
 </tbody>
 </table>
 </div>
+<div class="sources-slow-note" id="sources-slow-note">Lemmy, Wikipedia and Bluesky load slower — with them on, comments can take a moment to all appear.</div>
 </div>
 
 </div>
@@ -9723,6 +9831,23 @@ ${["read", "vote", "reply", "submit"]
 			...settingsPanel.querySelectorAll("[data-suboptions-of]"),
 		];
 
+		// The Sources-page notice: shown whenever a slow source is ticked. Toggled
+		// from JS off the live checkbox state -- the same reliable path the caveats
+		// use, since this browser does not re-run :has() on a live toggle.
+		function syncSlowNote() {
+			const note = settingsPanel.querySelector("#sources-slow-note");
+
+			if (!note) {
+				return;
+			}
+
+			const anySlow = [
+				...settingsPanel.querySelectorAll("input[data-source]"),
+			].some((input) => input.checked && isSlowSource(input.dataset.source));
+
+			note.classList.toggle("is-visible", anySlow);
+		}
+
 		const applySettingsPanelState = (settings) => {
 			for (const [key, input] of Object.entries(settingsInputs)) {
 				if (input) {
@@ -9749,6 +9874,8 @@ ${["read", "vote", "reply", "submit"]
 				input.checked = Boolean(sourceState[input.dataset.source]);
 				syncSourceHint(input);
 			}
+
+			syncSlowNote();
 
 			for (const group of suboptionGroups) {
 				const enabled = Boolean(settings[group.dataset.suboptionsOf]);
@@ -9825,6 +9952,7 @@ ${["read", "vote", "reply", "submit"]
 				// Collapse (or restore) this source's caveat immediately, without
 				// waiting on :has() re-evaluation the browser may not do live.
 				syncSourceHint(sourceInput);
+				syncSlowNote();
 
 				const current = await loadSettings();
 
@@ -12871,8 +12999,39 @@ ${settingsPanelHTML()}
 		// Every thread first, because the merge needs each discussion's total before
 		// it can place any one comment. They are independent reads, so they overlap
 		// rather than queueing behind each other.
+		//
+		// While they load, name the slow sources still outstanding, so a lag reads as
+		// a specific source rather than a stall. "loading comments…" holds while a fast
+		// source is still in; once only slow ones remain, they are named.
+		const pending = new Set(stories.map((story) => story.key));
+		const slowKeys = new Set(
+			stories
+				.filter((story) => isSlowSource(story.source))
+				.map((story) => story.key),
+		);
+		const nameByKey = new Map(
+			stories.map((story) => [
+				story.key,
+				getSource(story.source)?.shortLabel || story.source || "",
+			]),
+		);
+		const updateLoadingLabel = () => {
+			if (pending.size && [...pending].every((key) => slowKeys.has(key))) {
+				const names = [...new Set([...pending].map((key) => nameByKey.get(key)))];
+				setSidebarLoadingLabel(ui, "still loading " + joinNames(names) + "…");
+			}
+		};
+
+		updateLoadingLabel();
+
 		const threads = await Promise.all(
-			stories.map((story) => getSource(story.source).loadThread(story)),
+			stories.map((story) =>
+				loadThreadWithCeiling(story).then((reader) => {
+					pending.delete(story.key);
+					updateLoadingLabel();
+					return reader;
+				}),
+			),
 		);
 
 		if (generation !== sidebarGeneration) {
@@ -13663,6 +13822,30 @@ title="Show only this discussion">
 		if (!ui.activeStage) {
 			writeSidebarSubtitle(ui.headerSubtitle, text);
 		}
+	}
+
+	// Same shimmer treatment as a stage, but for a custom label -- so the subtitle
+	// can name the slow sources still loading rather than the generic stage. Marked
+	// as the comments stage so clearSidebarStage still ends it.
+	function setSidebarLoadingLabel(ui, text) {
+		const element = ui?.headerSubtitle;
+
+		if (!element || !text) {
+			return;
+		}
+
+		ui.activeStage = "comments";
+		writeSidebarSubtitle(element, text);
+		element.classList.add("header-subtitle-stage");
+		element.classList.toggle("header-subtitle-loading", !prefersReducedMotion());
+	}
+
+	function joinNames(names) {
+		if (names.length <= 1) {
+			return names[0] || "";
+		}
+
+		return names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
 	}
 
 	// Still one open at a time, but the guard hands the in-flight run back rather
