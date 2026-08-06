@@ -2835,7 +2835,7 @@
 				(source) => `
 <label class="settings-option">
 <input${idPrefix ? ` id="${escapeHTML(idPrefix + source.id)}"` : ""} data-source="${escapeHTML(source.id)}" type="checkbox">
-<span>${escapeHTML(source.label)}${source.beta ? ` <span class="op-pill">BETA</span>` : ""}${source.slow ? ` <span class="op-pill op-pill-slow" tabindex="0" role="note" aria-label="Slower comment fetch source">⧗<span class="op-pill-tip" aria-hidden="true">Slower comment fetch source</span></span>` : ""}</span>
+<span>${escapeHTML(source.label)}${source.beta ? ` <span class="op-pill">BETA</span>` : ""}${hasFrontPage(source) ? ` <span class="op-pill op-pill-front" tabindex="0" role="note" aria-label="Contributes to the front page">⧉<span class="op-pill-tip" aria-hidden="true">Contributes to the front page</span></span>` : ""}${source.slow ? ` <span class="op-pill op-pill-slow" tabindex="0" role="note" aria-label="Slower comment fetch source">⧗<span class="op-pill-tip" aria-hidden="true">Slower comment fetch source</span></span>` : ""}</span>
 </label>
 ${
 	source.caveat
@@ -2858,7 +2858,9 @@ ${
 			hint.classList.toggle("is-acknowledged", input.checked);
 		}
 
-		// The slower-fetch pill lives in the label and shows only once enabled.
+		// The front-page and slower-fetch pills live in the label and show only
+		// once enabled: both describe what having the source on does for you or
+		// costs you, which is nothing to say about a source you have left off.
 		option?.classList.toggle("settings-option-on", Boolean(input?.checked));
 	}
 
@@ -2874,6 +2876,20 @@ ${
 	// "still loading" subtitle.
 	function isSlowSource(id) {
 		return Boolean(getSource(id)?.slow);
+	}
+
+	// Whether a source has a front page to contribute. Declared by having the
+	// method rather than by a flag beside it, so a seventh source answers this
+	// question by existing -- the same reason discover is a method and not a
+	// branch. Bluesky and Wikipedia rank posts and citations respectively, not
+	// URLs, so neither implements it and neither claims the pill or the row.
+	//
+	// One predicate for the three things that ask: which sources the blend
+	// fetches, which checkboxes wear the pill, and which cells the support table
+	// ticks. Three copies of a typeof check is three chances to disagree about
+	// what a front page source is.
+	function hasFrontPage(source) {
+		return typeof source?.frontPage === "function";
 	}
 
 	registerSource({
@@ -3916,14 +3932,11 @@ ${
 	// hour old is a different front page.
 	const FRONT_PAGE_TTL = 5 * 60 * 1000;
 
-	// Which enabled sources have a front page to contribute. Declared by having
-	// the method rather than listed here, so a seventh source answers this
-	// question by existing -- the same reason discover is a method and not a
-	// branch. Bluesky and Wikipedia rank posts and citations respectively, not
-	// URLs, so neither implements it and neither appears.
+	// Which enabled sources have a front page to contribute. See hasFrontPage for
+	// why that is a method on the source rather than a list kept here.
 	function frontPageSourceIds(settings) {
-		return enabledSourceIds(settings, registeredSourceIds()).filter(
-			(id) => typeof getSource(id)?.frontPage === "function",
+		return enabledSourceIds(settings, registeredSourceIds()).filter((id) =>
+			hasFrontPage(getSource(id)),
 		);
 	}
 
@@ -9628,9 +9641,12 @@ header button svg {
 	line-height:1.2;
 }
 
-/* The slower-fetch pill: the BETA pill's shape but muted, shown only once the
-   source is enabled, with its meaning behind a hover/focus tip -- a tap on mobile
-   focuses it, so that reveals the tip too. */
+/* The front-page (⧉) and slower-fetch (⧗) pills: the BETA pill's shape but
+   muted, shown only once the source is enabled, with their meaning behind a
+   hover/focus tip -- a tap on mobile focuses it, so that reveals the tip too.
+   One shape for both because they are the same kind of mark: a glyph that says
+   something about the source, explained on demand rather than in the label. */
+.op-pill-front,
 .op-pill-slow {
 	display:none;
 	position:relative;
@@ -9639,6 +9655,7 @@ header button svg {
 	cursor:default;
 }
 
+.settings-option-on .op-pill-front,
 .settings-option-on .op-pill-slow {
 	display:inline-block;
 }
@@ -9660,6 +9677,8 @@ header button svg {
 	z-index:3;
 }
 
+.op-pill-front:hover .op-pill-tip,
+.op-pill-front:focus .op-pill-tip,
 .op-pill-slow:hover .op-pill-tip,
 .op-pill-slow:focus .op-pill-tip {
 	opacity:1;
@@ -9738,7 +9757,7 @@ header button svg {
 	display:block;
 }
 
-/* Small enough to sit in a dropdown, which is the constraint: four rows and a
+/* Small enough to sit in a dropdown, which is the constraint: five rows and a
 	column per source is about what fits before it stops being glanceable. */
 .source-matrix-caption {
 	margin:14px 0 5px;
@@ -10391,13 +10410,26 @@ ${sourceListHTML({ idPrefix: "setting-source-" })}
 <table class="source-matrix">
 <thead><tr><th></th>${[...SOURCES.values()].map((source) => `<th>${escapeHTML(source.shortLabel || source.label)}</th>`).join("")}</tr></thead>
 <tbody>
-${["read", "vote", "reply", "submit"]
+${[
+	// Each row carries its own test rather than all of them indexing
+	// capabilities, because two of the five are not in there: everything reads,
+	// and a front page is declared by the method (see hasFrontPage) so that a
+	// new source lands in this table without being added to it.
+	//
+	// The two reading rows first, then the three that write, so the table runs
+	// from what a source gives you to what it lets you do back.
+	["Read", () => true],
+	["Front page", (source) => hasFrontPage(source)],
+	["Vote", (source) => Boolean(source.capabilities.vote)],
+	["Reply", (source) => Boolean(source.capabilities.reply)],
+	["Submit", (source) => Boolean(source.capabilities.submit)],
+]
 	.map(
-		(row) => `<tr><th>${escapeHTML({ read: "Read", vote: "Vote", reply: "Reply", submit: "Submit" }[row])}</th>${[
+		([label, supported]) => `<tr><th>${escapeHTML(label)}</th>${[
 			...SOURCES.values(),
 		]
 			.map((source) => {
-				const yes = row === "read" ? true : Boolean(source.capabilities[row]);
+				const yes = Boolean(supported(source));
 				return `<td class="${yes ? "yes" : "no"}" aria-label="${yes ? "yes" : "no"}">${yes ? "&check;" : "&ndash;"}</td>`;
 			})
 			.join("")}</tr>`,
