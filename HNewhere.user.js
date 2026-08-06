@@ -2192,6 +2192,168 @@
 		);
 	}
 
+	// The same merge one level up: front pages instead of threads, submissions
+	// instead of comments. A front page is already that source's own ranking, so
+	// blendPosition applies to it unchanged -- which is why this is a sibling of
+	// blendRoots rather than a generalisation of it. blendRoots takes groups of
+	// rootKeys and knows about liveness; neither means anything here.
+	//
+	// standing is fed an adapter rather than the row being reshaped. It speaks
+	// createdAt/commentCount and a row speaks time/descendants, which is Firebase's
+	// vocabulary and what every reader's stored queue has held since queues
+	// existed. Renaming the row would rewrite reader data to buy nothing.
+	//
+	// Two things this deliberately does NOT do.
+	//
+	// It does not pass arrivedFrom. On a discussion that boost means "lead with
+	// the thread you were just reading about", which is the reader's own context.
+	// On a front page it would mean "you came from Lobsters, so Lobsters' picks
+	// lead" -- and someone pressing the wordmark is asking to leave the page they
+	// are on, not to be shown more of where they came from.
+	//
+	// It does not correct for the age term going quiet. Every front-page row is
+	// hours old, so (1 + ageYears) ** STANDING_GRAVITY is ~1 and the blend reduces
+	// to log-scaled score-and-comments over rank fraction. That is the intended
+	// behaviour here, not a decay that has failed to fire: on this list every row
+	// is current, so there is nothing for the decay to tell apart. Measured, so it
+	// is not re-derived later -- a day of age costs 0.27% and a year costs half.
+	function blendStories(lists, options = {}) {
+		const entries = [];
+
+		for (const stories of lists) {
+			const total = stories.length;
+
+			stories.forEach((story, index) => {
+				entries.push({
+					story,
+					// Every other source that also carries this page, best-blended first.
+					// Filled by mergeStoriesByURL; empty here so a caller that skips the
+					// merge still gets rows it can render.
+					also: [],
+					// `now` alone, never the whole options object. standing reads
+					// arrivedFrom off what it is handed, so forwarding options wholesale
+					// applies the arrival boost as a side effect of a caller passing it
+					// for something else -- which is precisely what the paragraph above
+					// says this does not do.
+					position:
+						blendPosition(index, total) /
+						standing(
+							{
+								source: story.source,
+								score: story.score,
+								commentCount: story.descendants,
+								createdAt: story.time,
+							},
+							0,
+							{ now: options.now },
+						),
+				});
+			});
+		}
+
+		// No live tier and no size tie-break. Liveness is a property of a
+		// conversation and these are submissions; size is the tie-break because a
+		// bigger discussion has more to read, and descendants already says that
+		// inside standing rather than after it.
+		return entries.sort(
+			(a, b) => a.position - b.position || b.story.descendants - a.story.descendants,
+		);
+	}
+
+	// One row per page, however many places submitted it. Measured on the day this
+	// was built: Hacker News and Lobsters shared 3 of 25 front-page URLs, which as
+	// two adjacent rows with the same title reads as the panel repeating itself.
+	//
+	// After the blend, never before, and that ordering is load-bearing. Walking a
+	// sorted list means the first arrival at any URL is by construction its
+	// best-blended one, so the survivor keeps the position it earned and the
+	// others ride along in `also` to supply their comment links. Merging first
+	// would mean choosing a winner before knowing which one the blend preferred.
+	//
+	// normalizeURL is the key -- the same function every source's discovery
+	// already measures its own hits against, so two sources agree here exactly
+	// when they agree there. A URL it cannot parse merges with nothing rather than
+	// collapsing every unparseable row into one: "" is not an identity.
+	function mergeStoriesByURL(entries) {
+		const byURL = new Map();
+		const merged = [];
+
+		for (const entry of entries) {
+			const key = normalizeURL(entry.story.url);
+			const existing = key ? byURL.get(key) : null;
+
+			if (existing) {
+				existing.also.push(entry.story);
+				continue;
+			}
+
+			// Copied rather than mutated in place: blendStories' output is the input
+			// to this, and a caller holding that array should not find its rows
+			// growing an `also` list because something downstream merged them.
+			const row = { ...entry, also: [...entry.also] };
+
+			if (key) {
+				byURL.set(key, row);
+			}
+
+			merged.push(row);
+		}
+
+		return merged;
+	}
+
+	// Whether a front-page row points at a page worth opening, or back at the
+	// source that listed it.
+	//
+	// Hacker News and Lobsters are ~100% link-shaped because their readers submit
+	// articles. Reddit and Lemmy are general-purpose forums whose front pages are
+	// mostly native content -- measured on the day this was built, r/popular was
+	// 80 reddit-hosted rows in 100, and Lemmy's Active feed 42% bare images. Blended
+	// raw, Reddit would contribute four memes per article to a panel whose whole
+	// premise is "discussion about the page you are reading".
+	//
+	// The test is hosting, not media type. A YouTube link stays, because it is a
+	// page on someone else's site that a reader can go and be at; i.redd.it does
+	// not, because it is Reddit's own CDN and "opening" it lands nowhere the (BC)
+	// button could ever light. That distinction is why this takes hosts rather
+	// than file extensions -- and it is also why a pictrs path counts, since every
+	// Lemmy instance serves its own images from one and the host is whichever
+	// instance happened to federate the post.
+	//
+	// Hacker News is the deliberate exception and does not call this: an Ask HN
+	// points at its own item page because for an Ask HN the page and the
+	// discussion are the same object, which parseFrontPageRow has always known.
+	function isOffSiteLink(url, selfHosts = [], selfPaths = []) {
+		let parsed;
+
+		try {
+			parsed = new URL(url);
+		} catch {
+			// Includes the empty string, which is how Lobsters and Lemmy both write
+			// "this submission is its own text". Nothing to open, so not a row.
+			return false;
+		}
+
+		if (!/^https?:$/.test(parsed.protocol)) {
+			return false;
+		}
+
+		const host = parsed.hostname.toLowerCase();
+
+		// Suffix match on a dot boundary, never a substring test -- the same
+		// discipline arrivalSource applies for the same reason. "notreddit.com"
+		// ends with "reddit.com" as a string and is somebody else entirely.
+		if (
+			selfHosts.some(
+				(self) => host === self || host.endsWith("." + self),
+			)
+		) {
+			return false;
+		}
+
+		return !selfPaths.some((path) => parsed.pathname.startsWith(path));
+	}
+
 	// 403 is the only demotion, and it is specific: it is what Reddit returns to a
 	// caller without a usable loid, which is exactly the condition the archive tier
 	// exists for. A 429 is a wait and a 0 is a dropped connection; treating either
