@@ -8,6 +8,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.4] — 2026-08-06
+
+### Added
+
+- **The front page behind the wordmark is every source's front page, merged.**
+  It was Hacker News' own, which was the right answer while Hacker News was the
+  only source that had one. Now Hacker News, Reddit, Lobsters and Lemmy each
+  contribute their own ranking and the panel blends them — by the same
+  rank-fraction over log-scaled standing that already merges a page's comments,
+  because a front page is already that source's own ranking. Bluesky and
+  Wikipedia do not appear: neither ranks URLs, so neither has a front page to
+  contribute. A byline under the tab names which ones went in.
+- A page on more than one front page is one row, not two. Hacker News and
+  Lobsters shared three of twenty-five URLs on the day this was built, which as
+  two adjacent identical titles read as the panel repeating itself. The merged
+  row carries a comment link per source — `HN 211 comments · Lobsters 24
+  comments` — and never adds the counts up, because a Reddit number and a Hacker
+  News number are not the same unit.
+
+### Changed
+
+- The queue identifies an article by its address rather than by its Hacker News
+  item number, so a page can be queued from any source and queueing something
+  already in the list is a no-op rather than a second copy. Existing queues are
+  migrated in place on first run; nothing is re-fetched and nothing is lost.
+- Reddit and Lemmy contribute only rows that point somewhere off their own site.
+  Their front pages are mostly native content — measured at 80% of `r/popular`,
+  44 of 100 being bare images — and a reading list of memes is not what the
+  wordmark is for. Videos and articles hosted anywhere else are kept.
+- Flag and favorite appear only on Hacker News rows, which are the only ones
+  where they could do anything. Every source already declared its capabilities;
+  the front page now reads them.
+- The front page tab reads "front pages", and the wordmark's tooltip "front
+  pages and your queue". Both said Hacker News — and lower case now that the
+  name has gone, matching `queue` beside it.
+- Queueing your first story slides the queue tab out from under "front pages"
+  and pushes it across, rather than snapping a second tab into a row that had
+  one. Clearing the last one slides it away again. Only for something you just
+  did: opening the panel on a queue that already has entries shows the tab
+  rather than replaying its arrival.
+- Paging through the merged list costs no further requests. Every source is
+  fetched once to a fixed depth and the pool is paged locally.
+
+### Fixed
+
+- Clicking a non-Hacker-News story and then losing the network no longer offers a
+  Hacker News discussion that does not exist. The record of what you clicked is
+  recovered as a Hacker News item reference when discovery comes back empty, and
+  it now records which source it came from so only Hacker News rows are recovered
+  that way.
+- A queued story from another source no longer costs a wasted Hacker News request
+  every time the queue is drawn. The refresh asks Hacker News only about Hacker
+  News entries; the rest keep the numbers they were saved with.
+
 ## [1.6.3] — 2026-08-06
 
 ### Added
