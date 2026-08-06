@@ -6472,6 +6472,13 @@ ${
 			panel.classList.toggle("browsing", on);
 			toggle.title = on ? "Back to this page's discussion" : browseLabel();
 
+			// Whatever the queue did while the panel was shut is not news. Cleared
+			// on the way in so the first refresh paints the row as it stands, and
+			// re-armed a frame later for anything the reader does from inside.
+			if (on) {
+				ui?.shadow?.querySelector(".browse-tabs")?.classList.remove("is-ready");
+			}
+
 			if (comments) {
 				// Assigning scrollTop forces the layout it depends on, so the list is
 				// measured in the state the class change has just put it in rather
@@ -6762,17 +6769,43 @@ ${
 		const entries = await loadQueue();
 		const unread = unreadQueueCount(entries);
 
-		// The bare word when there is nothing waiting. A "(0)" is a number that says
-		// nothing and still asks to be read. Lower case, the way HN sets the tabs on
-		// its own pages -- "submissions | comments" on a profile.
-		tab.textContent = unread ? `queue (${unread})` : "queue";
-
 		queueHasItems = entries.length > 0;
 
-		// Present or absent, never moved. A tab that slides about as its contents
-		// change asks to be watched; one that is simply there when it has something
-		// to offer does not.
-		tab.hidden = !queueHasItems;
+		// Only while there is a queue to label, and the label is what makes that
+		// worth saying. Emptying it rewrites "queue (1)" to "queue", which is
+		// narrower by the width of the count -- and since the box is only as wide
+		// as its content, it would lose those pixels in a single frame and the
+		// slide would start from the jump rather than from where the tab is. Left
+		// alone, the last label collapses with the tab and is rewritten on the way
+		// back in, where nothing can see it change.
+		if (queueHasItems) {
+			// The bare word when there is nothing waiting. A "(0)" is a number that
+			// says nothing and still asks to be read. Lower case, the way HN sets the
+			// tabs on its own pages -- "submissions | comments" on a profile.
+			tab.textContent = unread ? `queue (${unread})` : "queue";
+
+			// Measured after the label is set and before the class is toggled, so the
+			// ceiling matches the text that is actually there. scrollWidth reports the
+			// content width even while the box is clipped to zero, which is what lets
+			// the tab be measured on its way open rather than only once it is.
+			tab.style.setProperty("--queue-tab-width", tab.scrollWidth + "px");
+		}
+
+		// Present or absent, never moved -- and now the arrival is visible. Zero
+		// width rather than `hidden`, because display:none cannot be transitioned;
+		// the tab stays in the tree, so it is taken out of the tab order and hidden
+		// from assistive technology by hand, which the attribute used to do.
+		tab.classList.toggle("is-collapsed", !queueHasItems);
+		tab.setAttribute("aria-hidden", String(!queueHasItems));
+		tab.tabIndex = queueHasItems ? 0 : -1;
+
+		// Next frame, so this pass paints in whatever state it found and only what
+		// happens after it moves. setBrowseMode clears it again on the way in.
+		const tabs = tab.parentElement;
+
+		if (tabs && !tabs.classList.contains("is-ready")) {
+			requestAnimationFrame(() => tabs.classList.add("is-ready"));
+		}
 
 		// Reads the queue, so the wordmark's own availability is settled here where
 		// the answer is already known rather than by loading it a second time.
@@ -8545,7 +8578,57 @@ header {
 }
 
 /* Nothing queued, nothing to show. The queue keeps its place on the left for
-   when there is -- it does not move, it arrives. */
+   when there is -- it does not move, it arrives. Still true; what changed is
+   that it now arrives visibly.
+
+   Collapsed to zero width rather than hidden, the way .wordmark-chevron is and
+   for the same reason: queueing your first story should slide the tab out from
+   under 'front pages' and push it across, not snap a second tab into a row that
+   had one. The clip edge does the work -- overflow cuts at the box's right edge,
+   which is exactly where 'front pages' sits, so the part of "queue |" still to
+   come is always the part underneath it.
+
+   max-width rather than width, and the difference is load-bearing: the ceiling
+   stays put while the label changes, so "queue" becoming "queue (3)" resizes
+   instantly. Transitioning width would animate that too, and a tab that slides
+   about as its contents change asks to be watched. */
+#browse-tab-queue {
+	/* Measured into --queue-tab-width by refreshQueueCount. A literal ceiling
+	   generous enough for "queue (100)" would finish the movement a third of the
+	   way through the duration and then sit still for the rest, because a
+	   max-width above the content width stops having any effect. The fallback is
+	   only for the frame before the first measurement. */
+	max-width:var(--queue-tab-width, 8em);
+	overflow:hidden;
+	white-space:nowrap;
+	opacity:1;
+}
+
+#browse-tab-queue.is-collapsed {
+	max-width:0;
+	opacity:0;
+	/* Zero width already makes it unclickable; this says so rather than relying
+	   on it, since the tab is in the tree and no longer hidden by attribute. */
+	pointer-events:none;
+}
+
+/* Only once the row has been painted in whatever state it opened in. Entering
+   browse mode clears this, so a panel opened on a queue that already has entries
+   shows the tab rather than playing its arrival -- the movement is meant to
+   report a change the reader just made, and every open is not one. */
+.browse-tabs.is-ready #browse-tab-queue {
+	transition:max-width .2s ease, opacity .2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.browse-tabs.is-ready #browse-tab-queue {
+		transition:none;
+	}
+}
+
+/* The front page tab still goes outright. It comes and goes with a settings
+   change rather than with anything happening on screen, so there is no movement
+   for a reader to follow and nothing to report. */
 .browse-tab[hidden] {
 	display:none;
 }
@@ -11978,7 +12061,7 @@ ${settingsPanelHTML()}
 <div id="comments-content">Loading...</div>
 <div id="browse-view" class="browse-view">
 <div class="browse-tabs" role="tablist">
-<button id="browse-tab-queue" class="browse-tab" type="button" role="tab" hidden>queue</button>
+<button id="browse-tab-queue" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">queue</button>
 <button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front pages</button>
 </div>
 <div id="browse-list"></div>

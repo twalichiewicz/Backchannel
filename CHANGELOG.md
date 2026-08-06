@@ -43,6 +43,11 @@ use to detect updates, so every release bumps it.
 - The front page tab reads "front pages", and the wordmark's tooltip "front
   pages and your queue". Both said Hacker News — and lower case now that the
   name has gone, matching `queue` beside it.
+- Queueing your first story slides the queue tab out from under "front pages"
+  and pushes it across, rather than snapping a second tab into a row that had
+  one. Clearing the last one slides it away again. Only for something you just
+  did: opening the panel on a queue that already has entries shows the tab
+  rather than replaying its arrival.
 - Paging through the merged list costs no further requests. Every source is
   fetched once to a fixed depth and the pool is paged locally.
 
