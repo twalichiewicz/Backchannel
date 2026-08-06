@@ -2479,11 +2479,11 @@
 				(source) => `
 <label class="settings-option">
 <input${idPrefix ? ` id="${escapeHTML(idPrefix + source.id)}"` : ""} data-source="${escapeHTML(source.id)}" type="checkbox">
-<span>${escapeHTML(source.label)}${source.beta ? ` <span class="op-pill">BETA</span>` : ""}</span>
+<span>${escapeHTML(source.label)}${source.beta ? ` <span class="op-pill">BETA</span>` : ""}${source.slow ? ` <span class="op-pill op-pill-slow" tabindex="0" role="note" aria-label="Slower comment fetch source">⧗<span class="op-pill-tip" aria-hidden="true">Slower comment fetch source</span></span>` : ""}</span>
 </label>
 ${
 	source.caveat
-		? `<div class="settings-option-hint">${escapeHTML(source.caveat)}</div>`
+		? `<div class="settings-option-hint">${escapeHTML(source.caveat)}${source.slow ? `<p class="settings-option-hint-slow">This source takes longer to fetch comments, so they may take a moment to appear.</p>` : ""}</div>`
 		: ""
 }`,
 			)
@@ -2495,11 +2495,15 @@ ${
 	// live toggle, so the is-acknowledged class is set from JS wherever a source
 	// checkbox renders or changes -- which the toggle handlers already run through.
 	function syncSourceHint(input) {
-		const hint = input?.closest(".settings-option")?.nextElementSibling;
+		const option = input?.closest(".settings-option");
+		const hint = option?.nextElementSibling;
 
 		if (hint && hint.classList.contains("settings-option-hint")) {
 			hint.classList.toggle("is-acknowledged", input.checked);
 		}
+
+		// The slower-fetch pill lives in the label and shows only once enabled.
+		option?.classList.toggle("settings-option-on", Boolean(input?.checked));
 	}
 
 	function enabledSources(settings) {
@@ -2508,15 +2512,12 @@ ${
 		);
 	}
 
-	// One flag drives both the "still loading" subtitle and the Sources-page notice.
-	// Lemmy, Wikipedia and Bluesky each make several calls or a large fetch; the rest
-	// are a single quick request.
+	// One flag (source.slow) marks the sources that fetch comments slowly -- Lemmy,
+	// Wikipedia and Bluesky, each several calls or a large read. It drives the
+	// per-source caveat note, the pill shown once the source is enabled, and the
+	// "still loading" subtitle.
 	function isSlowSource(id) {
 		return Boolean(getSource(id)?.slow);
-	}
-
-	function enabledSlowSources(settings) {
-		return enabledSources(settings).filter((source) => source?.slow);
 	}
 
 	registerSource({
@@ -2527,7 +2528,7 @@ ${
 		label: "Hacker News",
 		shortLabel: "HN",
 		caveat:
-			"Sends each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
+			"Will send each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
 		capabilities: { vote: true, reply: true, submit: true },
 
 		profileURL: (author) =>
@@ -2684,7 +2685,7 @@ ${
 		// SameSite=None and rides along. Signed out it carries only the device id.
 		// The wording says which, because the difference is the whole trade.
 		caveat:
-			"Sends each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds.",
+			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds.",
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (author) =>
@@ -2934,7 +2935,7 @@ ${
 		// public.api.bsky.app answers identically to a cookie, a bearer token and
 		// neither. Numbers in the spike's §8.
 		caveat:
-			"Sends each page you visit to Constellation, an independent index of Bluesky links, not to Bluesky. Bluesky is asked only about the posts Constellation names. Signed in or out, these requests carry no account.",
+			"Will send each page you visit to Constellation, an independent index of Bluesky links, not to Bluesky. Bluesky is asked only about the posts Constellation names. Signed in or out, these requests carry no account.",
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => "https://bsky.app/profile/" + encodeURIComponent(handle),
@@ -3081,7 +3082,7 @@ ${
 		// request the way Reddit's SameSite=None session does -- measured, as that
 		// one was. And discover sends only the host, never the page's full address.
 		caveat:
-			"Sends the domain of each page you visit to lobste.rs, not the full address. Signed in or out, these requests carry no account.",
+			"Will send the domain of each page you visit to lobste.rs, not the full address. Signed in or out, these requests carry no account.",
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (user) => "https://lobste.rs/~" + encodeURIComponent(user),
@@ -3174,7 +3175,7 @@ ${
 		// whole thing is on screen as soon as it renders.
 		threadArrivesWhole: true,
 		caveat:
-			"Sends each page you visit to Wikipedia's API to find pages that link it. No account, signed in or out.",
+			"Will send each page you visit to Wikipedia's API to find pages that link it. No account, signed in or out.",
 		capabilities: { vote: false, reply: false, submit: false },
 
 		async discover(url) {
@@ -3275,7 +3276,7 @@ ${
 		slow: true,
 		beta: true,
 		caveat:
-			"Sends each page you visit to lemmy.world, a large Lemmy instance whose federation reaches across the network. No account, signed in or out.",
+			"Will send each page you visit to lemmy.world, a large Lemmy instance whose federation reaches across the network. No account, signed in or out.",
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => "https://lemmy.world/u/" + handle,
@@ -8847,9 +8848,14 @@ header button svg {
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
-	max-height:5rem;
+	max-height:8rem;
 	overflow:hidden;
 	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
+}
+
+/* The slower-fetch note, added as its own paragraph under a slow source's caveat. */
+.settings-option-hint-slow {
+	margin:6px 0 0;
 }
 
 /* That hint describes what happens with the setting off. Switched on, it is
@@ -8892,6 +8898,43 @@ header button svg {
 	font-size:9px;
 	font-weight:bold;
 	line-height:1.2;
+}
+
+/* The slower-fetch pill: the BETA pill's shape but muted, shown only once the
+   source is enabled, with its meaning behind a hover/focus tip -- a tap on mobile
+   focuses it, so that reveals the tip too. */
+.op-pill-slow {
+	display:none;
+	position:relative;
+	background:var(--muted);
+	font-weight:400;
+	cursor:default;
+}
+
+.settings-option-on .op-pill-slow {
+	display:inline-block;
+}
+
+.op-pill-tip {
+	position:absolute;
+	bottom:calc(100% + 6px);
+	left:50%;
+	transform:translateX(-50%);
+	white-space:nowrap;
+	padding:4px 6px;
+	border-radius:4px;
+	background:var(--surface-text);
+	color:var(--surface);
+	font-size:10px;
+	opacity:0;
+	pointer-events:none;
+	transition:opacity .15s ease;
+	z-index:3;
+}
+
+.op-pill-slow:hover .op-pill-tip,
+.op-pill-slow:focus .op-pill-tip {
+	opacity:1;
 }
 
 .hidden {
@@ -9031,26 +9074,6 @@ header button svg {
 
 .source-matrix .no {
 	color:var(--muted);
-}
-
-/* A quiet, persistent heads-up at the foot of the Sources page: the slow sources
-   fill comments in over a moment rather than at once. Collapsed until one is ticked,
-   then it eases in -- driven from JS off the checkboxes, not :has(), for the reason
-   the caveats are. */
-.sources-slow-note {
-	color:var(--muted);
-	font-size:11px;
-	line-height:1.4;
-	max-height:0;
-	opacity:0;
-	overflow:hidden;
-	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
-}
-
-.sources-slow-note.is-visible {
-	max-height:6rem;
-	margin-top:14px;
-	opacity:1;
 }
 
 /* Separates the source checkboxes from the support table below them. */
@@ -9655,7 +9678,6 @@ ${["read", "vote", "reply", "submit"]
 </tbody>
 </table>
 </div>
-<div class="sources-slow-note" id="sources-slow-note">Certain sources take longer to fetch comments, so they may take a moment to appear.</div>
 </div>
 
 </div>
@@ -9839,23 +9861,6 @@ ${["read", "vote", "reply", "submit"]
 			...settingsPanel.querySelectorAll("[data-suboptions-of]"),
 		];
 
-		// The Sources-page notice: shown whenever a slow source is ticked. Toggled
-		// from JS off the live checkbox state -- the same reliable path the caveats
-		// use, since this browser does not re-run :has() on a live toggle.
-		function syncSlowNote() {
-			const note = settingsPanel.querySelector("#sources-slow-note");
-
-			if (!note) {
-				return;
-			}
-
-			const anySlow = [
-				...settingsPanel.querySelectorAll("input[data-source]"),
-			].some((input) => input.checked && isSlowSource(input.dataset.source));
-
-			note.classList.toggle("is-visible", anySlow);
-		}
-
 		const applySettingsPanelState = (settings) => {
 			for (const [key, input] of Object.entries(settingsInputs)) {
 				if (input) {
@@ -9882,8 +9887,6 @@ ${["read", "vote", "reply", "submit"]
 				input.checked = Boolean(sourceState[input.dataset.source]);
 				syncSourceHint(input);
 			}
-
-			syncSlowNote();
 
 			for (const group of suboptionGroups) {
 				const enabled = Boolean(settings[group.dataset.suboptionsOf]);
@@ -9960,7 +9963,6 @@ ${["read", "vote", "reply", "submit"]
 				// Collapse (or restore) this source's caveat immediately, without
 				// waiting on :has() re-evaluation the browser may not do live.
 				syncSourceHint(sourceInput);
-				syncSlowNote();
 
 				const current = await loadSettings();
 
