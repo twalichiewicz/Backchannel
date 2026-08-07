@@ -36,8 +36,7 @@ instead.
 - Bluesky sends the pages you visit to Constellation, an independent index of
 Bluesky links, not to Bluesky. Bluesky is asked only about the posts
 Constellation names. No account is needed and neither host sets a cookie.
-- Lobsters sends only the domain of each page you visit — not the full address —
-to lobste.rs, to find that domain's submissions. Signed in or out, the request
+- Lobsters sends only the domain of each page you visit to lobste.rs, to find that domain's submissions. Signed in or out, the request
 carries no account.
 - Wikipedia sends the pages you visit to Wikipedia's API, to find the Talk and
 project pages that link them. No account, signed in or out.
