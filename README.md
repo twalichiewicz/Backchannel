@@ -68,9 +68,7 @@ preferences all carry over untouched.
 
 2. [Install Backchannel](https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js)
    - *Upgrading from HNewhere?* Let it auto-update and it renames itself. If you
-     install from this link instead, delete the old **HNewhere** entry afterwards —
-     managers match a manual install by name, so the rename arrives as a second
-     script and both would run at once.
+     install from this link instead, delete the old **HNewhere** entry afterwards.
 3. Browse the web as usual. If a thread exists for that page the (BC) button lights up. Clicking it opens the sidebar. Still grey? Nobody's posted it yet-- click to submit it yourself.
 
 ## Contributing
