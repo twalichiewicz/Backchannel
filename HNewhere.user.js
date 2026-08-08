@@ -7376,6 +7376,17 @@ ${
 		}, VIEW_SWAP_FADE_MS);
 	}
 
+	// Every breakdown in the list, shut. One row's menu at a time: two of them open
+	// down a list is the reader having lost track of which count they pressed.
+	function closeBrowseBreakdowns(root) {
+		for (const panel of root?.querySelectorAll?.(".browse-breakdown") || []) {
+			panel.hidden = true;
+			panel.parentElement
+				?.querySelector(".browse-comments-total")
+				?.setAttribute("aria-expanded", "false");
+		}
+	}
+
 	// One source's share of a row's comments, as a filled wedge. Greyscale on
 	// purpose: this says how much, not which, and giving each source a colour would
 	// invent a per-source palette the panel does not otherwise have and could not
@@ -7431,20 +7442,47 @@ stroke-dasharray="${filled.toFixed(2)} ${circumference.toFixed(2)}" transform="r
 		);
 		const breakdownID = `browse-breakdown-${rank}`;
 		const totalText = escapeHTML(pluralize(totalComments, "comment"));
+		const breakdownHTML = `<div id="${breakdownID}" class="browse-breakdown" role="menu" hidden>
+${
+	// Only where it is telling you something. With one source the line below
+	// already names it, and "across 1 source" above it is the panel counting to
+	// one out loud.
+	breakdown.length > 1
+		? `<div class="browse-breakdown-head">across ${escapeHTML(pluralize(breakdown.length, "source"))}</div>`
+		: ""
+}
+${breakdown
+	.map(
+		(each) => `<button type="button" role="menuitem" class="browse-breakdown-entry"${
+			each.permalink
+				? ` data-permalink="${escapeHTML(each.permalink)}"`
+				: ` disabled title="No page lists these without an account"`
+		}>
+${sharePieHTML(totalComments ? (each.descendants || 0) / totalComments : 0)}
+<span class="browse-breakdown-label">${escapeHTML(sourceShortLabel(each))}</span>
+<span class="browse-breakdown-count">${escapeHTML(pluralize(each.descendants || 0, "comment"))}</span>
+</button>`,
+	)
+	.join("")}
+</div>`;
 
-		// With one discussion there is nothing to break down: the count is that
-		// source's count and pressing it should open that source, which is what it
-		// did before any of this. The disclosure is for the case it was built for.
-		// Same rule the page header uses one level up.
-		const commentLinks =
-			breakdown.length > 1
-				? `<button type="button" class="browse-comments-total" aria-expanded="false" aria-controls="${breakdownID}">${totalText}</button>`
-				: breakdown[0]?.permalink
-					? `<a class="browse-comments-link" href="${escapeHTML(breakdown[0].permalink)}"
-	target="_blank" rel="noopener noreferrer">${totalText}</a>`
-					: // Said, not linked. Mastodon publishes no list of the posts about a
-						// URL that anyone can reach without an account.
-						`<span class="browse-comments-count">${totalText}</span>`;
+		// Always the disclosure, however many sources a row carries. Single-source
+		// rows briefly kept a plain link, on the reasoning that one source has
+		// nothing to break down -- which is true of the number and false of the
+		// question being asked. Most rows on a front page carry one source, so that
+		// made the breakdown unreachable on nearly all of them, and a control that
+		// is a link here and a menu there is two controls wearing one label.
+		//
+		// It also answers something the bare count never did: which source these
+		// comments are on. "112 comments" said how many and not where.
+		//
+		// The menu is a sibling of the button inside a positioned shell, so it hangs
+		// off the count itself rather than off the row -- and so the row's own text
+		// keeps its place when the menu opens.
+		const commentLinks = `<span class="browse-comments-shell">
+<button type="button" class="browse-comments-total" aria-expanded="false" aria-controls="${breakdownID}">${totalText}</button>
+${breakdownHTML}
+</span>`;
 
 		// Only where the reader has an account that can act. Every source declares
 		// its capabilities, and HN is the only one with any -- so flag and favorite
@@ -7489,26 +7527,6 @@ stroke-dasharray="${filled.toFixed(2)} ${circumference.toFixed(2)}" transform="r
 	<div class="story-meta">
 	${meta}
 	</div>
-	${
-		breakdown.length > 1
-			? `<div id="${breakdownID}" class="browse-breakdown" hidden>
-<div class="browse-breakdown-head">across ${escapeHTML(pluralize(breakdown.length, "source"))}</div>
-${breakdown
-	.map(
-		(each) => `<button type="button" class="browse-breakdown-entry"${
-			each.permalink
-				? ` data-permalink="${escapeHTML(each.permalink)}"`
-				: ` disabled title="No page lists these without an account"`
-		}>
-${sharePieHTML(totalComments ? (each.descendants || 0) / totalComments : 0)}
-<span class="browse-breakdown-label">${escapeHTML(sourceShortLabel(each))}</span>
-<span class="browse-breakdown-count">${escapeHTML(pluralize(each.descendants || 0, "comment"))}</span>
-</button>`,
-	)
-	.join("")}
-</div>`
-			: ""
-	}
 	</div>
 	`;
 
@@ -7519,9 +7537,14 @@ ${sharePieHTML(totalComments ? (each.descendants || 0) / totalComments : 0)}
 		const breakdownPanel = row.querySelector(".browse-breakdown");
 
 		if (total && breakdownPanel) {
-			total.onclick = () => {
+			total.onclick = (event) => {
+				// The panel's own click handler closes these; without this the menu
+				// would be shut again by the press that opened it.
+				event.stopPropagation();
+
 				const opening = breakdownPanel.hidden;
 
+				closeBrowseBreakdowns(row.getRootNode());
 				breakdownPanel.hidden = !opening;
 				total.setAttribute("aria-expanded", String(opening));
 			};
@@ -9521,13 +9544,36 @@ header {
 	text-decoration:underline;
 }
 
-/* Indented to where the row's own text begins, so it reads as belonging to the
-   row above it rather than as a new row. */
+/* The count and the menu it opens, as one unit. Positioned so the menu hangs off
+   the count rather than off the row: the count is what was pressed, and a row is
+   wide enough that anchoring to it would leave the menu somewhere the pointer
+   never was. */
+.browse-comments-shell {
+	position:relative;
+	display:inline-block;
+}
+
+/* A menu over the list, not a section pushed into it. Opening it used to move
+   every row below down the page, which is the wrong thing for a control you
+   press to glance at something and close again. Same surface as the header's own
+   dropdowns, so the panel has one kind of menu rather than two.
+
+   width is stated as well as min-width for the reason the hide menu needed it:
+   an absolutely positioned box shrink-fits against its containing block, and
+   this one hangs off a shell the width of the words "621 comments". */
 .browse-breakdown {
-	margin:4px 0 0 var(--browse-indent);
-	padding:4px 0 2px;
-	border-left:2px solid var(--border-soft);
-	padding-left:8px;
+	position:absolute;
+	top:calc(100% + 4px);
+	left:0;
+	z-index:4;
+	width:max-content;
+	min-width:max-content;
+	max-width:min(17rem, 70vw);
+	padding:4px;
+	border:1px solid var(--surface-border);
+	border-radius:6px;
+	background:var(--surface);
+	box-shadow:0 6px 18px rgba(0,0,0,.18);
 }
 
 .browse-breakdown[hidden] {
@@ -9535,7 +9581,7 @@ header {
 }
 
 .browse-breakdown-head {
-	margin-bottom:3px;
+	margin:2px 4px 4px;
 	color:var(--meta);
 	font-family:Verdana, Geneva, sans-serif;
 	font-size:10px;
@@ -9544,16 +9590,17 @@ header {
 .browse-breakdown-entry {
 	display:flex;
 	align-items:center;
-	gap:6px;
+	gap:7px;
 	width:100%;
-	padding:2px 4px 2px 0;
+	padding:5px 8px;
 	border:0;
-	border-radius:3px;
+	border-radius:4px;
 	background:none;
-	color:var(--text);
+	color:var(--surface-text);
 	font-family:Verdana, Geneva, sans-serif;
 	font-size:11px;
 	text-align:left;
+	white-space:nowrap;
 	cursor:pointer;
 }
 
@@ -11685,6 +11732,12 @@ ${[
 			// gives up its space. Registered on the shadow root rather than the
 			// document because that is where the presses the panel can see arrive.
 			shadow.addEventListener("click", (event) => {
+				// A front-page breakdown is a menu in the same panel and closes on the
+				// same press, unless the press was inside one.
+				if (!event.composedPath().some((node) => node?.classList?.contains?.("browse-breakdown"))) {
+					closeBrowseBreakdowns(shadow);
+				}
+
 				if (event.composedPath().includes(hideSiteButton) || event.composedPath().includes(hideMenu)) {
 					return;
 				}
