@@ -9564,7 +9564,11 @@ header {
 .browse-breakdown {
 	position:absolute;
 	top:calc(100% + 4px);
-	left:0;
+	/* Grows leftward from the count, not rightward. The count closes a meta line
+	   in a panel pinned to the right edge of the screen, so a menu opening to the
+	   right of it opens off the screen. */
+	right:0;
+	left:auto;
 	z-index:4;
 	width:max-content;
 	min-width:max-content;
