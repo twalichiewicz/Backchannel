@@ -2712,10 +2712,26 @@
 		};
 	}
 
+	// What getPostThread actually returns, whatever is asked for. Measured on one
+	// root at 10, 50 and 1000: byte-identical responses, 66 nodes, truncated every
+	// time. So this is not a number to raise -- it is the shape of the answer, and
+	// the tail is reached by asking again from the bottom.
+	const BSKY_THREAD_DEPTH = 10;
+
 	// Walks a getPostThread response into the flat map getComment reads. The
 	// response is a union: notFoundPost and blockedPost carry no author and no
 	// text, and rendering one would put an authorless comment in the thread.
-	function indexBskyThread(node, discussion, byKey, parentKey) {
+	//
+	// `depth` is where this node sits in the response, which is what separates a
+	// gap worth offering to fill from one that cannot be filled. A node reporting
+	// replies it did not return means two different things depending on where it
+	// sits: at the cap the walk simply stopped, and the replies are there to be
+	// fetched. Above the cap the walk did not stop, so the missing replies are
+	// ones the AppView will not serve -- blocked, deleted, or from a blocked
+	// account -- and replyCount counts them anyway. Measured: three such nodes at
+	// depth 2 each returned zero replies when fetched directly, while one at the
+	// cap returned 2 replies and 17 nodes beneath them.
+	function indexBskyThread(node, discussion, byKey, parentKey, depth = 0) {
 		const post = node?.post;
 
 		if (!post?.uri) {
@@ -2727,13 +2743,20 @@
 
 		byKey.set(key, comment);
 
+		if (depth >= BSKY_THREAD_DEPTH && (post.replyCount || 0) > 0) {
+			// The uri is the id, because that is what fetching the rest needs. Reddit
+			// passes comment ids through the same field; the renderer never reads it,
+			// it only hands it back.
+			comment.more = { ids: [post.uri], count: post.replyCount };
+		}
+
 		for (const reply of node.replies || []) {
 			if (!reply?.post?.uri) {
 				continue;
 			}
 
 			comment.replyKeys.push(bskyKeyFromURI(reply.post.uri));
-			indexBskyThread(reply, discussion, byKey, key);
+			indexBskyThread(reply, discussion, byKey, key, depth + 1);
 		}
 	}
 
@@ -3547,7 +3570,7 @@ ${
 					}
 
 					const thread = await bskyJSON(
-						`${BSKY_APPVIEW}/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=10&parentHeight=0`,
+						`${BSKY_APPVIEW}/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=${BSKY_THREAD_DEPTH}&parentHeight=0`,
 					);
 
 					if (!thread?.thread) {
@@ -3561,6 +3584,69 @@ ${
 					indexBskyThread(thread.thread, discussion, byKey, null);
 
 					return byKey.get(key) || null;
+				},
+
+				// The bottom of a capped thread, asked for again from there. One uri
+				// per call, because that is what a gap is here: getPostThread takes a
+				// single root, unlike Reddit's morechildren which takes a hundred ids.
+				//
+				// Only the replies are indexed, not the node itself -- it is already in
+				// the map and already on screen, and rebuilding it would hand the
+				// renderer a different object for the comment it is holding.
+				async expandMore(ids) {
+					const uri = ids?.[0];
+
+					if (!uri) {
+						return { ok: true, added: [], remaining: [] };
+					}
+
+					const thread = await bskyJSON(
+						`${BSKY_APPVIEW}/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=${BSKY_THREAD_DEPTH}&parentHeight=0`,
+					);
+
+					// Left standing rather than withdrawn. "2 more replies" vanishing
+					// without producing two replies is worse than the offer never
+					// having been made.
+					if (!thread?.thread) {
+						return { ok: false, added: [], remaining: ids };
+					}
+
+					const key = bskyKeyFromURI(uri);
+					const parent = byKey.get(key);
+					const before = new Set(byKey.keys());
+
+					for (const reply of thread.thread.replies || []) {
+						if (!reply?.post?.uri) {
+							continue;
+						}
+
+						const replyKey = bskyKeyFromURI(reply.post.uri);
+
+						if (parent && !parent.replyKeys.includes(replyKey)) {
+							parent.replyKeys.push(replyKey);
+						}
+
+						// Depth 1, not 0: these are the children of the node the second
+						// request was rooted at, so the new cap falls ten levels below it
+						// and a thread deeper still grows its own offer down there.
+						indexBskyThread(reply, discussion, byKey, key, 1);
+					}
+
+					const added = [];
+
+					for (const [addedKey, comment] of byKey) {
+						if (!before.has(addedKey) && comment) {
+							added.push(comment);
+						}
+					}
+
+					// This gap is closed whatever came back. Anything deeper is a new
+					// gap, carried by whichever node now sits at the bottom.
+					if (parent) {
+						parent.more = null;
+					}
+
+					return { ok: true, added, remaining: [] };
 				},
 			};
 		},
