@@ -7062,7 +7062,9 @@ ${
 				(each) =>
 					`<a class="browse-comments-link" href="${escapeHTML(each.permalink)}"
 	target="_blank" rel="noopener noreferrer">${
-		labelled ? escapeHTML(sourceShortLabel(each)) + " " : ""
+		labelled
+			? `<span class="browse-comments-source">(${escapeHTML(sourceShortLabel(each))})</span> `
+			: ""
 	}${escapeHTML(pluralize(each.descendants, "comment"))}</a>`,
 			)
 			.join(`<span class="browse-comments-sep">·</span>`);
@@ -9214,6 +9216,15 @@ header {
    links instead of before a floating dot. */
 .browse-comments-sep {
 	padding:0 4px;
+	color:var(--meta);
+}
+
+/* The quieter half of the pair. The count is what the row is offering and the
+   name only says whose, so it takes the same treatment as the site after a
+   title -- parenthesised, in the meta colour -- because it is the same kind of
+   aside. Inside the link rather than beside it: it describes that link, and
+   splitting them would put two targets where the reader sees one thing. */
+.browse-comments-source {
 	color:var(--meta);
 }
 
