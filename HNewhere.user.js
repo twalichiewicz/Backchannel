@@ -7376,35 +7376,48 @@ ${
 		}, VIEW_SWAP_FADE_MS);
 	}
 
-	// Every breakdown in the list, shut. One row's menu at a time: two of them open
-	// down a list is the reader having lost track of which count they pressed.
-	function closeBrowseBreakdowns(root) {
-		for (const panel of root?.querySelectorAll?.(".browse-breakdown") || []) {
-			panel.hidden = true;
-			panel.parentElement
-				?.querySelector(".browse-comments-total")
-				?.setAttribute("aria-expanded", "false");
-		}
-	}
-
-	// One source's share of a row's comments, as a filled wedge. Greyscale on
-	// purpose: this says how much, not which, and giving each source a colour would
-	// invent a per-source palette the panel does not otherwise have and could not
-	// keep consistent as sources are added.
+	// What a comment count is for on Hacker News: the title opens the article and
+	// the count opens the conversation about it. Here the conversation is the
+	// merged one, so this is the only place a reader can reach it without first
+	// going to the page it is about.
 	//
-	// Drawn as a stroke rather than an arc path. A circle of radius 5 with a
-	// 10-wide stroke paints from the centre out to radius 10, so a dash along it is
-	// a wedge -- and the dash is one number to get right instead of the sweep flag
-	// and endpoint arithmetic an arc would need.
-	function sharePieHTML(share) {
-		const circumference = 2 * Math.PI * 5;
-		const filled = Math.max(0, Math.min(1, share || 0)) * circumference;
+	// It is also the only honest way to show a true total. A front-page row knows
+	// what the front pages carry -- r/popular had one thread about a story that
+	// fifteen subreddits were arguing about -- and discovery is what finds the
+	// rest. Running it for thirty rows nobody has asked about would be hundreds of
+	// requests; running it for the one row somebody pressed costs what opening
+	// that page costs, which they were about to spend anyway.
+	async function openRowDiscussion(ui, story) {
+		if (!ui || !story?.url) {
+			return;
+		}
 
-		return `<svg class="browse-share" viewBox="0 0 20 20" width="11" height="11" aria-hidden="true" focusable="false">
-<circle cx="10" cy="10" r="10" fill="var(--border)"/>
-<circle cx="10" cy="10" r="5" fill="none" stroke="var(--meta)" stroke-width="10"
-stroke-dasharray="${filled.toFixed(2)} ${circumference.toFixed(2)}" transform="rotate(-90 10 10)"/>
-</svg>`;
+		const generation = ++sidebarGeneration;
+
+		setBrowseMode(ui, false, { animate: false });
+		setSidebarStage(ui, "discussion");
+
+		const settings = await loadSettings();
+		const discussions = await discoverAll(story.url, settings);
+
+		if (generation !== sidebarGeneration) {
+			return;
+		}
+
+		// Nothing found is not nothing to show: the row came from somewhere, and the
+		// front page is where the reader was. A trending link with no thread behind
+		// it -- Mastodon's front page carries those -- lands here.
+		if (!discussions.length) {
+			setBrowseMode(ui, true);
+
+			return;
+		}
+
+		sidebarHasDiscussion = true;
+		setSidebarStage(ui, "comments");
+		await renderDiscussions(discussions, ui);
+		// Deliberately no annotation pass. The article this thread is about is not
+		// the page behind the panel, so there is nothing on screen to light up.
 	}
 
 	// Borrowing the story vocabulary rather than renderStory itself: the title
@@ -7433,56 +7446,20 @@ stroke-dasharray="${filled.toFixed(2)} ${circumference.toFixed(2)}" transform="r
 		// *ranking*, which is why standing still log-scales each source separately
 		// and this total reaches none of it. It is not right about a headline: as a
 		// count of things said about this page, they are the same unit.
-		const breakdown = [...discussions].sort(
-			(left, right) => (right.descendants || 0) - (left.descendants || 0),
-		);
-		const totalComments = breakdown.reduce(
+		const totalComments = discussions.reduce(
 			(sum, each) => sum + (each.descendants || 0),
 			0,
 		);
-		const breakdownID = `browse-breakdown-${rank}`;
 		const totalText = escapeHTML(pluralize(totalComments, "comment"));
-		const breakdownHTML = `<div id="${breakdownID}" class="browse-breakdown" role="menu" hidden>
-${
-	// Only where it is telling you something. With one source the line below
-	// already names it, and "across 1 source" above it is the panel counting to
-	// one out loud.
-	breakdown.length > 1
-		? `<div class="browse-breakdown-head">across ${escapeHTML(pluralize(breakdown.length, "source"))}</div>`
-		: ""
-}
-${breakdown
-	.map(
-		(each) => `<button type="button" role="menuitem" class="browse-breakdown-entry"${
-			each.permalink
-				? ` data-permalink="${escapeHTML(each.permalink)}"`
-				: ` disabled title="No page lists these without an account"`
-		}>
-${sharePieHTML(totalComments ? (each.descendants || 0) / totalComments : 0)}
-<span class="browse-breakdown-label">${escapeHTML(sourceShortLabel(each))}</span>
-<span class="browse-breakdown-count">${escapeHTML(pluralize(each.descendants || 0, "comment"))}</span>
-</button>`,
-	)
-	.join("")}
-</div>`;
 
-		// Always the disclosure, however many sources a row carries. Single-source
-		// rows briefly kept a plain link, on the reasoning that one source has
-		// nothing to break down -- which is true of the number and false of the
-		// question being asked. Most rows on a front page carry one source, so that
-		// made the breakdown unreachable on nearly all of them, and a control that
-		// is a link here and a menu there is two controls wearing one label.
-		//
-		// It also answers something the bare count never did: which source these
-		// comments are on. "112 comments" said how many and not where.
-		//
-		// The menu is a sibling of the button inside a positioned shell, so it hangs
-		// off the count itself rather than off the row -- and so the row's own text
-		// keeps its place when the menu opens.
-		const commentLinks = `<span class="browse-comments-shell">
-<button type="button" class="browse-comments-total" aria-expanded="false" aria-controls="${breakdownID}">${totalText}</button>
-${breakdownHTML}
-</span>`;
+		// Marked as a floor, because it is one. A row knows what the front pages
+		// carry and nothing else: r/popular held one thread about a story fifteen
+		// subreddits were arguing about, so the row said 2,419 where the article
+		// said 5,476. The error only ever runs one way -- a front page can omit a
+		// discussion and cannot invent one -- so the number is honest as "at least
+		// this many" and a lie as "this many". Pressing it settles the question.
+		const commentLinks = `<button type="button" class="browse-comments-total"
+	title="Open the conversation about this">${totalText}<span class="browse-comments-floor" aria-hidden="true">+</span></button>`;
 
 		// Only where the reader has an account that can act. Every source declares
 		// its capabilities, and HN is the only one with any -- so flag and favorite
@@ -7534,26 +7511,13 @@ ${breakdownHTML}
 		// row rather than delegated because the row is built here and thrown away
 		// whole, so there is nothing to keep in step.
 		const total = row.querySelector(".browse-comments-total");
-		const breakdownPanel = row.querySelector(".browse-breakdown");
 
-		if (total && breakdownPanel) {
+		if (total) {
 			total.onclick = (event) => {
-				// The panel's own click handler closes these; without this the menu
-				// would be shut again by the press that opened it.
+				event.preventDefault();
 				event.stopPropagation();
-
-				const opening = breakdownPanel.hidden;
-
-				closeBrowseBreakdowns(row.getRootNode());
-				breakdownPanel.hidden = !opening;
-				total.setAttribute("aria-expanded", String(opening));
+				openRowDiscussion(sidebarUI, story).catch(console.error);
 			};
-
-			for (const entry of breakdownPanel.querySelectorAll("[data-permalink]")) {
-				entry.onclick = () => {
-					window.open(entry.dataset.permalink, "_blank", "noopener,noreferrer");
-				};
-			}
 		}
 
 		const saveButton = row.querySelector(".browse-save-link");
@@ -9540,100 +9504,11 @@ header {
 	}
 }
 
-.browse-comments-total[aria-expanded="true"] {
-	text-decoration:underline;
-}
-
-/* The count and the menu it opens, as one unit. Positioned so the menu hangs off
-   the count rather than off the row: the count is what was pressed, and a row is
-   wide enough that anchoring to it would leave the menu somewhere the pointer
-   never was. */
-.browse-comments-shell {
-	position:relative;
-	display:inline-block;
-}
-
-/* A menu over the list, not a section pushed into it. Opening it used to move
-   every row below down the page, which is the wrong thing for a control you
-   press to glance at something and close again. Same surface as the header's own
-   dropdowns, so the panel has one kind of menu rather than two.
-
-   width is stated as well as min-width for the reason the hide menu needed it:
-   an absolutely positioned box shrink-fits against its containing block, and
-   this one hangs off a shell the width of the words "621 comments". */
-.browse-breakdown {
-	position:absolute;
-	top:calc(100% + 4px);
-	/* Grows leftward from the count, not rightward. The count closes a meta line
-	   in a panel pinned to the right edge of the screen, so a menu opening to the
-	   right of it opens off the screen. */
-	right:0;
-	left:auto;
-	z-index:4;
-	width:max-content;
-	min-width:max-content;
-	max-width:min(17rem, 70vw);
-	padding:4px;
-	border:1px solid var(--surface-border);
-	border-radius:6px;
-	background:var(--surface);
-	box-shadow:0 6px 18px rgba(0,0,0,.18);
-}
-
-.browse-breakdown[hidden] {
-	display:none;
-}
-
-.browse-breakdown-head {
-	margin:2px 4px 4px;
-	color:var(--meta);
-	font-family:Verdana, Geneva, sans-serif;
-	font-size:10px;
-}
-
-.browse-breakdown-entry {
-	display:flex;
-	align-items:center;
-	gap:7px;
-	width:100%;
-	padding:5px 8px;
-	border:0;
-	border-radius:4px;
-	background:none;
-	color:var(--surface-text);
-	font-family:Verdana, Geneva, sans-serif;
-	font-size:11px;
-	text-align:left;
-	white-space:nowrap;
-	cursor:pointer;
-}
-
-/* No page to open, so it is a reading rather than a control. */
-.browse-breakdown-entry:disabled {
-	cursor:default;
-}
-
-@media (hover: hover) {
-	.browse-breakdown-entry:not(:disabled):hover {
-		background:var(--hover-tint);
-	}
-}
-
-.browse-share {
-	flex:0 0 auto;
-}
-
-.browse-breakdown-label {
-	flex:0 0 auto;
-}
-
-/* Pushed to the right so the counts line up down the list rather than sitting
-   wherever each source's name happens to end. */
-.browse-breakdown-count {
-	margin-left:auto;
+/* Quiet, because it qualifies the number rather than being part of it. Hidden
+   from screen readers, which would read it as arithmetic. */
+.browse-comments-floor {
 	color:var(--meta);
 }
-
 
 /* Which front pages this list came from, as a byline under the tab rather than a
    footnote after the rows. 'front pages' names the place and this names the
@@ -11736,12 +11611,6 @@ ${[
 			// gives up its space. Registered on the shadow root rather than the
 			// document because that is where the presses the panel can see arrive.
 			shadow.addEventListener("click", (event) => {
-				// A front-page breakdown is a menu in the same panel and closes on the
-				// same press, unless the press was inside one.
-				if (!event.composedPath().some((node) => node?.classList?.contains?.("browse-breakdown"))) {
-					closeBrowseBreakdowns(shadow);
-				}
-
 				if (event.composedPath().includes(hideSiteButton) || event.composedPath().includes(hideMenu)) {
 					return;
 				}
