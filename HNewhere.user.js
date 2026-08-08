@@ -639,12 +639,6 @@
 		return location.hostname;
 	}
 
-	// The front page of a site, where "hide this" is genuinely ambiguous. Judged on
-	// the path alone: a query string on a front page is a filter or a campaign tag,
-	// not a different page in the sense that matters here.
-	function onSiteHomepage() {
-		return location.pathname === "/" || location.pathname === "";
-	}
 
 	// Exact hostname only, matching how per-site widths are keyed. Subdomains are
 	// therefore independent entries, which is what "hide it on this site" means.
@@ -701,10 +695,15 @@
 	// Storage is not language. The settings list is the one place a person reads
 	// these, and `page:macrumors.com/2026/08/08/…` is the shape they are stored in,
 	// not a sentence about what is hidden.
+	//
+	// Only the unusual half is named. One page is what hiding does unless you ask
+	// for more, so saying so on every entry annotates the default; a whole site is
+	// the thing that was chosen, and is the thing worth being able to spot in a
+	// list of addresses that otherwise look alike.
 	function describeBlockedEntry(entry) {
 		return entry.startsWith(BLOCKED_PAGE_PREFIX)
-			? entry.slice(BLOCKED_PAGE_PREFIX.length) + " — this page only"
-			: entry;
+			? entry.slice(BLOCKED_PAGE_PREFIX.length)
+			: entry + " (domain-wide)";
 	}
 
 	// The reading queue is a list rather than a set, because its order is the
@@ -7377,6 +7376,26 @@ ${
 		}, VIEW_SWAP_FADE_MS);
 	}
 
+	// One source's share of a row's comments, as a filled wedge. Greyscale on
+	// purpose: this says how much, not which, and giving each source a colour would
+	// invent a per-source palette the panel does not otherwise have and could not
+	// keep consistent as sources are added.
+	//
+	// Drawn as a stroke rather than an arc path. A circle of radius 5 with a
+	// 10-wide stroke paints from the centre out to radius 10, so a dash along it is
+	// a wedge -- and the dash is one number to get right instead of the sweep flag
+	// and endpoint arithmetic an arc would need.
+	function sharePieHTML(share) {
+		const circumference = 2 * Math.PI * 5;
+		const filled = Math.max(0, Math.min(1, share || 0)) * circumference;
+
+		return `<svg class="browse-share" viewBox="0 0 20 20" width="11" height="11" aria-hidden="true" focusable="false">
+<circle cx="10" cy="10" r="10" fill="var(--border)"/>
+<circle cx="10" cy="10" r="5" fill="none" stroke="var(--meta)" stroke-width="10"
+stroke-dasharray="${filled.toFixed(2)} ${circumference.toFixed(2)}" transform="rotate(-90 10 10)"/>
+</svg>`;
+	}
+
 	// Borrowing the story vocabulary rather than renderStory itself: the title
 	// leads to the article here instead of to the discussion, there is no composer
 	// and no story text, and a rank sits in front. Same classes, so a browse row
@@ -7392,36 +7411,40 @@ ${
 		// and a summed total would undo at display time what the blend was careful
 		// about at ranking time.
 		const discussions = [story, ...(options.also || [])];
-		// Every discussion the row carries, including the ones with no page to open.
-		// Mastodon has none -- there is no list of the posts about a URL anyone can
-		// reach without an account -- and filtering those out here is what made this
-		// line read three different ways. A Mastodon-only row ended on a bare
-		// separator with nothing after it; a row it shared with Reddit said "1145
-		// Reddit comments", labelled as though two counts were shown when only one
-		// was; and a row nothing else carried said "2107 comments" unlabelled. Same
-		// rule each time, applied to a list that had already had a hole cut in it.
-		const labelled = discussions.length > 1;
-		const countText = (each) =>
-			// "167 HN comments", not "(HN) 167 comments": the source is an adjective
-			// on the count, and reading it as one puts the words in the order they
-			// would be said aloud.
-			labelled
-				? `${each.descendants} ${sourceShortLabel(each)} ${
-						each.descendants === 1 ? "comment" : "comments"
-					}`
-				: pluralize(each.descendants, "comment");
-		const commentLinks = discussions
-			.map((each) =>
-				each.permalink
-					? `<a class="browse-comments-link" href="${escapeHTML(each.permalink)}"
-	target="_blank" rel="noopener noreferrer">${escapeHTML(countText(each))}</a>`
-					: // Said, not linked. The count is real and worth knowing; there is
-						// simply nowhere to send anyone for it.
-						`<span class="browse-comments-count">${escapeHTML(countText(each))}</span>`,
-			)
-			// The same pipe HN separates the rest of a subline with, rather than a
-			// middot this row would be alone in using.
-			.join(`<span class="browse-comments-sep">|</span>`);
+		// One number, summed. Listing a count per source was the row arguing with
+		// itself about what it was for: the point of merging is that this is one
+		// thing people are talking about, and four counts in a line asked the reader
+		// to add them up to find that out. The page header above a discussion has
+		// always said "352 comments across 2 discussions" for the same reason.
+		//
+		// The old note here said counts must never be added because a Reddit number
+		// and an HN number are not the same unit. That is exactly right about
+		// *ranking*, which is why standing still log-scales each source separately
+		// and this total reaches none of it. It is not right about a headline: as a
+		// count of things said about this page, they are the same unit.
+		const breakdown = [...discussions].sort(
+			(left, right) => (right.descendants || 0) - (left.descendants || 0),
+		);
+		const totalComments = breakdown.reduce(
+			(sum, each) => sum + (each.descendants || 0),
+			0,
+		);
+		const breakdownID = `browse-breakdown-${rank}`;
+		const totalText = escapeHTML(pluralize(totalComments, "comment"));
+
+		// With one discussion there is nothing to break down: the count is that
+		// source's count and pressing it should open that source, which is what it
+		// did before any of this. The disclosure is for the case it was built for.
+		// Same rule the page header uses one level up.
+		const commentLinks =
+			breakdown.length > 1
+				? `<button type="button" class="browse-comments-total" aria-expanded="false" aria-controls="${breakdownID}">${totalText}</button>`
+				: breakdown[0]?.permalink
+					? `<a class="browse-comments-link" href="${escapeHTML(breakdown[0].permalink)}"
+	target="_blank" rel="noopener noreferrer">${totalText}</a>`
+					: // Said, not linked. Mastodon publishes no list of the posts about a
+						// URL that anyone can reach without an account.
+						`<span class="browse-comments-count">${totalText}</span>`;
 
 		// Only where the reader has an account that can act. Every source declares
 		// its capabilities, and HN is the only one with any -- so flag and favorite
@@ -7466,8 +7489,49 @@ ${
 	<div class="story-meta">
 	${meta}
 	</div>
+	${
+		breakdown.length > 1
+			? `<div id="${breakdownID}" class="browse-breakdown" hidden>
+<div class="browse-breakdown-head">across ${escapeHTML(pluralize(breakdown.length, "source"))}</div>
+${breakdown
+	.map(
+		(each) => `<button type="button" class="browse-breakdown-entry"${
+			each.permalink
+				? ` data-permalink="${escapeHTML(each.permalink)}"`
+				: ` disabled title="No page lists these without an account"`
+		}>
+${sharePieHTML(totalComments ? (each.descendants || 0) / totalComments : 0)}
+<span class="browse-breakdown-label">${escapeHTML(sourceShortLabel(each))}</span>
+<span class="browse-breakdown-count">${escapeHTML(pluralize(each.descendants || 0, "comment"))}</span>
+</button>`,
+	)
+	.join("")}
+</div>`
+			: ""
+	}
 	</div>
 	`;
+
+		// The count opens the breakdown; a line in it opens that source. Wired per
+		// row rather than delegated because the row is built here and thrown away
+		// whole, so there is nothing to keep in step.
+		const total = row.querySelector(".browse-comments-total");
+		const breakdownPanel = row.querySelector(".browse-breakdown");
+
+		if (total && breakdownPanel) {
+			total.onclick = () => {
+				const opening = breakdownPanel.hidden;
+
+				breakdownPanel.hidden = !opening;
+				total.setAttribute("aria-expanded", String(opening));
+			};
+
+			for (const entry of breakdownPanel.querySelectorAll("[data-permalink]")) {
+				entry.onclick = () => {
+					window.open(entry.dataset.permalink, "_blank", "noopener,noreferrer");
+				};
+			}
+		}
 
 		const saveButton = row.querySelector(".browse-save-link");
 
@@ -9079,10 +9143,10 @@ header {
 
 .hide-menu {
 	position:absolute;
-	/* Measured from the header's own box, so it clears the bar by the same 4px
-	   whatever the header's height turns out to be. Right-aligned to sit under the
-	   controls it belongs to rather than under the wordmark. */
-	top:calc(100% + 4px);
+	/* The settings panel's own offsets. They are the two dropdowns in this header
+	   and they hang from the same bar, so a different gap reads as one of them
+	   being slightly wrong rather than as a distinction. */
+	top:46px;
 	right:8px;
 	/* Above the settings panel, which is also absolute in this header at z-index
 	   3. Opened with settings already down, this used to arrive behind it. */
@@ -9432,6 +9496,90 @@ header {
    links instead of before a floating dot. */
 .browse-comments-sep {
 	padding:0 4px;
+	color:var(--meta);
+}
+
+/* A control that has to sit inside a text line without becoming a widget: the
+   same font, colour and underline-on-hover as the links either side of it, so
+   the row still reads as one sentence. */
+.browse-comments-total {
+	padding:0;
+	border:0;
+	background:none;
+	font:inherit;
+	color:inherit;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.browse-comments-total:hover {
+		text-decoration:underline;
+	}
+}
+
+.browse-comments-total[aria-expanded="true"] {
+	text-decoration:underline;
+}
+
+/* Indented to where the row's own text begins, so it reads as belonging to the
+   row above it rather than as a new row. */
+.browse-breakdown {
+	margin:4px 0 0 var(--browse-indent);
+	padding:4px 0 2px;
+	border-left:2px solid var(--border-soft);
+	padding-left:8px;
+}
+
+.browse-breakdown[hidden] {
+	display:none;
+}
+
+.browse-breakdown-head {
+	margin-bottom:3px;
+	color:var(--meta);
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:10px;
+}
+
+.browse-breakdown-entry {
+	display:flex;
+	align-items:center;
+	gap:6px;
+	width:100%;
+	padding:2px 4px 2px 0;
+	border:0;
+	border-radius:3px;
+	background:none;
+	color:var(--text);
+	font-family:Verdana, Geneva, sans-serif;
+	font-size:11px;
+	text-align:left;
+	cursor:pointer;
+}
+
+/* No page to open, so it is a reading rather than a control. */
+.browse-breakdown-entry:disabled {
+	cursor:default;
+}
+
+@media (hover: hover) {
+	.browse-breakdown-entry:not(:disabled):hover {
+		background:var(--hover-tint);
+	}
+}
+
+.browse-share {
+	flex:0 0 auto;
+}
+
+.browse-breakdown-label {
+	flex:0 0 auto;
+}
+
+/* Pushed to the right so the counts line up down the list rather than sitting
+   wherever each source's name happens to end. */
+.browse-breakdown-count {
+	margin-left:auto;
 	color:var(--meta);
 }
 
@@ -9812,7 +9960,10 @@ header button svg {
 /* Held while the dropdown is open so the gear reads as a toggle rather than a
    button that fired once. Darker than the hover tint so the two stay distinct on
    a pointer device, and outside the hover media query so touch gets it too. */
-#settings-toggle.is-open {
+/* Both dropdowns in this header stay lit while they are down, so the button and
+   the panel under it read as one thing rather than as a press that ended. */
+#settings-toggle.is-open,
+#hide-site.is-open {
 	background:var(--active-tint);
 }
 
@@ -11011,15 +11162,7 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </svg>
 </button>
 <span class="hide-control">
-<button id="hide-site"${
-	// On a front page the two meanings are both plausible -- not here, and not
-	// anywhere on this site -- so the eye asks instead of guessing. Anywhere else
-	// it hides the page you are on, which is the reversible half: a misclick costs
-	// one article rather than a whole publication.
-	onSiteHomepage()
-		? ` class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Hide Backchannel here" title="Hide Backchannel here"`
-		: ` aria-label="Hide Backchannel on this page" title="Hide Backchannel on this page"`
-}>
+<button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Hide Backchannel here" title="Hide Backchannel here">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <!-- Filled rather than outlined. White on the header's green, a 1.25px stroke
      is most of the way to invisible at 15px; a solid shape holds its detail.
@@ -11031,7 +11174,7 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 <line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="var(--header-bg)" stroke-width="3.4" stroke-linecap="round"/>
 <line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
 </svg>
-${onSiteHomepage() ? `<span class="hide-caret" aria-hidden="true">&#9662;</span>` : ""}
+<span class="hide-caret" aria-hidden="true">&#9662;</span>
 </button>
 </span>
 <button id="settings-toggle" aria-label="Open Backchannel settings" title="Backchannel settings" aria-expanded="false" aria-controls="settings-panel">
@@ -11054,12 +11197,15 @@ ${
 	// 36px icon square, which is right for the three controls and would squeeze
 	// these two labels into 36px. It is positioned against the header rather than
 	// against anything in the row, so where it sits in the markup costs nothing.
-	onSiteHomepage()
-		? `<div id="hide-menu" class="hide-menu" role="menu" hidden>
+	//
+	// Always asked, everywhere. It was offered only on a front page, where the two
+	// readings are most obviously different -- but they are different on every
+	// page, and a control that is a menu here and a button there is two controls
+	// wearing one glyph.
+	`<div id="hide-menu" class="hide-menu" role="menu" hidden>
 <button type="button" role="menuitem" data-hide-scope="page">Hide on this page only</button>
 <button type="button" role="menuitem" data-hide-scope="site">Hide on all ${escapeHTML(siteKey())} pages</button>
 </div>`
-		: ""
 }
 
 </header>
@@ -11442,10 +11588,21 @@ ${[
 
 		// Single place the open state changes, so the button's pressed styling and
 		// aria-expanded cannot drift out of sync with the panel.
+		// Assigned when the hide menu is wired, further down. Declared here because
+		// the two dropdowns have to be able to close each other and only one of them
+		// can be defined first.
+		let setHideMenuOpen = () => {};
+
 		const setSettingsOpen = (open) => {
 			settingsPanel.classList.toggle("hidden", !open);
 			settingsToggle.classList.toggle("is-open", open);
 			settingsToggle.setAttribute("aria-expanded", open ? "true" : "false");
+
+			// The other half of the pair. Opening settings over an open hide menu left
+			// two dropdowns down at once, one of them stacked behind the other.
+			if (open) {
+				setHideMenuOpen(false);
+			}
 
 			// Measured only while visible: scrollHeight reads 0 under display:none,
 			// which is why this runs after the class toggle rather than before it.
@@ -11469,36 +11626,40 @@ ${[
 		// Wired here rather than per-surface because this is the one function both
 		// the sidebar header and the submit popover header pass through.
 		const hideSiteButton = shadow.querySelector("#hide-site");
-
 		const hideMenu = shadow.querySelector("#hide-menu");
 
-		if (hideSiteButton) {
+		// The same three things setSettingsOpen does, for the same reason: the
+		// panel, the button's lit state and what a screen reader is told cannot
+		// disagree about whether a menu is open.
+		setHideMenuOpen = (open) => {
+			if (!hideMenu || !hideSiteButton) {
+				return;
+			}
+
+			hideMenu.hidden = !open;
+			hideSiteButton.classList.toggle("is-open", open);
+			hideSiteButton.setAttribute("aria-expanded", open ? "true" : "false");
+		};
+
+		setHideMenuOpen(false);
+
+		if (hideSiteButton && hideMenu) {
 			hideSiteButton.onclick = (event) => {
 				event.preventDefault();
 				event.stopPropagation();
 
-				// Off a front page there is only one thing this can mean, so it does it.
-				if (!hideMenu) {
-					hideCurrentSite("page").catch(console.error);
-
-					return;
-				}
-
 				const opening = hideMenu.hidden;
 
 				// Two dropdowns in one header row, and only one of them can be the
-				// thing being answered. Settings gives way rather than being stacked
-				// under.
+				// thing being answered. Settings gives way here; setSettingsOpen
+				// returns the favour.
 				if (opening) {
 					setSettingsOpen(false);
 				}
 
-				hideMenu.hidden = !opening;
-				hideSiteButton.setAttribute("aria-expanded", String(opening));
+				setHideMenuOpen(opening);
 			};
-		}
 
-		if (hideMenu) {
 			for (const choice of hideMenu.querySelectorAll("[data-hide-scope]")) {
 				choice.onclick = (event) => {
 					event.preventDefault();
@@ -11515,8 +11676,7 @@ ${[
 					return;
 				}
 
-				hideMenu.hidden = true;
-				hideSiteButton?.setAttribute("aria-expanded", "false");
+				setHideMenuOpen(false);
 			});
 		}
 
@@ -19185,12 +19345,25 @@ title="Show only this discussion">
 					return;
 				}
 
-				// No source turned anything up, which is exactly what a page with no
-				// discussion has always looked like: the grey button, offering to
-				// submit. Keeping the panel open around a message would be a third
-				// state that says less than the button it replaced.
+				// No source turned anything up. That used to mean the panel had nothing
+				// left to be, so it was torn down for the grey button -- true while a
+				// panel could only ever be one page's discussion.
+				//
+				// It is not true now. There is a front page and a queue behind the
+				// wordmark, and the grey button opens onto them rather than offering to
+				// submit, so closing the panel here takes away the thing the reader was
+				// most likely sent to and may well be reading: switching a source off
+				// while looking at the front page closed the front page. It steps back
+				// to browse instead, and only tears down when there is nothing behind
+				// the wordmark either.
 				if (!discussions.length) {
 					sidebarHasDiscussion = false;
+
+					if (frontPageAvailable || queueHasItems) {
+						setBrowseMode(ui, true);
+						return;
+					}
+
 					teardownSurfaces();
 					await runPagePass();
 					return;
