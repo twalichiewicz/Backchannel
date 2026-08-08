@@ -39,7 +39,13 @@ Constellation names. No account is needed and neither host sets a cookie.
 - Lobsters sends only the domain of each page you visit to lobste.rs, to find that domain's submissions. Signed in or out, the request
 carries no account.
 - Wikipedia sends the pages you visit to Wikipedia's API, to find the Talk and
-project pages that link them. No account, signed in or out.
+project pages that link them, and then reads what was said on them. No account,
+signed in or out.
+- Mastodon sends only the domain of each page you visit to Tootfinder, an opt-in
+index of Mastodon posts, not to Mastodon. It holds only people who chose to be
+searchable, so it finds a slice of the fediverse rather than all of it. The front
+page asks mastodon.social what it's currently linking to, which tells it nothing
+about you. No account, signed in or out.
 - Lemmy sends the pages you visit to lemmy.world, a large instance whose
 federation reaches across the wider network. No account, signed in or out.
 
@@ -68,7 +74,7 @@ preferences all carry over untouched.
 2. [Install Backchannel](https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js)
    - *Upgrading from HNewhere?* Let it auto-update and it renames itself. If you
      install from this link instead, delete the old **HNewhere** entry afterwards.
-3. Browse the web as usual. If a thread exists for that page the (BC) button lights up. Clicking it opens the sidebar. Still grey? Nobody's posted it yet-- click to submit it yourself.
+3. Browse the web as usual. If a thread exists for that page the (BC) button lights up. Clicking it opens the sidebar. Still grey? Nobody's posted it yet-- click to open the front page and see what they are talking about instead, or submit it yourself from there.
 
 ## Contributing
 
