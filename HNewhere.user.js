@@ -2595,6 +2595,97 @@
 		};
 	}
 
+	// A facet's uri is somebody else's JSON, and the lexicon does not stop a client
+	// writing a scheme that runs rather than navigates. sanitizeHTML refuses one at
+	// render time; refusing it here as well means bodyHTML never carries one to
+	// begin with, and the text still shows -- just not as a link.
+	function bskyLinkURI(uri) {
+		try {
+			const protocol = new URL(String(uri)).protocol;
+
+			return protocol === "http:" || protocol === "https:" ? String(uri) : null;
+		} catch {
+			return null;
+		}
+	}
+
+	// Where a facet feature points. A link states its address; the other two state
+	// an identity and the address is Bluesky's own page for it. A mention is
+	// addressed by did rather than by the handle in the text, because a handle is
+	// rented -- it moves, and the text keeps whatever it said on the day.
+	function bskyFacetHref(feature) {
+		switch (feature?.$type) {
+			case "app.bsky.richtext.facet#link":
+				return bskyLinkURI(feature.uri);
+			case "app.bsky.richtext.facet#mention":
+				return feature.did ? "https://bsky.app/profile/" + feature.did : null;
+			case "app.bsky.richtext.facet#tag":
+				return feature.tag
+					? "https://bsky.app/hashtag/" + encodeURIComponent(feature.tag)
+					: null;
+			default:
+				return null;
+		}
+	}
+
+	// A post's text carries Bluesky's own truncated display form of a link --
+	// `simonwillison.net/2026/Aug/7/o...` -- and the address itself lives only in
+	// the facet beside it. Rendering the text alone names a page nobody can reach.
+	function bskyRichText(text, facets) {
+		const source = String(text || "");
+		const ranges = (facets || [])
+			.map((facet) => ({
+				start: facet?.index?.byteStart,
+				end: facet?.index?.byteEnd,
+				// First recognised feature wins. A facet may carry several, and the
+				// range is one stretch of text that can only be one link.
+				uri: (facet?.features || []).map(bskyFacetHref).find(Boolean) || null,
+			}))
+			.filter(
+				(range) =>
+					range.uri &&
+					Number.isInteger(range.start) &&
+					Number.isInteger(range.end) &&
+					range.start < range.end,
+			)
+			.sort((left, right) => left.start - right.start);
+
+		if (!ranges.length) {
+			return escapeHTML(source);
+		}
+
+		// The ranges are byte offsets into the UTF-8 encoding, and the string they
+		// index is UTF-16. One emoji ahead of a link is enough to separate the two --
+		// 🦕 is four bytes and two units -- so the text is encoded once and cut in the
+		// units the offsets are actually written in. Cutting the string on a byte
+		// offset instead takes "gi" off the front of a link and leaves it behind in
+		// the sentence, which is a corruption that reads like a typo.
+		const bytes = new TextEncoder().encode(source);
+		const decoder = new TextDecoder();
+		const cut = (start, end) =>
+			decoder.decode(bytes.subarray(start, Math.min(end, bytes.length)));
+
+		let html = "";
+		let cursor = 0;
+
+		for (const range of ranges) {
+			// Out of order or overlapping ranges are not something Bluesky sends, but
+			// the record is somebody else's data and a negative slice would silently
+			// repeat the text between them.
+			if (range.start < cursor || range.start >= bytes.length) {
+				continue;
+			}
+
+			html += escapeHTML(cut(cursor, range.start));
+			html += `<a target="_blank" rel="noopener noreferrer" href="${escapeHTML(
+				range.uri,
+			)}">${escapeHTML(cut(range.start, range.end))}</a>`;
+			cursor = Math.min(range.end, bytes.length);
+		}
+
+		return html + escapeHTML(cut(cursor, bytes.length));
+	}
+
 	// Bluesky publishes a like count per post, so unlike HN there is a real number
 	// to report and it is not invented. A post and a reply are the same record
 	// type, which is why one mapper serves both.
@@ -2608,10 +2699,7 @@
 			discussionKey: discussion?.key,
 			parentKey: parentKey || null,
 			author: post?.author?.handle || "",
-			// Bluesky's rich-text facets are dropped here, so a link inside a post
-			// renders as text rather than an anchor. A deliberate first cut, and the
-			// reason this escapes rather than sanitizes.
-			bodyHTML: escapeHTML(post?.record?.text || ""),
+			bodyHTML: bskyRichText(post?.record?.text, post?.record?.facets),
 			score: post?.likeCount ?? 0,
 			createdAt: bskyTime(post),
 			// No OP on Bluesky. Discovery aggregates many people's separate posts
