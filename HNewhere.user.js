@@ -1913,7 +1913,266 @@
 		return { rootKeys, byKey, hiddenCount: 0, rootMore: null };
 	}
 
-	// Wikipedia has no comment API. exturlusage names the Talk and Project pages
+	// Which comments on a Talk page are about the page the reader is on. A Talk
+	// page is a discussion of the Wikipedia article, not of the link -- Talk:
+	// Fediverse is 124 comments about editing that article, of which two cite
+	// fediverse.party. Those two are what somebody arriving from fediverse.party
+	// came to read, and the other 122 are a different conversation.
+	//
+	// Matched through normalizeURL on both sides, the same equality exturlusage's
+	// own rows are held to, so a trailing slash or a tracking parameter does not
+	// decide whether a citation counts.
+	function wikipediaCitingComments(items, targetURL) {
+		const target = normalizeURL(targetURL);
+
+		if (!target) {
+			return [];
+		}
+
+		const found = [];
+
+		const cites = (html) => {
+			for (const match of String(html || "").matchAll(/href="([^"]*)"/g)) {
+				// The href arrives HTML-escaped inside a JSON string, so a query with
+				// more than one parameter reads as &amp; and parses as a different URL.
+				if (normalizeURL(match[1].replace(/&amp;/g, "&")) === target) {
+					return true;
+				}
+			}
+
+			return false;
+		};
+
+		const walk = (list) => {
+			for (const item of list || []) {
+				if (item?.type === "comment" && cites(item.html)) {
+					found.push(item);
+				}
+
+				walk(item?.replies);
+			}
+		};
+
+		walk(items);
+
+		return found;
+	}
+
+	// What `~~~~` expands to at the end of every signed comment: a link to the
+	// editor's user page, usually a talk or contributions link beside it, and the
+	// time. DiscussionTools recognises a comment *by* parsing that timestamp, so
+	// it is on all 124 comments of the page these were measured against and will
+	// be on every comment this source ever renders.
+	//
+	// The panel already puts the author and the age on the line above, so left in
+	// it says both twice and closes each comment on a restatement of its own
+	// header.
+	const WIKIPEDIA_SIGNATURE_TIME = /\d{1,2}:\d{2},\s+\d{1,2}\s+\w+\s+\d{4}\s+\(UTC[^)]*\)\s*$/;
+	const WIKIPEDIA_SIGNATURE_LINK =
+		/^(?:\.\/|https:\/\/en\.wikipedia\.org\/wiki\/)(?:User:|User_talk:|Special:Contributions\/)/;
+	// The punctuation a signature is assembled from -- "(talk | contribs)" and the
+	// dash some editors put in front of their name. Letters and digits are prose.
+	const WIKIPEDIA_SIGNATURE_PUNCTUATION = /[^\s(),|·—–\- ]/;
+
+	function isWikipediaSignaturePart(node) {
+		if (node.nodeType === Node.TEXT_NODE) {
+			return !WIKIPEDIA_SIGNATURE_PUNCTUATION.test(node.textContent);
+		}
+
+		if (node.nodeType !== Node.ELEMENT_NODE) {
+			return true;
+		}
+
+		if (node.tagName === "A") {
+			return WIKIPEDIA_SIGNATURE_LINK.test(node.getAttribute("href") || "");
+		}
+
+		// The wrappers editors decorate a signature with. Only when everything
+		// inside is itself signature, so a <small> holding a real aside stays.
+		if (["SMALL", "SPAN", "B", "I", "SUB", "SUP", "BDI"].includes(node.tagName)) {
+			return [...node.childNodes].every(isWikipediaSignaturePart);
+		}
+
+		return false;
+	}
+
+	// Anchored on the timestamp and worked backwards, rather than matched as one
+	// pattern: the signature is not a contiguous run of text. The timestamp sits in
+	// a text node while the names beside it are sibling elements, so a regex over
+	// the markup would either miss the links or take markup with them. Walking back
+	// from the timestamp stops the moment it reaches something that is not part of
+	// a signature, which is the prose.
+	function wikipediaStripSignature(html) {
+		const template = document.createElement("template");
+
+		template.innerHTML = String(html || "");
+
+		const walker = document.createTreeWalker(
+			template.content,
+			NodeFilter.SHOW_TEXT,
+		);
+
+		let last = null;
+
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+			if (node.textContent.trim()) {
+				last = node;
+			}
+		}
+
+		const match = last && WIKIPEDIA_SIGNATURE_TIME.exec(last.textContent);
+
+		// No timestamp at the end is no signature, and the comment is returned
+		// exactly as it arrived rather than trimmed on a guess.
+		if (!match) {
+			return String(html || "");
+		}
+
+		last.textContent = last.textContent.slice(0, match.index);
+
+		let cursor = last.previousSibling;
+
+		// "(talk) 15:29, …" leaves ") " behind once the time is gone.
+		if (!WIKIPEDIA_SIGNATURE_PUNCTUATION.test(last.textContent)) {
+			last.remove();
+		}
+
+		while (cursor && isWikipediaSignaturePart(cursor)) {
+			const previous = cursor.previousSibling;
+
+			cursor.remove();
+			cursor = previous;
+		}
+
+		// The separator that introduced the signature -- "…the Fediverse. —" -- is
+		// left dangling once the name after it goes. A full stop is the sentence's
+		// own and stays.
+		if (cursor?.nodeType === Node.TEXT_NODE) {
+			cursor.textContent = cursor.textContent.replace(/[\s—–\-|·]+$/, "");
+		}
+
+		return template.innerHTML;
+	}
+
+	// Parsoid writes wiki links relative to the wiki -- `./User:Wesleyac` -- and on
+	// a Talk page they outnumber external ones several times over. sanitizeHTML
+	// resolves an href against location.origin, so left as they are every one of
+	// them points at whatever site the reader is on rather than at Wikipedia,
+	// which is not broken so much as quietly wrong.
+	//
+	// Only the leading `./` form is rewritten. Anything else Parsoid emits -- the
+	// `mw-data:` stylesheet references, say -- is left for sanitizeHTML to refuse,
+	// which it does by keeping the text and dropping the anchor.
+	function wikipediaAbsoluteLinks(html) {
+		return String(html || "").replace(
+			/href="\.\/([^"]*)"/g,
+			(_, path) => `href="https://en.wikipedia.org/wiki/${path}"`,
+		);
+	}
+
+	// One DiscussionTools item as a comment. MediaWiki builds the id from the
+	// author, the timestamp and the comment replied to, which makes it stable
+	// under replies arriving above it -- unlike a position in the tree -- and the
+	// same on every page carrying that comment. That last part is what identity
+	// wants here: a deletion log transcludes the discussions it lists and an
+	// archive is a copy of the page it was cut from, so one comment is reached
+	// through several pages and is still one comment. Keyed on the id alone, the
+	// copies land on top of each other, which is the answer.
+	function wikipediaComment(item, discussion, parentKey) {
+		return {
+			source: "wikipedia",
+			key: sourceKey("wikipedia", item?.id || ""),
+			id: item?.id || "",
+			discussionKey: discussion?.key,
+			parentKey: parentKey || null,
+			author: item?.author || "",
+			bodyHTML: wikipediaAbsoluteLinks(wikipediaStripSignature(item?.html)),
+			// No voting on a Talk page, so there is no number to report and one
+			// would be invented. null is omitted by the renderer, never shown as
+			// zero.
+			score: null,
+			createdAt: Math.floor(Date.parse(item?.timestamp || "") / 1000) || 0,
+			// The article's editors are not an OP; a Talk page was not submitted by
+			// anybody, the same reason the Bluesky collective marks none.
+			isOP: false,
+			deleted: false,
+			replyKeys: [],
+		};
+	}
+
+	// One linking page as roots and a lookup map, the shape every loadThread
+	// returns. Roots are the comments that cite this URL; each brings the
+	// conversation that grew under it, because a reply to the citation is part of
+	// what was said about the link.
+	//
+	// Nothing cited means no roots, not an invented one: the link is in the
+	// article body, a template, or an archived form the citation index still
+	// matches. Naming the page is the caller's fallback, which is what it did for
+	// every page before this.
+	// `seen` is shared across the pages of one discussion, so a comment reached
+	// through two of them is taken by the first and skipped by the rest. Wikipedia
+	// makes that ordinary rather than rare: the deletion log for a day transcludes
+	// every discussion it lists, so one AfD's 28 comments are also 28 of the log
+	// page's 1177, under the same ids. Left alone the reader gets everything twice.
+	//
+	// Defaulted, so a caller with a single page to judge needs no set and gets the
+	// page judged on its own.
+	function indexWikipediaPage(items, discussion, targetURL, seen = new Set()) {
+		const byKey = new Map();
+		const rootKeys = [];
+
+		const absorb = (item, parentKey) => {
+			const comment = wikipediaComment(item, discussion, parentKey);
+
+			if (seen.has(comment.key)) {
+				return null;
+			}
+
+			seen.add(comment.key);
+			byKey.set(comment.key, comment);
+
+			for (const reply of item?.replies || []) {
+				// A heading carries no author and no timestamp, so it is not a comment
+				// and rendering one would put an empty line in the thread. Its own
+				// replies are still conversation, so they are lifted to where the
+				// heading sat.
+				const children =
+					reply?.type === "comment" ? [reply] : reply?.replies || [];
+
+				for (const child of children) {
+					if (child?.type !== "comment") {
+						continue;
+					}
+
+					const absorbed = absorb(child, comment.key);
+
+					if (absorbed) {
+						comment.replyKeys.push(absorbed.key);
+					}
+				}
+			}
+
+			return comment;
+		};
+
+		const citing = wikipediaCitingComments(items, targetURL);
+
+		for (const item of citing) {
+			const root = absorb(item, null);
+
+			if (root) {
+				rootKeys.push(root.key);
+			}
+		}
+
+		// `cited` is not rootKeys.length. A page whose every citing comment was
+		// already taken by an earlier page cited the URL and contributes no rows,
+		// and the caller has to tell that from a page where nothing cited it at
+		// all -- only the second is worth naming as a bare link.
+		return { rootKeys, byKey, cited: citing.length };
+	}
+
+	// exturlusage names the Talk and Project pages
 	// that link a URL, and prop=revisions dates each -- so the source is one
 	// Bluesky-style collective whose roots are those pages, newest edit first. The
 	// per-page data rides on the discussion because the roots are known here and
@@ -3737,6 +3996,13 @@ ${
 		},
 	});
 
+	// How many linking pages get asked what was said on them. One request each, and
+	// the count exturlusage returns is long-tailed -- measured across ten URLs the
+	// median was 3 pages and the worst was 74. Ten covers the ordinary case whole
+	// and stops the tail from spending a reader's whole load on citations nobody
+	// scrolls to.
+	const WIKIPEDIA_THREAD_PAGES = 10;
+
 	async function wikipediaJSON(url) {
 		const result = await requestWithMeta(url);
 
@@ -3784,6 +4050,12 @@ ${
 		caveat:
 			"Will send each page you visit to Wikipedia's API to find pages that link it. No account, signed in or out.",
 		capabilities: { vote: false, reply: false, submit: false },
+
+		// Now that the comments are real, so are the people who left them. An
+		// unregistered editor signs with an IP address, which has a user page like
+		// any other name, so this needs no special case for them.
+		profileURL: (author) =>
+			"https://en.wikipedia.org/wiki/User:" + encodeURIComponent(author),
 
 		async discover(url) {
 			const target = normalizeURL(url);
@@ -3836,22 +4108,77 @@ ${
 			return collective ? [collective] : [];
 		},
 
+		// The pages are known from discovery; what was said on them is not, and this
+		// is where it arrives. One request per page, so the list is capped: a URL
+		// cited by ninety Talk pages would otherwise be ninety requests before a
+		// word rendered. Newest first, so the cap falls on the stalest pages.
 		async loadThread(discussion) {
 			const byKey = new Map();
+			const rootKeys = [];
+			const rootTimes = new Map();
 
-			for (const page of discussion.wikiPages || []) {
-				const comment = wikipediaRootComment(page, discussion);
-				byKey.set(comment.key, comment);
-			}
+			const pages = [...(discussion.wikiPages || [])].sort(
+				(left, right) => (right.time || 0) - (left.time || 0),
+			);
+			const asked = pages.slice(0, WIKIPEDIA_THREAD_PAGES);
+			const threads = await Promise.all(
+				asked.map((page) =>
+					wikipediaJSON(
+						`https://en.wikipedia.org/w/api.php?action=discussiontoolspageinfo&page=${encodeURIComponent(
+							page.title,
+						)}&prop=threaditemshtml&format=json&formatversion=2`,
+					),
+				),
+			);
+
+			// One set for the whole discussion, so the pages are deduplicated against
+			// each other in the order they are walked -- newest edit first.
+			const seen = new Set();
+
+			pages.forEach((page, index) => {
+				const items =
+					index < asked.length
+						? threads[index]?.discussiontoolspageinfo?.threaditemshtml
+						: null;
+				const indexed = items
+					? indexWikipediaPage(items, discussion, discussion.articleURL, seen)
+					: { rootKeys: [], byKey: new Map(), cited: 0 };
+
+				// No comment cited it, or the page fell past the cap, or the request
+				// failed. Naming the page is what this source did for every page before
+				// it could read Talk comments at all, so the row is still there and
+				// still leads somewhere.
+				//
+				// A page that cited it and contributed nothing is the other case: its
+				// comments are already on screen, put there by the page that reached
+				// them first, and naming it as well would trade duplicate comments for
+				// a duplicate row.
+				if (!indexed.rootKeys.length && !indexed.cited) {
+					const fallback = wikipediaRootComment(page, discussion);
+
+					byKey.set(fallback.key, fallback);
+					rootKeys.push(fallback.key);
+					rootTimes.set(fallback.key, page.time || 0);
+
+					return;
+				}
+
+				for (const [key, comment] of indexed.byKey) {
+					byKey.set(key, comment);
+				}
+
+				for (const key of indexed.rootKeys) {
+					rootKeys.push(key);
+					// The comment's own time, not the page's last edit. A citation from
+					// 2018 on a page edited yesterday is 2018 news, and dating it
+					// yesterday would sort it above everything actually recent.
+					rootTimes.set(key, byKey.get(key)?.createdAt || page.time || 0);
+				}
+			});
 
 			return {
-				rootKeys: discussion.rootKeys,
-				rootTimes: new Map(
-					(discussion.rootKeys || []).map((key, index) => [
-						key,
-						discussion.rootTimes?.[index] || 0,
-					]),
-				),
+				rootKeys,
+				rootTimes,
 				async getComment(key) {
 					return byKey.get(key) || null;
 				},
