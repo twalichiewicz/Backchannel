@@ -11247,7 +11247,18 @@ ${[
 	position:fixed;
 	right:0;
 	top:0;
+	/* 100vh is the *large* viewport: on a phone it is the height the page would
+	   have with the browser's chrome collapsed, whether or not it currently is.
+	   Fixed to the top at that height, the foot of the panel sits behind the URL
+	   bar, and scrolling the list to its end cannot bring it back -- the end is
+	   below the screen, not below the scroll. The last thing in the list is what
+	   goes missing, which on the front page is the More button.
+
+	   dvh is the visible viewport and follows the chrome as it comes and goes.
+	   The vh line stays as the fallback: a browser that does not know dvh drops
+	   the second declaration and keeps the first, which is today's behaviour. */
 	height:100vh;
+	height:100dvh;
 	width:${width}px;
 	min-width:${isPortraitPhone() ? "0" : "280px"};
 	max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "80vw"};
@@ -11427,8 +11438,13 @@ ${CHROME_CSS}
 		scrollbar over the foot of the list -- and 8px was not enough to scroll the
 		last comment clear of it, which read as the thread being cut off. It also
 		gives a long thread somewhere to end: a list that stops flush against the
-		edge looks truncated even when it is complete. */
-	padding:12px 12px 32px;
+		edge looks truncated even when it is complete.
+
+		The inset is for the home indicator, which dvh does not account for -- it
+		is drawn over the visible viewport rather than subtracted from it, and it
+		is 34px on the phones that have one, which is more than the 32px here.
+		Resolves to zero everywhere else, so this is the same 32px on a desktop. */
+	padding:12px 12px calc(32px + env(safe-area-inset-bottom, 0px));
 	word-wrap:break-word;
 }
 
