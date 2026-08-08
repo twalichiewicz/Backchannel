@@ -4410,7 +4410,7 @@ ${
 		// page asks mastodon.social about mastodon.social and carries nothing about
 		// the reader at all.
 		caveat:
-			"Will send the domain of each page you visit to Tootfinder, an opt-in index of Mastodon posts, not to Mastodon. It indexes only people who chose to be searchable, so it finds a slice of the fediverse rather than all of it. Signed in or out, these requests carry no account.",
+			"Will send the domain of each page you visit to Tootfinder, an opt-in index of Mastodon posts. It indexes only people who chose to be searchable. Signed in or out, these requests carry no account.",
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => {
@@ -7393,14 +7393,21 @@ ${
 			.filter((each) => each.permalink)
 			.map(
 				(each) =>
+					// "167 HN comments", not "(HN) 167 comments": the source is an
+					// adjective on the count, and reading it as one puts the words in the
+					// order they would be said aloud.
 					`<a class="browse-comments-link" href="${escapeHTML(each.permalink)}"
-	target="_blank" rel="noopener noreferrer">${
+	target="_blank" rel="noopener noreferrer">${escapeHTML(
 		labelled
-			? `<span class="browse-comments-source">(${escapeHTML(sourceShortLabel(each))})</span> `
-			: ""
-	}${escapeHTML(pluralize(each.descendants, "comment"))}</a>`,
+			? `${each.descendants} ${sourceShortLabel(each)} ${
+					each.descendants === 1 ? "comment" : "comments"
+				}`
+			: pluralize(each.descendants, "comment"),
+	)}</a>`,
 			)
-			.join(`<span class="browse-comments-sep">·</span>`);
+			// The same pipe HN separates the rest of a subline with, rather than a
+			// middot this row would be alone in using.
+			.join(`<span class="browse-comments-sep">|</span>`);
 
 		// Only where the reader has an account that can act. Every source declares
 		// its capabilities, and HN is the only one with any -- so flag and favorite
@@ -7570,6 +7577,19 @@ ${
 	// A reader with only Bluesky and Wikipedia enabled is in exactly that position,
 	// and correctly: neither ranks URLs, so neither has a front page, and the tab
 	// is as absent as it is with everything off.
+	// Whether anything switched on can take a submission, which is what decides
+	// whether the front page offers to make one. Read from the settings rather
+	// than from the rendered view, and called from both the render and the moment
+	// a source is toggled -- switching Hacker News off with the front page already
+	// open has to withdraw the offer there and then, not at the next render.
+	async function refreshSubmitAffordance(root) {
+		const button = root?.querySelector?.("#browse-submit");
+
+		if (button) {
+			button.hidden = !submitTargetFor(await loadSettings());
+		}
+	}
+
 	async function refreshBrowseAffordances(root) {
 		const frontTab = root?.querySelector?.("#browse-tab-front");
 		const wordmark = root?.querySelector?.("#browse-toggle");
@@ -8213,6 +8233,13 @@ ${
 		// wordmark -- "Backchannel" is where you are. The queue is a step off it and
 		// says so.
 		setWordmarkLocation(ui, browseTab === "queue" ? "Queue" : "");
+
+		// Offered only where it can be honoured. Hacker News is the one source that
+		// takes a submission, so with it switched off this button's whole form would
+		// be a sentence explaining why there is no form. Decided here rather than
+		// when the button was wired, because sources can be switched off while the
+		// panel is open and the answer changes with them.
+		await refreshSubmitAffordance(ui.shadow);
 
 		refreshQueueCount(ui.shadow);
 
@@ -8975,6 +9002,12 @@ header {
 	align-items:center;
 	gap:8px;
 	font-weight:bold;
+	/* The containing block for the hide menu. It used to hang off the eye itself,
+	   and an absolutely positioned box shrink-fits against its containing block --
+	   so a menu anchored to a 36px icon was 46px wide with its labels spilling out
+	   of it. The header is the width of the panel, which is the room the menu
+	   actually has. */
+	position:relative;
 }
 
 /* Scoped to the action row rather than to every button in the header. It
@@ -9008,11 +9041,9 @@ header {
 	}
 }
 
-/* The eye and the choice behind it. Positioned so the menu hangs from the eye
-   rather than from the header, which is what keeps it under the control that
-   opened it when the panel is resized. */
+/* The eye and the choice behind it. Deliberately not the menu's containing
+   block -- see the note on header. */
 .hide-control {
-	position:relative;
 	display:inline-flex;
 }
 
@@ -9021,7 +9052,7 @@ header {
    caret with its own hit area would be a second control saying the same thing. */
 .hide-caret {
 	margin-left:1px;
-	font-size:9px;
+	font-size:18px;
 	line-height:1;
 }
 
@@ -9031,12 +9062,24 @@ header {
 
 .hide-menu {
 	position:absolute;
+	/* Measured from the header's own box, so it clears the bar by the same 4px
+	   whatever the header's height turns out to be. Right-aligned to sit under the
+	   controls it belongs to rather than under the wordmark. */
 	top:calc(100% + 4px);
-	right:0;
-	z-index:3;
+	right:8px;
+	/* Above the settings panel, which is also absolute in this header at z-index
+	   3. Opened with settings already down, this used to arrive behind it. */
+	z-index:5;
 	display:flex;
 	flex-direction:column;
+	/* Both, deliberately. min-width alone lets a flex column shrink-wrap to its
+	   widest child's *available* width rather than its content's, which wrapped
+	   "Hide on all www.macrumors.com pages" onto two lines inside a box sized for
+	   one. width states the intent; max-width keeps a very long host from running
+	   off the panel. */
+	width:max-content;
 	min-width:max-content;
+	max-width:min(20rem, 82vw);
 	padding:4px;
 	border:1px solid var(--surface-border);
 	border-radius:6px;
@@ -9109,11 +9152,12 @@ header {
 	transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
 }
 
-/* The way back to the discussion, which is a separate question from where the
-   trail says you are: both the front page and the submit form are places you
-   went from a discussion, and both need the way back. */
-#panel.browsing .wordmark-chevron,
-#panel.submitting .wordmark-chevron {
+/* Only where there is somewhere to go back to. The front page is the root and
+   names nothing after the wordmark, so a chevron there points at nothing; the
+   queue, the submit form and a discussion are all a step off it and each says so
+   in the trail. Keyed on has-trail for exactly that reason -- the trail and the
+   chevron are answering the same question and cannot disagree. */
+#panel.has-trail .wordmark-chevron {
 	width:9px;
 	margin-right:5px;
 	opacity:1;
@@ -9374,14 +9418,6 @@ header {
 	color:var(--meta);
 }
 
-/* The quieter half of the pair. The count is what the row is offering and the
-   name only says whose, so it takes the same treatment as the site after a
-   title -- parenthesised, in the meta colour -- because it is the same kind of
-   aside. Inside the link rather than beside it: it describes that link, and
-   splitting them would put two targets where the reader sees one thing. */
-.browse-comments-source {
-	color:var(--meta);
-}
 
 /* Which front pages this list came from, as a byline under the tab rather than a
    footnote after the rows. 'front pages' names the place and this names the
@@ -9424,23 +9460,24 @@ header {
 	display:none;
 }
 
+/* The same button as the one that finishes the job on the form it opens. It is
+   the same action at two points in it, and two treatments would read as two
+   different things. Values restated rather than shared because .submit-actions
+   is scoped to that row; if you change one, change both. */
 .browse-submit {
 	margin:-6px 0 10px auto;
-	padding:2px 8px;
+	padding:5px 10px;
 	flex:0 0 auto;
-	font:600 11px Verdana, Geneva, sans-serif;
-	color:var(--button-text);
-	background:var(--button-bg);
-	border:1px solid var(--button-border);
+	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	color:white;
+	background:var(--accent);
+	border:1px solid var(--accent);
 	border-radius:4px;
 	cursor:pointer;
 }
 
-@media (hover: hover) {
-	.browse-submit:hover {
-		border-color:var(--accent);
-		color:var(--accent);
-	}
+.browse-submit[hidden] {
+	display:none;
 }
 
 /* A rank column wide enough for two digits and the stop after them, which is
@@ -10291,7 +10328,12 @@ header button svg {
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
-	max-height:8rem;
+	/* A ceiling for the collapse to animate against, not a size. It has to clear
+	   the longest caveat any source writes -- Reddit's runs to thirteen lines in
+	   this column -- because overflow is hidden and anything past it is a sentence
+	   cut in half rather than a sentence scrolled. max-height cannot animate from
+	   "none", which is why this is a number at all. */
+	max-height:24rem;
 	overflow:hidden;
 	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
 }
@@ -10982,14 +11024,6 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </svg>
 ${onSiteHomepage() ? `<span class="hide-caret" aria-hidden="true">&#9662;</span>` : ""}
 </button>
-${
-	onSiteHomepage()
-		? `<div id="hide-menu" class="hide-menu" role="menu" hidden>
-<button type="button" role="menuitem" data-hide-scope="page">Hide on this page</button>
-<button type="button" role="menuitem" data-hide-scope="site">Hide on ${escapeHTML(siteKey())}</button>
-</div>`
-		: ""
-}
 </span>
 <button id="settings-toggle" aria-label="Open Backchannel settings" title="Backchannel settings" aria-expanded="false" aria-controls="settings-panel">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -11006,6 +11040,18 @@ ${
 		: ""
 }
 </div>
+${
+	// Outside the action row on purpose. That row styles every button in it as a
+	// 36px icon square, which is right for the three controls and would squeeze
+	// these two labels into 36px. It is positioned against the header rather than
+	// against anything in the row, so where it sits in the markup costs nothing.
+	onSiteHomepage()
+		? `<div id="hide-menu" class="hide-menu" role="menu" hidden>
+<button type="button" role="menuitem" data-hide-scope="page">Hide on this page only</button>
+<button type="button" role="menuitem" data-hide-scope="site">Hide on all ${escapeHTML(siteKey())} pages</button>
+</div>`
+		: ""
+}
 
 </header>
 `;
@@ -11431,6 +11477,13 @@ ${[
 
 				const opening = hideMenu.hidden;
 
+				// Two dropdowns in one header row, and only one of them can be the
+				// thing being answered. Settings gives way rather than being stacked
+				// under.
+				if (opening) {
+					setSettingsOpen(false);
+				}
+
 				hideMenu.hidden = !opening;
 				hideSiteButton.setAttribute("aria-expanded", String(opening));
 			};
@@ -11488,6 +11541,11 @@ ${[
 						[sourceInput.dataset.source]: sourceInput.checked,
 					},
 				});
+
+				// The front page may be the thing on screen, and it is not what
+				// refreshForSourceChange re-renders. Whether it offers to submit
+				// depends on what is switched on, so it is answered here too.
+				await refreshSubmitAffordance(shadow);
 
 				// A source turned on mid-visit has never been looked up for this page,
 				// and one turned off may be on screen. Re-running the whole decision is
@@ -12933,7 +12991,7 @@ ${settingsPanelHTML()}
 </div>
 <div class="browse-blend-row">
 <div id="browse-blend-note" class="browse-blend-note" hidden></div>
-<button id="browse-submit" class="browse-submit" type="button">Submit</button>
+<button id="browse-submit" class="browse-submit" type="button" hidden>Submit</button>
 </div>
 <div id="browse-list"></div>
 </div>
