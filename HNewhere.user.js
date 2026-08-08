@@ -53,6 +53,8 @@
 // @connect      lobste.rs
 // @connect      en.wikipedia.org
 // @connect      lemmy.world
+// @connect      mastodon.social
+// @connect      www.tootfinder.ch
 // @run-at       document-end
 // @noframes
 // ==/UserScript==
@@ -1800,6 +1802,129 @@
 			isOP: Boolean(data.is_submitter),
 			deleted: data.author === "[deleted]" && !data.body_html,
 			replyKeys: [],
+		};
+	}
+
+	// Mastodon answers two different questions with two different endpoints, and
+	// only one of them is Mastodon's own. /api/v1/trends/links is official and
+	// needs no account: it is what an instance is currently linking to, with a
+	// count of the people doing it. Discovery is the other way round -- status
+	// search requires an account, so it goes through an opt-in third-party index
+	// and is domain-wide, which makes the exact-URL comparison the answer and the
+	// query only a hint. Lobsters already works exactly that way.
+
+	// `accounts`, not `uses`. One account posting a link nine times is not nine
+	// people finding it worth posting, and the whole point of a ranking is to say
+	// how many people thought so. Every number in the history arrives as a string,
+	// which sorts "9" above "513" if it is not converted.
+	function mastodonTrendStory(link) {
+		const today = link?.history?.[0] || {};
+		const url = link?.url || "";
+
+		return {
+			source: "mastodon",
+			key: normalizeURL(url),
+			// No id of its own: a trending link is a URL and a count, not a post.
+			id: normalizeURL(url),
+			url,
+			title: link?.title || "",
+			by: link?.author_name || "",
+			score: Number(today.accounts) || 0,
+			time: Number(today.day) || 0,
+			descendants: Number(today.uses) || 0,
+			site: hostLabel(url),
+			// There is no page on Mastodon listing the posts about a URL that can be
+			// reached without an account, so there is nothing for a comment count to
+			// link to. Said, rather than invented -- renderStory prints an unlinked
+			// title for exactly this.
+			permalink: null,
+		};
+	}
+
+	// The query was the domain, so most of what comes back is about something else
+	// on that domain. Compared through normalizeURL on both sides, the same
+	// equality every other source holds its search results to.
+	function mastodonStatusPasses(status, target) {
+		const card = status?.card?.url;
+
+		return Boolean(card && target && normalizeURL(card) === target);
+	}
+
+	// Tootfinder returns the status without an account object, so the permalink is
+	// the only place the author survives: https://<instance>/@<user>/<id>. Written
+	// as user@instance, which is how the fediverse writes a handle and how it can
+	// be searched for.
+	function mastodonAuthorFromURL(url) {
+		try {
+			const parsed = new URL(String(url));
+			const handle = parsed.pathname.split("/").filter(Boolean)[0] || "";
+
+			return handle.startsWith("@")
+				? handle.slice(1) + "@" + parsed.hostname
+				: "";
+		} catch {
+			return "";
+		}
+	}
+
+	function mastodonComment(status, discussion) {
+		const url = status?.url || status?.uri || "";
+
+		return {
+			source: "mastodon",
+			key: sourceKey("mastodon", url),
+			id: status?.id || url,
+			discussionKey: discussion?.key,
+			parentKey: null,
+			author: mastodonAuthorFromURL(url),
+			// The status is already HTML, and goes through sanitizeHTML at render
+			// like every other source's body.
+			bodyHTML: status?.content || "",
+			// The index reports no favourites and no boosts, so a number here would
+			// be invented rather than measured.
+			score: null,
+			createdAt: Math.floor(Date.parse(status?.created_at || "") / 1000) || 0,
+			isOP: false,
+			deleted: false,
+			replyKeys: [],
+		};
+	}
+
+	// One collective per URL, the same shape Bluesky's takes: separate people
+	// posting the same link is not a thread, and giving it one would invent a
+	// conversation that never happened.
+	function mastodonCollective(url, statuses) {
+		if (!statuses.length) {
+			return null;
+		}
+
+		const times = statuses.map(
+			(status) => Math.floor(Date.parse(status?.created_at || "") / 1000) || 0,
+		);
+
+		return {
+			source: "mastodon",
+			key: sourceKey("mastodon", "links:" + url),
+			id: "links:" + url,
+			title: "",
+			author: "",
+			score: null,
+			commentCount: statuses.length,
+			// The newest post, because a collective was never submitted and the only
+			// honest timestamp is when it last moved.
+			createdAt: Math.max(...times, 0),
+			permalink: null,
+			articleURL: url,
+			label: "Mastodon",
+			bodyHTML: "",
+			rootKeys: statuses.map(
+				(status) => sourceKey("mastodon", status?.url || status?.uri || ""),
+			),
+			rootTimes: times,
+			// Carried rather than refetched. The index answers with the whole status,
+			// so everything loadThread will ever show is already in hand -- the same
+			// reason the Wikipedia collective carries its pages.
+			statuses,
 		};
 	}
 
@@ -4229,6 +4354,130 @@ ${
 					return byKey.get(key) || null;
 				},
 			};
+		},
+	});
+
+	// The instance asked for trending links. Any Mastodon instance answers this,
+	// and they answer differently -- each one's trends are what *its* people are
+	// posting. The largest is the least parochial default, and it is asked about
+	// nothing but its own trends: the reader's address never goes here.
+	const MASTODON_INSTANCE = "https://mastodon.social";
+	// Mastodon's own status search requires an account. Tootfinder is an opt-in
+	// full-text index of people who chose to be searchable, which is a slice of the
+	// fediverse rather than all of it -- measured at two posts per URL on a busy
+	// news domain. Thin, and the only way to answer the question without asking the
+	// reader for credentials.
+	const TOOTFINDER = "https://www.tootfinder.ch";
+
+	async function mastodonJSON(url) {
+		const result = await requestWithMeta(url);
+
+		return result.ok ? result.json : null;
+	}
+
+	registerSource({
+		id: "mastodon",
+		// Where a reader arrives from. Not exhaustive -- there are thousands of
+		// instances -- and arrival is only a blend hint, so a miss costs nothing.
+		origins: ["mastodon.social", "hachyderm.io", "fosstodon.org", "mstdn.social"],
+		label: "Mastodon",
+		shortLabel: "Mastodon",
+		slow: true,
+		beta: true,
+		// A collective was never posted, so a bare age would read as "posted then".
+		// The only honest timestamp is when it last moved.
+		ageLabel: "Last Mastodon post",
+		// The index answers with whole statuses, so loadThread fetches nothing and
+		// what is on screen is the discussion.
+		threadArrivesWhole: true,
+		// Two surprises, both stated. The address goes to a third party that is not
+		// Mastodon, and only the domain of it -- Tootfinder's search takes a path
+		// segment, so a full URL cannot be sent even if it were wanted. The front
+		// page asks mastodon.social about mastodon.social and carries nothing about
+		// the reader at all.
+		caveat:
+			"Will send the domain of each page you visit to Tootfinder, an opt-in index of Mastodon posts, not to Mastodon. It indexes only people who chose to be searchable, so it finds a slice of the fediverse rather than all of it. Signed in or out, these requests carry no account.",
+		capabilities: { vote: false, reply: false, submit: false },
+
+		profileURL: (handle) => {
+			const [user, host] = String(handle).split("@");
+
+			return user && host
+				? `https://${host}/@${encodeURIComponent(user)}`
+				: null;
+		},
+
+		// The query is the domain and the comparison is the answer, exactly as
+		// Lobsters does it: neither has a URL search, and both would rather send
+		// less and filter more than send the reader's full address.
+		async discover(url) {
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return [];
+			}
+
+			let host = "";
+
+			try {
+				host = new URL(url).hostname;
+			} catch {
+				return [];
+			}
+
+			const statuses = await mastodonJSON(
+				`${TOOTFINDER}/rest/api/search/${encodeURIComponent(host)}`,
+			);
+
+			if (!Array.isArray(statuses)) {
+				return [];
+			}
+
+			const collective = mastodonCollective(
+				url,
+				statuses.filter((status) => mastodonStatusPasses(status, target)),
+			);
+
+			return collective ? [collective] : [];
+		},
+
+		// Nothing to fetch: discovery already holds every status this will show.
+		async loadThread(discussion) {
+			const byKey = new Map();
+
+			for (const status of discussion.statuses || []) {
+				const comment = mastodonComment(status, discussion);
+
+				byKey.set(comment.key, comment);
+			}
+
+			return {
+				rootKeys: discussion.rootKeys,
+				rootTimes: new Map(
+					(discussion.rootKeys || []).map((key, index) => [
+						key,
+						discussion.rootTimes?.[index] || 0,
+					]),
+				),
+				async getComment(key) {
+					return byKey.get(key) || null;
+				},
+			};
+		},
+
+		// The one part of Mastodon that is both official and unauthenticated. Every
+		// row is by definition a link off the instance, so it needs none of the
+		// filtering Reddit and Lemmy do to keep their own content out.
+		async frontPage() {
+			const links = await mastodonJSON(
+				`${MASTODON_INSTANCE}/api/v1/trends/links?limit=40`,
+			);
+
+			if (!Array.isArray(links)) {
+				return [];
+			}
+
+			return links.filter((link) => link?.url).map(mastodonTrendStory);
 		},
 	});
 
