@@ -1842,7 +1842,11 @@
 			id: normalizeURL(url),
 			url,
 			title: link?.title || "",
-			by: link?.author_name || "",
+			// Deliberately empty. The card's author_name is the article's byline --
+			// the journalist who wrote it -- and putting it after "by" on a row whose
+			// every other source puts a submitter there says somebody posted this,
+			// which nobody did: a trending link is an aggregate of many people.
+			by: "",
 			score: Number(today.accounts) || 0,
 			time: Number(today.day) || 0,
 			descendants: Number(today.uses) || 0,
@@ -7388,22 +7392,32 @@ ${
 		// and a summed total would undo at display time what the blend was careful
 		// about at ranking time.
 		const discussions = [story, ...(options.also || [])];
+		// Every discussion the row carries, including the ones with no page to open.
+		// Mastodon has none -- there is no list of the posts about a URL anyone can
+		// reach without an account -- and filtering those out here is what made this
+		// line read three different ways. A Mastodon-only row ended on a bare
+		// separator with nothing after it; a row it shared with Reddit said "1145
+		// Reddit comments", labelled as though two counts were shown when only one
+		// was; and a row nothing else carried said "2107 comments" unlabelled. Same
+		// rule each time, applied to a list that had already had a hole cut in it.
 		const labelled = discussions.length > 1;
+		const countText = (each) =>
+			// "167 HN comments", not "(HN) 167 comments": the source is an adjective
+			// on the count, and reading it as one puts the words in the order they
+			// would be said aloud.
+			labelled
+				? `${each.descendants} ${sourceShortLabel(each)} ${
+						each.descendants === 1 ? "comment" : "comments"
+					}`
+				: pluralize(each.descendants, "comment");
 		const commentLinks = discussions
-			.filter((each) => each.permalink)
-			.map(
-				(each) =>
-					// "167 HN comments", not "(HN) 167 comments": the source is an
-					// adjective on the count, and reading it as one puts the words in the
-					// order they would be said aloud.
-					`<a class="browse-comments-link" href="${escapeHTML(each.permalink)}"
-	target="_blank" rel="noopener noreferrer">${escapeHTML(
-		labelled
-			? `${each.descendants} ${sourceShortLabel(each)} ${
-					each.descendants === 1 ? "comment" : "comments"
-				}`
-			: pluralize(each.descendants, "comment"),
-	)}</a>`,
+			.map((each) =>
+				each.permalink
+					? `<a class="browse-comments-link" href="${escapeHTML(each.permalink)}"
+	target="_blank" rel="noopener noreferrer">${escapeHTML(countText(each))}</a>`
+					: // Said, not linked. The count is real and worth knowing; there is
+						// simply nowhere to send anyone for it.
+						`<span class="browse-comments-count">${escapeHTML(countText(each))}</span>`,
 			)
 			// The same pipe HN separates the rest of a subline with, rather than a
 			// middot this row would be alone in using.
@@ -7433,8 +7447,11 @@ ${
 	|
 	<button class="browse-save-link" type="button">queue</button>
 	${actions}
-	|
-	${commentLinks}`;
+	${
+		// The separator belongs to the counts rather than to the line. A row with
+		// nothing to say about comments used to end on a pipe with nothing after it.
+		commentLinks ? `|\n\t${commentLinks}` : ""
+	}`;
 
 		const row = document.createElement("div");
 		row.className = "story browse-row";
@@ -7583,7 +7600,7 @@ ${
 	// a source is toggled -- switching Hacker News off with the front page already
 	// open has to withdraw the offer there and then, not at the next render.
 	async function refreshSubmitAffordance(root) {
-		const button = root?.querySelector?.("#browse-submit");
+		const button = root?.querySelector?.("#header-submit");
 
 		if (button) {
 			button.hidden = !submitTargetFor(await loadSettings());
@@ -9434,49 +9451,29 @@ header {
    they did; this tucks up into that gap rather than adding to it. Done this way
    rather than with :has() on the tabs, because the byline appears and disappears
    while the panel is open and some browsers do not re-evaluate :has() on that. */
-/* The byline and the way to add to it, sharing one line. Submitting sits out
-   here rather than in the header's action row because it acts on the page behind
-   the panel, not on the panel -- the same reason it is a word and not a glyph
-   beside the eye and the gear. */
-.browse-blend-row {
-	display:flex;
-	align-items:baseline;
-	justify-content:space-between;
-	gap:10px;
-	padding-right:12px;
-}
-
+/* Tight under the tab it qualifies: "front pages" and the list of them are one
+   statement, and the gap was reading as a separation between two. */
 .browse-blend-note {
-	margin:-6px 0 10px var(--browse-indent);
+	margin:-7px 0 10px var(--browse-indent);
 	color:var(--meta);
 	font-size:11px;
 	font-family:Verdana, Geneva, sans-serif;
 }
 
-/* Hidden leaves the row, and the button stays where it was: with no blend to
-   describe -- the queue tab, or a single front page -- Submit must not slide
-   left into the space the byline was using. */
 .browse-blend-note[hidden] {
 	display:none;
 }
 
-/* The same button as the one that finishes the job on the form it opens. It is
-   the same action at two points in it, and two treatments would read as two
-   different things. Values restated rather than shared because .submit-actions
-   is scoped to that row; if you change one, change both. */
-.browse-submit {
-	margin:-6px 0 10px auto;
-	padding:5px 10px;
-	flex:0 0 auto;
-	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-	color:white;
-	background:var(--accent);
-	border:1px solid var(--accent);
-	border-radius:4px;
-	cursor:pointer;
+/* Submitting is offered from the front page and nowhere else -- it is the thing
+   to do about a page nothing has said anything about, and the front page is
+   where that becomes apparent. Hidden on the submit view itself, where it would
+   be pointing at the screen it is already on. */
+#panel:not(.browsing) #header-submit,
+#panel.submitting #header-submit {
+	display:none;
 }
 
-.browse-submit[hidden] {
+#header-submit[hidden] {
 	display:none;
 }
 
@@ -11007,6 +11004,12 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </span>
 
 <div class="header-actions">
+<button id="header-submit" type="button" aria-label="Submit this page" title="Submit this page" hidden>
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path d="M8 12.7V4.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+<path d="M4.5 7.7 8 4.2l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+</button>
 <span class="hide-control">
 <button id="hide-site"${
 	// On a front page the two meanings are both plausible -- not here, and not
@@ -11018,9 +11021,15 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 		: ` aria-label="Hide Backchannel on this page" title="Hide Backchannel on this page"`
 }>
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
-<path d="M1.4 8S3.9 3.9 8 3.9 14.6 8 14.6 8 12.1 12.1 8 12.1 1.4 8 1.4 8Z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
-<circle cx="8" cy="8" r="1.85" fill="none" stroke="currentColor" stroke-width="1.25"/>
-<line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
+<!-- Filled rather than outlined. White on the header's green, a 1.25px stroke
+     is most of the way to invisible at 15px; a solid shape holds its detail.
+     The pupil is a hole punched with evenodd rather than a circle painted in
+     the background colour, so it survives whatever the header is behind it. -->
+<path fill="currentColor" fill-rule="evenodd" d="M1.4 8S3.9 3.9 8 3.9 14.6 8 14.6 8 12.1 12.1 8 12.1 1.4 8 1.4 8ZM8 6.15a1.85 1.85 0 1 0 0 3.7 1.85 1.85 0 1 0 0-3.7Z"/>
+<!-- The slash needs to read across a filled shape, so it is cut into it: a wide
+     line in the header's own colour, and the mark itself drawn on top. -->
+<line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="var(--header-bg)" stroke-width="3.4" stroke-linecap="round"/>
+<line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
 </svg>
 ${onSiteHomepage() ? `<span class="hide-caret" aria-hidden="true">&#9662;</span>` : ""}
 </button>
@@ -12989,10 +12998,7 @@ ${settingsPanelHTML()}
 <button id="browse-tab-queue" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">queue</button>
 <button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front pages</button>
 </div>
-<div class="browse-blend-row">
 <div id="browse-blend-note" class="browse-blend-note" hidden></div>
-<button id="browse-submit" class="browse-submit" type="button" hidden>Submit</button>
-</div>
 <div id="browse-list"></div>
 </div>
 <div id="submit-view" class="submit-view"></div>
@@ -13278,7 +13284,7 @@ ${settingsPanelHTML()}
 		// Submitting acts on the page behind the panel, so it is offered where the
 		// reader is already looking at what else exists about it rather than from a
 		// control of its own out on the page.
-		const submitButton = shadow.querySelector("#browse-submit");
+		const submitButton = shadow.querySelector("#header-submit");
 
 		if (submitButton) {
 			submitButton.onclick = () => {
