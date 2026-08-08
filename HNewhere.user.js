@@ -9679,6 +9679,19 @@ header {
 	font-size:11px;
 }
 
+/* Read, and saying so. A list you come back to is mostly a list of things you
+   have already dealt with, and without this every row goes on looking equally
+   new -- which is the one thing a front page must not do.
+
+   The same grey Hacker News greys a visited title to, which --meta already is.
+   Left to the browser's own history rather than tracked here: it is the record
+   that already exists, it is right across tabs and sessions, and it costs no
+   storage. Browsers allow :visited to change little more than colour, which is
+   all this asks for. The queue gets it too, since it renders the same row. */
+.browse-title-link:visited {
+	color:var(--meta);
+}
+
 /* Indented to the rank column's right edge, so it starts where every title above
    it starts rather than at the panel's edge. */
 .browse-nav {
