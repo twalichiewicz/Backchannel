@@ -5698,57 +5698,6 @@ ${
 		return pageTitle().slice(0, HN_TITLE_LIMIT);
 	}
 
-	// Fills the circle bottom-to-top, then leaves a plain orange button behind. Uses
-	// element.animate() rather than a keyframe rule so nothing has to be injected into
-	// the host page's stylesheet, and animates clip-path rather than a gradient
-	// because clip-path actually interpolates.
-	function animateButtonFill(button) {
-		const overlay = document.createElement("span");
-
-		overlay.textContent = buttonMarkPreference;
-		overlay.style.cssText = `
-			position:absolute;
-			inset:0;
-			display:flex;
-			align-items:center;
-			justify-content:center;
-			background:${BUTTON_VARIANTS.active.background};
-			color:white;
-			font:bold 13px Verdana,sans-serif;
-			border-radius:50%;
-			clip-path:inset(100% 0 0 0);
-			pointer-events:none;
-		`;
-
-		button.appendChild(overlay);
-
-		const fill = overlay.animate(
-			[{ clipPath: "inset(100% 0 0 0)" }, { clipPath: "inset(0 0 0 0)" }],
-			{
-				duration: 620,
-				easing: "cubic-bezier(.22,.61,.36,1)",
-				fill: "forwards",
-			},
-		);
-
-		// A short settle so the fill reads as landing rather than stopping.
-		button.animate(
-			[
-				{ transform: "scale(1)" },
-				{ transform: "scale(1.12)" },
-				{ transform: "scale(1)" },
-			],
-			{ duration: 420, delay: 480, easing: "ease-out" },
-		);
-
-		return fill.finished
-			.catch(() => {})
-			.then(() => {
-				setFloatingButtonVariant(button, "active");
-				overlay.remove();
-			});
-	}
-
 	// -------------------------
 	// Popup helpers
 	// -------------------------
@@ -6945,6 +6894,70 @@ ${
 	// One class toggle and a title. Both labels are already in the button and CSS
 	// picks between them, so nothing here rewrites markup on a control the reader
 	// is pointing at.
+	// The third view. Built on the way in rather than kept in the markup, because
+	// what the form contains depends on which source can take a submission -- a
+	// setting the reader can change while the panel is open.
+	async function setSubmitMode(ui, on) {
+		const panel = ui?.shadow?.querySelector("#panel");
+		const view = ui?.shadow?.querySelector("#submit-view");
+
+		if (!panel || !view) {
+			return;
+		}
+
+		if (!on) {
+			panel.classList.remove("submitting");
+			view.replaceChildren();
+
+			return;
+		}
+
+		const settings = await loadSettings();
+		const submitTarget = submitTargetFor(settings);
+
+		view.innerHTML = submitFormHTML({
+			submitTarget,
+			message: submitTarget ? "" : unsubmittableMessage(settings),
+		});
+
+		panel.classList.add("submitting");
+		setWordmarkLocation(ui, "Submit");
+
+		wireSubmitForm(view, {
+			submitTarget,
+			// Back to the front page rather than to the discussion: submitting is
+			// only reachable from there, and cancelling should undo the one step
+			// taken rather than two.
+			onCancel: () => {
+				setSubmitMode(ui, false).catch(console.error);
+				setBrowseMode(ui, true);
+			},
+			onSubmit: async (fields, form) => {
+				const result = await submitPageToHN(fields);
+
+				if (!result?.ok) {
+					form.setStatus(submitFailureMessage(result), { error: true });
+
+					return;
+				}
+
+				// The story id is not always recoverable -- a text-only submission has
+				// no URL to match on -- so the confirmation degrades to /newest rather
+				// than linking somewhere that may not be right.
+				form.setStatus(
+					result.storyID
+						? `Submitted. <a href="${escapeHTML(HN_ORIGIN)}/item?id=${encodeURIComponent(
+								result.storyID,
+							)}" target="_blank" rel="noopener noreferrer">See the discussion</a>`
+						: `Submitted. <a href="${escapeHTML(
+								HN_ORIGIN,
+							)}/newest" target="_blank" rel="noopener noreferrer">See it on HN</a>`,
+					{ html: true },
+				);
+			},
+		});
+	}
+
 	function setBrowseMode(ui, on, options = {}) {
 		const panel = ui?.shadow?.querySelector("#panel");
 		const toggle = ui?.shadow?.querySelector("#browse-toggle");
@@ -6985,6 +6998,17 @@ ${
 		const swap = () => {
 			panel.classList.toggle("browsing", on);
 			toggle.title = on ? "Back to this page's discussion" : browseLabel();
+
+			// Either direction leaves the form: it is reached from the front page and
+			// returns there, so arriving anywhere else means it is no longer where the
+			// reader is. renderBrowseView names the browse half of the trail itself,
+			// once it knows which tab it settled on.
+			panel.classList.remove("submitting");
+			ui?.shadow?.querySelector("#submit-view")?.replaceChildren();
+
+			if (!on) {
+				setWordmarkLocation(ui, sidebarHasDiscussion ? "Discussion" : "");
+			}
 
 			// Whatever the queue did while the panel was shut is not news. Cleared
 			// on the way in so the first refresh paints the row as it stands, and
@@ -7519,11 +7543,12 @@ ${
 		);
 	}
 
-	// The trail's destination, which is not always the same place. Off an article it
-	// leads to Read more -- the front page and the queue together. On Hacker News
-	// the front page is already underneath the panel, so the only thing it can be
-	// offering is the queue, and it says so.
-	function setWordmarkDestination(ui, label) {
+	// Where the reader is, not where the trail leads. The front page is the root
+	// and says only "Backchannel"; everything else is a step off it and names
+	// itself after the separator. The chevron stays independent of this -- it is
+	// the way back to the discussion, which is a different question from where you
+	// are standing.
+	function setWordmarkLocation(ui, label) {
 		const tail = ui?.shadow?.querySelector(".wordmark-tail");
 		const sep = tail?.querySelector(".wordmark-sep");
 
@@ -7532,6 +7557,12 @@ ${
 		}
 
 		const swap = () => tail.replaceChildren(sep, document.createTextNode(label));
+
+		// An empty label is the root. The trail is not a crumb saying "Backchannel /
+		// Backchannel", it is simply absent, and the class is what the stylesheet
+		// watches -- reading the tail's own text to decide whether to show it would
+		// have it appear a frame before the word it is showing.
+		ui?.shadow?.querySelector("#panel")?.classList.toggle("has-trail", Boolean(label));
 
 		// Nothing to announce if it already says this, and animating it anyway would
 		// blink the trail every time the same tab is re-rendered.
@@ -7869,10 +7900,10 @@ ${
 			tab.setAttribute("aria-selected", String(isCurrent));
 		}
 
-		// The trail names where you actually are, not where the door led. Read more
-		// is the pair of them; once you are standing in one of the two, saying so is
-		// the more useful thing for it to say.
-		setWordmarkDestination(ui, browseTab === "queue" ? "Queue" : "Read more");
+		// The front page is the root of the trail, so it names nothing after the
+		// wordmark -- "Backchannel" is where you are. The queue is a step off it and
+		// says so.
+		setWordmarkLocation(ui, browseTab === "queue" ? "Queue" : "");
 
 		refreshQueueCount(ui.shadow);
 
@@ -8056,104 +8087,33 @@ ${
 
 	// Its own shadow root for the same reason the sidebar has one: this renders over
 	// an arbitrary page whose CSS would otherwise reach in and restyle it.
-	function createSubmitPopover(button, onSubmit, onClose, options = {}) {
-		const submitTarget = options.submitTarget ?? null;
-		const unsubmittableMessageText = options.message ?? "";
-		const host = document.createElement("div");
-
-		host.setAttribute("data-hnewhere-submit-popover", "1");
-		host.style.cssText = `
-			position:fixed;
-			z-index:2147483647;
-			top:0;
-			left:0;
-		`;
-
-		const shadow = host.attachShadow({ mode: "open" });
-
-		shadow.innerHTML = `
-<style>
-${THEME_CSS}
-${CHROME_CSS}
-
-#popover {
-	width:320px;
-	box-sizing:border-box;
-	background:var(--bg);
-	color:var(--text);
-	border:1px solid var(--border);
-	border-radius:8px;
-	box-shadow:0 8px 24px rgba(0,0,0,.18);
-    /* No padding of its own: the header runs edge to edge like the sidebar's and
-       rounds its own top corners. The body below carries the inset instead.
-       Deliberately no overflow:hidden -- it used to clip the header, but it also
-       clipped the absolutely positioned settings dropdown to this box, and the
-       popover is only as tall as a short submit form. */
-	padding:0;
-    /* Containing block for the absolutely positioned settings dropdown. */
-	position:relative;
-	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-	font-size:12px;
-	line-height:1.4;
-    /* The same inheritance the panel has to close off, for the same reason: this
-       is a second shadow root on the same page, and it reads whatever the host
-       inherited. See #panel for the full account. */
-	text-align:left;
-	text-indent:0;
-	text-transform:none;
-	letter-spacing:normal;
-	word-spacing:normal;
-	font-style:normal;
-	font-variant:normal;
-	white-space:normal;
-}
-
-/* Same inset the sidebar's #comments uses, so the two read as one product. */
-.popover-body {
-	padding:12px 12px 8px;
-    /* The form is tall enough to run off a short viewport, so it scrolls itself
-       rather than being clipped by the edge of the screen. Sized against the header
-       and the popover's own vertical margins. */
-	max-height:calc(100vh - 120px);
-	overflow-y:auto;
-}
-
-/* Rounds its own top corners now that #popover no longer clips its children. */
-#popover header {
-	border-radius:7px 7px 0 0;
-}
-
-/* Narrower host than the sidebar, so the dropdown spans the width rather than
-   sitting in a 240px column that would overhang the left edge. */
-.settings-panel {
-	top:44px;
-	right:8px;
-	left:8px;
-	width:auto;
-}
-
-.popover-title {
+	// The submission form, as markup and behaviour, with nothing about where it is
+	// mounted. It began life inside a floating popover anchored to the grey button
+	// and now lives in the panel as a view of its own; keeping the two halves free
+	// of their surroundings is what made moving it a change of address rather than
+	// a rewrite.
+	const SUBMIT_FORM_CSS = `
+.submit-title {
 	font-weight:600;
 	margin-bottom:8px;
 }
 
 /* HN's own explanation of how url and text interact. Kept because the two fields
    are genuinely non-obvious: a blank url turns the whole thing into an Ask HN. */
-.popover-note {
+.submit-note {
 	margin-top:8px;
 	color:var(--muted);
 	font-size:11px;
 }
 
-.popover-field + .popover-field {
+.submit-field + .submit-field {
 	margin-top:8px;
 }
 
-/* All of the following are scoped to .popover-field rather than bare element
-   selectors. The settings dropdown shares this shadow root now, and a bare
-   "input" rule would stretch its checkboxes to full width and give them a text
-   field's border. */
-.popover-field label {
+/* Scoped to .submit-field rather than bare element selectors, because the
+   settings dropdown shares this shadow root and a bare "input" rule would
+   stretch its checkboxes to full width and give them a text field's border. */
+.submit-field label {
 	display:block;
 	color:var(--muted);
 	font-size:10px;
@@ -8163,10 +8123,10 @@ ${CHROME_CSS}
 	margin-bottom:3px;
 }
 
-/* Label left, character count hard right, sharing one line above the field. Baseline
-   alignment rather than centre so the count sits on the label's baseline despite
-   being the smaller of the two. */
-.popover-field-head {
+/* Label left, character count hard right, sharing one line above the field.
+   Baseline rather than centre, so the count sits on the label's baseline
+   despite being the smaller of the two. */
+.submit-field-head {
 	display:flex;
 	align-items:baseline;
 	justify-content:space-between;
@@ -8174,12 +8134,12 @@ ${CHROME_CSS}
 	margin-bottom:3px;
 }
 
-.popover-field-head label {
+.submit-field-head label {
 	margin-bottom:0;
 }
 
-.popover-field input,
-.popover-field textarea {
+.submit-field input,
+.submit-field textarea {
 	width:100%;
 	box-sizing:border-box;
 	font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -8190,42 +8150,38 @@ ${CHROME_CSS}
 	color:var(--field-text);
 }
 
-.popover-field textarea {
+.submit-field textarea {
 	min-height:56px;
 	resize:vertical;
-    /* Same reasoning as the sidebar composer: HN reads leading spaces as code. */
+	/* Same reasoning as the sidebar composer: HN reads leading spaces as code. */
 	white-space:pre-wrap;
 }
 
-.popover-field input:focus,
-.popover-field textarea:focus {
+.submit-field input:focus,
+.submit-field textarea:focus {
 	outline:2px solid rgba(var(--accent-rgb),.4);
 	outline-offset:-1px;
 }
 
-.popover-count {
+.submit-count {
 	color:var(--meta);
 	font-size:10px;
-    /* Fixed digits would be better, but the count is short enough that reflow is
-       imperceptible; what matters is that it never pushes the label around. */
 	flex:0 0 auto;
 	white-space:nowrap;
 }
 
-.popover-count.over {
+.submit-count.over {
 	color:var(--error);
 }
 
-.popover-actions {
+.submit-actions {
 	display:flex;
 	justify-content:flex-end;
 	gap:6px;
 	margin-top:10px;
 }
 
-/* Scoped for the same reason as the fields above: the header's gear button lives
-   in this shadow root and must keep its own borderless styling. */
-.popover-actions button {
+.submit-actions button {
 	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	padding:5px 10px;
 	border-radius:4px;
@@ -8235,223 +8191,89 @@ ${CHROME_CSS}
 	color:var(--button-text);
 }
 
-.popover-actions button.primary {
+.submit-actions button.primary {
 	background:var(--accent);
 	border-color:var(--accent);
 	color:white;
 }
 
-.popover-actions button:disabled {
+.submit-actions button:disabled {
 	opacity:.6;
 	cursor:default;
 }
 
-.popover-status {
+.submit-status {
 	margin-top:8px;
 	font-size:11px;
 	line-height:1.4;
 }
 
-.popover-status.error {
+.submit-status.error {
 	color:var(--error);
 }
 
-.popover-status a {
+.submit-status a {
 	color:var(--link);
 }
+`;
 
-.hidden {
-	display:none;
-}
-</style>
-
-<div id="popover" role="dialog" aria-label="${escapeHTML(submitTarget ? "Submit to " + submitTarget.label : "Submitting not available")}">
-${headerHTML({ browse: true })}
-${settingsPanelHTML()}
-
-<div class="popover-body">
-<div class="popover-title">${
-	// Named, not bare. "Submit" was unambiguous while one source could take a
-	// submission; with a picker in front of the reader it has to say where.
-	submitTarget ? "Submit to " + escapeHTML(submitTarget.label) : "Submit"
-}</div>
+	function submitFormHTML({ submitTarget, message = "" }) {
+		return `
+<div class="submit-title">${
+			// Named, not bare. "Submit" was unambiguous while one source could take a
+			// submission; with a picker in front of the reader it has to say where.
+			submitTarget ? "Submit to " + escapeHTML(submitTarget.label) : "Submit"
+		}</div>
 ${
 	submitTarget
 		? `
-<div class="popover-field">
-<div class="popover-field-head">
+<div class="submit-field">
+<div class="submit-field-head">
 <label for="submit-title">title</label>
-<span id="submit-count" class="popover-count"></span>
+<span id="submit-count" class="submit-count"></span>
 </div>
 <input id="submit-title" type="text" maxlength="${HN_TITLE_LIMIT}" spellcheck="true">
 </div>
 
-<div class="popover-field">
+<div class="submit-field">
 <label for="submit-url">url</label>
 <input id="submit-url" type="text" spellcheck="false">
 </div>
 
-<div class="popover-field">
+<div class="submit-field">
 <label for="submit-text">text</label>
 <textarea id="submit-text" rows="3" spellcheck="true"></textarea>
 </div>
 
-<div class="popover-note">
+<div class="submit-note">
 Leave url blank to submit a question for discussion. If there is no url, text will appear at the top of the thread. If there is a url, text is optional.
 </div>`
 		: `
-<div class="popover-note">
-${escapeHTML(unsubmittableMessageText)}
+<div class="submit-note">
+${escapeHTML(message)}
 </div>`
 }
 
-<div class="popover-actions">
+<div class="submit-actions">
 <button id="submit-cancel" type="button">${submitTarget ? "Cancel" : "Close"}</button>
 ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</button>` : ""}
 </div>
 
-<div id="submit-status" class="popover-status hidden" role="status"></div>
-</div>
-</div>
+<div id="submit-status" class="submit-status hidden" role="status"></div>
 `;
+	}
 
-		guardHostKeyboard(host);
-		document.body.appendChild(host);
-
-		// Same palette as the sidebar, resolved independently because this is its own
-		// shadow root -- the two can be open at different times on different pages.
-		const stopWatchingTheme = watchTheme(host);
-
-		// The gear needs somewhere to open into, so the popover carries the same
-		// dropdown the sidebar does. No annotation refresh is passed: there is no
-		// sidebar to refresh when this is on screen.
-		wireSettingsPanel(shadow).catch(console.error);
-
-		// The wordmark is the way out of this page and into the rest of HN, which is
-		// as true here as it is in the sidebar -- more so, since this page has no
-		// discussion of its own to read. It opens the panel rather than trying to
-		// fit thirty stories into a 320px popover.
-		const browseToggle = shadow.querySelector("#browse-toggle");
-
-		if (browseToggle) {
-			browseToggle.onclick = () => {
-				// close(), not onClose(): the latter only tells the button its popover
-				// has gone, which would leave the popover itself sitting on the page
-				// behind the panel. Declared further down, which is fine -- nothing
-				// runs this until it has been clicked.
-				close();
-				openSidebar([], { browseOnly: true }).catch(console.error);
-			};
-		}
-
-		const titleInput = shadow.querySelector("#submit-title");
-		const countLabel = shadow.querySelector("#submit-count");
-		const urlInput = shadow.querySelector("#submit-url");
-		const textInput = shadow.querySelector("#submit-text");
-		const goButton = shadow.querySelector("#submit-go");
-		const cancelButton = shadow.querySelector("#submit-cancel");
-		const statusLine = shadow.querySelector("#submit-status");
-
-		// Only rendered when something can take the submission. With no such source
-		// the popover is a sentence and a close button, so there are no fields to
-		// fill or validate.
-		if (submitTarget) {
-			// Same two values HN's own bookmarklet passes to /submitlink, both editable
-			// here because the bookmarklet's weakness is that they are not.
-			titleInput.value = suggestedSubmissionTitle();
-			urlInput.value = location.href;
-
-			const updateCount = () => {
-				const remaining = HN_TITLE_LIMIT - titleInput.value.length;
-
-				countLabel.textContent = remaining + " left";
-				countLabel.classList.toggle("over", remaining < 0);
-
-				// HN requires a title, and requires at least one of url or text -- a
-				// submission with neither has nothing in it.
-				goButton.disabled =
-					!titleInput.value.trim() ||
-					(!urlInput.value.trim() && !textInput.value.trim());
-			};
-
-			updateCount();
-			titleInput.addEventListener("input", updateCount);
-			urlInput.addEventListener("input", updateCount);
-			textInput.addEventListener("input", updateCount);
-		}
-
-		// Anchored to the button rather than a fixed corner, because the button is
-		// draggable and may be sitting anywhere along the edge.
-		const position = () => {
-			const rect = button.getBoundingClientRect();
-			const popover = shadow.querySelector("#popover");
-			const width = popover.offsetWidth || 264;
-			const height = popover.offsetHeight || 180;
-			const gap = 8;
-
-			let left = rect.right - width;
-			let top = rect.bottom + gap;
-
-			// Flip above when there is no room below, and keep it on screen either way.
-			if (top + height > window.innerHeight - gap) {
-				top = Math.max(gap, rect.top - height - gap);
-			}
-
-			left = Math.min(Math.max(gap, left), window.innerWidth - width - gap);
-
-			host.style.left = left + "px";
-			host.style.top = top + "px";
-		};
-
-		position();
-		window.addEventListener("resize", position);
-		window.addEventListener("scroll", position, true);
-		// The button is draggable, and dragging it while this is open would otherwise
-		// leave the panel stranded where the button used to be.
-		button.addEventListener(BUTTON_MOVE_EVENT, position);
-
-		let closed = false;
-
-		const close = () => {
-			if (closed) {
-				return;
-			}
-
-			closed = true;
-			window.removeEventListener("resize", position);
-			window.removeEventListener("scroll", position, true);
-			button.removeEventListener(BUTTON_MOVE_EVENT, position);
-			stopWatchingTheme();
-			document.removeEventListener("pointerdown", onOutsidePointerDown, true);
-			document.removeEventListener("keydown", onKeyDown, true);
-			host.remove();
-			// Reported back so the button's toggle state cannot get out of step when the
-			// popover is dismissed by an outside click or Escape rather than by the
-			// button itself -- otherwise reopening it would take two clicks.
-			onClose?.();
-		};
-
-		function onOutsidePointerDown(event) {
-			const path = event.composedPath();
-
-			if (path.includes(host) || path.includes(button)) {
-				return;
-			}
-
-			close();
-		}
-
-		function onKeyDown(event) {
-			if (event.key === "Escape") {
-				event.stopPropagation();
-				close();
-			}
-		}
-
-		document.addEventListener("pointerdown", onOutsidePointerDown, true);
-		document.addEventListener("keydown", onKeyDown, true);
-
-		cancelButton.onclick = close;
+	// Takes the element the markup was rendered into rather than a shadow root, so
+	// the same wiring serves a view inside the panel and anything else that mounts
+	// the form later.
+	function wireSubmitForm(root, { submitTarget, onSubmit, onCancel }) {
+		const titleInput = root.querySelector("#submit-title");
+		const countLabel = root.querySelector("#submit-count");
+		const urlInput = root.querySelector("#submit-url");
+		const textInput = root.querySelector("#submit-text");
+		const goButton = root.querySelector("#submit-go");
+		const cancelButton = root.querySelector("#submit-cancel");
+		const statusLine = root.querySelector("#submit-status");
 
 		const setStatus = (message, { error = false, html = false } = {}) => {
 			statusLine.classList.remove("hidden");
@@ -8464,13 +8286,47 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			}
 		};
 
-		// Guarded for the same reason the fields are: with nothing able to take a
-		// submission this button was never rendered.
-		if (goButton) goButton.onclick = async () => {
+		if (cancelButton) {
+			cancelButton.onclick = () => onCancel?.();
+		}
+
+		// Only rendered when something can take the submission. With no such source
+		// this is a sentence and a close button, so there are no fields to fill or
+		// validate.
+		if (!submitTarget) {
+			cancelButton?.focus();
+
+			return { setStatus };
+		}
+
+		// Same two values HN's own bookmarklet passes to /submitlink, both editable
+		// here because the bookmarklet's weakness is that they are not.
+		titleInput.value = suggestedSubmissionTitle();
+		urlInput.value = location.href;
+
+		const updateCount = () => {
+			const remaining = HN_TITLE_LIMIT - titleInput.value.length;
+
+			countLabel.textContent = remaining + " left";
+			countLabel.classList.toggle("over", remaining < 0);
+
+			// HN requires a title, and requires at least one of url or text -- a
+			// submission with neither has nothing in it.
+			goButton.disabled =
+				!titleInput.value.trim() ||
+				(!urlInput.value.trim() && !textInput.value.trim());
+		};
+
+		updateCount();
+		titleInput.addEventListener("input", updateCount);
+		urlInput.addEventListener("input", updateCount);
+		textInput.addEventListener("input", updateCount);
+
+		goButton.onclick = async () => {
 			const title = titleInput.value.trim();
 			const url = urlInput.value.trim();
-			// Not trimmed: HN reads two leading spaces as a code block, so the body has
-			// to reach it exactly as typed.
+			// Not trimmed: HN reads two leading spaces as a code block, so the body
+			// has to reach it exactly as typed.
 			const text = textInput.value;
 
 			if (!title || (!url && !text.trim())) {
@@ -8485,7 +8341,7 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			setStatus("Opening Hacker News…");
 
 			try {
-				await onSubmit({ title, url, text }, { setStatus, close });
+				await onSubmit({ title, url, text }, { setStatus });
 			} finally {
 				cancelButton.disabled = false;
 			}
@@ -8493,7 +8349,7 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 
 		// Enter submits from the single-line fields only. In the text area it has to
 		// stay a newline, since blank lines are how HN separates paragraphs.
-		for (const field of [titleInput, urlInput].filter(Boolean)) {
+		for (const field of [titleInput, urlInput]) {
 			field.addEventListener("keydown", (event) => {
 				if (event.key === "Enter") {
 					event.preventDefault();
@@ -8502,12 +8358,10 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			});
 		}
 
-		// Focus lands on the way out when there is no form to fill, so the popover
-		// still answers the keyboard rather than leaving focus behind on the page.
-		(titleInput ?? cancelButton)?.focus();
-		titleInput?.select();
+		titleInput.focus();
+		titleInput.select();
 
-		return { close, host };
+		return { setStatus };
 	}
 
 	// Not async, for the same reason as submitCommentToHN: window.open has to happen
@@ -8620,6 +8474,11 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		return button;
 	}
 
+	// Grey means the lookup came back empty. It used to answer that with an offer
+	// to submit, which is one thing to do about it and not the first: a page with
+	// no discussion is a good moment to be shown what does have one. So it opens
+	// the front page, and submitting is a button on that page rather than the only
+	// thing behind this one.
 	async function createSubmitButton() {
 		const button = createFloatingHNButton("hn-submit-button", "inactive");
 
@@ -8631,74 +8490,11 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			await applyButtonPosition(button);
 		}
 
-		let popover = null;
-
-		// The popover lives outside the button, so destroying the button -- which
-		// happens the moment a sidebar opens -- would otherwise leave it orphaned on
-		// the page with nothing to anchor to.
-		const baseCleanup = button._cleanup;
-
-		button._cleanup = () => {
-			popover?.close();
-			popover = null;
-			baseCleanup?.();
-		};
-
-		button.onclick = async () => {
+		button.onclick = () => {
 			if (button._dragController.wasMoved()) return;
 
-			if (popover) {
-				popover.close();
-				popover = null;
-				return;
-			}
-
-			// Read before the popover is built, because it decides whether there is a
-			// form to build at all.
-			const settings = await loadSettings();
-			const submitTarget = submitTargetFor(settings);
-
-			popover = createSubmitPopover(
-				button,
-				async (fields, ui) => {
-					const result = await submitPageToHN(fields);
-
-					if (!result?.ok) {
-						ui.setStatus(submitFailureMessage(result), { error: true });
-						return;
-					}
-
-					await animateButtonFill(button);
-
-					// The story id is not always recoverable -- see the /newest branch in
-					// reportSubmitResultAfterReload -- so the confirmation degrades to a
-					// plain success rather than linking somewhere that may not be right.
-					if (result.storyID) {
-						ui.setStatus(
-							`Submitted. <a href="${escapeHTML(commentURL(result.storyID))}" target="_blank" rel="noopener noreferrer">View</a> &middot; <a href="${escapeHTML(editURL(result.storyID))}" target="_blank" rel="noopener noreferrer">Edit title</a>`,
-							{ html: true },
-						);
-
-						rebindSubmittedButton(button, result.storyID);
-					} else {
-						// No id came back -- either /newest could not be matched, or this
-						// was a text-only submission with no URL to match on. Point at
-						// /newest rather than claiming something about this page.
-						ui.setStatus(
-							`Submitted. <a href="${escapeHTML(HN_ORIGIN)}/newest" target="_blank" rel="noopener noreferrer">See it on HN</a>`,
-							{ html: true },
-						);
-						setFloatingButtonVariant(button, "active");
-					}
-				},
-				() => {
-					popover = null;
-				},
-				{
-					submitTarget,
-					message: submitTarget ? "" : unsubmittableMessage(settings),
-				},
-			);
+			destroyFloatingButton(button);
+			openSidebar([], { browseOnly: true }).catch(console.error);
 		};
 
 		return button;
@@ -8719,21 +8515,6 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			default:
 				return result?.message || "Submission did not go through.";
 		}
-	}
-
-	// Turns the grey submit button into an ordinary discussion button, so the click
-	// after a submission opens the thread instead of offering to submit again.
-	function rebindSubmittedButton(button, storyID) {
-		setFloatingButtonVariant(button, "active");
-
-		const stories = [{ objectID: String(storyID) }];
-
-		button.onclick = () => {
-			if (button._dragController?.wasMoved()) return;
-
-			destroyFloatingButton(button);
-			openSidebar(stories).catch(console.error);
-		};
 	}
 
 	// -------------------------
@@ -8961,7 +8742,11 @@ header {
 	transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
 }
 
-#panel.browsing .wordmark-chevron {
+/* The way back to the discussion, which is a separate question from where the
+   trail says you are: both the front page and the submit form are places you
+   went from a discussion, and both need the way back. */
+#panel.browsing .wordmark-chevron,
+#panel.submitting .wordmark-chevron {
 	width:9px;
 	margin-right:5px;
 	opacity:1;
@@ -9012,7 +8797,10 @@ header {
 	transition:width .2s ease, margin-left .2s ease, opacity .2s ease;
 }
 
-#panel.browsing .wordmark-more {
+/* The ellipsis and the trail say the same thing -- there is more here than the
+   wordmark -- so whichever one is present, the other goes. The trail is the
+   better of the two because it names what is behind. */
+#panel.has-trail .wordmark-more {
 	width:0;
 	margin-left:0;
 	opacity:0;
@@ -9034,7 +8822,7 @@ header {
 	transition:opacity .2s ease, transform .2s ease;
 }
 
-#panel.browsing .wordmark-tail {
+#panel.has-trail .wordmark-tail {
 	opacity:1;
 	transform:none;
 	pointer-events:auto;
@@ -9243,6 +9031,18 @@ header {
    they did; this tucks up into that gap rather than adding to it. Done this way
    rather than with :has() on the tabs, because the byline appears and disappears
    while the panel is open and some browsers do not re-evaluate :has() on that. */
+/* The byline and the way to add to it, sharing one line. Submitting sits out
+   here rather than in the header's action row because it acts on the page behind
+   the panel, not on the panel -- the same reason it is a word and not a glyph
+   beside the eye and the gear. */
+.browse-blend-row {
+	display:flex;
+	align-items:baseline;
+	justify-content:space-between;
+	gap:10px;
+	padding-right:12px;
+}
+
 .browse-blend-note {
 	margin:-6px 0 10px var(--browse-indent);
 	color:var(--meta);
@@ -9250,8 +9050,30 @@ header {
 	font-family:Verdana, Geneva, sans-serif;
 }
 
+/* Hidden leaves the row, and the button stays where it was: with no blend to
+   describe -- the queue tab, or a single front page -- Submit must not slide
+   left into the space the byline was using. */
 .browse-blend-note[hidden] {
 	display:none;
+}
+
+.browse-submit {
+	margin:-6px 0 10px auto;
+	padding:2px 8px;
+	flex:0 0 auto;
+	font:600 11px Verdana, Geneva, sans-serif;
+	color:var(--button-text);
+	background:var(--button-bg);
+	border:1px solid var(--button-border);
+	border-radius:4px;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.browse-submit:hover {
+		border-color:var(--accent);
+		color:var(--accent);
+	}
 }
 
 /* A rank column wide enough for two digits and the stop after them, which is
@@ -10065,11 +9887,12 @@ header button svg {
 	margin-bottom:16px;
 }
 
-/* Deliberately identical to .popover-actions and its primary button, restated
-	rather than shared. The submit popover is its own host with its own shadow root,
-	so a rule written there cannot reach in here -- only THEME_CSS crosses, which is
-	why the tokens do and the rules do not. Same values, so the two screens read as
-	one product; if you change one, change both. */
+/* Deliberately identical to .submit-actions and its primary button, restated
+	rather than shared. The two were in separate shadow roots when this was written
+	and are now in the same one, so they could be folded together -- left apart
+	because the picker's row and the submit form's row are not the same control and
+	changing one should not silently move the other. Same values, so the two screens
+	read as one product; if you change one, change both. */
 .source-picker-actions {
 	display:flex;
 	justify-content:flex-end;
@@ -10768,7 +10591,7 @@ ${
 		? `<button id="browse-toggle" class="header-wordmark" type="button"
 title="${escapeHTML(browseLabel())}"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
 class="wordmark-root"><b>Back</b>channel</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
-class="wordmark-tail"><span class="wordmark-sep">/</span>Read more</span></button>`
+class="wordmark-tail"><span class="wordmark-sep">/</span>Discussion</span></button>`
 		: `<span><b>Back</b>channel</span>`
 }
 ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
@@ -11643,9 +11466,33 @@ ${[
 
 ${THEME_CSS}
 ${CHROME_CSS}
+${SUBMIT_FORM_CSS}
 
-/* Sidebar-only, so deliberately not part of CHROME_CSS: the submit popover has no
-   resize handle. #panel is position:fixed, which is already a containing block. */
+/* The third thing the panel can be showing. Submitting used to be a popover
+   hanging off the grey button; it is a place you go now, which is why it is a
+   view beside the discussion and the front page rather than a layer over them. */
+.submit-view {
+	display:none;
+	transition:opacity .16s ease;
+}
+
+#panel.submitting .submit-view {
+	display:block;
+}
+
+#panel.submitting #comments-content,
+#panel.submitting .browse-view,
+#panel.submitting .filter-banner,
+#panel.submitting .next-up {
+	display:none;
+}
+
+#comments.views-swapping > .submit-view {
+	opacity:0;
+}
+
+/* Sidebar-only, so deliberately not part of CHROME_CSS: #panel is position:fixed,
+   which is already a containing block. */
 #resize-handle {
 	position:absolute;
 	left:0;
@@ -12660,9 +12507,13 @@ ${settingsPanelHTML()}
 <button id="browse-tab-queue" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">queue</button>
 <button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front pages</button>
 </div>
+<div class="browse-blend-row">
 <div id="browse-blend-note" class="browse-blend-note" hidden></div>
+<button id="browse-submit" class="browse-submit" type="button">Submit</button>
+</div>
 <div id="browse-list"></div>
 </div>
+<div id="submit-view" class="submit-view"></div>
 <div id="next-up" class="next-up hidden"></div>
 </div>
 
@@ -12940,6 +12791,18 @@ ${settingsPanelHTML()}
 					renderBrowseView(ui, { tab }).catch(console.error);
 				};
 			}
+		}
+
+		// Submitting acts on the page behind the panel, so it is offered where the
+		// reader is already looking at what else exists about it rather than from a
+		// control of its own out on the page.
+		const submitButton = shadow.querySelector("#browse-submit");
+
+		if (submitButton) {
+			submitButton.onclick = () => {
+				scrollBrowseToTop(ui);
+				setSubmitMode(ui, true).catch(console.error);
+			};
 		}
 
 		refreshQueueCount(shadow).catch(console.error);
@@ -14274,6 +14137,10 @@ ${settingsPanelHTML()}
 	async function renderDiscussions(stories, ui) {
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
+		// Where the reader is, said once the panel is actually showing it. The trail
+		// is otherwise only written on the way out of browse, which never runs for
+		// the ordinary arrival: opening straight onto a discussion.
+		setWordmarkLocation(ui, "Discussion");
 		// The observer holds the elements about to be thrown away with the list.
 		stopObservingNewComments();
 		renderedComments = [];
