@@ -637,6 +637,13 @@
 		return location.hostname;
 	}
 
+	// The front page of a site, where "hide this" is genuinely ambiguous. Judged on
+	// the path alone: a query string on a front page is a filter or a campaign tag,
+	// not a different page in the sense that matters here.
+	function onSiteHomepage() {
+		return location.pathname === "/" || location.pathname === "";
+	}
+
 	// Exact hostname only, matching how per-site widths are keyed. Subdomains are
 	// therefore independent entries, which is what "hide it on this site" means.
 	async function loadBlockedSites() {
@@ -654,10 +661,49 @@
 	}
 
 	async function isSiteBlocked() {
-		return (await loadBlockedSites()).has(siteKey());
+		const entries = await loadBlockedSites();
+
+		return pageIsBlocked(entries, siteKey(), location.href);
 	}
 
 	// #region hnewhere-test-export
+
+	// A blocked entry means one of two things, and the prefix is what tells them
+	// apart. A bare hostname hides the whole site -- which is what every entry
+	// saved before this release is, and what they go on meaning. A `page:` entry
+	// hides one address.
+	//
+	// The prefix is load-bearing rather than decorative. normalizeURL reduces a
+	// homepage to its bare host, so without it `macrumors.com` would spell both
+	// "this site" and "this site's front page" and the second could not be said at
+	// all -- which is the whole of issue #76: hiding it on a front page also hid it
+	// on every article underneath, where the discussions are.
+	const BLOCKED_PAGE_PREFIX = "page:";
+
+	function blockedPageEntry(url) {
+		const normalized = normalizeURL(url);
+
+		return normalized ? BLOCKED_PAGE_PREFIX + normalized : null;
+	}
+
+	function pageIsBlocked(entries, hostname, url) {
+		if (entries.has(hostname)) {
+			return true;
+		}
+
+		const page = blockedPageEntry(url);
+
+		return Boolean(page && entries.has(page));
+	}
+
+	// Storage is not language. The settings list is the one place a person reads
+	// these, and `page:macrumors.com/2026/08/08/…` is the shape they are stored in,
+	// not a sentence about what is hidden.
+	function describeBlockedEntry(entry) {
+		return entry.startsWith(BLOCKED_PAGE_PREFIX)
+			? entry.slice(BLOCKED_PAGE_PREFIX.length) + " — this page only"
+			: entry;
+	}
 
 	// The reading queue is a list rather than a set, because its order is the
 	// feature: what you saved first is what you are offered next. Every rule below
@@ -8699,6 +8745,64 @@ header {
 	}
 }
 
+/* The eye and the choice behind it. Positioned so the menu hangs from the eye
+   rather than from the header, which is what keeps it under the control that
+   opened it when the panel is resized. */
+.hide-control {
+	position:relative;
+	display:inline-flex;
+}
+
+/* Only on a front page, where the eye has two meanings to choose between. It
+   rides inside the button rather than beside it so the pair is one target: a
+   caret with its own hit area would be a second control saying the same thing. */
+.hide-caret {
+	margin-left:1px;
+	font-size:9px;
+	line-height:1;
+}
+
+#hide-site.has-scope {
+	gap:0;
+}
+
+.hide-menu {
+	position:absolute;
+	top:calc(100% + 4px);
+	right:0;
+	z-index:3;
+	display:flex;
+	flex-direction:column;
+	min-width:max-content;
+	padding:4px;
+	border:1px solid var(--surface-border);
+	border-radius:6px;
+	background:var(--surface);
+	box-shadow:0 6px 18px rgba(0,0,0,.18);
+}
+
+.hide-menu[hidden] {
+	display:none;
+}
+
+.hide-menu button {
+	padding:5px 8px;
+	border:0;
+	border-radius:4px;
+	background:none;
+	color:var(--surface-text);
+	font:12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	text-align:left;
+	white-space:nowrap;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.hide-menu button:hover {
+		background:var(--hover-tint);
+	}
+}
+
 .header-actions {
 	display:flex;
 	align-items:center;
@@ -10598,13 +10702,32 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </span>
 
 <div class="header-actions">
-<button id="hide-site" aria-label="Hide Backchannel on this site" title="Hide Backchannel on this site">
+<span class="hide-control">
+<button id="hide-site"${
+	// On a front page the two meanings are both plausible -- not here, and not
+	// anywhere on this site -- so the eye asks instead of guessing. Anywhere else
+	// it hides the page you are on, which is the reversible half: a misclick costs
+	// one article rather than a whole publication.
+	onSiteHomepage()
+		? ` class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Hide Backchannel here" title="Hide Backchannel here"`
+		: ` aria-label="Hide Backchannel on this page" title="Hide Backchannel on this page"`
+}>
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path d="M1.4 8S3.9 3.9 8 3.9 14.6 8 14.6 8 12.1 12.1 8 12.1 1.4 8 1.4 8Z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
 <circle cx="8" cy="8" r="1.85" fill="none" stroke="currentColor" stroke-width="1.25"/>
 <line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
 </svg>
+${onSiteHomepage() ? `<span class="hide-caret" aria-hidden="true">&#9662;</span>` : ""}
 </button>
+${
+	onSiteHomepage()
+		? `<div id="hide-menu" class="hide-menu" role="menu" hidden>
+<button type="button" role="menuitem" data-hide-scope="page">Hide on this page</button>
+<button type="button" role="menuitem" data-hide-scope="site">Hide on ${escapeHTML(siteKey())}</button>
+</div>`
+		: ""
+}
+</span>
 <button id="settings-toggle" aria-label="Open Backchannel settings" title="Backchannel settings" aria-expanded="false" aria-controls="settings-panel">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>
@@ -11029,12 +11152,47 @@ ${[
 		// the sidebar header and the submit popover header pass through.
 		const hideSiteButton = shadow.querySelector("#hide-site");
 
+		const hideMenu = shadow.querySelector("#hide-menu");
+
 		if (hideSiteButton) {
 			hideSiteButton.onclick = (event) => {
 				event.preventDefault();
 				event.stopPropagation();
-				hideCurrentSite().catch(console.error);
+
+				// Off a front page there is only one thing this can mean, so it does it.
+				if (!hideMenu) {
+					hideCurrentSite("page").catch(console.error);
+
+					return;
+				}
+
+				const opening = hideMenu.hidden;
+
+				hideMenu.hidden = !opening;
+				hideSiteButton.setAttribute("aria-expanded", String(opening));
 			};
+		}
+
+		if (hideMenu) {
+			for (const choice of hideMenu.querySelectorAll("[data-hide-scope]")) {
+				choice.onclick = (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					hideCurrentSite(choice.dataset.hideScope).catch(console.error);
+				};
+			}
+
+			// Anywhere else in the panel closes it, the same way the settings dropdown
+			// gives up its space. Registered on the shadow root rather than the
+			// document because that is where the presses the panel can see arrive.
+			shadow.addEventListener("click", (event) => {
+				if (event.composedPath().includes(hideSiteButton) || event.composedPath().includes(hideMenu)) {
+					return;
+				}
+
+				hideMenu.hidden = true;
+				hideSiteButton?.setAttribute("aria-expanded", "false");
+			});
 		}
 
 		settingsPanel.addEventListener("click", (event) => {
@@ -11329,14 +11487,17 @@ ${[
 				const row = document.createElement("div");
 				const name = document.createElement("span");
 				const remove = document.createElement("button");
+				// Storage is not language: an entry is stored as `page:host/path`
+				// and read as a sentence.
+				const label = describeBlockedEntry(host);
 
 				row.className = "settings-blocked-entry";
-				name.textContent = host;
+				name.textContent = label;
 
 				remove.type = "button";
 				remove.className = "settings-blocked-remove";
 				remove.textContent = "×";
-				remove.setAttribute("aria-label", `Stop hiding Backchannel on ${host}`);
+				remove.setAttribute("aria-label", `Stop hiding Backchannel on ${label}`);
 				remove.onclick = async () => {
 					const next = await loadBlockedSites();
 
@@ -18727,12 +18888,18 @@ title="Show only this discussion">
 	}
 
 
-	// Shared by both headers. Persists before tearing down, because the teardown
-	// destroys the surface this was clicked in.
-	async function hideCurrentSite() {
+	// Persists before tearing down, because the teardown destroys the surface this
+	// was clicked in. The default is the page rather than the site: it is the
+	// reversible half, and a reader who wanted the whole site said so.
+	async function hideCurrentSite(scope = "page") {
 		const sites = await loadBlockedSites();
+		const entry = scope === "site" ? siteKey() : blockedPageEntry(location.href);
 
-		sites.add(siteKey());
+		if (!entry) {
+			return;
+		}
+
+		sites.add(entry);
 		await saveBlockedSites(sites);
 		teardownForBlockedSite();
 	}
