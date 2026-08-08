@@ -15,7 +15,7 @@ See what everyone's talking about.
 
 - **The web's commentary track:** Avoid the two-tab-tango and conveniently read the community's comments in-context.
 - **Never miss a thread:** Every page you land on gets checked against the sources you've picked, so you find out a discussion exists without going hunting for one.
-- **What the internet is saying, in one thread:** Hacker News, Bluesky, and Reddit merged into a single conversation, each comment quietly noting where it came from. Pick your sources with a checkbox.
+- **What the internet is saying, in one thread:** Every source you've switched on, merged into a single conversation, each comment quietly noting where it came from. Pick them with a checkbox.
 - **See what they're talking about:** Quotes in the comments get matched back to the article and lit as annotations in articles. Click a highlight to filter the thread to the people discussing that passage.
    - _Currently in beta. Enable Annotations in the settings menu to try it out!_ 
 - **Read, then join in:** Vote, reply, and even submit on supported sources. It uses the session you already have, in a popup on news.ycombinator.com. The script never sees your password.
