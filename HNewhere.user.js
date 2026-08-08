@@ -1415,6 +1415,14 @@
 		// Carried at all because the blend needs a time per root before it can order
 		// anything, and two of the three sources fetch comments lazily.
 		rootTimes: { type: "array" },
+		// What a source whose discovery already holds the whole discussion carries
+		// forward, so its loadThread fetches nothing. Declared rather than smuggled:
+		// the extra-field rule exists to catch a mapper inventing something the
+		// renderer is not obliged to display, and these are neither invented nor
+		// displayed -- they are the source talking to its own loadThread. Absent on
+		// every source but the one that carries them.
+		wikiPages: { type: "array", optional: true },
+		statuses: { type: "array", optional: true },
 	};
 
 	const COMMENT_SHAPE = {
@@ -1491,7 +1499,13 @@
 
 		for (const [field, rule] of Object.entries(shape)) {
 			if (!Object.prototype.hasOwnProperty.call(value, field)) {
-				problems.push(`${field}: missing`);
+				// Optional fields are the ones a single source carries for its own
+				// loadThread rather than ones the renderer reads. Absent is their
+				// ordinary state; present and wrongly typed is still a problem.
+				if (!rule.optional) {
+					problems.push(`${field}: missing`);
+				}
+
 				continue;
 			}
 
