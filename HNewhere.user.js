@@ -639,7 +639,6 @@
 		return location.hostname;
 	}
 
-
 	// Exact hostname only, matching how per-site widths are keyed. Subdomains are
 	// therefore independent entries, which is what "hide it on this site" means.
 	async function loadBlockedSites() {
@@ -1426,6 +1425,7 @@
 		// every source but the one that carries them.
 		wikiPages: { type: "array", optional: true },
 		statuses: { type: "array", optional: true },
+		creatorId: { type: ["number", "string"], optional: true },
 	};
 
 	const COMMENT_SHAPE = {
@@ -1444,6 +1444,11 @@
 		isOP: { type: "boolean" },
 		deleted: { type: "boolean" },
 		replyKeys: { type: "array" },
+		// A gap the source withheld and can be asked to fill: { ids, count }. Hung
+		// on the comment the gap sits under by the thread indexers rather than by a
+		// mapper, and read by mountMoreReplies. Nullable because closing a gap sets
+		// it to null rather than deleting it.
+		more: { type: "object", nullable: true, optional: true },
 	};
 
 	// A row on a front page or in the queue, which is a different object from a
@@ -1453,12 +1458,7 @@
 	// addToQueue copied a subset of it, renderBrowseRow read it -- which is the
 	// situation DISCUSSION_SHAPE was written to prevent one level down.
 	//
-	// Two fields differ from DISCUSSION_SHAPE deliberately.
-	//
-	// `permalink` is NOT nullable here. A collective has no page of its own and a
-	// Discussion has to say so; a front-page row always came from one submission,
-	// and that submission always has a page. Anything unable to name one is not a
-	// row.
+	// Two fields read oddly beside DISCUSSION_SHAPE and are deliberate.
 	//
 	// `key` is normalizeURL(url), not sourceKey(source, id). What a reader queues
 	// is an article, not a submission of it -- so the same page reaching the queue
@@ -1484,7 +1484,11 @@
 		time: { type: "number" },
 		descendants: { type: "number" },
 		site: { type: "string" },
-		permalink: { type: "string" },
+		// Nullable, like a Discussion's. Mastodon's trending links are the case: a
+		// row there is an aggregate of many people posting a URL, with no page
+		// listing them reachable without an account. renderStory already prints an
+		// unlinked title for exactly that.
+		permalink: { type: "string", nullable: true },
 	};
 
 	// Returns problems rather than throwing, so one run names every field that is
@@ -3146,7 +3150,9 @@
 		return {
 			source: "bsky",
 			key,
-			id: key.slice("bsky:".length),
+			// Through parseSourceKey rather than slicing a literal prefix off: the
+			// separator is declared in one place and this is what reads it back.
+			id: parseSourceKey(key)?.id ?? "",
 			discussionKey: discussion?.key,
 			parentKey: parentKey || null,
 			author: post?.author?.handle || "",
@@ -3733,12 +3739,7 @@ ${
 			);
 
 			if (!result) {
-				return {
-					rootKeys: [],
-					async getComment() {
-						return null;
-					},
-				};
+				return emptyThreadReader();
 			}
 
 			const index =
@@ -5961,78 +5962,78 @@ ${
 		);
 	}
 
-		function createFloatingHNButton(id, variant = "active") {
-			let button = document.getElementById(id);
+	function createFloatingHNButton(id, variant = "active") {
+		let button = document.getElementById(id);
 
-			if (button) {
-				button.textContent = buttonMarkPreference;
-				return button;
-			}
-
-			// A button drawn before the lookup answered becomes whichever button the
-			// answer calls for, rather than being torn down and rebuilt: rebuilding
-			// would drop the ring mid-fade and discard a position the reader had
-			// already dragged it to.
-			button = document.getElementById(BUTTON_PENDING_ID);
-
-			if (button) {
-				button.id = id;
-				button.textContent = buttonMarkPreference;
-				setFloatingButtonVariant(button, variant);
-				return button;
-			}
-
-			button = document.createElement("button");
-			button.id = id;
+		if (button) {
 			button.textContent = buttonMarkPreference;
-
-			pinButtonStyle(button, {
-				...BUTTON_STYLE_RESET,
-				position: "fixed",
-				top: "16px",
-				right: "16px",
-				zIndex: "2147483647",
-				color: "white",
-				padding: "0",
-				fontFamily: "Verdana,sans-serif",
-				fontWeight: "bold",
-				cursor: "pointer",
-				userSelect: "none",
-				touchAction: "none",
-				display: "flex",
-				alignItems: "center",
-				justifyContent: "center",
-				// box-shadow rides along because setFloatingButtonVariant writes it
-				// too: without it the glow snapped while the fill cross-faded, which
-				// is visible when the button settles out of "checking".
-				transition: "background .2s ease, box-shadow .2s ease",
-				// So the fill overlay can be clipped to the circle.
-				overflow: "hidden",
-				isolation: "isolate",
-			});
-
-			button.style.setProperty(
-				"-webkit-tap-highlight-color",
-				"transparent",
-				"important",
-			);
-
-			setFloatingButtonVariant(button, variant);
-
-			const updateButtonStyle = () => {
-				applyButtonMobileStyle(button);
-			};
-
-			updateButtonStyle();
-			window.addEventListener("resize", updateButtonStyle);
-			document.body.appendChild(button);
-
-			button._cleanup = () => {
-				window.removeEventListener("resize", updateButtonStyle);
-			};
-
 			return button;
 		}
+
+		// A button drawn before the lookup answered becomes whichever button the
+		// answer calls for, rather than being torn down and rebuilt: rebuilding
+		// would drop the ring mid-fade and discard a position the reader had
+		// already dragged it to.
+		button = document.getElementById(BUTTON_PENDING_ID);
+
+		if (button) {
+			button.id = id;
+			button.textContent = buttonMarkPreference;
+			setFloatingButtonVariant(button, variant);
+			return button;
+		}
+
+		button = document.createElement("button");
+		button.id = id;
+		button.textContent = buttonMarkPreference;
+
+		pinButtonStyle(button, {
+			...BUTTON_STYLE_RESET,
+			position: "fixed",
+			top: "16px",
+			right: "16px",
+			zIndex: "2147483647",
+			color: "white",
+			padding: "0",
+			fontFamily: "Verdana,sans-serif",
+			fontWeight: "bold",
+			cursor: "pointer",
+			userSelect: "none",
+			touchAction: "none",
+			display: "flex",
+			alignItems: "center",
+			justifyContent: "center",
+			// box-shadow rides along because setFloatingButtonVariant writes it
+			// too: without it the glow snapped while the fill cross-faded, which
+			// is visible when the button settles out of "checking".
+			transition: "background .2s ease, box-shadow .2s ease",
+			// So the fill overlay can be clipped to the circle.
+			overflow: "hidden",
+			isolation: "isolate",
+		});
+
+		button.style.setProperty(
+			"-webkit-tap-highlight-color",
+			"transparent",
+			"important",
+		);
+
+		setFloatingButtonVariant(button, variant);
+
+		const updateButtonStyle = () => {
+			applyButtonMobileStyle(button);
+		};
+
+		updateButtonStyle();
+		window.addEventListener("resize", updateButtonStyle);
+		document.body.appendChild(button);
+
+		button._cleanup = () => {
+			window.removeEventListener("resize", updateButtonStyle);
+		};
+
+		return button;
+	}
 
 	// -------------------------
 	// Submission helpers
@@ -6107,10 +6108,6 @@ ${
 			"&t=" +
 			encodeURIComponent(title)
 		);
-	}
-
-	function editURL(storyID) {
-		return HN_ORIGIN + "/edit?id=" + storyID;
 	}
 
 	// -------------------------
@@ -6523,10 +6520,6 @@ ${
 		} catch {
 			return null;
 		}
-	}
-
-	function invalidateVoteLinks(storyID) {
-		voteLinkCache.delete(String(storyID));
 	}
 
 	function getVoteStateValue(voteInfo) {
@@ -10234,7 +10227,6 @@ header button svg {
 	display:none;
 }
 
-
 .source-strip-entry {
 	display:inline-flex;
 	align-items:baseline;
@@ -12125,7 +12117,6 @@ ${[
 	--measure:1215px;
 }
 
-
 ${THEME_CSS}
 ${CHROME_CSS}
 ${SUBMIT_FORM_CSS}
@@ -12190,7 +12181,6 @@ ${SUBMIT_FORM_CSS}
 		background:var(--accent);
 	}
 }
-
 
 .submission {
 	margin:0;
@@ -12411,7 +12401,6 @@ ${SUBMIT_FORM_CSS}
 	display:none;
 }
 
-
 /* A text link on the meta row, not a floating glyph. Same rule as .meta a and
    .composer-help-toggle: no underline until hover, no colour shift. */
 .filter-banner-close {
@@ -12508,11 +12497,6 @@ ${SUBMIT_FORM_CSS}
    the three, so it outranks the transparent rule at equal specificity. */
 .children > .comment.new-comment.comment-new-seen {
 	border-left-color:var(--border-soft);
-}
-
-.comment.comment-target {
-	background:rgba(var(--accent-rgb),.10);
-	border-radius:6px;
 }
 
 .comment.comment-filter-hidden {
@@ -13407,7 +13391,6 @@ ${settingsPanelHTML()}
 
 			await refreshArticleAnnotations();
 		};
-
 
 		document
 			.querySelectorAll(
@@ -14506,7 +14489,6 @@ ${settingsPanelHTML()}
 					: ""
 			}
 
-
 		<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span><span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
 
 		${
@@ -15330,7 +15312,6 @@ title="Show only this discussion">
 		// permanently under the title.
 		const strip = wrapper.querySelector(".source-strip");
 		const disclosure = wrapper.querySelector(".page-header-disclosure");
-
 
 		// Nothing to disclose with a single discussion: no button was rendered, and
 		// the strip stays out of the layout entirely.
@@ -17178,10 +17159,6 @@ title="Show only this discussion">
 					element.classList.remove("comment-quote-promoted");
 					delete element.dataset.hnewhereQuotePromoted;
 				});
-
-			sidebarUI.shadow
-				.querySelectorAll(".comment-target")
-				.forEach((element) => element.classList.remove("comment-target"));
 		}
 	}
 
@@ -17957,14 +17934,6 @@ title="Show only this discussion">
 			top: Math.max(0, rect.top + window.scrollY - window.innerHeight * 0.3),
 			behavior: prefersReducedMotion() ? "auto" : "smooth",
 		});
-	}
-
-	function flashSidebarComment(element) {
-		element.classList.add("comment-target");
-
-		window.setTimeout(() => {
-			element.classList.remove("comment-target");
-		}, 1200);
 	}
 
 	function buildAnnotationGroups(comments, providedIndex = null) {
@@ -19411,7 +19380,6 @@ title="Show only this discussion">
 
 		crossFadeCommentsView(comments, render);
 	}
-
 
 	// Persists before tearing down, because the teardown destroys the surface this
 	// was clicked in. The default is the page rather than the site: it is the
