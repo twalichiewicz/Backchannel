@@ -940,7 +940,12 @@
 	// at startup by loadRememberedVotes().
 	let rememberedVotes = {};
 
-	// { [itemId]: { favorite?: bool, flagged?: bool, flagUnavailable?: bool, at } }
+	// { [itemId]: { favorite?: bool, flagged?: bool, at },
+	//   account:  { favoriteUnavailable?: bool, flaggedUnavailable?: bool, at } }
+	//
+	// "account" is not a story id, and cannot collide with one. Whether an action is
+	// offered at all is a fact about the reader rather than about any item, so it is
+	// remembered once instead of being rediscovered a popup at a time.
 	let rememberedItemActions = {};
 
 	async function loadRememberedVotes() {
@@ -1421,7 +1426,7 @@
 		// one that carries them.
 		//
 		// wikiPages and statuses hold a whole discussion discovery already fetched,
-		// so those two loadThreads fetch nothing. creatorId is smaller: Lemmy needs
+		// so neither source's loadThread fetches anything. creatorId is smaller: Lemmy needs
 		// the poster's id to mark OP, and the comment list does not carry it.
 		wikiPages: { type: "array", optional: true },
 		statuses: { type: "array", optional: true },
@@ -3380,6 +3385,7 @@
 	// registry entry and no markup. The caveat travels with the source that earns
 	// it: a checkbox that sends the reader's browsing history somewhere new has to
 	// say so where it is ticked, not in a document nobody opens.
+	//
 	// The id is optional because this list is rendered twice into the same shadow
 	// root -- once in the settings panel, once in the picker -- and two elements
 	// cannot share one. The input sits inside its own label, so nothing needs a
@@ -7517,9 +7523,8 @@ ${
 	</div>
 	`;
 
-		// The count opens the breakdown; a line in it opens that source. Wired per
-		// row rather than delegated because the row is built here and thrown away
-		// whole, so there is nothing to keep in step.
+		// Wired per row rather than delegated, because the row is built here and
+		// thrown away whole, so there is nothing to keep in step.
 		const total = row.querySelector(".browse-comments-total");
 
 		if (total) {
@@ -8024,18 +8029,15 @@ ${
 		}
 	}
 
-	// The queue rendered as rows, reusing the front page's row exactly -- it is the
-	// same object in the same list, and giving it a second appearance would say the
-	// two were different kinds of thing.
-	// Returns whether anything actually changed, so a redraw only happens when there
-	// is something new to show. Without that the refresh would redraw the list every
-	// time the tab is opened, and the redraw would start another refresh.
 	// A handful at a time rather than all at once. A queue is meant to be filled
 	// over days, so forty entries is an ordinary size and forty simultaneous
 	// requests is not -- getItem caches, so this is paid once a session, but paying
 	// it as one burst is how a reader ends up rate-limited for reading.
 	const QUEUE_REFRESH_BATCH = 6;
 
+	// Returns whether anything actually changed, so a redraw only happens when there
+	// is something new to show. Without that the refresh would redraw the list every
+	// time the tab is opened, and the redraw would start another refresh.
 	async function refreshQueueEntries(entries) {
 		const fetched = [];
 
@@ -8102,6 +8104,9 @@ ${
 		return changed;
 	}
 
+	// The queue rendered as rows, reusing the front page's row exactly -- it is the
+	// same object in the same list, and giving it a second appearance would say the
+	// two were different kinds of thing.
 	async function renderQueueView(ui, list) {
 		const entries = sortQueue(await loadQueue());
 
@@ -11494,13 +11499,13 @@ ${[
 
 		applySettingsPanelState(await loadSettings());
 
-		// Single place the open state changes, so the button's pressed styling and
-		// aria-expanded cannot drift out of sync with the panel.
 		// Assigned when the hide menu is wired, further down. Declared here because
 		// the two dropdowns have to be able to close each other and only one of them
 		// can be defined first.
 		let setHideMenuOpen = () => {};
 
+		// Single place the open state changes, so the button's pressed styling and
+		// aria-expanded cannot drift out of sync with the panel.
 		const setSettingsOpen = (open) => {
 			settingsPanel.classList.toggle("hidden", !open);
 			settingsToggle.classList.toggle("is-open", open);
@@ -15510,6 +15515,7 @@ title="Show only this discussion">
 	// idle, how many submissions it is showing. The resting text is recorded rather
 	// than written straight out, so a render finishing mid-stage cannot overwrite
 	// the stage the reader is currently being shown.
+	//
 	// Every write goes through here, so the collapsed-when-empty class can never
 	// drift out of step with the text that justifies it.
 	function writeSidebarSubtitle(element, text) {
@@ -15711,15 +15717,15 @@ title="Show only this discussion">
 
 			setSidebarStage(ui, "comments");
 
-			// One path, whatever the count. Two renderers meant the panel looked
-			// like a different product depending on how many places a link happened
-			// to be posted to -- a submission header for one, a page header for
-			// several -- and every fix had to be made twice.
 			// Read before the render rather than after it. renderDiscussions ends by
 			// clearing the stage it announced, and an await between that and the next
 			// one would let the subtitle start collapsing and then come back.
 			const settings = await loadSettings();
 
+			// One path, whatever the count. Two renderers meant the panel looked like a
+			// different product depending on how many places a link happened to be
+			// posted to -- a submission header for one, a page header for several --
+			// and every fix had to be made twice.
 			await renderDiscussions(loaded, ui);
 
 			if (generation === sidebarGeneration) {
@@ -16075,7 +16081,7 @@ title="Show only this discussion">
 			return true;
 		}
 
-		// Deliberately NOT voteAnchor.click(): HN's own handler updates the arrow
+		// Deliberately NOT anchor.click(): HN's own handler updates the arrow
 		// optimistically and sends /vote in the background, so closing the popup
 		// moments later aborts the request and the vote never reaches the server.
 		// A top-level navigation cannot be aborted that way -- HN commits the vote
@@ -16529,7 +16535,7 @@ title="Show only this discussion">
 			// Shaped rather than used raw. This is the other place a story enters the
 			// queue, and an entry made here has to be indistinguishable from one made
 			// in the panel -- same key, so the two lists agree about what is already
-			// saved, and same permalink, so the row can draw its comment link.
+			// saved, and same source, so the queue knows what kind of id it holds.
 			const parsed = parseFrontPageRow(row);
 			const story = parsed ? hnStory(parsed) : null;
 			const subline = row.nextElementSibling?.querySelector(".subline, .subtext");
@@ -18423,6 +18429,7 @@ title="Show only this discussion">
 	// layer that is itself partly transparent cannot compound, so every quote reads
 	// the same. How much a passage is discussed is the heat layer's job, and it was
 	// only ever being said twice.
+	//
 	// Meant to read as a highlighter drawn over the line, not as a tint on it: half
 	// strength puts white paper at rgb(173,173,235). The overlay blends, so the accent
 	// cannot touch the glyphs however heavy it gets -- text on a highlight keeps a
@@ -19235,11 +19242,9 @@ title="Show only this discussion">
 				// and the wordmark has to be told either way.
 				await refreshBrowseAffordances(ui.shadow);
 
-				// Nothing enabled is a state, not an error: the panel offers the
-				// picker rather than emptying and leaving the reader to guess.
-				// Nothing enabled is a state the reader chose, and the picker is how
-				// they undo it -- so the panel stays and offers it rather than
-				// vanishing and leaving them to find the grey button.
+				// Nothing enabled is a state the reader chose, not an error, and the
+				// picker is how they undo it -- so the panel stays and offers it rather
+				// than vanishing and leaving them to find the grey button.
 				if (!enabledSourceIds(settings, registeredSourceIds()).length) {
 					sidebarHasDiscussion = false;
 					renderSourcePicker(ui);
