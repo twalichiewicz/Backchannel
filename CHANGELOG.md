@@ -51,6 +51,16 @@ use to detect updates, so every release bumps it.
   from its text named a page nobody could reach.
 - The source beside a comment count reads as an aside — `(HN) 295 comments` —
   rather than as part of the count.
+- **A front-page row's comment count goes to the page it counts**, and opens the
+  conversation when it gets there. The title reads the article and the count
+  reads what was said about it, the way a Hacker News row splits the same two.
+  The panel only ever shows the discussion of the page behind it, so there is
+  nowhere else for a conversation to be read from.
+- That count is marked as a floor — `2,419+`. A row knows what the front pages
+  carry and nothing else: `r/popular` held one thread about a story fifteen
+  subreddits were arguing about. Going to the page is what settles the number.
+- Each discussion a page's conversation is made of is still reachable, from the
+  "4 discussions" button under the title once you are there.
 
 ### Fixed
 
