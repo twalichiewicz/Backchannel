@@ -68,6 +68,16 @@ use to detect updates, so every release bumps it.
 - Wiki links inside those comments point at Wikipedia. There are 321 relative
   links on one Talk page against 49 absolute ones, and a relative href resolves
   against whatever site you are reading.
+- The panel stops saying it is loading once it has. Opening a conversation from
+  a front-page count, changing the sort, or switching a source off left the
+  subtitle claiming to load for as long as the panel stayed open.
+- Opening a queued story from another source no longer offers a Hacker News
+  discussion that does not exist. The strip at the foot of a thread recorded
+  which page it was opening but not where it came from, so a Lobsters id could
+  be read back as a Hacker News item number.
+- Two submissions of one page are told apart wherever the panel opens them. The
+  date that separates them was added on arrival but not when a conversation is
+  opened from a front-page count, so both pills read "HN".
 
 ## [1.6.4] — 2026-08-06
 

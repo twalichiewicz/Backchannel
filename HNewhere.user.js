@@ -1353,7 +1353,9 @@
 		const counts = new Map();
 
 		for (const discussion of discussions) {
-			counts.set(discussion.label, (counts.get(discussion.label) ?? 0) + 1);
+			const base = discussion.baseLabel ?? discussion.label;
+
+			counts.set(base, (counts.get(base) ?? 0) + 1);
 		}
 
 		// baseLabel is the name before any date was added, kept on every discussion
@@ -1367,16 +1369,18 @@
 		// adapter must produce, and this is derived here, after every adapter has
 		// already answered.
 		return discussions.map((discussion) => {
-			if ((counts.get(discussion.label) ?? 0) < 2 || !discussion.createdAt) {
-				return { ...discussion, baseLabel: discussion.label };
+			const baseLabel = discussion.baseLabel ?? discussion.label;
+
+			if ((counts.get(baseLabel) ?? 0) < 2 || !discussion.createdAt) {
+				return { ...discussion, baseLabel, label: baseLabel };
 			}
 
 			const when = new Date(discussion.createdAt * 1000);
 
 			return {
 				...discussion,
-				baseLabel: discussion.label,
-				label: `${discussion.label} · ${when.toLocaleString(undefined, {
+				baseLabel,
+				label: `${baseLabel} · ${when.toLocaleString(undefined, {
 					month: "short",
 					year: "numeric",
 				})}`,
@@ -4638,7 +4642,13 @@ ${
 
 		// filter(Boolean) so a source that ever returns a nullish entry cannot throw
 		// the comparator and, with it, the whole page pass.
-		return results.flat().filter(Boolean).sort(compareStoriesByDiscussion);
+		// Labelled here, where the whole set for a URL is known, because that is what
+		// telling two submissions of one page apart requires. Every path that
+		// produces a discussion list crosses this or resolveDiscussions, and
+		// disambiguateLabels is idempotent so both may apply it.
+		return disambiguateLabels(
+			results.flat().filter(Boolean).sort(compareStoriesByDiscussion),
+		);
 	}
 
 	// The same protection for the second phase, loading a discussion's comments. The
@@ -7911,8 +7921,13 @@ ${
 		title.onclick = (event) => {
 			// Same record and same rules as a browse row: this is a story being opened
 			// from HNewhere, and the page it lands on should read it as an arrival.
+			// `source` included for the reason the browse row gives: the landing page
+			// recovers these ids as Algolia refs when its own discovery comes back
+			// empty, and only Hacker News can be read that way. Absent, a queued
+			// Lobsters story would be offered as HN item "97laur".
 			const record = save(STORAGE.last, {
 				url: next.url,
+				source: next.source || "hn",
 				ids: [String(next.id)],
 				timestamp: Date.now(),
 			});
@@ -15093,6 +15108,17 @@ ${settingsPanelHTML()}
 			hydrateVoteControlsForStory(story.id, await loadVoteLinks(story.id));
 			hydrateDisplayAges(story.id);
 		}
+
+		// Every stage this render announced is over. Cleared here rather than by each
+		// caller because there are four of them -- the first open, a sort change, a
+		// front-page count, a source toggle -- and only the first had a finally to do
+		// it, so the other three left the subtitle claiming to load for good.
+		//
+		// Not on the early returns above: those mean a newer render has taken over,
+		// and the stage on screen is now that one's to clear.
+		if (generation === sidebarGeneration) {
+			clearSidebarStage(ui);
+		}
 	}
 
 	// discover sees root posts and their direct reply counts, never the replies,
@@ -15781,13 +15807,16 @@ title="Show only this discussion">
 			// like a different product depending on how many places a link happened
 			// to be posted to -- a submission header for one, a page header for
 			// several -- and every fix had to be made twice.
+			// Read before the render rather than after it. renderDiscussions ends by
+			// clearing the stage it announced, and an await between that and the next
+			// one would let the subtitle start collapsing and then come back.
+			const settings = await loadSettings();
+
 			await renderDiscussions(loaded, ui);
 
 			if (generation === sidebarGeneration) {
 				// Announced only when the pass will actually run, so the sidebar never
 				// claims to be doing work that is switched off.
-				const settings = await loadSettings();
-
 				if (settings.annotations && shouldShowArticleAnnotations(settings)) {
 					setSidebarStage(ui, "annotations");
 				}
