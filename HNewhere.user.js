@@ -5813,15 +5813,65 @@ ${
 	// existing button untouched and adopts a pending one by id, so neither path
 	// re-labels it: a mark changed while a button was already on the page stayed on
 	// the old one until a reload.
+	// The panel is in a shadow root and a page's selectors cannot reach into it.
+	// The floating buttons are not: they are in the page so they can be dragged
+	// around it and composite against it, which also puts them in range of the
+	// page's own CSS. `button { padding:18px !important }` is an ordinary line in a
+	// design system and it turned the circle into an 80px square with the mark
+	// letter-spaced across it.
+	//
+	// An important author rule beats a normal inline style -- that is the cascade
+	// working as specified, not a bug -- and the only thing that outranks it is an
+	// important inline style. So everything deciding how this button looks is set
+	// through here, and nothing that decides it is left normal.
+	function pinButtonStyle(button, properties) {
+		for (const [name, value] of Object.entries(properties)) {
+			const property = name.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
+
+			if (value === null || value === undefined) {
+				button.style.removeProperty(property);
+				continue;
+			}
+
+			button.style.setProperty(property, String(value), "important");
+		}
+	}
+
+	// What a page can set that this button never does, and would be disfigured by.
+	// Pinned to their initial values rather than left alone, because "we do not set
+	// letter-spacing" is not a defence against a page that does.
+	const BUTTON_STYLE_RESET = {
+		margin: "0",
+		border: "0",
+		minWidth: "0",
+		maxWidth: "none",
+		minHeight: "0",
+		maxHeight: "none",
+		lineHeight: "1",
+		letterSpacing: "normal",
+		wordSpacing: "normal",
+		textTransform: "none",
+		textIndent: "0",
+		textDecoration: "none",
+		textAlign: "center",
+		fontStyle: "normal",
+		whiteSpace: "nowrap",
+		boxSizing: "border-box",
+		float: "none",
+		visibility: "visible",
+	};
+
 	function applyButtonAppearance(button) {
 		const size = buttonSizePreference;
 
 		button.textContent = buttonMarkPreference;
-		button.style.width = `${size}px`;
-		button.style.height = `${size}px`;
-		button.style.fontSize = `${buttonFontSizeFor(size)}px`;
-		button.style.borderRadius =
-			BUTTON_SHAPES[buttonShapePreference] || BUTTON_SHAPES.circle;
+		pinButtonStyle(button, {
+			width: `${size}px`,
+			height: `${size}px`,
+			fontSize: `${buttonFontSizeFor(size)}px`,
+			borderRadius:
+				BUTTON_SHAPES[buttonShapePreference] || BUTTON_SHAPES.circle,
+		});
 	}
 
 	async function refreshButtonAppearance() {
@@ -5865,19 +5915,21 @@ ${
 					: style.background;
 
 		button.dataset.hnewhereVariant = variant;
-		button.style.background = background;
-		// The mark sits on that background, so its colour is decided by it rather
-		// than fixed at white. The greys go through the same test as the accent --
-		// #b8b8b8 carries black, #4a4a4a carries white -- so one rule covers every
-		// variant instead of the accent being a special case.
-		button.style.color = readableInk(parseHexColor(background));
-		button.style.boxShadow = style.boxShadow;
+		pinButtonStyle(button, {
+			background,
+			// The mark sits on that background, so its colour is decided by it rather
+			// than fixed at white. The greys go through the same test as the accent --
+			// #b8b8b8 carries black, #4a4a4a carries white -- so one rule covers every
+			// variant instead of the accent being a special case.
+			color: readableInk(parseHexColor(background)),
+			boxShadow: style.boxShadow,
+		});
 		button.title = style.title;
 	}
 
 	function applyButtonMobileStyle(button) {
-		Object.assign(button.style, {
-			boxSizing: "border-box",
+		pinButtonStyle(button, {
+			...BUTTON_STYLE_RESET,
 			padding: "0",
 			display: "flex",
 			alignItems: "center",
@@ -5885,8 +5937,9 @@ ${
 			color: "white",
 			top: "16px",
 			right: "16px",
-			opacity: "1",
 		});
+
+		button.style.opacity = "1";
 
 		applyButtonAppearance(button);
 
@@ -5923,31 +5976,36 @@ ${
 			button.id = id;
 			button.textContent = buttonMarkPreference;
 
-			button.style.cssText = `
-					position:fixed;
-					top:16px;
-					right:16px;
-					z-index:2147483647;
-					color:white;
-					border:none;
-					padding:0;
-					font-family:Verdana,sans-serif;
-					font-weight:bold;
-					cursor:pointer;
-					user-select:none;
-					touch-action:none;
-					display:flex;
-					align-items:center;
-					justify-content:center;
-					-webkit-tap-highlight-color:transparent;
-					/* box-shadow rides along because setFloatingButtonVariant writes it
-					   too: without it the glow snapped while the fill cross-faded, which
-					   is visible when the button settles out of "checking". */
-					transition:background .2s ease, box-shadow .2s ease;
-					/* So the fill overlay can be clipped to the circle. */
-					overflow:hidden;
-					isolation:isolate;
-				`;
+			pinButtonStyle(button, {
+				...BUTTON_STYLE_RESET,
+				position: "fixed",
+				top: "16px",
+				right: "16px",
+				zIndex: "2147483647",
+				color: "white",
+				padding: "0",
+				fontFamily: "Verdana,sans-serif",
+				fontWeight: "bold",
+				cursor: "pointer",
+				userSelect: "none",
+				touchAction: "none",
+				display: "flex",
+				alignItems: "center",
+				justifyContent: "center",
+				// box-shadow rides along because setFloatingButtonVariant writes it
+				// too: without it the glow snapped while the fill cross-faded, which
+				// is visible when the button settles out of "checking".
+				transition: "background .2s ease, box-shadow .2s ease",
+				// So the fill overlay can be clipped to the circle.
+				overflow: "hidden",
+				isolation: "isolate",
+			});
+
+			button.style.setProperty(
+				"-webkit-tap-highlight-color",
+				"transparent",
+				"important",
+			);
 
 			setFloatingButtonVariant(button, variant);
 
@@ -7059,9 +7117,7 @@ ${
 
 		const { x, y } = clampButtonToViewport(button, saved.x, saved.y);
 
-		button.style.left = x + "px";
-		button.style.top = y + "px";
-		button.style.right = "auto";
+		pinButtonStyle(button, { left: x + "px", top: y + "px", right: "auto" });
 	}
 
 	// Anything anchored to the button -- currently the submit popover -- listens for
@@ -7088,9 +7144,7 @@ ${
 				button.offsetTop,
 			);
 
-			button.style.left = x + "px";
-			button.style.top = y + "px";
-			button.style.right = "auto";
+			pinButtonStyle(button, { left: x + "px", top: y + "px", right: "auto" });
 			notifyMoved();
 		};
 
@@ -7129,9 +7183,7 @@ ${
 				startTop + deltaY,
 			);
 
-			button.style.left = x + "px";
-			button.style.top = y + "px";
-			button.style.right = "auto";
+			pinButtonStyle(button, { left: x + "px", top: y + "px", right: "auto" });
 			notifyMoved();
 		});
 
@@ -8367,8 +8419,7 @@ ${
 
 	function pulseFloatingButtonFeedback(button, text) {
 		button.textContent = text;
-		button.style.fontSize = "11px";
-		button.style.color = "white";
+		pinButtonStyle(button, { fontSize: "11px", color: "white" });
 
 		window.setTimeout(() => {
 			button.textContent = buttonMarkPreference;
@@ -9147,7 +9198,10 @@ header {
 	   off the panel. */
 	width:max-content;
 	min-width:max-content;
-	max-width:min(20rem, 82vw);
+	/* px, not rem. rem inside a shadow root is measured against the page's own
+	   root font-size, so on any site using the 62.5% reset this ceiling silently
+	   became 200px. Nothing else in this stylesheet uses rem. */
+	max-width:min(320px, 82vw);
 	padding:4px;
 	border:1px solid var(--surface-border);
 	border-radius:6px;
@@ -10420,7 +10474,10 @@ header button svg {
 	   this column -- because overflow is hidden and anything past it is a sentence
 	   cut in half rather than a sentence scrolled. max-height cannot animate from
 	   "none", which is why this is a number at all. */
-	max-height:24rem;
+	   Stated in px for the same reason the hide menu is: rem here would be
+	   measured against the page's root font-size, and a site using the 62.5%
+	   reset would put this ceiling back below the caveats it has to clear. */
+	max-height:384px;
 	overflow:hidden;
 	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
 }
