@@ -7396,48 +7396,52 @@ ${
 		}, VIEW_SWAP_FADE_MS);
 	}
 
-	// What a comment count is for on Hacker News: the title opens the article and
-	// the count opens the conversation about it. Here the conversation is the
-	// merged one, so this is the only place a reader can reach it without first
-	// going to the page it is about.
+	// Opening a row goes to the page, always. The panel shows the discussion of the
+	// page behind it, so a conversation reached any other way is a conversation
+	// about something the reader is not looking at -- which is the one thing this
+	// whole panel exists not to do.
 	//
-	// It is also the only honest way to show a true total. A front-page row knows
-	// what the front pages carry -- r/popular had one thread about a story that
-	// fifteen subreddits were arguing about -- and discovery is what finds the
-	// rest. Running it for thirty rows nobody has asked about would be hundreds of
-	// requests; running it for the one row somebody pressed costs what opening
-	// that page costs, which they were about to spend anyway.
-	async function openRowDiscussion(ui, story) {
-		if (!ui || !story?.url) {
+	// The count and the title differ only in what the reader is asking for, which
+	// is what `openPanel` carries: the title says "read this", the count says "read
+	// what was said about this". Hacker News splits the same row the same way.
+	//
+	// The record is the one setupHNListener writes when you click a story on HN, so
+	// the page you land on reads the arrival it would have read coming from HN
+	// itself -- and automatic opening, and "only when arriving from Hacker News",
+	// apply to a story opened from here without either of them knowing this path
+	// exists.
+	//
+	// `source` is what stops the ids being misread. They are recovered as Algolia
+	// refs -- `{ objectID: id }` -- when discovery on the landing page comes back
+	// empty, which is only meaningful for Hacker News. Without it, a row from
+	// anywhere else whose discovery then failed would offer the reader a Hacker
+	// News item whose number is that source's own id.
+	function openStoryFromRow(story, event, { openPanel = false } = {}) {
+		const record = save(STORAGE.last, {
+			url: story.url,
+			source: story.source || "hn",
+			ids: [String(story.id)],
+			timestamp: Date.now(),
+			// Only ever true, never written false: an absent flag is a title click,
+			// and a record written by an older version has none.
+			...(openPanel ? { openPanel: true } : {}),
+		});
+
+		// A modified or middle click means "open it somewhere else" everywhere on
+		// the web, and it means that here too, so the default is left alone. The
+		// record is still made and simply not waited on: the browser is already
+		// opening the tab, and a GM write lands well inside a page load.
+		if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
 			return;
 		}
 
-		const generation = ++sidebarGeneration;
+		event.preventDefault();
 
-		setBrowseMode(ui, false, { animate: false });
-		setSidebarStage(ui, "discussion");
-
-		const settings = await loadSettings();
-		const discussions = await discoverAll(story.url, settings);
-
-		if (generation !== sidebarGeneration) {
-			return;
-		}
-
-		// Nothing found is not nothing to show: the row came from somewhere, and the
-		// front page is where the reader was. A trending link with no thread behind
-		// it -- Mastodon's front page carries those -- lands here.
-		if (!discussions.length) {
-			setBrowseMode(ui, true);
-
-			return;
-		}
-
-		sidebarHasDiscussion = true;
-		setSidebarStage(ui, "comments");
-		await renderDiscussions(discussions, ui);
-		// Deliberately no annotation pass. The article this thread is about is not
-		// the page behind the panel, so there is nothing on screen to light up.
+		// Navigates either way. A storage error is not a reason to refuse to open
+		// the article -- it costs the arrival, not the click.
+		record.catch(() => {}).then(() => {
+			location.href = story.url;
+		});
 	}
 
 	// Borrowing the story vocabulary rather than renderStory itself: the title
@@ -7467,8 +7471,8 @@ ${
 		// subreddits were arguing about, so the row said 2,419 where the article said
 		// 5,476. The error only ever runs one way, since a front page can omit a
 		// discussion and cannot invent one. Pressing it settles the question.
-		const commentTotal = `<button type="button" class="browse-comments-total"
-	title="Open the conversation about this">${totalText}<span class="browse-comments-floor" aria-hidden="true">+</span></button>`;
+		const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
+	title="Go to the page and read what was said about it">${totalText}<span class="browse-comments-floor" aria-hidden="true">+</span></a>`;
 
 		// Only where the reader has an account that can act. Every source declares
 		// its capabilities, and HN is the only one with any -- so flag and favorite
@@ -7520,9 +7524,8 @@ ${
 
 		if (total) {
 			total.onclick = (event) => {
-				event.preventDefault();
 				event.stopPropagation();
-				openRowDiscussion(sidebarUI, story).catch(console.error);
+				openStoryFromRow(story, event, { openPanel: true });
 			};
 		}
 
@@ -7575,41 +7578,8 @@ ${
 			};
 		}
 
-		row.querySelector(".browse-title-link").onclick = (event) => {
-			// The same record setupHNListener writes when you click a story on HN.
-			// Written before navigating, so the page you land on reads the arrival it
-			// would have read coming from HN itself -- which is what makes automatic
-			// opening, and "only when arriving from Hacker News", apply to a story
-			// opened from here without either of them knowing this path exists.
-			//
-			// `source` is what stops the ids being misread. They are recovered as
-			// Algolia refs -- `{ objectID: id }` -- when discovery on the landing page
-			// comes back empty, which is only meaningful for Hacker News. Without it,
-			// a row from anywhere else whose discovery then failed would offer the
-			// reader a Hacker News item whose number is that source's own id.
-			const record = save(STORAGE.last, {
-				url: story.url,
-				source: story.source || "hn",
-				ids: [String(story.id)],
-				timestamp: Date.now(),
-			});
-
-			// A modified or middle click means "open it somewhere else" everywhere on
-			// the web, and it means that here too, so the default is left alone. The
-			// record is still made and simply not waited on: the browser is already
-			// opening the tab, and a GM write lands well inside a page load.
-			if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
-				return;
-			}
-
-			event.preventDefault();
-
-			// Navigates either way. A storage error is not a reason to refuse to open
-			// the article -- it costs the arrival, not the click.
-			record.catch(() => {}).then(() => {
-				location.href = story.url;
-			});
-		};
+		row.querySelector(".browse-title-link").onclick = (event) =>
+			openStoryFromRow(story, event);
 
 		container.appendChild(row);
 		return row;
@@ -9485,12 +9455,16 @@ header {
 /* A control that has to sit inside a text line without becoming a widget: the
    same font, colour and underline-on-hover as the links either side of it, so
    the row still reads as one sentence. */
+/* An anchor rather than a button, so a modified click opens the page in a new tab
+   the way it does from the title beside it. Everything below is what it takes to
+   make one read as the rest of the meta line. */
 .browse-comments-total {
 	padding:0;
 	border:0;
 	background:none;
 	font:inherit;
 	color:inherit;
+	text-decoration:none;
 	cursor:pointer;
 }
 
@@ -19671,6 +19645,12 @@ title="Show only this discussion">
 				Date.now() - last.timestamp < 300000,
 		);
 
+		// Pressing a comment count is a press, and a press outranks the automatic
+		// rules for the reason one on the button does: those describe what the reader
+		// wanted in general, and this is what they are asking for now. Read before
+		// the record is cleared, and only for the page it was made about.
+		const arrivedForComments = arrivedFromClick && Boolean(last.openPanel);
+
 		if (arrivedFromClick) {
 			await save(STORAGE.last, null);
 		}
@@ -19707,7 +19687,7 @@ title="Show only this discussion">
 			// A press outranks every automatic rule, including the per-site memory --
 			// that is about what the reader did here last time, and this is what they
 			// are doing now. Recorded like any other open they asked for.
-			if (requestedOpen) {
+			if (requestedOpen || arrivedForComments) {
 				destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
 				// Passed whole rather than reduced to ids. A Reddit discussion cannot
 				// be rebuilt from an HN item number, and reducing these to refs was
@@ -19728,10 +19708,15 @@ title="Show only this discussion">
 			return;
 		}
 
-		// Nothing on HN for this page, but the panel has not been only about this
+		// Nothing found for this page, but the panel has not been only about this
 		// page since the front page and the queue went behind it -- and that is what
 		// a reader who pressed the button while it was still looking asked to see.
-		if (requestedOpen) {
+		//
+		// A count press lands here too, and can: the number is a floor drawn from
+		// what the front pages carry, so a trending link with no thread behind it
+		// counts posts and finds no discussion. Better the front page than a grey
+		// button on a page they arrived at asking to read something.
+		if (requestedOpen || arrivedForComments) {
 			destroyFloatingButton(pendingButton);
 			await openSidebar([], { browseOnly: true });
 			return;
