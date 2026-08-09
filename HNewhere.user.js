@@ -14707,6 +14707,27 @@ ${settingsPanelHTML()}
 	// Discussion loading
 	// -------------------------
 
+	// What to call the page a set of discussions is about.
+	//
+	// The document's own title, because the panel shows the discussions of the page
+	// behind it -- every path into a list renders the page the reader is looking at.
+	// Checked rather than assumed: a set about somewhere else would otherwise be
+	// titled with wherever the reader happens to be standing, which is one article's
+	// name over another article's comments, and nothing on screen saying so.
+	//
+	// A set that is about somewhere else has to name itself instead. Falls back to
+	// the document only when no discussion carries a title of its own, which is a
+	// worse answer than a wrong one is a lie.
+	function discussionsPageTitle(stories) {
+		const article = (stories || []).find((story) => story.articleURL)?.articleURL;
+
+		if (!article || sameURL(article, location.href)) {
+			return pageTitle();
+		}
+
+		return (stories || []).find((story) => story.title)?.title || pageTitle();
+	}
+
 	async function renderDiscussions(stories, ui) {
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
@@ -14790,7 +14811,18 @@ ${settingsPanelHTML()}
 			}
 		});
 
+		// The content's own name, not whichever submission sorted first. That would
+		// put one submitter's framing where the page's name belongs -- and render
+		// nothing at all for a Bluesky collective, honestly titled "" because nobody
+		// titled it, which a time-descending sort can put first.
+		//
+		// Read once and handed down. Two independent reads of the document is the
+		// same question asked twice, and the header and the submission blocks
+		// answering it differently is exactly the disagreement this avoids.
+		const page = discussionsPageTitle(stories);
+
 		const headerElement = renderPageHeader(stories, ui.body, {
+			page,
 			sort: settings.commentSort,
 			// The whole panel, not a re-sort in place. Changing the order changes
 			// which comment each batch renders, and renderDiscussions is what owns
@@ -14818,12 +14850,6 @@ ${settingsPanelHTML()}
 		details.className = "submission-details";
 		ui.body.appendChild(details);
 
-		// The content's own name, not whichever submission sorted first. That used
-		// to read stories[0].title, which put one submitter's framing where the
-		// page's name belongs -- and rendered nothing at all once a Bluesky
-		// collective, honestly titled "" because nobody titled it, could sort to
-		// the front of a time-descending list.
-		const page = pageTitle();
 		// A submitted title is an identifier only when there is another discussion
 		// to tell it apart from. syncSubmissionDetails shows a lone block
 		// unconditionally and hides all but the filtered one when there are
@@ -15183,6 +15209,7 @@ ${settingsPanelHTML()}
 	// 26 opening a submission line reading "96 comments".
 	function renderPageHeader(stories, container, options = {}) {
 		const sort = options.sort || "best";
+		const page = options.page ?? discussionsPageTitle(stories);
 		const total = stories.reduce(
 			(sum, story) => sum + (story.commentCount || 0),
 			0,
@@ -15198,7 +15225,7 @@ ${settingsPanelHTML()}
 
 		wrapper.className = single ? "page-header page-header-quiet" : "page-header";
 		wrapper.innerHTML = `
-<div class="page-header-title">${single ? "" : escapeHTML(pageTitle())}</div>
+<div class="page-header-title">${single ? "" : escapeHTML(page)}</div>
 <div class="page-header-meta">${
 	// With one discussion there is nothing to break down and nothing to switch
 	// between, so the header is the title and nothing else: the submission's own
