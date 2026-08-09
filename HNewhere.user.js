@@ -146,17 +146,15 @@
 
 	// Which keys prove a reader was here before this release.
 	//
-	// "HNewhere:migrated" leads, and only because seedSources runs *before*
-	// migrateStorage. Read at that moment it is exact: an upgrading reader has it
-	// from a previous session, and a first run has not reached the line that
-	// writes it. Read any later it is worthless, because migrateStorage sets it
-	// for brand new installs too -- which is why the order in init is load-bearing
-	// rather than tidy.
+	// "HNewhere:migrated" leads, and is exact only because seedSources runs before
+	// migrateStorage: an upgrading reader has it from a previous session, and a
+	// first run has not reached the line that writes it. Read any later it is
+	// worthless, since migrateStorage sets it for fresh installs too -- which is
+	// why the order in init is load-bearing rather than tidy.
 	//
-	// The rest are a belt-and-braces list for a store that somehow has history
-	// without that flag. A reader who installed HNewhere and never once opened a
-	// sidebar would leave almost none of them, which is exactly the reader the
-	// flag catches and a hand-kept list would not.
+	// The rest are belt and braces for a store that somehow has history without
+	// that flag. A reader who installed HNewhere and never opened a sidebar leaves
+	// almost none of them, which is exactly the reader the flag catches.
 	const PRIOR_STORAGE_KEYS = [
 		"HNewhere:migrated",
 		"hn_width",
@@ -348,16 +346,13 @@
 		squircle: "30%",
 	};
 
-	// Clamped to the range but deliberately NOT snapped to the step: a size typed
-	// into the field is the user's choice and is kept exactly, so any whole pixel
-	// from 24 to 64 is a valid stored value. Snapping belongs to the stepper alone.
-	// One or two characters, because that is what a 44px circle holds. Trimmed and
-	// upper-cased so "bc" and " Bc " settle on the same mark, and anything that
-	// normalises to nothing falls back rather than leaving a blank circle -- an
-	// unlabelled button is indistinguishable from a broken one.
+	// One or two characters, because that is what a 44px circle holds.
 	const BUTTON_MARK_DEFAULT = "BC";
 	const BUTTON_MARK_MAX = 2;
 
+	// Trimmed and upper-cased, so "bc" and " Bc " settle on the same mark. Anything
+	// normalising to nothing falls back rather than leaving a blank circle: an
+	// unlabelled button is indistinguishable from a broken one.
 	function normalizeButtonMark(value) {
 		const text = String(value ?? "")
 			.trim()
@@ -367,6 +362,9 @@
 		return text || BUTTON_MARK_DEFAULT;
 	}
 
+	// Clamped to the range but deliberately NOT snapped to the step: a size typed
+	// into the field is the reader's choice and is kept exactly, so any whole pixel
+	// from 24 to 64 is a valid stored value. Snapping belongs to the stepper alone.
 	function normalizeButtonSize(value) {
 		const raw = typeof value === "string" ? LEGACY_BUTTON_SIZES[value] : value;
 		const numeric = Number.isFinite(raw)
@@ -663,16 +661,15 @@
 
 	// #region hnewhere-test-export
 
-	// A blocked entry means one of two things, and the prefix is what tells them
-	// apart. A bare hostname hides the whole site -- which is what every entry
-	// saved before this release is, and what they go on meaning. A `page:` entry
-	// hides one address.
+	// A blocked entry means one of two things and the prefix tells them apart. A
+	// bare hostname hides the whole site, which is what every entry saved before
+	// this release is and what they go on meaning; a `page:` entry hides one
+	// address.
 	//
 	// The prefix is load-bearing rather than decorative. normalizeURL reduces a
-	// homepage to its bare host, so without it `macrumors.com` would spell both
-	// "this site" and "this site's front page" and the second could not be said at
-	// all -- which is the whole of issue #76: hiding it on a front page also hid it
-	// on every article underneath, where the discussions are.
+	// homepage to its bare host, so without it `macrumors.com` spells both "this
+	// site" and "this site's front page" and the second cannot be said at all --
+	// issue #76, where hiding a front page also hid every article underneath it.
 	const BLOCKED_PAGE_PREFIX = "page:";
 
 	function blockedPageEntry(url) {
@@ -707,19 +704,14 @@
 
 	// The reading queue is a list rather than a set, because its order is the
 	// feature: what you saved first is what you are offered next. Every rule below
-	// is a pure transform of that list so the ordering can be argued about without
-	// a browser. The URL comparison arrives as an argument for the same reason
-	// referrerIsHN takes its referrer -- the real one normalizes, and normalizeURL
-	// lives outside this region.
-	// Keyed on the article, not on the submission of it. The item number was a
-	// sound identity while Hacker News was the only source that could put anything
-	// in a queue, and stops being one the moment anything else can: a Lobsters
-	// short_id of "97laur" and an HN item number would share a namespace, and the
-	// same page saved from each would sit in the list twice.
+	// is a pure transform of that list, so the ordering can be argued about without
+	// a browser -- which is why the URL comparison and the key both arrive as
+	// arguments rather than being computed here. normalizeURL lives outside this
+	// region, and the Story mappers have already applied it.
 	//
-	// The key arrives on the story rather than being computed here, for the reason
-	// the region comment gives: normalizeURL lives outside this region, and the
-	// Story mappers have already applied it.
+	// Keyed on the article, not on the submission of it: a Lobsters short_id of
+	// "97laur" and an HN item number share a namespace, so the same page saved from
+	// each would sit in the list twice.
 	function addToQueue(entries, story, now) {
 		const list = Array.isArray(entries) ? entries : [];
 
@@ -735,9 +727,9 @@
 		// a row in it has to be able to say the same things -- and a queue entry is
 		// read days after it was made, long after the page it came from is gone.
 		//
-		// `source` and `permalink` are kept for the same reason and are load-bearing
-		// twice over: the row draws its comment link from the permalink, and
-		// refreshQueueEntries asks the source whether it is one it can refresh.
+		// `source` is read back by refreshQueueEntries, to ask whether this is an
+		// entry it can refresh, and by the next-up link, to say what kind of id it
+		// is recording.
 		return [
 			...list,
 			{
@@ -1345,9 +1337,14 @@
 	// needed: a lone Hacker News discussion stays "HN", and subreddits are already
 	// distinct so they are left alone unless the same one carries two posts.
 	//
-	// Month and year rather than a full date. The pill is small, and two
-	// submissions of one link in the same month is not a case worth widening every
-	// label for.
+	// Month and year rather than a full date. The pill is small, and two submissions
+	// of one link in the same month is not a case worth widening every label for.
+	//
+	// Safe to run twice: everything is measured against baseLabel, the name before
+	// any date was added, so a second pass counts the same names and rebuilds the
+	// same label rather than dating an already-dated one. That is what lets both
+	// discoverAll and resolveDiscussions apply it, which is what it takes to cover
+	// every path producing a discussion list.
 	function disambiguateLabels(discussions) {
 		const counts = new Map();
 
@@ -1417,12 +1414,15 @@
 		// Carried at all because the blend needs a time per root before it can order
 		// anything, and two of the three sources fetch comments lazily.
 		rootTimes: { type: "array" },
-		// What a source whose discovery already holds the whole discussion carries
-		// forward, so its loadThread fetches nothing. Declared rather than smuggled:
-		// the extra-field rule exists to catch a mapper inventing something the
-		// renderer is not obliged to display, and these are neither invented nor
-		// displayed -- they are the source talking to its own loadThread. Absent on
-		// every source but the one that carries them.
+		// What a source carries forward to its own mappers rather than to the
+		// renderer. Declared rather than smuggled: the extra-field rule exists to
+		// catch a mapper inventing something nothing is obliged to display, and
+		// these are neither invented nor displayed. Absent on every source but the
+		// one that carries them.
+		//
+		// wikiPages and statuses hold a whole discussion discovery already fetched,
+		// so those two loadThreads fetch nothing. creatorId is smaller: Lemmy needs
+		// the poster's id to mark OP, and the comment list does not carry it.
 		wikiPages: { type: "array", optional: true },
 		statuses: { type: "array", optional: true },
 		creatorId: { type: ["number", "string"], optional: true },
@@ -1452,23 +1452,20 @@
 	};
 
 	// A row on a front page or in the queue, which is a different object from a
-	// Discussion: it is a *submission* of a page, described well enough to be
-	// listed and read later, not a conversation to be walked. Undeclared until
-	// now, and three places knew it independently -- parseFrontPageRow built it,
-	// addToQueue copied a subset of it, renderBrowseRow read it -- which is the
-	// situation DISCUSSION_SHAPE was written to prevent one level down.
+	// Discussion: it is a *submission* of a page, described well enough to be listed
+	// and read later, not a conversation to be walked. Three places know it --
+	// parseFrontPageRow builds it, addToQueue copies a subset, renderBrowseRow reads
+	// it -- which is the situation DISCUSSION_SHAPE prevents one level down.
 	//
 	// Two fields read oddly beside DISCUSSION_SHAPE and are deliberate.
 	//
-	// `key` is normalizeURL(url), not sourceKey(source, id). What a reader queues
-	// is an article, not a submission of it -- so the same page reaching the queue
-	// from Hacker News and from somewhere else is one entry, and having read it
-	// once you have read it, whichever list it came off.
+	// `key` is normalizeURL(url), not sourceKey(source, id). What a reader queues is
+	// an article, not a submission of it, so the same page reaching the queue from
+	// two sources is one entry -- having read it once, you have read it.
 	//
-	// time/descendants rather than createdAt/commentCount, unlike everything in
-	// DISCUSSION_SHAPE. That is Firebase's vocabulary and it is what every stored
-	// queue has held since queues existed. Renaming here would rewrite reader data
-	// to no end.
+	// time/descendants rather than createdAt/commentCount: Firebase's vocabulary,
+	// and what every stored queue holds. Renaming would rewrite reader data to no
+	// end.
 	const STORY_SHAPE = {
 		source: { type: "string" },
 		key: { type: "string" },
@@ -1484,10 +1481,12 @@
 		time: { type: "number" },
 		descendants: { type: "number" },
 		site: { type: "string" },
-		// Nullable, like a Discussion's. Mastodon's trending links are the case: a
-		// row there is an aggregate of many people posting a URL, with no page
-		// listing them reachable without an account. renderStory already prints an
-		// unlinked title for exactly that.
+		// Nullable, like a Discussion's. This said otherwise, on the premise that a
+		// row always came from one submission and a submission always has a page.
+		// Mastodon's trending links are the counter-example: a row there is an
+		// aggregate of many people posting a URL, with no page listing them that can
+		// be reached without an account. renderStory already prints an unlinked
+		// title for exactly that.
 		permalink: { type: "string", nullable: true },
 	};
 
@@ -2301,15 +2300,15 @@
 	// conversation that grew under it, because a reply to the citation is part of
 	// what was said about the link.
 	//
-	// Nothing cited means no roots, not an invented one: the link is in the
-	// article body, a template, or an archived form the citation index still
-	// matches. Naming the page is the caller's fallback, which is what it did for
-	// every page before this.
+	// Nothing cited means no roots, not an invented one: the link is in the article
+	// body, a template, or an archived form the citation index still matches.
+	// Naming the page is the caller's fallback.
+	//
 	// `seen` is shared across the pages of one discussion, so a comment reached
 	// through two of them is taken by the first and skipped by the rest. Wikipedia
-	// makes that ordinary rather than rare: the deletion log for a day transcludes
-	// every discussion it lists, so one AfD's 28 comments are also 28 of the log
-	// page's 1177, under the same ids. Left alone the reader gets everything twice.
+	// makes that ordinary rather than rare: a day's deletion log transcludes every
+	// discussion it lists, so one AfD's 28 comments are also 28 of the log page's
+	// 1177, under the same ids. Left alone the reader gets everything twice.
 	//
 	// Defaulted, so a caller with a single page to judge needs no set and gets the
 	// page judged on its own.
@@ -2538,33 +2537,12 @@
 		return (index + 1) / (total + 1);
 	}
 
-	// A discussion's standing: what it earned, discounted by how long ago it earned
-	// it -- not erased by it. The decay is a power law rather than an exponential
-	// for exactly that reason. An exponential half-life drives an old discussion
-	// geometrically toward nothing, which is the model that says old means invalid;
-	// a power law falls toward a floor instead. A thread that drew 761 comments in
-	// 2013 is still the best conversation about the page it was about. It simply
-	// should not be the only conversation at the head of the list.
-	//
-	// Votes are log-scaled because raw they are not comparable across venues.
-	// r/todayilearned is a default subreddit and answers in thousands where Hacker
-	// News answers in hundreds: 1916 against 102 is a 19x gap raw and a 1.6x one in
-	// log10, which is the honest distance between them. Bibliometrics has the
-	// identical problem -- a cell-biology paper out-cites a maths paper by
-	// construction -- and solves it by scoring against a same-field reference set.
-	// Without a per-subreddit corpus to compare against, log-scaling is the
-	// approximation available.
-	//
-	// Quality and age deliberately pull against each other. On the measured
-	// fixture the 2013 thread stands at 0.515 against the day-old HN thread's
-	// 4.807: its merit recovers most of what its age costs, which is the point. A
-	// rule where they did not fight would be "newest first" wearing a costume.
-	// Three orders, and there is deliberately no fourth called "Score". HN
-	// publishes no comment points at any endpoint, so a score sort would have to
-	// invent a number for one of the three sources. "Best" already is the
-	// score-ordered blend, honestly named: each platform's own ranking -- HN's
-	// `kids` order, Reddit's sort=top -- read as a percentile, which is the only
-	// comparison available across sources that carry different currencies.
+	// Three orders, and deliberately no fourth called "Score". HN publishes no
+	// comment points at any endpoint, so a score sort would have to invent a number
+	// for one of the sources. "Best" already is the score-ordered blend, honestly
+	// named: each platform's own ranking -- HN's `kids` order, Reddit's sort=top --
+	// read as a percentile, the only comparison available across sources carrying
+	// different currencies.
 	const SORT_MODES = [
 		{ id: "best", label: "Best" },
 		{ id: "newest", label: "Newest" },
@@ -2578,15 +2556,30 @@
 	const STANDING_LIVE_WINDOW = 86400;
 	const SECONDS_PER_YEAR = 31557600;
 
-	// Arrival wins by a nose rather than dominating: it decides between discussions
-	// that are otherwise close, and leaves the merit ordering beneath them intact.
+	// A discussion's standing: what it earned, discounted by how long ago it earned
+	// it -- not erased by it. The decay is a power law rather than an exponential
+	// for exactly that reason: an exponential half-life drives an old discussion
+	// geometrically toward nothing, which is the model that says old means invalid,
+	// where a power law falls toward a floor. A thread that drew 761 comments in
+	// 2013 is still the best conversation about the page it was about; it simply
+	// should not be the only conversation at the head of the list.
 	//
-	// Being live is deliberately NOT a factor here. It was, at 1.5x, and that was
-	// wrong twice over. Too small to do its job -- on the measured page the archive
-	// led a live thread by 1.70x and stayed ahead -- and wrong in kind, because
-	// "there is a conversation happening right now" is not a quantity to be traded
-	// off against thirteen years of accumulated votes. It is a different question,
-	// so blendRoots asks it separately and sorts on it first.
+	// Votes are log-scaled because raw they are not comparable across venues.
+	// r/todayilearned answers in thousands where Hacker News answers in hundreds:
+	// 1916 against 102 is a 19x gap raw and 1.6x in log10, which is the honest
+	// distance. Bibliometrics solves the identical problem by scoring against a
+	// same-field reference set; without a per-subreddit corpus, log-scaling is the
+	// approximation available.
+	//
+	// Arrival wins by a nose rather than dominating: it decides between discussions
+	// that are otherwise close and leaves the merit ordering beneath them intact.
+	//
+	// Being live is deliberately NOT a factor. As a 1.5x multiplier it is both too
+	// small to do its job -- the measured archive led a live thread by 1.70x and
+	// stayed ahead -- and wrong in kind, because "there is a conversation happening
+	// right now" is not a quantity to trade off against thirteen years of votes. It
+	// is a different question, so blendRoots asks it separately and sorts on it
+	// first.
 	function standing(discussion, newestCommentAt, options = {}) {
 		if (!discussion) {
 			return 1;
@@ -2699,14 +2692,12 @@
 			return entries.sort((a, b) => a.createdAt - b.createdAt || b.size - a.size);
 		}
 
-		// Anything else is "best", including absent -- which is what every reader
-		// upgrading into this version has until they touch the control.
+		// Anything unrecognised is "best", including absent.
 		//
-		// Live first, as a tier rather than as a weight. A conversation happening
-		// right now is not worth some number of upvotes that a big enough archive
-		// could out-argue: it is the thing the reader opened the panel to find. As a
-		// 1.5x multiplier it lost to a thirteen-year-old thread with 284 roots, which
-		// is precisely the case it existed for.
+		// Live first, as a tier rather than as a weight. A conversation happening now
+		// is not worth some number of upvotes a big enough archive could out-argue:
+		// it is the thing the reader opened the panel to find. See standing for why
+		// the multiplier this replaced could not do the job.
 		//
 		// Sorting it first is also what makes the live comments one contiguous run,
 		// which is what lets the list bookend them instead of tagging every comment
@@ -2726,25 +2717,23 @@
 	// blendRoots rather than a generalisation of it. blendRoots takes groups of
 	// rootKeys and knows about liveness; neither means anything here.
 	//
-	// standing is fed an adapter rather than the row being reshaped. It speaks
+	// standing is fed an adapter rather than the row being reshaped: it speaks
 	// createdAt/commentCount and a row speaks time/descendants, which is Firebase's
-	// vocabulary and what every reader's stored queue has held since queues
-	// existed. Renaming the row would rewrite reader data to buy nothing.
+	// vocabulary and what every stored queue holds. Renaming the row would rewrite
+	// reader data to buy nothing.
 	//
 	// Two things this deliberately does NOT do.
 	//
-	// It does not pass arrivedFrom. On a discussion that boost means "lead with
-	// the thread you were just reading about", which is the reader's own context.
-	// On a front page it would mean "you came from Lobsters, so Lobsters' picks
-	// lead" -- and someone pressing the wordmark is asking to leave the page they
-	// are on, not to be shown more of where they came from.
+	// It does not pass arrivedFrom. On a discussion that boost means "lead with the
+	// thread you were just reading about"; on a front page it would mean "you came
+	// from Lobsters, so Lobsters' picks lead" -- and someone pressing the wordmark
+	// is asking to leave the page they are on.
 	//
 	// It does not correct for the age term going quiet. Every front-page row is
 	// hours old, so (1 + ageYears) ** STANDING_GRAVITY is ~1 and the blend reduces
-	// to log-scaled score-and-comments over rank fraction. That is the intended
-	// behaviour here, not a decay that has failed to fire: on this list every row
-	// is current, so there is nothing for the decay to tell apart. Measured, so it
-	// is not re-derived later -- a day of age costs 0.27% and a year costs half.
+	// to log-scaled score-and-comments over rank fraction. That is intended, not a
+	// decay that failed to fire: on this list every row is current. Measured, so it
+	// is not re-derived later -- a day of age costs 0.27%, a year costs half.
 	function blendStories(lists, options = {}) {
 		const entries = [];
 
@@ -2794,9 +2783,9 @@
 	//
 	// After the blend, never before, and that ordering is load-bearing. Walking a
 	// sorted list means the first arrival at any URL is by construction its
-	// best-blended one, so the survivor keeps the position it earned and the
-	// others ride along in `also` to supply their comment links. Merging first
-	// would mean choosing a winner before knowing which one the blend preferred.
+	// best-blended one, so the survivor keeps the position it earned and the others
+	// ride along in `also`, where the row reads their comment counts into its total.
+	// Merging first would mean choosing a winner before the blend had preferred one.
 	//
 	// normalizeURL is the key -- the same function every source's discovery
 	// already measures its own hits against, so two sources agree here exactly
@@ -2835,22 +2824,20 @@
 	//
 	// Hacker News and Lobsters are ~100% link-shaped because their readers submit
 	// articles. Reddit and Lemmy are general-purpose forums whose front pages are
-	// mostly native content -- measured on the day this was built, r/popular was
-	// 80 reddit-hosted rows in 100, and Lemmy's Active feed 42% bare images. Blended
-	// raw, Reddit would contribute four memes per article to a panel whose whole
-	// premise is "discussion about the page you are reading".
+	// mostly native content -- measured, r/popular was 80 reddit-hosted rows in 100
+	// and Lemmy's Active feed 42% bare images -- so blended raw, Reddit contributes
+	// four memes per article to a panel whose premise is "discussion about the page
+	// you are reading".
 	//
 	// The test is hosting, not media type. A YouTube link stays, because it is a
-	// page on someone else's site that a reader can go and be at; i.redd.it does
-	// not, because it is Reddit's own CDN and "opening" it lands nowhere the (BC)
-	// button could ever light. That distinction is why this takes hosts rather
-	// than file extensions -- and it is also why a pictrs path counts, since every
-	// Lemmy instance serves its own images from one and the host is whichever
-	// instance happened to federate the post.
+	// page on someone else's site a reader can go and be at; i.redd.it does not,
+	// because it is Reddit's own CDN and opening it lands nowhere the (BC) button
+	// could light. Hence hosts rather than file extensions -- and hence a pictrs
+	// path counting, since every Lemmy instance serves images from one and the host
+	// is whichever instance federated the post.
 	//
-	// Hacker News is the deliberate exception and does not call this: an Ask HN
-	// points at its own item page because for an Ask HN the page and the
-	// discussion are the same object, which parseFrontPageRow has always known.
+	// Hacker News is the deliberate exception and does not call this: for an Ask HN
+	// the page and the discussion are the same object.
 	function isOffSiteLink(url, selfHosts = [], selfPaths = []) {
 		let parsed;
 
@@ -3360,9 +3347,9 @@
 	}
 	// #endregion hnewhere-test-export
 
-	// Where a name links to, decided by the source the name came from. It used to
-	// be Hacker News for everybody, which sent a Reddit username to an HN profile
-	// page that has never existed.
+	// Where a name links to, decided by the source the name came from -- one rule
+	// for everybody would send a Reddit username to an HN profile that has never
+	// existed.
 	//
 	// Returns null for a name that is not a person -- Reddit's "[deleted]", HN's
 	// "anonymous" placeholder -- so the renderer can print the text without
@@ -3486,10 +3473,10 @@ ${
 		// page costs nothing. The front page is the same for everyone; only the vote
 		// arrows would differ, and those are replayed from vote memory anyway.
 		//
-		// One page, where this used to take a page number. The blend fetches every
-		// source once and pages through the merged pool locally, so HN's own ?p=
-		// pagination has nowhere left to surface: page 2 of a blend is made of rows
-		// that lost on page 1, not of one source's next thirty.
+		// One page, and no page number. The blend fetches every source once and pages
+		// through the merged pool locally, so HN's own ?p= pagination has nowhere to
+		// surface: page 2 of a blend is made of rows that lost on page 1, not of one
+		// source's next thirty.
 		async frontPage() {
 			const html = await requestText(HN_ORIGIN + "/news");
 
@@ -3814,9 +3801,8 @@ ${
 
 					// What the caller renders is decided by the caller, because only it
 					// knows which comment the gap sat under. Classifying by "has no
-					// parent" was wrong in the way that matters: a stub hangs beneath a
-					// comment that is already on screen, so every reply it returns has a
-					// parent in the map and nothing was ever a root.
+					// parent" cannot work: a stub hangs beneath a comment already on
+					// screen, so every reply it returns has a parent in the map.
 					return { ok: true, added, remaining: ids.slice(100) };
 				},
 			};
@@ -4590,22 +4576,13 @@ ${
 		},
 	});
 
-	// The discovery entry point. With one source registered it is a fan-out of
-	// one, and the current lookup still goes through findHN directly because the
-	// button only needs to know whether a discussion exists. This is where a
-	// second source plugs in.
-	//
-	// Sources are independent: one failing must never blank a sidebar that has
-	// something else to show, so a rejected discover contributes nothing rather
-	// than rejecting the whole lookup.
 	// A source that never settles must not freeze the button for the others. A
 	// request awaiting a manager's @connect approval slips past the per-request
 	// timeout -- it never starts, so ontimeout never fires -- and under Promise.all
-	// one such source would block every other, Hacker News included, leaving the
-	// nub spinning for good. Each source gets a ceiling; past it, it contributes
-	// nothing rather than holding up the whole lookup. 12s clears the 10s per-request
-	// timeout, so a source whose request merely times out still returns normally --
-	// only a genuine hang is cut off.
+	// one such source would block every other, leaving the nub spinning for good.
+	//
+	// 12s clears the 10s per-request timeout, so a source whose request merely
+	// times out still returns normally; only a genuine hang is cut off.
 	const DISCOVER_CEILING_MS = 12000;
 
 	function discoverWithCeiling(promise, sourceId) {
@@ -4628,6 +4605,12 @@ ${
 		});
 	}
 
+	// The discovery entry point: every enabled source asked at once, their answers
+	// merged into one ordered list.
+	//
+	// Sources are independent. One failing must never blank a sidebar that has
+	// something else to show, so a rejected discover contributes nothing rather
+	// than rejecting the whole lookup.
 	async function discoverAll(url, settings) {
 		const results = await Promise.all(
 			enabledSources(settings).map((source) =>
@@ -4643,6 +4626,7 @@ ${
 
 		// filter(Boolean) so a source that ever returns a nullish entry cannot throw
 		// the comparator and, with it, the whole page pass.
+		//
 		// Labelled here, where the whole set for a URL is known, because that is what
 		// telling two submissions of one page apart requires. Every path that
 		// produces a discussion list crosses this or resolveDiscussions, and
@@ -4778,10 +4762,9 @@ ${
 	// one off should not be served the ranking that included it.
 	//
 	// Every source is asked at once and a thrown adapter costs only its own rows.
-	// One source being down is the case this has to survive well: with four of
-	// them the odds that all four are up are meaningfully worse than for any one,
-	// so a fan-out that failed whole would be less reliable than the single fetch
-	// it replaces.
+	// One source being down is the case this has to survive well: the odds that all
+	// of them are up are meaningfully worse than for any one, so a fan-out that
+	// failed whole would be less reliable than a single fetch.
 	async function loadFrontPages(options = {}) {
 		const settings = options.settings || (await loadSettings());
 		const ids = frontPageSourceIds(settings);
@@ -5315,9 +5298,9 @@ ${
 	}
 
 	// What the panel and the page-side overlay should actually paint, whichever of
-	// the two is in force. Everything that used to read ACCENT, ACCENT_DARK or
-	// ACCENT_RGB reads this instead, so the reader's colour reaches the button and
-	// the article highlights rather than only the panel.
+	// the two is in force. Read in place of ACCENT, ACCENT_DARK and ACCENT_RGB
+	// everywhere, so the reader's colour reaches the button and the article
+	// highlights rather than only the panel.
 	function activeAccent(dark) {
 		const override = accentOverridePalette();
 
@@ -5692,16 +5675,10 @@ ${
 	}
 	// #endregion hnewhere-test-export
 
-	// "HN" was doing double duty as the product's mark and as the name of the only
-	// source; with several sources it would have been announcing one of them. The
-	// reader can set their own, so this reads the preference rather than a
-	// constant -- see normalizeButtonMark for what a valid one is.
-
-	// The two states the floating button can be in. "active" means a discussion is
-	// known to exist; "inactive" means the lookup came back empty and clicking offers
-	// to submit the page instead. Kept in one table because both the initial cssText
-	// and applyButtonMobileStyle used to hardcode the colour separately, which is
-	// exactly how the two would drift.
+	// What the floating button can be saying. "active" means a discussion is known
+	// to exist; the three greys each mean something different is on offer. One
+	// table, because two places paint this button and a colour written in both
+	// drifts.
 	const BUTTON_VARIANTS = {
 		active: {
 			background: ACCENT,
@@ -5815,26 +5792,17 @@ ${
 		}, 220);
 	}
 
-	// The only place these properties are set. They used to be spelled out in both
-	// createFloatingHNButton's cssText and applyButtonMobileStyle, which re-asserts
-	// them on every resize -- so a value applied to only one of them was silently
-	// reverted the next time the window changed size.
+	// The only place these properties are set, so applyButtonMobileStyle -- which
+	// re-asserts them on every resize -- cannot revert a value set anywhere else.
 	//
-	// The label belongs here for the same reason. createFloatingHNButton returns an
-	// existing button untouched and adopts a pending one by id, so neither path
-	// re-labels it: a mark changed while a button was already on the page stayed on
-	// the old one until a reload.
-	// The panel is in a shadow root and a page's selectors cannot reach into it.
-	// The floating buttons are not: they are in the page so they can be dragged
-	// around it and composite against it, which also puts them in range of the
-	// page's own CSS. `button { padding:18px !important }` is an ordinary line in a
-	// design system and it turned the circle into an 80px square with the mark
-	// letter-spaced across it.
-	//
-	// An important author rule beats a normal inline style -- that is the cascade
-	// working as specified, not a bug -- and the only thing that outranks it is an
-	// important inline style. So everything deciding how this button looks is set
-	// through here, and nothing that decides it is left normal.
+	// Every one is written `!important`. The floating buttons live in the page
+	// rather than a shadow root, so they can be dragged around it and composite
+	// against it, which also puts them in range of the page's own CSS:
+	// `button { padding:18px !important }` is an ordinary line in a design system
+	// and it turns the circle into an 80px square with the mark letter-spaced
+	// across it. An important author rule beats a normal inline style -- the
+	// cascade working as specified -- and only an important inline style outranks
+	// it.
 	function pinButtonStyle(button, properties) {
 		for (const [name, value] of Object.entries(properties)) {
 			const property = name.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
@@ -6044,11 +6012,9 @@ ${
 	// than one source. og:title first because it is what the author wrote for
 	// sharing, whereas document.title routinely carries a " | Site Name" tail.
 	//
-	// The hostname floor is load-bearing. It is what makes an empty header
-	// unreachable rather than merely unlikely -- and unlikely was not enough: a
-	// Bluesky collective is honestly titled "" because nobody titled it, the sort
-	// is time-descending, and the header used to read whichever submission landed
-	// first.
+	// The hostname floor is load-bearing: it makes an empty header unreachable
+	// rather than merely unlikely, and unlikely is not enough when a Bluesky
+	// collective is honestly titled "" because nobody titled it.
 	//
 	// `doc` is a parameter for the same reason parseFrontPage takes one: it makes
 	// the precedence testable without a live page.
@@ -7351,8 +7317,7 @@ ${
 		// with something in it is what the reader came for -- they put it there --
 		// so it leads. Switching tabs while the panel is open lasts as long as the
 		// panel is open, and no longer: a latch that survived would mean one
-		// incidental press turning this off for good, invisibly, which is the fault
-		// the auto-open setting was already fixed for once.
+		// incidental press turning this off for good, invisibly.
 		if (on) {
 			// Queue first when it has something, and always when there is no front
 			// page to fall back on -- otherwise turning Hacker News off and pressing
@@ -7480,27 +7445,17 @@ ${
 	// and no story text, and a rank sits in front. Same classes, so a browse row
 	// and the story at the top of a discussion read as the same kind of object.
 	function renderBrowseRow(story, container, rank, options = {}) {
-		// One comment link per source carrying this page, the lead first. With a
-		// single source this is the line it has always been; with two it becomes
-		// "HN 211 comments · Lobsters 24 comments", which is the merged row saying
-		// what merging it bought.
+		// One number across every source carrying this page, summed. The point of
+		// merging is that this is one thing people are talking about, so a count per
+		// source would ask the reader to add them up to find that out -- which is
+		// why the header above a discussion says "352 comments across 2 discussions"
+		// rather than listing them.
 		//
-		// Counts stay per source and are never added up. standing log-scales votes
-		// precisely because a Reddit number and an HN number are not the same unit,
-		// and a summed total would undo at display time what the blend was careful
-		// about at ranking time.
+		// Summing is a display decision and reaches no further. standing still
+		// log-scales each source's votes separately, because a Reddit number and an
+		// HN number are not the same unit for *ranking*. As a count of things said
+		// about a page, they are.
 		const discussions = [story, ...(options.also || [])];
-		// One number, summed. Listing a count per source was the row arguing with
-		// itself about what it was for: the point of merging is that this is one
-		// thing people are talking about, and four counts in a line asked the reader
-		// to add them up to find that out. The page header above a discussion has
-		// always said "352 comments across 2 discussions" for the same reason.
-		//
-		// The old note here said counts must never be added because a Reddit number
-		// and an HN number are not the same unit. That is exactly right about
-		// *ranking*, which is why standing still log-scales each source separately
-		// and this total reaches none of it. It is not right about a headline: as a
-		// count of things said about this page, they are the same unit.
 		const totalComments = discussions.reduce(
 			(sum, each) => sum + (each.descendants || 0),
 			0,
@@ -7508,12 +7463,11 @@ ${
 		const totalText = escapeHTML(pluralize(totalComments, "comment"));
 
 		// Marked as a floor, because it is one. A row knows what the front pages
-		// carry and nothing else: r/popular held one thread about a story fifteen
-		// subreddits were arguing about, so the row said 2,419 where the article
-		// said 5,476. The error only ever runs one way -- a front page can omit a
-		// discussion and cannot invent one -- so the number is honest as "at least
-		// this many" and a lie as "this many". Pressing it settles the question.
-		const commentLinks = `<button type="button" class="browse-comments-total"
+		// carry and nothing else -- r/popular held one thread about a story fifteen
+		// subreddits were arguing about, so the row said 2,419 where the article said
+		// 5,476. The error only ever runs one way, since a front page can omit a
+		// discussion and cannot invent one. Pressing it settles the question.
+		const commentTotal = `<button type="button" class="browse-comments-total"
 	title="Open the conversation about this">${totalText}<span class="browse-comments-floor" aria-hidden="true">+</span></button>`;
 
 		// Only where the reader has an account that can act. Every source declares
@@ -7540,11 +7494,8 @@ ${
 	|
 	<button class="browse-save-link" type="button">queue</button>
 	${actions}
-	${
-		// The separator belongs to the counts rather than to the line. A row with
-		// nothing to say about comments used to end on a pipe with nothing after it.
-		commentLinks ? `|\n\t${commentLinks}` : ""
-	}`;
+	|
+	${commentTotal}`;
 
 		const row = document.createElement("div");
 		row.className = "story browse-row";
@@ -7671,35 +7622,18 @@ ${
 	// on a settings read to do it.
 	let frontPageAvailable = true;
 
-	// What is actually behind the wordmark, in one place because three of them set
+	// What is actually behind the wordmark, in one place because three callers set
 	// this title -- the header template, setBrowseMode on every toggle, and
-	// refreshBrowseAffordances when the sources change. Kept as two literals, the
-	// last writer won, and a wordmark went on naming Hacker News after it had been
-	// switched off and its front page tab had already gone.
+	// refreshBrowseAffordances when the sources change. As three literals the last
+	// writer wins, and the wordmark goes on naming a source that is switched off.
 	//
-	// Plural at one source as well as four. Computing the number would mean the
-	// tab renaming itself as sources are toggled, and "front pages" describes the
-	// place rather than counting what is in it -- the way a newsstand is a
-	// newsstand with one paper on it.
-	//
-	// Lower case, like the tab it describes and like `queue` beside it. It named
-	// Hacker News before, where the capitals were a proper noun rather than a
-	// style, so dropping the name drops them with it.
+	// Plural at one source as well as four: computing the number would mean the tab
+	// renaming itself as sources are toggled, and "front pages" describes the place
+	// rather than counting what is in it.
 	function browseLabel() {
 		return frontPageAvailable ? "front pages and your queue" : "Your queue";
 	}
 
-	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
-	// rather than the ui object because a browse row only knows the tree it is in.
-	// The front page behind the wordmark is every enabled source's own, blended.
-	// With none of them switched on there is no front page to show, so the tab goes
-	// -- and if the queue is empty too there is nothing behind the wordmark at all,
-	// so the wordmark goes with it rather than opening onto an empty list under a
-	// tab for sources the reader turned off.
-	//
-	// A reader with only Bluesky and Wikipedia enabled is in exactly that position,
-	// and correctly: neither ranks URLs, so neither has a front page, and the tab
-	// is as absent as it is with everything off.
 	// Whether anything switched on can take a submission, which is what decides
 	// whether the front page offers to make one. Read from the settings rather
 	// than from the rendered view, and called from both the render and the moment
@@ -7713,6 +7647,14 @@ ${
 		}
 	}
 
+	// The front page behind the wordmark is every enabled source's own, blended.
+	// With none of them switched on there is no front page to show, so the tab goes
+	// -- and if the queue is empty too there is nothing behind the wordmark at all,
+	// so the wordmark goes with it rather than opening onto an empty list under a
+	// tab for sources the reader turned off.
+	//
+	// A reader with only Bluesky and Wikipedia enabled is in exactly that position,
+	// and correctly: neither ranks URLs, so neither has a front page.
 	async function refreshBrowseAffordances(root) {
 		const frontTab = root?.querySelector?.("#browse-tab-front");
 		const wordmark = root?.querySelector?.("#browse-toggle");
@@ -7751,6 +7693,8 @@ ${
 		}
 	}
 
+	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
+	// rather than the ui object, because a browse row only knows the tree it is in.
 	async function refreshQueueCount(root) {
 		const tab = root?.querySelector?.("#browse-tab-queue");
 
@@ -7786,7 +7730,7 @@ ${
 		// Present or absent, never moved -- and now the arrival is visible. Zero
 		// width rather than `hidden`, because display:none cannot be transitioned;
 		// the tab stays in the tree, so it is taken out of the tab order and hidden
-		// from assistive technology by hand, which the attribute used to do.
+		// from assistive technology by hand.
 		tab.classList.toggle("is-collapsed", !queueHasItems);
 		tab.setAttribute("aria-hidden", String(!queueHasItems));
 		tab.tabIndex = queueHasItems ? 0 : -1;
@@ -7814,10 +7758,10 @@ ${
 			if (frontPageAvailable) {
 				renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
 			} else {
-				// The front page used to be "the only other place to be", which was
-				// true while Hacker News was the only source. Switched off, there is
-				// no front page to land on, and sending the reader to that tab was
-				// what made pressing the wordmark open browse and snap shut again.
+				// The front page is not "the only other place to be": with every
+				// source that has one switched off there is no front page to land
+				// on, and sending the reader to that tab is what makes pressing the
+				// wordmark open browse and snap shut again.
 				setBrowseMode(sidebarUI, false);
 			}
 		}
@@ -7914,6 +7858,7 @@ ${
 		title.onclick = (event) => {
 			// Same record and same rules as a browse row: this is a story being opened
 			// from HNewhere, and the page it lands on should read it as an arrival.
+			//
 			// `source` included for the reason the browse row gives: the landing page
 			// recovers these ids as Algolia refs when its own discovery comes back
 			// empty, and only Hacker News can be read that way. Absent, a queued
@@ -8055,8 +8000,7 @@ ${
 
 	// The panel on Hacker News itself, offered only once there is a queue to work
 	// through. HN is where a queue gets filled, often across several pages, and
-	// what you do next is read it -- which until now meant remembering what you
-	// had put in.
+	// what you do next is read it.
 	async function offerQueueOnHN() {
 		if (document.getElementById("hn-queue-button")) {
 			return;
@@ -8435,26 +8379,19 @@ ${
 		}, 900);
 	}
 
-	// Takes a resolved array now rather than the resolver it used to accept: the
-	// discussion lookup moved ahead of the first paint in 1.5.3 so the button's
-	// colour can mean something, which leaves nothing left to resolve on click.
-	// The colour answers "is there a discussion here", the ring answers "am I still
-	// working". They are separate questions, so the colour settles the moment the
-	// lookup replies rather than waiting for the comments and the annotation pass
-	// -- which is what kept the button grey for the whole of startup.
+	// The colour answers "is there a discussion here"; the ring answers "am I still
+	// working". Separate questions, so the colour settles the moment the lookup
+	// replies rather than waiting on the comments and the annotation pass.
 	function settleButtonToDiscussion(button) {
 		if (button) {
 			setFloatingButtonVariant(button, "active");
 		}
 	}
 
-	// Drawn before the discussion lookup answers, so the page shows something at
-	// once. createFloatingHNButton adopts it as soon as the real button is asked
-	// for, which is also when it gains that button's behaviour.
-	// Pressed while the lookup was still running. The button spins for as long as
-	// that takes and used to do nothing at all when pressed, which is the one thing
-	// a button must not do -- so the press is remembered and honoured the moment
-	// there is an answer to honour it with.
+	// A press that landed while the lookup was still running. The button spins for
+	// as long as that takes, and a button that does nothing when pressed is the one
+	// thing a button must not be -- so the press is remembered and honoured the
+	// moment there is an answer to honour it with.
 	let openRequestedWhileChecking = false;
 
 	function takeRequestedOpen() {
@@ -8937,11 +8874,9 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		return button;
 	}
 
-	// Grey means the lookup came back empty. It used to answer that with an offer
-	// to submit, which is one thing to do about it and not the first: a page with
-	// no discussion is a good moment to be shown what does have one. So it opens
-	// the front page, and submitting is a button on that page rather than the only
-	// thing behind this one.
+	// Grey means the lookup came back empty, and a page with no discussion is a
+	// good moment to be shown what does have one. So it opens the front page, and
+	// submitting is a button on that page rather than the only thing behind this.
 	async function createSubmitButton() {
 		const button = createFloatingHNButton("hn-submit-button", "inactive");
 
@@ -8984,13 +8919,12 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 	// Shared chrome
 	// -------------------------
 
-	// Palette for both themes. Defined on :host rather than on #panel -- which is
-	// where #21 put it -- because the submit popover is a separate shadow root with
-	// no #panel in it, and custom properties set on a host element inherit into its
-	// shadow tree. One definition therefore reaches every surface.
+	// Palette for both themes. Defined on :host rather than on #panel, because the
+	// submit popover is a separate shadow root with no #panel in it and custom
+	// properties set on a host element inherit into its shadow tree. One definition
+	// therefore reaches every surface.
 	//
-	// Light values are the originals; the dark set comes from #21, extended for the
-	// composer, popover and status surfaces added in 1.5.3.
+	// The dark set was contributed in #21.
 	const THEME_CSS = `
 :host {
 	--bg:#f6f6ef;
@@ -11201,10 +11135,9 @@ ${
 	// these two labels into 36px. It is positioned against the header rather than
 	// against anything in the row, so where it sits in the markup costs nothing.
 	//
-	// Always asked, everywhere. It was offered only on a front page, where the two
-	// readings are most obviously different -- but they are different on every
-	// page, and a control that is a menu here and a button there is two controls
-	// wearing one glyph.
+	// Always asked, everywhere. "Hide this page" and "hide this site" are different
+	// on every page, not only on a front page, and a control that is a menu here
+	// and a button there is two controls wearing one glyph.
 	`<div id="hide-menu" class="hide-menu" role="menu" hidden>
 <button type="button" role="menuitem" data-hide-scope="page">Hide on this page only</button>
 <button type="button" role="menuitem" data-hide-scope="site">Hide on all ${escapeHTML(siteKey())} pages</button>
@@ -11464,11 +11397,9 @@ ${[
 		const crumbTail = shadow.querySelector("#settings-crumb-tail");
 		const crumbName = shadow.querySelector("#settings-crumb-name");
 
-		// Takes a pane name, or null for the first level. It used to take a boolean,
-		// which was enough while "hidden sites" was the only second level -- the
-		// track is two slots wide, so exactly one secondary pane may occupy the
-		// second at a time, and the rest are display:none and therefore out of the
-		// flex flow entirely.
+		// Takes a pane name, or null for the first level. The track is two slots wide,
+		// so exactly one secondary pane may occupy the second at a time; the rest are
+		// display:none and therefore out of the flex flow entirely.
 		const showSecondaryPane = (paneName) => {
 			const secondary = Boolean(paneName);
 
@@ -13487,12 +13418,8 @@ ${settingsPanelHTML()}
 		// own title so renderStory stays usable without the option.
 		const title = options.title ?? story.title;
 
-		// Read through the normalized names first, falling back to the raw Firebase
-		// ones. renderStory has two callers with different shapes: a discussion from
-		// an adapter, and a front-page row parsed straight out of HN's markup, which
-		// never passes through a mapper.
-		// Flag and favourite are Hacker News features. A source without them must
-		// not be given links that would act on an item id Hacker News never issued.
+		// Flag and favourite are Hacker News features. A source without them must not
+		// be given links that would act on an item id Hacker News never issued.
 		const showActions = options.actions !== false;
 		// The title row is dropped when it would only repeat the page header above
 		// it. It carries the only way out to the discussion though, so that link
@@ -13501,6 +13428,10 @@ ${settingsPanelHTML()}
 		// Separate from `actions`, which is about voting. A source can allow one and
 		// not the other, and the front-page rows pass neither.
 		const showComposer = options.compose === true;
+		// Read through the normalized names first, falling back to the raw Firebase
+		// ones. renderStory has two callers with different shapes: a discussion from an
+		// adapter, and a front-page row parsed straight out of HN's markup, which never
+		// passes through a mapper.
 		const storyAuthor = story.author ?? story.by;
 		const storyCreatedAt = story.createdAt ?? story.time;
 		// Read through ?? rather than ||, because 0 points is a real measurement
@@ -14472,6 +14403,7 @@ ${settingsPanelHTML()}
 				// Roots only. Replies inherit it through the indent guides, and
 				// repeating it on every nested comment would double the weight of the
 				// metadata line to say what the parent already said.
+				//
 				// baseLabel while the discussion is live, so this reads "HN" beside a
 				// comment posted a minute ago rather than "HN · Aug 2026 1 minute ago",
 				// which says the same thing twice and says the weaker half first.
@@ -14675,10 +14607,6 @@ ${settingsPanelHTML()}
 		});
 	}
 
-	// A source that withholds part of a thread says so, and this is the button that
-	// asks for the rest. Optional on both sides: a source with no gaps never sets
-	// `more`, and one that cannot fill them offers no expandMore -- in either case
-	// nothing is drawn, which is why Hacker News needed no changes for this.
 	// Whether any source currently on screen can be voted on. Read off the enabled
 	// sources rather than the rendered comments, so it is stable while a thread is
 	// still painting.
@@ -14688,6 +14616,10 @@ ${settingsPanelHTML()}
 		);
 	}
 
+	// A source that withholds part of a thread says so, and this is the button that
+	// asks for the rest. Optional on both sides: a source with no gaps never sets
+	// `more`, and one that cannot fill them offers no expandMore. In either case
+	// nothing is drawn.
 	function mountMoreReplies(more, thread, container, discussion, context) {
 		if (!more?.ids?.length || typeof thread.expandMore !== "function") {
 			return;
@@ -14786,13 +14718,11 @@ ${settingsPanelHTML()}
 		stopObservingNewComments();
 		renderedComments = [];
 		ui.body.innerHTML = "";
-		// "submissions on HN" was true while HN was the only source. It stops being
-		// Nothing at rest. This counted submissions back when the panel had no other
-		// way to say there were several; the source strip now names each one and
-		// carries its own count, so a bare "7 discussions" under the wordmark is a
-		// worse version of the row directly beneath it. Still cleared on every
-		// render rather than left alone, because the subtitle carries the loading
-		// stages and must not keep a previous page's text behind them.
+		// Nothing at rest: the source strip names each discussion and carries its own
+		// count, so a bare "7 discussions" under the wordmark would be a worse version
+		// of the row directly beneath it. Still cleared on every render rather than
+		// left alone, because the subtitle also carries the loading stages and must
+		// not keep a previous page's text behind them.
 		setSidebarRestingSubtitle(ui, "");
 
 		const generation = sidebarGeneration;
@@ -14913,11 +14843,9 @@ ${settingsPanelHTML()}
 				// meta line with no heading above it reads as though the panel lost
 				// something.
 				//
-				// It was once suppressed when it matched the header, back when the
-				// header showed a submission's title and the match meant a literal
-				// duplicate. The header names the content now, so a submitter using
-				// the article's own title -- the common case -- was silently costing
-				// the block its heading.
+				// Never suppressed on a match with the header. The header names the
+				// content, so a submitter who used the article's own title -- the
+				// common case -- would silently cost the block its heading.
 				showTitle: true,
 			});
 
@@ -15094,7 +15022,7 @@ ${settingsPanelHTML()}
 		// Every stage this render announced is over. Cleared here rather than by each
 		// caller because there are four of them -- the first open, a sort change, a
 		// front-page count, a source toggle -- and only the first had a finally to do
-		// it, so the other three left the subtitle claiming to load for good.
+		// it, so the other three left the subtitle claiming to be loading for good.
 		//
 		// Not on the early returns above: those mean a newer render has taken over,
 		// and the stage on screen is now that one's to clear.
@@ -15180,14 +15108,6 @@ ${settingsPanelHTML()}
 		}
 	}
 
-	// The subject is the page, not any one submission of it. `renderStory` put a
-	// submission's own title and score at the top because there was only ever one;
-	// with several, across several sites, that is trivia sitting where the article
-	// should be.
-	// The pill counts every comment in a discussion, not the roots it happens to
-	// have loaded. Roots made the pills disagree with everything around them: the
-	// header totalled 325 while they summed to 100, and filtering to a pill that
-	// said 26 opened a submission line reading "96 comments".
 	// Which live discussions the reader can actually see, which is not the same as
 	// which are live. Filtering to one discussion hides the rest, and a bookend that
 	// went on naming a hidden conversation would be describing something that is no
@@ -15253,6 +15173,14 @@ ${settingsPanelHTML()}
 		}
 	}
 
+	// The subject is the page, not any one submission of it: with several
+	// discussions across several sites, one submitter's title and score at the top
+	// is trivia sitting where the article should be.
+	//
+	// Each pill counts every comment in its discussion, not the roots it happens to
+	// have loaded. Counting roots makes the pills disagree with everything around
+	// them -- a header totalling 325 above pills summing to 100, and a pill reading
+	// 26 opening a submission line reading "96 comments".
 	function renderPageHeader(stories, container, options = {}) {
 		const sort = options.sort || "best";
 		const total = stories.reduce(
@@ -15264,9 +15192,8 @@ ${settingsPanelHTML()}
 
 		// With one discussion the header steps aside entirely and the submission
 		// below renders the way a Hacker News story does: the arrow, the title and
-		// the subline as one unit. Holding the title up here instead left the arrow
-		// pointing at an empty cell, with our own heading and a rule above it --
-		// which is what stopped it reading like HN.
+		// the subline as one unit. Holding the title up here instead leaves the arrow
+		// pointing at an empty cell, under a heading and a rule of our own.
 		const single = stories.length < 2;
 
 		wrapper.className = single ? "page-header page-header-quiet" : "page-header";
@@ -15479,10 +15406,9 @@ title="Show only this discussion">
 	}
 
 	// Both of these read activeCommentFilter and nothing else, so they belong on
-	// the same trigger. Kept apart, the strip was synced only by its own click
-	// handler -- so focusing a comment inside a filtered discussion, then pressing
-	// "show all comments", cleared the filter while leaving the pill lit for a
-	// filter that was no longer on.
+	// the same trigger. Synced separately, the strip only ever hears about its own
+	// clicks -- and clearing a filter from the banner leaves the pill lit for a
+	// filter that is no longer on.
 	function syncFilterAffordances() {
 		const wrapper = sidebarUI?.body?.querySelector(".source-strip");
 
@@ -16002,13 +15928,10 @@ title="Show only this discussion">
 			// presence *is* the state: "unflag" showing means flagged, "flag"
 			// showing means not.
 			//
-			// Deriving it from the action instead is what broke unflagging. The
-			// check was "is the opposite link here" -- true after flagging, because
-			// unflag appears; but also true after unflagging, because flag appears.
-			// So a successful unflag recorded itself as flagged and the label never
-			// changed back. Favorite escaped it by luck: /fave lands on the
-			// favorites list, where a story just un-favorited is no longer named, so
-			// neither link was found and the fallback happened to be right.
+			// Deriving it from the action instead breaks unflagging, and subtly:
+			// "is the opposite link here" is true after flagging, because unflag
+			// appears -- and equally true after unflagging, because flag does. A
+			// successful unflag then records itself as flagged.
 			const onLink = findItemActionAnchor(document, "un" + base, payload.itemId);
 			const offLink = findItemActionAnchor(document, base, payload.itemId);
 
@@ -16662,14 +16585,14 @@ title="Show only this discussion">
 			// then the comment count -- so the age is the one thing that reliably
 			// marks where the actions start.
 			//
-			// Anchoring on a particular action instead is what put this in the wrong
-			// place: the favorites list carries neither flag nor hide, so a rule
-			// written in terms of those had nothing to find and fell through to the
-			// end of the line, landing queue after the comment count.
+			// Deliberately not anchored on a particular action: the favorites list
+			// carries neither flag nor hide, so a rule written in terms of those
+			// finds nothing and falls through to the end of the line, landing queue
+			// after the comment count.
 			//
 			// It also lands where the order says it should: decide whether you want
-			// to read it, flag it if it should not be there, hide it if it is not for
-			// you, open the comments if it is.
+			// to read it, flag it if it should not be there, hide it if it is not
+			// for you, open the comments if it is.
 			const age = subline.querySelector(".age");
 
 			if (age) {
@@ -16771,12 +16694,6 @@ title="Show only this discussion">
 			.map(parseFrontPageRow)
 			.filter(Boolean);
 	}
-
-	// parseFrontPageNextPage lived here and is gone. It read HN's "More" link to
-	// find the next ?p=, which the blend has nowhere to use: every source is
-	// fetched once to a fixed depth and the merged pool is paged locally, so page 2
-	// is made of rows that lost on page 1 rather than of Hacker News' next thirty.
-	// Kept as a note rather than as dead code with passing tests behind it.
 
 	// #endregion hnewhere-test-export
 
@@ -18588,12 +18505,10 @@ title="Show only this discussion">
 	// being replied to, and everything below, so they get the conversation rather
 	// than one turn of it.
 	//
-	// The descent keeps its own visited set. Guarding it on `visible` instead is
-	// what stopped it working at all: the climb below used to run first and add the
-	// seed, so the descent found its own starting point already visible and
-	// returned before adding a single reply -- and a focus on a thread's root
-	// showed the root alone. The two walks ask different questions. "Have I already
-	// walked this subtree" is not "is this comment on screen".
+	// The descent keeps its own visited set, and must: "have I already walked this
+	// subtree" is a different question from "is this comment on screen". Guarded on
+	// `visible` instead, a seed added by the climb makes the descent return before
+	// adding a single reply, and a focus on a thread's root shows the root alone.
 	//
 	// Descending first is what makes a seed that is also another seed's ancestor
 	// come out whole: reached as an ancestor it is only added to `visible`, and its
@@ -19282,10 +19197,9 @@ title="Show only this discussion">
 	// is. With the panel open it is re-rendered in place behind the same cross-fade
 	// the front-page swap uses: the comments go, the new ones arrive as they load.
 	//
-	// It used to tear the panel down and re-run the page pass, which was wrong
-	// twice over. The reader lost their place mid-checkbox, and the pass could take
-	// a branch that produced neither a sidebar nor a button -- so turning a source
-	// off could leave the page with nothing on it at all until a reload.
+	// Deliberately not a teardown and a fresh page pass: that loses the reader's
+	// place mid-checkbox, and the pass can take a branch producing neither a
+	// sidebar nor a button -- leaving the page with nothing on it until a reload.
 	//
 	// Same contract as teardownForBlockedSite: persist before calling.
 	async function refreshForSourceChange() {
@@ -19339,17 +19253,13 @@ title="Show only this discussion">
 					return;
 				}
 
-				// No source turned anything up. That used to mean the panel had nothing
-				// left to be, so it was torn down for the grey button -- true while a
-				// panel could only ever be one page's discussion.
-				//
-				// It is not true now. There is a front page and a queue behind the
-				// wordmark, and the grey button opens onto them rather than offering to
-				// submit, so closing the panel here takes away the thing the reader was
-				// most likely sent to and may well be reading: switching a source off
-				// while looking at the front page closed the front page. It steps back
-				// to browse instead, and only tears down when there is nothing behind
-				// the wordmark either.
+				// No source turned anything up, which is not the same as the panel
+				// having nothing left to be: there is still a front page and a queue
+				// behind the wordmark. Tearing down here would take away the thing the
+				// reader may well be reading -- switching a source off while looking
+				// at the front page would close the front page. So it steps back to
+				// browse, and only tears down when there is nothing behind the
+				// wordmark either.
 				if (!discussions.length) {
 					sidebarHasDiscussion = false;
 
@@ -19724,11 +19634,10 @@ title="Show only this discussion">
 		// some browsers withhold it -- and arrival decides one thing only: whether
 		// the panel opens itself. It does not decide what the panel shows.
 		//
-		// It used to. This branch opened the recorded id and skipped the lookup,
-		// which was invisible while a page had one discussion and wrong the moment
-		// it could have several: an article resubmitted this morning opened on a
-		// thread from 2024 or one from today depending on which link had been
-		// clicked, with no sign the rest existed.
+		// Deliberately not used to choose that: opening the recorded id and skipping
+		// the lookup means an article resubmitted this morning opens on a thread from
+		// 2024 or one from today depending on which link was clicked, with no sign the
+		// rest exist.
 		const arrivedFromClick = Boolean(
 			last &&
 				sameURL(last.url, location.href) &&
@@ -19739,10 +19648,10 @@ title="Show only this discussion">
 			await save(STORAGE.last, null);
 		}
 
-		// Looked up here rather than on click. 1.5.3 makes the button's colour mean
-		// "a discussion exists", which is only answerable before it is drawn. Each
-		// source caches per URL for an hour, so this is one request per source per
-		// new page rather than one per visit.
+		// Looked up here rather than on click: the button's colour means "a discussion
+		// exists", which is only answerable before it is drawn. Each source caches per
+		// URL for an hour, so this is one request per source per new page rather than
+		// one per visit.
 		const found = await discoverAll(location.href, settings);
 
 		// The recorded ids stand in only when the lookup comes back with nothing.
