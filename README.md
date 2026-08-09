@@ -57,9 +57,8 @@ Full detail, including a host-by-host table, in [SECURITY.md](SECURITY.md).
 
 Nothing went anywhere. **HNewhere is now Backchannel**. Same project, same
 history, same install URL, same settings. It was renamed in v1.6.0 when it
-stopped being about one site: it now reads Hacker News and/or Reddit, and each
-source is a checkbox you control. The repository has since been renamed to
-match, and links to the old one redirect.
+stopped being about one site: it now offers many sources and each
+source is a checkbox you control.
 
 If you already have it installed it updates itself and renames in place. Your hidden sites, your reading queue, your collapsed threads and your
 preferences all carry over untouched.
@@ -74,7 +73,7 @@ preferences all carry over untouched.
 2. [Install Backchannel](https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js)
    - *Upgrading from HNewhere?* Let it auto-update and it renames itself. If you
      install from this link instead, delete the old **HNewhere** entry afterwards.
-3. Browse the web as usual. If a thread exists for that page the (BC) button lights up. Clicking it opens the sidebar. Still grey? Nobody's posted it yet-- click to open the front page and see what they are talking about instead, or submit it yourself from there.
+3. Browse the web as usual. If a thread exists for that page the (BC) button lights up. Clicking it opens the sidebar. Still grey? Click to view the front page when you're done or submit your current article (currently only supported for Hacker News).
 
 ## Contributing
 
