@@ -8,6 +8,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.5] — 2026-08-08
+
+### Added
+
+- **Mastodon, through the two doors it leaves open.** Its front page is
+  `/api/v1/trends/links` — official, no account, and ranked by how many accounts
+  posted a link rather than how many posts, because one account posting
+  something nine times is not nine people finding it worth posting. Discovery
+  cannot go the same way: status search needs an account, and four instances
+  asked anonymously each returned an empty list. So it goes through Tootfinder,
+  an opt-in index, searched by domain and matched exactly here — which means the
+  domain is sent rather than the full address, the same trade Lobsters already
+  makes. The result is thin, and the caveat says so: two posts per URL on a busy
+  news domain, because the index holds only people who chose to be searchable.
+- **Wikipedia reads the Talk pages it used to only name.** It listed the pages
+  citing a URL and stopped, because the endpoints the first cut measured had no
+  comments in them. MediaWiki's DiscussionTools does. A root is now the comment
+  that actually cites your page, carrying the replies it drew — not the whole
+  Talk page, which on `Talk:Fediverse` is 124 comments about editing that
+  article, of which two cite the link you arrived from. A page whose comments
+  cite nothing still names itself, exactly as before.
+- **The tail of a deep Bluesky thread.** `getPostThread` stops at ten levels
+  whatever depth is asked for — 10, 50 and 1000 return byte-identical responses
+  — so a node at the cap now carries the same "more replies" affordance Reddit's
+  stubs use, filled by a second request rooted there. Two of fourteen sampled
+  roots hit the cap.
+- **Hiding Backchannel on one page rather than a whole publication.** Off a
+  front page the eye hides the page you are on. On a front page both readings
+  are plausible, so it asks.
+
+### Changed
+
+- **Submitting is a place in the panel, not a popover on a button.** The grey
+  button meant "no discussion here" and the only thing behind it was an offer to
+  submit; it now opens the front page, and submitting is a button on that page,
+  beside the byline naming what went into it. The trail says where you are —
+  Backchannel, Backchannel / Discussion, Backchannel / Submit.
+- Links, mentions and hashtags inside Bluesky posts are links. The text carries
+  Bluesky's own truncated form of an address — `simonwillison.net/2026/Aug/7/o…`
+  — and the address itself lives only in the facet beside it, so a post rendered
+  from its text named a page nobody could reach.
+- The source beside a comment count reads as an aside — `(HN) 295 comments` —
+  rather than as part of the count.
+- **A front-page row's comment count goes to the page it counts**, and opens the
+  conversation when it gets there. The title reads the article and the count
+  reads what was said about it, the way a Hacker News row splits the same two.
+  The panel only ever shows the discussion of the page behind it, so there is
+  nowhere else for a conversation to be read from.
+- That count is marked as a floor — `2,419+`. A row knows what the front pages
+  carry and nothing else: `r/popular` held one thread about a story fifteen
+  subreddits were arguing about. Going to the page is what settles the number.
+- Each discussion a page's conversation is made of is still reachable, from the
+  "4 discussions" button under the title once you are there.
+
+### Fixed
+
+- **The foot of the panel is reachable on a phone.** It was sized to `100vh`,
+  which is the height the page would have with the browser's chrome collapsed
+  whether or not it currently is, so the bottom of the list sat behind the URL
+  bar and scrolling could not reach it. The last thing in the list is what went
+  missing, which on the front page is the More button.
+- Wikipedia comments no longer arrive in pairs. Deletion logs transclude the
+  discussions they list, so one comment is reached through several pages under
+  the same id — 27 of one discussion's 28 comments are also comments of a log
+  page carrying 1,177 — and it is one comment.
+- Wikipedia comments no longer end by repeating their own byline. Every one is
+  signed, and the panel already puts the author and the age on the line above.
+- Wiki links inside those comments point at Wikipedia. There are 321 relative
+  links on one Talk page against 49 absolute ones, and a relative href resolves
+  against whatever site you are reading.
+- The panel stops saying it is loading once it has. Opening a conversation from
+  a front-page count, changing the sort, or switching a source off left the
+  subtitle claiming to load for as long as the panel stayed open.
+- Opening a queued story from another source no longer offers a Hacker News
+  discussion that does not exist. The strip at the foot of a thread recorded
+  which page it was opening but not where it came from, so a Lobsters id could
+  be read back as a Hacker News item number.
+- Two submissions of one page are told apart wherever the panel opens them. The
+  date that separates them was added on arrival but not when a conversation is
+  opened from a front-page count, so both pills read "HN".
+
 ## [1.6.4] — 2026-08-06
 
 ### Added

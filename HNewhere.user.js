@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.4
+// @version      1.6.5
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -53,6 +53,8 @@
 // @connect      lobste.rs
 // @connect      en.wikipedia.org
 // @connect      lemmy.world
+// @connect      mastodon.social
+// @connect      www.tootfinder.ch
 // @run-at       document-end
 // @noframes
 // ==/UserScript==
@@ -144,17 +146,15 @@
 
 	// Which keys prove a reader was here before this release.
 	//
-	// "HNewhere:migrated" leads, and only because seedSources runs *before*
-	// migrateStorage. Read at that moment it is exact: an upgrading reader has it
-	// from a previous session, and a first run has not reached the line that
-	// writes it. Read any later it is worthless, because migrateStorage sets it
-	// for brand new installs too -- which is why the order in init is load-bearing
-	// rather than tidy.
+	// "HNewhere:migrated" leads, and is exact only because seedSources runs before
+	// migrateStorage: an upgrading reader has it from a previous session, and a
+	// first run has not reached the line that writes it. Read any later it is
+	// worthless, since migrateStorage sets it for fresh installs too -- which is
+	// why the order in init is load-bearing rather than tidy.
 	//
-	// The rest are a belt-and-braces list for a store that somehow has history
-	// without that flag. A reader who installed HNewhere and never once opened a
-	// sidebar would leave almost none of them, which is exactly the reader the
-	// flag catches and a hand-kept list would not.
+	// The rest are belt and braces for a store that somehow has history without
+	// that flag. A reader who installed HNewhere and never opened a sidebar leaves
+	// almost none of them, which is exactly the reader the flag catches.
 	const PRIOR_STORAGE_KEYS = [
 		"HNewhere:migrated",
 		"hn_width",
@@ -346,16 +346,13 @@
 		squircle: "30%",
 	};
 
-	// Clamped to the range but deliberately NOT snapped to the step: a size typed
-	// into the field is the user's choice and is kept exactly, so any whole pixel
-	// from 24 to 64 is a valid stored value. Snapping belongs to the stepper alone.
-	// One or two characters, because that is what a 44px circle holds. Trimmed and
-	// upper-cased so "bc" and " Bc " settle on the same mark, and anything that
-	// normalises to nothing falls back rather than leaving a blank circle -- an
-	// unlabelled button is indistinguishable from a broken one.
+	// One or two characters, because that is what a 44px circle holds.
 	const BUTTON_MARK_DEFAULT = "BC";
 	const BUTTON_MARK_MAX = 2;
 
+	// Trimmed and upper-cased, so "bc" and " Bc " settle on the same mark. Anything
+	// normalising to nothing falls back rather than leaving a blank circle: an
+	// unlabelled button is indistinguishable from a broken one.
 	function normalizeButtonMark(value) {
 		const text = String(value ?? "")
 			.trim()
@@ -365,6 +362,9 @@
 		return text || BUTTON_MARK_DEFAULT;
 	}
 
+	// Clamped to the range but deliberately NOT snapped to the step: a size typed
+	// into the field is the reader's choice and is kept exactly, so any whole pixel
+	// from 24 to 64 is a valid stored value. Snapping belongs to the stepper alone.
 	function normalizeButtonSize(value) {
 		const raw = typeof value === "string" ? LEGACY_BUTTON_SIZES[value] : value;
 		const numeric = Number.isFinite(raw)
@@ -654,26 +654,64 @@
 	}
 
 	async function isSiteBlocked() {
-		return (await loadBlockedSites()).has(siteKey());
+		const entries = await loadBlockedSites();
+
+		return pageIsBlocked(entries, siteKey(), location.href);
 	}
 
 	// #region hnewhere-test-export
 
+	// A blocked entry means one of two things and the prefix tells them apart. A
+	// bare hostname hides the whole site, which is what every entry saved before
+	// this release is and what they go on meaning; a `page:` entry hides one
+	// address.
+	//
+	// The prefix is load-bearing rather than decorative. normalizeURL reduces a
+	// homepage to its bare host, so without it `macrumors.com` spells both "this
+	// site" and "this site's front page" and the second cannot be said at all --
+	// issue #76, where hiding a front page also hid every article underneath it.
+	const BLOCKED_PAGE_PREFIX = "page:";
+
+	function blockedPageEntry(url) {
+		const normalized = normalizeURL(url);
+
+		return normalized ? BLOCKED_PAGE_PREFIX + normalized : null;
+	}
+
+	function pageIsBlocked(entries, hostname, url) {
+		if (entries.has(hostname)) {
+			return true;
+		}
+
+		const page = blockedPageEntry(url);
+
+		return Boolean(page && entries.has(page));
+	}
+
+	// Storage is not language. The settings list is the one place a person reads
+	// these, and `page:macrumors.com/2026/08/08/…` is the shape they are stored in,
+	// not a sentence about what is hidden.
+	//
+	// Only the unusual half is named. One page is what hiding does unless you ask
+	// for more, so saying so on every entry annotates the default; a whole site is
+	// the thing that was chosen, and is the thing worth being able to spot in a
+	// list of addresses that otherwise look alike.
+	function describeBlockedEntry(entry) {
+		return entry.startsWith(BLOCKED_PAGE_PREFIX)
+			? entry.slice(BLOCKED_PAGE_PREFIX.length)
+			: entry + " (domain-wide)";
+	}
+
 	// The reading queue is a list rather than a set, because its order is the
 	// feature: what you saved first is what you are offered next. Every rule below
-	// is a pure transform of that list so the ordering can be argued about without
-	// a browser. The URL comparison arrives as an argument for the same reason
-	// referrerIsHN takes its referrer -- the real one normalizes, and normalizeURL
-	// lives outside this region.
-	// Keyed on the article, not on the submission of it. The item number was a
-	// sound identity while Hacker News was the only source that could put anything
-	// in a queue, and stops being one the moment anything else can: a Lobsters
-	// short_id of "97laur" and an HN item number would share a namespace, and the
-	// same page saved from each would sit in the list twice.
+	// is a pure transform of that list, so the ordering can be argued about without
+	// a browser -- which is why the URL comparison and the key both arrive as
+	// arguments rather than being computed here. normalizeURL lives outside this
+	// region, and the Story mappers have already applied it.
 	//
-	// The key arrives on the story rather than being computed here, for the reason
-	// the region comment gives: normalizeURL lives outside this region, and the
-	// Story mappers have already applied it.
+	// Keyed on the article, not on the submission of it: a Lobsters short_id of
+	// "97laur" and an HN item number share a namespace, so the same page saved from
+	// each would sit in the list twice.
 	function addToQueue(entries, story, now) {
 		const list = Array.isArray(entries) ? entries : [];
 
@@ -689,9 +727,9 @@
 		// a row in it has to be able to say the same things -- and a queue entry is
 		// read days after it was made, long after the page it came from is gone.
 		//
-		// `source` and `permalink` are kept for the same reason and are load-bearing
-		// twice over: the row draws its comment link from the permalink, and
-		// refreshQueueEntries asks the source whether it is one it can refresh.
+		// `source` is read back by refreshQueueEntries, to ask whether this is an
+		// entry it can refresh, and by the next-up link, to say what kind of id it
+		// is recording.
 		return [
 			...list,
 			{
@@ -902,7 +940,12 @@
 	// at startup by loadRememberedVotes().
 	let rememberedVotes = {};
 
-	// { [itemId]: { favorite?: bool, flagged?: bool, flagUnavailable?: bool, at } }
+	// { [itemId]: { favorite?: bool, flagged?: bool, at },
+	//   account:  { favoriteUnavailable?: bool, flaggedUnavailable?: bool, at } }
+	//
+	// "account" is not a story id, and cannot collide with one. Whether an action is
+	// offered at all is a fact about the reader rather than about any item, so it is
+	// remembered once instead of being rediscovered a popup at a time.
 	let rememberedItemActions = {};
 
 	async function loadRememberedVotes() {
@@ -1299,14 +1342,21 @@
 	// needed: a lone Hacker News discussion stays "HN", and subreddits are already
 	// distinct so they are left alone unless the same one carries two posts.
 	//
-	// Month and year rather than a full date. The pill is small, and two
-	// submissions of one link in the same month is not a case worth widening every
-	// label for.
+	// Month and year rather than a full date. The pill is small, and two submissions
+	// of one link in the same month is not a case worth widening every label for.
+	//
+	// Safe to run twice: everything is measured against baseLabel, the name before
+	// any date was added, so a second pass counts the same names and rebuilds the
+	// same label rather than dating an already-dated one. That is what lets both
+	// discoverAll and resolveDiscussions apply it, which is what it takes to cover
+	// every path producing a discussion list.
 	function disambiguateLabels(discussions) {
 		const counts = new Map();
 
 		for (const discussion of discussions) {
-			counts.set(discussion.label, (counts.get(discussion.label) ?? 0) + 1);
+			const base = discussion.baseLabel ?? discussion.label;
+
+			counts.set(base, (counts.get(base) ?? 0) + 1);
 		}
 
 		// baseLabel is the name before any date was added, kept on every discussion
@@ -1320,16 +1370,18 @@
 		// adapter must produce, and this is derived here, after every adapter has
 		// already answered.
 		return discussions.map((discussion) => {
-			if ((counts.get(discussion.label) ?? 0) < 2 || !discussion.createdAt) {
-				return { ...discussion, baseLabel: discussion.label };
+			const baseLabel = discussion.baseLabel ?? discussion.label;
+
+			if ((counts.get(baseLabel) ?? 0) < 2 || !discussion.createdAt) {
+				return { ...discussion, baseLabel, label: baseLabel };
 			}
 
 			const when = new Date(discussion.createdAt * 1000);
 
 			return {
 				...discussion,
-				baseLabel: discussion.label,
-				label: `${discussion.label} · ${when.toLocaleString(undefined, {
+				baseLabel,
+				label: `${baseLabel} · ${when.toLocaleString(undefined, {
 					month: "short",
 					year: "numeric",
 				})}`,
@@ -1367,6 +1419,18 @@
 		// Carried at all because the blend needs a time per root before it can order
 		// anything, and two of the three sources fetch comments lazily.
 		rootTimes: { type: "array" },
+		// What a source carries forward to its own mappers rather than to the
+		// renderer. Declared rather than smuggled: the extra-field rule exists to
+		// catch a mapper inventing something nothing is obliged to display, and
+		// these are neither invented nor displayed. Absent on every source but the
+		// one that carries them.
+		//
+		// wikiPages and statuses hold a whole discussion discovery already fetched,
+		// so neither source's loadThread fetches anything. creatorId is smaller: Lemmy needs
+		// the poster's id to mark OP, and the comment list does not carry it.
+		wikiPages: { type: "array", optional: true },
+		statuses: { type: "array", optional: true },
+		creatorId: { type: ["number", "string"], optional: true },
 	};
 
 	const COMMENT_SHAPE = {
@@ -1385,31 +1449,28 @@
 		isOP: { type: "boolean" },
 		deleted: { type: "boolean" },
 		replyKeys: { type: "array" },
+		// A gap the source withheld and can be asked to fill: { ids, count }. Hung
+		// on the comment the gap sits under by the thread indexers rather than by a
+		// mapper, and read by mountMoreReplies. Nullable because closing a gap sets
+		// it to null rather than deleting it.
+		more: { type: "object", nullable: true, optional: true },
 	};
 
 	// A row on a front page or in the queue, which is a different object from a
-	// Discussion: it is a *submission* of a page, described well enough to be
-	// listed and read later, not a conversation to be walked. Undeclared until
-	// now, and three places knew it independently -- parseFrontPageRow built it,
-	// addToQueue copied a subset of it, renderBrowseRow read it -- which is the
-	// situation DISCUSSION_SHAPE was written to prevent one level down.
+	// Discussion: it is a *submission* of a page, described well enough to be listed
+	// and read later, not a conversation to be walked. Three places know it --
+	// parseFrontPageRow builds it, addToQueue copies a subset, renderBrowseRow reads
+	// it -- which is the situation DISCUSSION_SHAPE prevents one level down.
 	//
-	// Two fields differ from DISCUSSION_SHAPE deliberately.
+	// Two fields read oddly beside DISCUSSION_SHAPE and are deliberate.
 	//
-	// `permalink` is NOT nullable here. A collective has no page of its own and a
-	// Discussion has to say so; a front-page row always came from one submission,
-	// and that submission always has a page. Anything unable to name one is not a
-	// row.
+	// `key` is normalizeURL(url), not sourceKey(source, id). What a reader queues is
+	// an article, not a submission of it, so the same page reaching the queue from
+	// two sources is one entry -- having read it once, you have read it.
 	//
-	// `key` is normalizeURL(url), not sourceKey(source, id). What a reader queues
-	// is an article, not a submission of it -- so the same page reaching the queue
-	// from Hacker News and from somewhere else is one entry, and having read it
-	// once you have read it, whichever list it came off.
-	//
-	// time/descendants rather than createdAt/commentCount, unlike everything in
-	// DISCUSSION_SHAPE. That is Firebase's vocabulary and it is what every stored
-	// queue has held since queues existed. Renaming here would rewrite reader data
-	// to no end.
+	// time/descendants rather than createdAt/commentCount: Firebase's vocabulary,
+	// and what every stored queue holds. Renaming would rewrite reader data to no
+	// end.
 	const STORY_SHAPE = {
 		source: { type: "string" },
 		key: { type: "string" },
@@ -1425,7 +1486,13 @@
 		time: { type: "number" },
 		descendants: { type: "number" },
 		site: { type: "string" },
-		permalink: { type: "string" },
+		// Nullable, like a Discussion's. This said otherwise, on the premise that a
+		// row always came from one submission and a submission always has a page.
+		// Mastodon's trending links are the counter-example: a row there is an
+		// aggregate of many people posting a URL, with no page listing them that can
+		// be reached without an account. renderStory already prints an unlinked
+		// title for exactly that.
+		permalink: { type: "string", nullable: true },
 	};
 
 	// Returns problems rather than throwing, so one run names every field that is
@@ -1443,7 +1510,13 @@
 
 		for (const [field, rule] of Object.entries(shape)) {
 			if (!Object.prototype.hasOwnProperty.call(value, field)) {
-				problems.push(`${field}: missing`);
+				// Optional fields are the ones a single source carries for its own
+				// loadThread rather than ones the renderer reads. Absent is their
+				// ordinary state; present and wrongly typed is still a problem.
+				if (!rule.optional) {
+					problems.push(`${field}: missing`);
+				}
+
 				continue;
 			}
 
@@ -1757,6 +1830,133 @@
 		};
 	}
 
+	// Mastodon answers two different questions with two different endpoints, and
+	// only one of them is Mastodon's own. /api/v1/trends/links is official and
+	// needs no account: it is what an instance is currently linking to, with a
+	// count of the people doing it. Discovery is the other way round -- status
+	// search requires an account, so it goes through an opt-in third-party index
+	// and is domain-wide, which makes the exact-URL comparison the answer and the
+	// query only a hint. Lobsters already works exactly that way.
+
+	// `accounts`, not `uses`. One account posting a link nine times is not nine
+	// people finding it worth posting, and the whole point of a ranking is to say
+	// how many people thought so. Every number in the history arrives as a string,
+	// which sorts "9" above "513" if it is not converted.
+	function mastodonTrendStory(link) {
+		const today = link?.history?.[0] || {};
+		const url = link?.url || "";
+
+		return {
+			source: "mastodon",
+			key: normalizeURL(url),
+			// No id of its own: a trending link is a URL and a count, not a post.
+			id: normalizeURL(url),
+			url,
+			title: link?.title || "",
+			// Deliberately empty. The card's author_name is the article's byline --
+			// the journalist who wrote it -- and putting it after "by" on a row whose
+			// every other source puts a submitter there says somebody posted this,
+			// which nobody did: a trending link is an aggregate of many people.
+			by: "",
+			score: Number(today.accounts) || 0,
+			time: Number(today.day) || 0,
+			descendants: Number(today.uses) || 0,
+			site: hostLabel(url),
+			// There is no page on Mastodon listing the posts about a URL that can be
+			// reached without an account, so there is nothing for a comment count to
+			// link to. Said, rather than invented -- renderStory prints an unlinked
+			// title for exactly this.
+			permalink: null,
+		};
+	}
+
+	// The query was the domain, so most of what comes back is about something else
+	// on that domain. Compared through normalizeURL on both sides, the same
+	// equality every other source holds its search results to.
+	function mastodonStatusPasses(status, target) {
+		const card = status?.card?.url;
+
+		return Boolean(card && target && normalizeURL(card) === target);
+	}
+
+	// Tootfinder returns the status without an account object, so the permalink is
+	// the only place the author survives: https://<instance>/@<user>/<id>. Written
+	// as user@instance, which is how the fediverse writes a handle and how it can
+	// be searched for.
+	function mastodonAuthorFromURL(url) {
+		try {
+			const parsed = new URL(String(url));
+			const handle = parsed.pathname.split("/").filter(Boolean)[0] || "";
+
+			return handle.startsWith("@")
+				? handle.slice(1) + "@" + parsed.hostname
+				: "";
+		} catch {
+			return "";
+		}
+	}
+
+	function mastodonComment(status, discussion) {
+		const url = status?.url || status?.uri || "";
+
+		return {
+			source: "mastodon",
+			key: sourceKey("mastodon", url),
+			id: status?.id || url,
+			discussionKey: discussion?.key,
+			parentKey: null,
+			author: mastodonAuthorFromURL(url),
+			// The status is already HTML, and goes through sanitizeHTML at render
+			// like every other source's body.
+			bodyHTML: status?.content || "",
+			// The index reports no favourites and no boosts, so a number here would
+			// be invented rather than measured.
+			score: null,
+			createdAt: Math.floor(Date.parse(status?.created_at || "") / 1000) || 0,
+			isOP: false,
+			deleted: false,
+			replyKeys: [],
+		};
+	}
+
+	// One collective per URL, the same shape Bluesky's takes: separate people
+	// posting the same link is not a thread, and giving it one would invent a
+	// conversation that never happened.
+	function mastodonCollective(url, statuses) {
+		if (!statuses.length) {
+			return null;
+		}
+
+		const times = statuses.map(
+			(status) => Math.floor(Date.parse(status?.created_at || "") / 1000) || 0,
+		);
+
+		return {
+			source: "mastodon",
+			key: sourceKey("mastodon", "links:" + url),
+			id: "links:" + url,
+			title: "",
+			author: "",
+			score: null,
+			commentCount: statuses.length,
+			// The newest post, because a collective was never submitted and the only
+			// honest timestamp is when it last moved.
+			createdAt: Math.max(...times, 0),
+			permalink: null,
+			articleURL: url,
+			label: "Mastodon",
+			bodyHTML: "",
+			rootKeys: statuses.map(
+				(status) => sourceKey("mastodon", status?.url || status?.uri || ""),
+			),
+			rootTimes: times,
+			// Carried rather than refetched. The index answers with the whole status,
+			// so everything loadThread will ever show is already in hand -- the same
+			// reason the Wikipedia collective carries its pages.
+			statuses,
+		};
+	}
+
 	// Reddit returns the tree whole and pre-nested, so this is the only walk: it
 	// flattens once into a map the adapter answers getComment from instantly. That
 	// is what lets a source with no per-comment request satisfy an interface built
@@ -1913,7 +2113,266 @@
 		return { rootKeys, byKey, hiddenCount: 0, rootMore: null };
 	}
 
-	// Wikipedia has no comment API. exturlusage names the Talk and Project pages
+	// Which comments on a Talk page are about the page the reader is on. A Talk
+	// page is a discussion of the Wikipedia article, not of the link -- Talk:
+	// Fediverse is 124 comments about editing that article, of which two cite
+	// fediverse.party. Those two are what somebody arriving from fediverse.party
+	// came to read, and the other 122 are a different conversation.
+	//
+	// Matched through normalizeURL on both sides, the same equality exturlusage's
+	// own rows are held to, so a trailing slash or a tracking parameter does not
+	// decide whether a citation counts.
+	function wikipediaCitingComments(items, targetURL) {
+		const target = normalizeURL(targetURL);
+
+		if (!target) {
+			return [];
+		}
+
+		const found = [];
+
+		const cites = (html) => {
+			for (const match of String(html || "").matchAll(/href="([^"]*)"/g)) {
+				// The href arrives HTML-escaped inside a JSON string, so a query with
+				// more than one parameter reads as &amp; and parses as a different URL.
+				if (normalizeURL(match[1].replace(/&amp;/g, "&")) === target) {
+					return true;
+				}
+			}
+
+			return false;
+		};
+
+		const walk = (list) => {
+			for (const item of list || []) {
+				if (item?.type === "comment" && cites(item.html)) {
+					found.push(item);
+				}
+
+				walk(item?.replies);
+			}
+		};
+
+		walk(items);
+
+		return found;
+	}
+
+	// What `~~~~` expands to at the end of every signed comment: a link to the
+	// editor's user page, usually a talk or contributions link beside it, and the
+	// time. DiscussionTools recognises a comment *by* parsing that timestamp, so
+	// it is on all 124 comments of the page these were measured against and will
+	// be on every comment this source ever renders.
+	//
+	// The panel already puts the author and the age on the line above, so left in
+	// it says both twice and closes each comment on a restatement of its own
+	// header.
+	const WIKIPEDIA_SIGNATURE_TIME = /\d{1,2}:\d{2},\s+\d{1,2}\s+\w+\s+\d{4}\s+\(UTC[^)]*\)\s*$/;
+	const WIKIPEDIA_SIGNATURE_LINK =
+		/^(?:\.\/|https:\/\/en\.wikipedia\.org\/wiki\/)(?:User:|User_talk:|Special:Contributions\/)/;
+	// The punctuation a signature is assembled from -- "(talk | contribs)" and the
+	// dash some editors put in front of their name. Letters and digits are prose.
+	const WIKIPEDIA_SIGNATURE_PUNCTUATION = /[^\s(),|·—–\- ]/;
+
+	function isWikipediaSignaturePart(node) {
+		if (node.nodeType === Node.TEXT_NODE) {
+			return !WIKIPEDIA_SIGNATURE_PUNCTUATION.test(node.textContent);
+		}
+
+		if (node.nodeType !== Node.ELEMENT_NODE) {
+			return true;
+		}
+
+		if (node.tagName === "A") {
+			return WIKIPEDIA_SIGNATURE_LINK.test(node.getAttribute("href") || "");
+		}
+
+		// The wrappers editors decorate a signature with. Only when everything
+		// inside is itself signature, so a <small> holding a real aside stays.
+		if (["SMALL", "SPAN", "B", "I", "SUB", "SUP", "BDI"].includes(node.tagName)) {
+			return [...node.childNodes].every(isWikipediaSignaturePart);
+		}
+
+		return false;
+	}
+
+	// Anchored on the timestamp and worked backwards, rather than matched as one
+	// pattern: the signature is not a contiguous run of text. The timestamp sits in
+	// a text node while the names beside it are sibling elements, so a regex over
+	// the markup would either miss the links or take markup with them. Walking back
+	// from the timestamp stops the moment it reaches something that is not part of
+	// a signature, which is the prose.
+	function wikipediaStripSignature(html) {
+		const template = document.createElement("template");
+
+		template.innerHTML = String(html || "");
+
+		const walker = document.createTreeWalker(
+			template.content,
+			NodeFilter.SHOW_TEXT,
+		);
+
+		let last = null;
+
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+			if (node.textContent.trim()) {
+				last = node;
+			}
+		}
+
+		const match = last && WIKIPEDIA_SIGNATURE_TIME.exec(last.textContent);
+
+		// No timestamp at the end is no signature, and the comment is returned
+		// exactly as it arrived rather than trimmed on a guess.
+		if (!match) {
+			return String(html || "");
+		}
+
+		last.textContent = last.textContent.slice(0, match.index);
+
+		let cursor = last.previousSibling;
+
+		// "(talk) 15:29, …" leaves ") " behind once the time is gone.
+		if (!WIKIPEDIA_SIGNATURE_PUNCTUATION.test(last.textContent)) {
+			last.remove();
+		}
+
+		while (cursor && isWikipediaSignaturePart(cursor)) {
+			const previous = cursor.previousSibling;
+
+			cursor.remove();
+			cursor = previous;
+		}
+
+		// The separator that introduced the signature -- "…the Fediverse. —" -- is
+		// left dangling once the name after it goes. A full stop is the sentence's
+		// own and stays.
+		if (cursor?.nodeType === Node.TEXT_NODE) {
+			cursor.textContent = cursor.textContent.replace(/[\s—–\-|·]+$/, "");
+		}
+
+		return template.innerHTML;
+	}
+
+	// Parsoid writes wiki links relative to the wiki -- `./User:Wesleyac` -- and on
+	// a Talk page they outnumber external ones several times over. sanitizeHTML
+	// resolves an href against location.origin, so left as they are every one of
+	// them points at whatever site the reader is on rather than at Wikipedia,
+	// which is not broken so much as quietly wrong.
+	//
+	// Only the leading `./` form is rewritten. Anything else Parsoid emits -- the
+	// `mw-data:` stylesheet references, say -- is left for sanitizeHTML to refuse,
+	// which it does by keeping the text and dropping the anchor.
+	function wikipediaAbsoluteLinks(html) {
+		return String(html || "").replace(
+			/href="\.\/([^"]*)"/g,
+			(_, path) => `href="https://en.wikipedia.org/wiki/${path}"`,
+		);
+	}
+
+	// One DiscussionTools item as a comment. MediaWiki builds the id from the
+	// author, the timestamp and the comment replied to, which makes it stable
+	// under replies arriving above it -- unlike a position in the tree -- and the
+	// same on every page carrying that comment. That last part is what identity
+	// wants here: a deletion log transcludes the discussions it lists and an
+	// archive is a copy of the page it was cut from, so one comment is reached
+	// through several pages and is still one comment. Keyed on the id alone, the
+	// copies land on top of each other, which is the answer.
+	function wikipediaComment(item, discussion, parentKey) {
+		return {
+			source: "wikipedia",
+			key: sourceKey("wikipedia", item?.id || ""),
+			id: item?.id || "",
+			discussionKey: discussion?.key,
+			parentKey: parentKey || null,
+			author: item?.author || "",
+			bodyHTML: wikipediaAbsoluteLinks(wikipediaStripSignature(item?.html)),
+			// No voting on a Talk page, so there is no number to report and one
+			// would be invented. null is omitted by the renderer, never shown as
+			// zero.
+			score: null,
+			createdAt: Math.floor(Date.parse(item?.timestamp || "") / 1000) || 0,
+			// The article's editors are not an OP; a Talk page was not submitted by
+			// anybody, the same reason the Bluesky collective marks none.
+			isOP: false,
+			deleted: false,
+			replyKeys: [],
+		};
+	}
+
+	// One linking page as roots and a lookup map, the shape every loadThread
+	// returns. Roots are the comments that cite this URL; each brings the
+	// conversation that grew under it, because a reply to the citation is part of
+	// what was said about the link.
+	//
+	// Nothing cited means no roots, not an invented one: the link is in the article
+	// body, a template, or an archived form the citation index still matches.
+	// Naming the page is the caller's fallback.
+	//
+	// `seen` is shared across the pages of one discussion, so a comment reached
+	// through two of them is taken by the first and skipped by the rest. Wikipedia
+	// makes that ordinary rather than rare: a day's deletion log transcludes every
+	// discussion it lists, so one AfD's 28 comments are also 28 of the log page's
+	// 1177, under the same ids. Left alone the reader gets everything twice.
+	//
+	// Defaulted, so a caller with a single page to judge needs no set and gets the
+	// page judged on its own.
+	function indexWikipediaPage(items, discussion, targetURL, seen = new Set()) {
+		const byKey = new Map();
+		const rootKeys = [];
+
+		const absorb = (item, parentKey) => {
+			const comment = wikipediaComment(item, discussion, parentKey);
+
+			if (seen.has(comment.key)) {
+				return null;
+			}
+
+			seen.add(comment.key);
+			byKey.set(comment.key, comment);
+
+			for (const reply of item?.replies || []) {
+				// A heading carries no author and no timestamp, so it is not a comment
+				// and rendering one would put an empty line in the thread. Its own
+				// replies are still conversation, so they are lifted to where the
+				// heading sat.
+				const children =
+					reply?.type === "comment" ? [reply] : reply?.replies || [];
+
+				for (const child of children) {
+					if (child?.type !== "comment") {
+						continue;
+					}
+
+					const absorbed = absorb(child, comment.key);
+
+					if (absorbed) {
+						comment.replyKeys.push(absorbed.key);
+					}
+				}
+			}
+
+			return comment;
+		};
+
+		const citing = wikipediaCitingComments(items, targetURL);
+
+		for (const item of citing) {
+			const root = absorb(item, null);
+
+			if (root) {
+				rootKeys.push(root.key);
+			}
+		}
+
+		// `cited` is not rootKeys.length. A page whose every citing comment was
+		// already taken by an earlier page cited the URL and contributes no rows,
+		// and the caller has to tell that from a page where nothing cited it at
+		// all -- only the second is worth naming as a bare link.
+		return { rootKeys, byKey, cited: citing.length };
+	}
+
+	// exturlusage names the Talk and Project pages
 	// that link a URL, and prop=revisions dates each -- so the source is one
 	// Bluesky-style collective whose roots are those pages, newest edit first. The
 	// per-page data rides on the discussion because the roots are known here and
@@ -2083,33 +2542,12 @@
 		return (index + 1) / (total + 1);
 	}
 
-	// A discussion's standing: what it earned, discounted by how long ago it earned
-	// it -- not erased by it. The decay is a power law rather than an exponential
-	// for exactly that reason. An exponential half-life drives an old discussion
-	// geometrically toward nothing, which is the model that says old means invalid;
-	// a power law falls toward a floor instead. A thread that drew 761 comments in
-	// 2013 is still the best conversation about the page it was about. It simply
-	// should not be the only conversation at the head of the list.
-	//
-	// Votes are log-scaled because raw they are not comparable across venues.
-	// r/todayilearned is a default subreddit and answers in thousands where Hacker
-	// News answers in hundreds: 1916 against 102 is a 19x gap raw and a 1.6x one in
-	// log10, which is the honest distance between them. Bibliometrics has the
-	// identical problem -- a cell-biology paper out-cites a maths paper by
-	// construction -- and solves it by scoring against a same-field reference set.
-	// Without a per-subreddit corpus to compare against, log-scaling is the
-	// approximation available.
-	//
-	// Quality and age deliberately pull against each other. On the measured
-	// fixture the 2013 thread stands at 0.515 against the day-old HN thread's
-	// 4.807: its merit recovers most of what its age costs, which is the point. A
-	// rule where they did not fight would be "newest first" wearing a costume.
-	// Three orders, and there is deliberately no fourth called "Score". HN
-	// publishes no comment points at any endpoint, so a score sort would have to
-	// invent a number for one of the three sources. "Best" already is the
-	// score-ordered blend, honestly named: each platform's own ranking -- HN's
-	// `kids` order, Reddit's sort=top -- read as a percentile, which is the only
-	// comparison available across sources that carry different currencies.
+	// Three orders, and deliberately no fourth called "Score". HN publishes no
+	// comment points at any endpoint, so a score sort would have to invent a number
+	// for one of the sources. "Best" already is the score-ordered blend, honestly
+	// named: each platform's own ranking -- HN's `kids` order, Reddit's sort=top --
+	// read as a percentile, the only comparison available across sources carrying
+	// different currencies.
 	const SORT_MODES = [
 		{ id: "best", label: "Best" },
 		{ id: "newest", label: "Newest" },
@@ -2123,15 +2561,30 @@
 	const STANDING_LIVE_WINDOW = 86400;
 	const SECONDS_PER_YEAR = 31557600;
 
-	// Arrival wins by a nose rather than dominating: it decides between discussions
-	// that are otherwise close, and leaves the merit ordering beneath them intact.
+	// A discussion's standing: what it earned, discounted by how long ago it earned
+	// it -- not erased by it. The decay is a power law rather than an exponential
+	// for exactly that reason: an exponential half-life drives an old discussion
+	// geometrically toward nothing, which is the model that says old means invalid,
+	// where a power law falls toward a floor. A thread that drew 761 comments in
+	// 2013 is still the best conversation about the page it was about; it simply
+	// should not be the only conversation at the head of the list.
 	//
-	// Being live is deliberately NOT a factor here. It was, at 1.5x, and that was
-	// wrong twice over. Too small to do its job -- on the measured page the archive
-	// led a live thread by 1.70x and stayed ahead -- and wrong in kind, because
-	// "there is a conversation happening right now" is not a quantity to be traded
-	// off against thirteen years of accumulated votes. It is a different question,
-	// so blendRoots asks it separately and sorts on it first.
+	// Votes are log-scaled because raw they are not comparable across venues.
+	// r/todayilearned answers in thousands where Hacker News answers in hundreds:
+	// 1916 against 102 is a 19x gap raw and 1.6x in log10, which is the honest
+	// distance. Bibliometrics solves the identical problem by scoring against a
+	// same-field reference set; without a per-subreddit corpus, log-scaling is the
+	// approximation available.
+	//
+	// Arrival wins by a nose rather than dominating: it decides between discussions
+	// that are otherwise close and leaves the merit ordering beneath them intact.
+	//
+	// Being live is deliberately NOT a factor. As a 1.5x multiplier it is both too
+	// small to do its job -- the measured archive led a live thread by 1.70x and
+	// stayed ahead -- and wrong in kind, because "there is a conversation happening
+	// right now" is not a quantity to trade off against thirteen years of votes. It
+	// is a different question, so blendRoots asks it separately and sorts on it
+	// first.
 	function standing(discussion, newestCommentAt, options = {}) {
 		if (!discussion) {
 			return 1;
@@ -2244,14 +2697,12 @@
 			return entries.sort((a, b) => a.createdAt - b.createdAt || b.size - a.size);
 		}
 
-		// Anything else is "best", including absent -- which is what every reader
-		// upgrading into this version has until they touch the control.
+		// Anything unrecognised is "best", including absent.
 		//
-		// Live first, as a tier rather than as a weight. A conversation happening
-		// right now is not worth some number of upvotes that a big enough archive
-		// could out-argue: it is the thing the reader opened the panel to find. As a
-		// 1.5x multiplier it lost to a thirteen-year-old thread with 284 roots, which
-		// is precisely the case it existed for.
+		// Live first, as a tier rather than as a weight. A conversation happening now
+		// is not worth some number of upvotes a big enough archive could out-argue:
+		// it is the thing the reader opened the panel to find. See standing for why
+		// the multiplier this replaced could not do the job.
 		//
 		// Sorting it first is also what makes the live comments one contiguous run,
 		// which is what lets the list bookend them instead of tagging every comment
@@ -2271,25 +2722,23 @@
 	// blendRoots rather than a generalisation of it. blendRoots takes groups of
 	// rootKeys and knows about liveness; neither means anything here.
 	//
-	// standing is fed an adapter rather than the row being reshaped. It speaks
+	// standing is fed an adapter rather than the row being reshaped: it speaks
 	// createdAt/commentCount and a row speaks time/descendants, which is Firebase's
-	// vocabulary and what every reader's stored queue has held since queues
-	// existed. Renaming the row would rewrite reader data to buy nothing.
+	// vocabulary and what every stored queue holds. Renaming the row would rewrite
+	// reader data to buy nothing.
 	//
 	// Two things this deliberately does NOT do.
 	//
-	// It does not pass arrivedFrom. On a discussion that boost means "lead with
-	// the thread you were just reading about", which is the reader's own context.
-	// On a front page it would mean "you came from Lobsters, so Lobsters' picks
-	// lead" -- and someone pressing the wordmark is asking to leave the page they
-	// are on, not to be shown more of where they came from.
+	// It does not pass arrivedFrom. On a discussion that boost means "lead with the
+	// thread you were just reading about"; on a front page it would mean "you came
+	// from Lobsters, so Lobsters' picks lead" -- and someone pressing the wordmark
+	// is asking to leave the page they are on.
 	//
 	// It does not correct for the age term going quiet. Every front-page row is
 	// hours old, so (1 + ageYears) ** STANDING_GRAVITY is ~1 and the blend reduces
-	// to log-scaled score-and-comments over rank fraction. That is the intended
-	// behaviour here, not a decay that has failed to fire: on this list every row
-	// is current, so there is nothing for the decay to tell apart. Measured, so it
-	// is not re-derived later -- a day of age costs 0.27% and a year costs half.
+	// to log-scaled score-and-comments over rank fraction. That is intended, not a
+	// decay that failed to fire: on this list every row is current. Measured, so it
+	// is not re-derived later -- a day of age costs 0.27%, a year costs half.
 	function blendStories(lists, options = {}) {
 		const entries = [];
 
@@ -2339,9 +2788,9 @@
 	//
 	// After the blend, never before, and that ordering is load-bearing. Walking a
 	// sorted list means the first arrival at any URL is by construction its
-	// best-blended one, so the survivor keeps the position it earned and the
-	// others ride along in `also` to supply their comment links. Merging first
-	// would mean choosing a winner before knowing which one the blend preferred.
+	// best-blended one, so the survivor keeps the position it earned and the others
+	// ride along in `also`, where the row reads their comment counts into its total.
+	// Merging first would mean choosing a winner before the blend had preferred one.
 	//
 	// normalizeURL is the key -- the same function every source's discovery
 	// already measures its own hits against, so two sources agree here exactly
@@ -2380,22 +2829,20 @@
 	//
 	// Hacker News and Lobsters are ~100% link-shaped because their readers submit
 	// articles. Reddit and Lemmy are general-purpose forums whose front pages are
-	// mostly native content -- measured on the day this was built, r/popular was
-	// 80 reddit-hosted rows in 100, and Lemmy's Active feed 42% bare images. Blended
-	// raw, Reddit would contribute four memes per article to a panel whose whole
-	// premise is "discussion about the page you are reading".
+	// mostly native content -- measured, r/popular was 80 reddit-hosted rows in 100
+	// and Lemmy's Active feed 42% bare images -- so blended raw, Reddit contributes
+	// four memes per article to a panel whose premise is "discussion about the page
+	// you are reading".
 	//
 	// The test is hosting, not media type. A YouTube link stays, because it is a
-	// page on someone else's site that a reader can go and be at; i.redd.it does
-	// not, because it is Reddit's own CDN and "opening" it lands nowhere the (BC)
-	// button could ever light. That distinction is why this takes hosts rather
-	// than file extensions -- and it is also why a pictrs path counts, since every
-	// Lemmy instance serves its own images from one and the host is whichever
-	// instance happened to federate the post.
+	// page on someone else's site a reader can go and be at; i.redd.it does not,
+	// because it is Reddit's own CDN and opening it lands nowhere the (BC) button
+	// could light. Hence hosts rather than file extensions -- and hence a pictrs
+	// path counting, since every Lemmy instance serves images from one and the host
+	// is whichever instance federated the post.
 	//
-	// Hacker News is the deliberate exception and does not call this: an Ask HN
-	// points at its own item page because for an Ask HN the page and the
-	// discussion are the same object, which parseFrontPageRow has always known.
+	// Hacker News is the deliberate exception and does not call this: for an Ask HN
+	// the page and the discussion are the same object.
 	function isOffSiteLink(url, selfHosts = [], selfPaths = []) {
 		let parsed;
 
@@ -2595,6 +3042,97 @@
 		};
 	}
 
+	// A facet's uri is somebody else's JSON, and the lexicon does not stop a client
+	// writing a scheme that runs rather than navigates. sanitizeHTML refuses one at
+	// render time; refusing it here as well means bodyHTML never carries one to
+	// begin with, and the text still shows -- just not as a link.
+	function bskyLinkURI(uri) {
+		try {
+			const protocol = new URL(String(uri)).protocol;
+
+			return protocol === "http:" || protocol === "https:" ? String(uri) : null;
+		} catch {
+			return null;
+		}
+	}
+
+	// Where a facet feature points. A link states its address; the other two state
+	// an identity and the address is Bluesky's own page for it. A mention is
+	// addressed by did rather than by the handle in the text, because a handle is
+	// rented -- it moves, and the text keeps whatever it said on the day.
+	function bskyFacetHref(feature) {
+		switch (feature?.$type) {
+			case "app.bsky.richtext.facet#link":
+				return bskyLinkURI(feature.uri);
+			case "app.bsky.richtext.facet#mention":
+				return feature.did ? "https://bsky.app/profile/" + feature.did : null;
+			case "app.bsky.richtext.facet#tag":
+				return feature.tag
+					? "https://bsky.app/hashtag/" + encodeURIComponent(feature.tag)
+					: null;
+			default:
+				return null;
+		}
+	}
+
+	// A post's text carries Bluesky's own truncated display form of a link --
+	// `simonwillison.net/2026/Aug/7/o...` -- and the address itself lives only in
+	// the facet beside it. Rendering the text alone names a page nobody can reach.
+	function bskyRichText(text, facets) {
+		const source = String(text || "");
+		const ranges = (facets || [])
+			.map((facet) => ({
+				start: facet?.index?.byteStart,
+				end: facet?.index?.byteEnd,
+				// First recognised feature wins. A facet may carry several, and the
+				// range is one stretch of text that can only be one link.
+				uri: (facet?.features || []).map(bskyFacetHref).find(Boolean) || null,
+			}))
+			.filter(
+				(range) =>
+					range.uri &&
+					Number.isInteger(range.start) &&
+					Number.isInteger(range.end) &&
+					range.start < range.end,
+			)
+			.sort((left, right) => left.start - right.start);
+
+		if (!ranges.length) {
+			return escapeHTML(source);
+		}
+
+		// The ranges are byte offsets into the UTF-8 encoding, and the string they
+		// index is UTF-16. One emoji ahead of a link is enough to separate the two --
+		// 🦕 is four bytes and two units -- so the text is encoded once and cut in the
+		// units the offsets are actually written in. Cutting the string on a byte
+		// offset instead takes "gi" off the front of a link and leaves it behind in
+		// the sentence, which is a corruption that reads like a typo.
+		const bytes = new TextEncoder().encode(source);
+		const decoder = new TextDecoder();
+		const cut = (start, end) =>
+			decoder.decode(bytes.subarray(start, Math.min(end, bytes.length)));
+
+		let html = "";
+		let cursor = 0;
+
+		for (const range of ranges) {
+			// Out of order or overlapping ranges are not something Bluesky sends, but
+			// the record is somebody else's data and a negative slice would silently
+			// repeat the text between them.
+			if (range.start < cursor || range.start >= bytes.length) {
+				continue;
+			}
+
+			html += escapeHTML(cut(cursor, range.start));
+			html += `<a target="_blank" rel="noopener noreferrer" href="${escapeHTML(
+				range.uri,
+			)}">${escapeHTML(cut(range.start, range.end))}</a>`;
+			cursor = Math.min(range.end, bytes.length);
+		}
+
+		return html + escapeHTML(cut(cursor, bytes.length));
+	}
+
 	// Bluesky publishes a like count per post, so unlike HN there is a real number
 	// to report and it is not invented. A post and a reply are the same record
 	// type, which is why one mapper serves both.
@@ -2604,14 +3142,13 @@
 		return {
 			source: "bsky",
 			key,
-			id: key.slice("bsky:".length),
+			// Through parseSourceKey rather than slicing a literal prefix off: the
+			// separator is declared in one place and this is what reads it back.
+			id: parseSourceKey(key)?.id ?? "",
 			discussionKey: discussion?.key,
 			parentKey: parentKey || null,
 			author: post?.author?.handle || "",
-			// Bluesky's rich-text facets are dropped here, so a link inside a post
-			// renders as text rather than an anchor. A deliberate first cut, and the
-			// reason this escapes rather than sanitizes.
-			bodyHTML: escapeHTML(post?.record?.text || ""),
+			bodyHTML: bskyRichText(post?.record?.text, post?.record?.facets),
 			score: post?.likeCount ?? 0,
 			createdAt: bskyTime(post),
 			// No OP on Bluesky. Discovery aggregates many people's separate posts
@@ -2624,10 +3161,26 @@
 		};
 	}
 
+	// What getPostThread actually returns, whatever is asked for. Measured on one
+	// root at 10, 50 and 1000: byte-identical responses, 66 nodes, truncated every
+	// time. So this is not a number to raise -- it is the shape of the answer, and
+	// the tail is reached by asking again from the bottom.
+	const BSKY_THREAD_DEPTH = 10;
+
 	// Walks a getPostThread response into the flat map getComment reads. The
 	// response is a union: notFoundPost and blockedPost carry no author and no
 	// text, and rendering one would put an authorless comment in the thread.
-	function indexBskyThread(node, discussion, byKey, parentKey) {
+	//
+	// `depth` is where this node sits in the response, which is what separates a
+	// gap worth offering to fill from one that cannot be filled. A node reporting
+	// replies it did not return means two different things depending on where it
+	// sits: at the cap the walk simply stopped, and the replies are there to be
+	// fetched. Above the cap the walk did not stop, so the missing replies are
+	// ones the AppView will not serve -- blocked, deleted, or from a blocked
+	// account -- and replyCount counts them anyway. Measured: three such nodes at
+	// depth 2 each returned zero replies when fetched directly, while one at the
+	// cap returned 2 replies and 17 nodes beneath them.
+	function indexBskyThread(node, discussion, byKey, parentKey, depth = 0) {
 		const post = node?.post;
 
 		if (!post?.uri) {
@@ -2639,13 +3192,20 @@
 
 		byKey.set(key, comment);
 
+		if (depth >= BSKY_THREAD_DEPTH && (post.replyCount || 0) > 0) {
+			// The uri is the id, because that is what fetching the rest needs. Reddit
+			// passes comment ids through the same field; the renderer never reads it,
+			// it only hands it back.
+			comment.more = { ids: [post.uri], count: post.replyCount };
+		}
+
 		for (const reply of node.replies || []) {
 			if (!reply?.post?.uri) {
 				continue;
 			}
 
 			comment.replyKeys.push(bskyKeyFromURI(reply.post.uri));
-			indexBskyThread(reply, discussion, byKey, key);
+			indexBskyThread(reply, discussion, byKey, key, depth + 1);
 		}
 	}
 
@@ -2792,9 +3352,9 @@
 	}
 	// #endregion hnewhere-test-export
 
-	// Where a name links to, decided by the source the name came from. It used to
-	// be Hacker News for everybody, which sent a Reddit username to an HN profile
-	// page that has never existed.
+	// Where a name links to, decided by the source the name came from -- one rule
+	// for everybody would send a Reddit username to an HN profile that has never
+	// existed.
 	//
 	// Returns null for a name that is not a person -- Reddit's "[deleted]", HN's
 	// "anonymous" placeholder -- so the renderer can print the text without
@@ -2825,6 +3385,7 @@
 	// registry entry and no markup. The caveat travels with the source that earns
 	// it: a checkbox that sends the reader's browsing history somewhere new has to
 	// say so where it is ticked, not in a document nobody opens.
+	//
 	// The id is optional because this list is rendered twice into the same shadow
 	// root -- once in the settings panel, once in the picker -- and two elements
 	// cannot share one. The input sits inside its own label, so nothing needs a
@@ -2918,10 +3479,10 @@ ${
 		// page costs nothing. The front page is the same for everyone; only the vote
 		// arrows would differ, and those are replayed from vote memory anyway.
 		//
-		// One page, where this used to take a page number. The blend fetches every
-		// source once and pages through the merged pool locally, so HN's own ?p=
-		// pagination has nowhere left to surface: page 2 of a blend is made of rows
-		// that lost on page 1, not of one source's next thirty.
+		// One page, and no page number. The blend fetches every source once and pages
+		// through the merged pool locally, so HN's own ?p= pagination has nowhere to
+		// surface: page 2 of a blend is made of rows that lost on page 1, not of one
+		// source's next thirty.
 		async frontPage() {
 			const html = await requestText(HN_ORIGIN + "/news");
 
@@ -3171,12 +3732,7 @@ ${
 			);
 
 			if (!result) {
-				return {
-					rootKeys: [],
-					async getComment() {
-						return null;
-					},
-				};
+				return emptyThreadReader();
 			}
 
 			const index =
@@ -3251,9 +3807,8 @@ ${
 
 					// What the caller renders is decided by the caller, because only it
 					// knows which comment the gap sat under. Classifying by "has no
-					// parent" was wrong in the way that matters: a stub hangs beneath a
-					// comment that is already on screen, so every reply it returns has a
-					// parent in the map and nothing was ever a root.
+					// parent" cannot work: a stub hangs beneath a comment already on
+					// screen, so every reply it returns has a parent in the map.
 					return { ok: true, added, remaining: ids.slice(100) };
 				},
 			};
@@ -3459,7 +4014,7 @@ ${
 					}
 
 					const thread = await bskyJSON(
-						`${BSKY_APPVIEW}/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=10&parentHeight=0`,
+						`${BSKY_APPVIEW}/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=${BSKY_THREAD_DEPTH}&parentHeight=0`,
 					);
 
 					if (!thread?.thread) {
@@ -3473,6 +4028,69 @@ ${
 					indexBskyThread(thread.thread, discussion, byKey, null);
 
 					return byKey.get(key) || null;
+				},
+
+				// The bottom of a capped thread, asked for again from there. One uri
+				// per call, because that is what a gap is here: getPostThread takes a
+				// single root, unlike Reddit's morechildren which takes a hundred ids.
+				//
+				// Only the replies are indexed, not the node itself -- it is already in
+				// the map and already on screen, and rebuilding it would hand the
+				// renderer a different object for the comment it is holding.
+				async expandMore(ids) {
+					const uri = ids?.[0];
+
+					if (!uri) {
+						return { ok: true, added: [], remaining: [] };
+					}
+
+					const thread = await bskyJSON(
+						`${BSKY_APPVIEW}/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=${BSKY_THREAD_DEPTH}&parentHeight=0`,
+					);
+
+					// Left standing rather than withdrawn. "2 more replies" vanishing
+					// without producing two replies is worse than the offer never
+					// having been made.
+					if (!thread?.thread) {
+						return { ok: false, added: [], remaining: ids };
+					}
+
+					const key = bskyKeyFromURI(uri);
+					const parent = byKey.get(key);
+					const before = new Set(byKey.keys());
+
+					for (const reply of thread.thread.replies || []) {
+						if (!reply?.post?.uri) {
+							continue;
+						}
+
+						const replyKey = bskyKeyFromURI(reply.post.uri);
+
+						if (parent && !parent.replyKeys.includes(replyKey)) {
+							parent.replyKeys.push(replyKey);
+						}
+
+						// Depth 1, not 0: these are the children of the node the second
+						// request was rooted at, so the new cap falls ten levels below it
+						// and a thread deeper still grows its own offer down there.
+						indexBskyThread(reply, discussion, byKey, key, 1);
+					}
+
+					const added = [];
+
+					for (const [addedKey, comment] of byKey) {
+						if (!before.has(addedKey) && comment) {
+							added.push(comment);
+						}
+					}
+
+					// This gap is closed whatever came back. Anything deeper is a new
+					// gap, carried by whichever node now sits at the bottom.
+					if (parent) {
+						parent.more = null;
+					}
+
+					return { ok: true, added, remaining: [] };
 				},
 			};
 		},
@@ -3563,6 +4181,13 @@ ${
 		},
 	});
 
+	// How many linking pages get asked what was said on them. One request each, and
+	// the count exturlusage returns is long-tailed -- measured across ten URLs the
+	// median was 3 pages and the worst was 74. Ten covers the ordinary case whole
+	// and stops the tail from spending a reader's whole load on citations nobody
+	// scrolls to.
+	const WIKIPEDIA_THREAD_PAGES = 10;
+
 	async function wikipediaJSON(url) {
 		const result = await requestWithMeta(url);
 
@@ -3610,6 +4235,12 @@ ${
 		caveat:
 			"Will send each page you visit to Wikipedia's API to find pages that link it. No account, signed in or out.",
 		capabilities: { vote: false, reply: false, submit: false },
+
+		// Now that the comments are real, so are the people who left them. An
+		// unregistered editor signs with an IP address, which has a user page like
+		// any other name, so this needs no special case for them.
+		profileURL: (author) =>
+			"https://en.wikipedia.org/wiki/User:" + encodeURIComponent(author),
 
 		async discover(url) {
 			const target = normalizeURL(url);
@@ -3662,11 +4293,175 @@ ${
 			return collective ? [collective] : [];
 		},
 
+		// The pages are known from discovery; what was said on them is not, and this
+		// is where it arrives. One request per page, so the list is capped: a URL
+		// cited by ninety Talk pages would otherwise be ninety requests before a
+		// word rendered. Newest first, so the cap falls on the stalest pages.
+		async loadThread(discussion) {
+			const byKey = new Map();
+			const rootKeys = [];
+			const rootTimes = new Map();
+
+			const pages = [...(discussion.wikiPages || [])].sort(
+				(left, right) => (right.time || 0) - (left.time || 0),
+			);
+			const asked = pages.slice(0, WIKIPEDIA_THREAD_PAGES);
+			const threads = await Promise.all(
+				asked.map((page) =>
+					wikipediaJSON(
+						`https://en.wikipedia.org/w/api.php?action=discussiontoolspageinfo&page=${encodeURIComponent(
+							page.title,
+						)}&prop=threaditemshtml&format=json&formatversion=2`,
+					),
+				),
+			);
+
+			// One set for the whole discussion, so the pages are deduplicated against
+			// each other in the order they are walked -- newest edit first.
+			const seen = new Set();
+
+			pages.forEach((page, index) => {
+				const items =
+					index < asked.length
+						? threads[index]?.discussiontoolspageinfo?.threaditemshtml
+						: null;
+				const indexed = items
+					? indexWikipediaPage(items, discussion, discussion.articleURL, seen)
+					: { rootKeys: [], byKey: new Map(), cited: 0 };
+
+				// No comment cited it, or the page fell past the cap, or the request
+				// failed. Naming the page is what this source did for every page before
+				// it could read Talk comments at all, so the row is still there and
+				// still leads somewhere.
+				//
+				// A page that cited it and contributed nothing is the other case: its
+				// comments are already on screen, put there by the page that reached
+				// them first, and naming it as well would trade duplicate comments for
+				// a duplicate row.
+				if (!indexed.rootKeys.length && !indexed.cited) {
+					const fallback = wikipediaRootComment(page, discussion);
+
+					byKey.set(fallback.key, fallback);
+					rootKeys.push(fallback.key);
+					rootTimes.set(fallback.key, page.time || 0);
+
+					return;
+				}
+
+				for (const [key, comment] of indexed.byKey) {
+					byKey.set(key, comment);
+				}
+
+				for (const key of indexed.rootKeys) {
+					rootKeys.push(key);
+					// The comment's own time, not the page's last edit. A citation from
+					// 2018 on a page edited yesterday is 2018 news, and dating it
+					// yesterday would sort it above everything actually recent.
+					rootTimes.set(key, byKey.get(key)?.createdAt || page.time || 0);
+				}
+			});
+
+			return {
+				rootKeys,
+				rootTimes,
+				async getComment(key) {
+					return byKey.get(key) || null;
+				},
+			};
+		},
+	});
+
+	// The instance asked for trending links. Any Mastodon instance answers this,
+	// and they answer differently -- each one's trends are what *its* people are
+	// posting. The largest is the least parochial default, and it is asked about
+	// nothing but its own trends: the reader's address never goes here.
+	const MASTODON_INSTANCE = "https://mastodon.social";
+	// Mastodon's own status search requires an account. Tootfinder is an opt-in
+	// full-text index of people who chose to be searchable, which is a slice of the
+	// fediverse rather than all of it -- measured at two posts per URL on a busy
+	// news domain. Thin, and the only way to answer the question without asking the
+	// reader for credentials.
+	const TOOTFINDER = "https://www.tootfinder.ch";
+
+	async function mastodonJSON(url) {
+		const result = await requestWithMeta(url);
+
+		return result.ok ? result.json : null;
+	}
+
+	registerSource({
+		id: "mastodon",
+		// Where a reader arrives from. Not exhaustive -- there are thousands of
+		// instances -- and arrival is only a blend hint, so a miss costs nothing.
+		origins: ["mastodon.social", "hachyderm.io", "fosstodon.org", "mstdn.social"],
+		label: "Mastodon",
+		shortLabel: "Mastodon",
+		slow: true,
+		beta: true,
+		// A collective was never posted, so a bare age would read as "posted then".
+		// The only honest timestamp is when it last moved.
+		ageLabel: "Last Mastodon post",
+		// The index answers with whole statuses, so loadThread fetches nothing and
+		// what is on screen is the discussion.
+		threadArrivesWhole: true,
+		// Two surprises, both stated. The address goes to a third party that is not
+		// Mastodon, and only the domain of it -- Tootfinder's search takes a path
+		// segment, so a full URL cannot be sent even if it were wanted. The front
+		// page asks mastodon.social about mastodon.social and carries nothing about
+		// the reader at all.
+		caveat:
+			"Will send the domain of each page you visit to Tootfinder, an opt-in index of Mastodon posts. It indexes only people who chose to be searchable. Signed in or out, these requests carry no account.",
+		capabilities: { vote: false, reply: false, submit: false },
+
+		profileURL: (handle) => {
+			const [user, host] = String(handle).split("@");
+
+			return user && host
+				? `https://${host}/@${encodeURIComponent(user)}`
+				: null;
+		},
+
+		// The query is the domain and the comparison is the answer, exactly as
+		// Lobsters does it: neither has a URL search, and both would rather send
+		// less and filter more than send the reader's full address.
+		async discover(url) {
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return [];
+			}
+
+			let host = "";
+
+			try {
+				host = new URL(url).hostname;
+			} catch {
+				return [];
+			}
+
+			const statuses = await mastodonJSON(
+				`${TOOTFINDER}/rest/api/search/${encodeURIComponent(host)}`,
+			);
+
+			if (!Array.isArray(statuses)) {
+				return [];
+			}
+
+			const collective = mastodonCollective(
+				url,
+				statuses.filter((status) => mastodonStatusPasses(status, target)),
+			);
+
+			return collective ? [collective] : [];
+		},
+
+		// Nothing to fetch: discovery already holds every status this will show.
 		async loadThread(discussion) {
 			const byKey = new Map();
 
-			for (const page of discussion.wikiPages || []) {
-				const comment = wikipediaRootComment(page, discussion);
+			for (const status of discussion.statuses || []) {
+				const comment = mastodonComment(status, discussion);
+
 				byKey.set(comment.key, comment);
 			}
 
@@ -3682,6 +4477,21 @@ ${
 					return byKey.get(key) || null;
 				},
 			};
+		},
+
+		// The one part of Mastodon that is both official and unauthenticated. Every
+		// row is by definition a link off the instance, so it needs none of the
+		// filtering Reddit and Lemmy do to keep their own content out.
+		async frontPage() {
+			const links = await mastodonJSON(
+				`${MASTODON_INSTANCE}/api/v1/trends/links?limit=40`,
+			);
+
+			if (!Array.isArray(links)) {
+				return [];
+			}
+
+			return links.filter((link) => link?.url).map(mastodonTrendStory);
 		},
 	});
 
@@ -3772,22 +4582,13 @@ ${
 		},
 	});
 
-	// The discovery entry point. With one source registered it is a fan-out of
-	// one, and the current lookup still goes through findHN directly because the
-	// button only needs to know whether a discussion exists. This is where a
-	// second source plugs in.
-	//
-	// Sources are independent: one failing must never blank a sidebar that has
-	// something else to show, so a rejected discover contributes nothing rather
-	// than rejecting the whole lookup.
 	// A source that never settles must not freeze the button for the others. A
 	// request awaiting a manager's @connect approval slips past the per-request
 	// timeout -- it never starts, so ontimeout never fires -- and under Promise.all
-	// one such source would block every other, Hacker News included, leaving the
-	// nub spinning for good. Each source gets a ceiling; past it, it contributes
-	// nothing rather than holding up the whole lookup. 12s clears the 10s per-request
-	// timeout, so a source whose request merely times out still returns normally --
-	// only a genuine hang is cut off.
+	// one such source would block every other, leaving the nub spinning for good.
+	//
+	// 12s clears the 10s per-request timeout, so a source whose request merely
+	// times out still returns normally; only a genuine hang is cut off.
 	const DISCOVER_CEILING_MS = 12000;
 
 	function discoverWithCeiling(promise, sourceId) {
@@ -3810,6 +4611,12 @@ ${
 		});
 	}
 
+	// The discovery entry point: every enabled source asked at once, their answers
+	// merged into one ordered list.
+	//
+	// Sources are independent. One failing must never blank a sidebar that has
+	// something else to show, so a rejected discover contributes nothing rather
+	// than rejecting the whole lookup.
 	async function discoverAll(url, settings) {
 		const results = await Promise.all(
 			enabledSources(settings).map((source) =>
@@ -3825,7 +4632,14 @@ ${
 
 		// filter(Boolean) so a source that ever returns a nullish entry cannot throw
 		// the comparator and, with it, the whole page pass.
-		return results.flat().filter(Boolean).sort(compareStoriesByDiscussion);
+		//
+		// Labelled here, where the whole set for a URL is known, because that is what
+		// telling two submissions of one page apart requires. Every path that
+		// produces a discussion list crosses this or resolveDiscussions, and
+		// disambiguateLabels is idempotent so both may apply it.
+		return disambiguateLabels(
+			results.flat().filter(Boolean).sort(compareStoriesByDiscussion),
+		);
 	}
 
 	// The same protection for the second phase, loading a discussion's comments. The
@@ -3954,10 +4768,9 @@ ${
 	// one off should not be served the ranking that included it.
 	//
 	// Every source is asked at once and a thrown adapter costs only its own rows.
-	// One source being down is the case this has to survive well: with four of
-	// them the odds that all four are up are meaningfully worse than for any one,
-	// so a fan-out that failed whole would be less reliable than the single fetch
-	// it replaces.
+	// One source being down is the case this has to survive well: the odds that all
+	// of them are up are meaningfully worse than for any one, so a fan-out that
+	// failed whole would be less reliable than a single fetch.
 	async function loadFrontPages(options = {}) {
 		const settings = options.settings || (await loadSettings());
 		const ids = frontPageSourceIds(settings);
@@ -4491,9 +5304,9 @@ ${
 	}
 
 	// What the panel and the page-side overlay should actually paint, whichever of
-	// the two is in force. Everything that used to read ACCENT, ACCENT_DARK or
-	// ACCENT_RGB reads this instead, so the reader's colour reaches the button and
-	// the article highlights rather than only the panel.
+	// the two is in force. Read in place of ACCENT, ACCENT_DARK and ACCENT_RGB
+	// everywhere, so the reader's colour reaches the button and the article
+	// highlights rather than only the panel.
 	function activeAccent(dark) {
 		const override = accentOverridePalette();
 
@@ -4868,16 +5681,10 @@ ${
 	}
 	// #endregion hnewhere-test-export
 
-	// "HN" was doing double duty as the product's mark and as the name of the only
-	// source; with several sources it would have been announcing one of them. The
-	// reader can set their own, so this reads the preference rather than a
-	// constant -- see normalizeButtonMark for what a valid one is.
-
-	// The two states the floating button can be in. "active" means a discussion is
-	// known to exist; "inactive" means the lookup came back empty and clicking offers
-	// to submit the page instead. Kept in one table because both the initial cssText
-	// and applyButtonMobileStyle used to hardcode the colour separately, which is
-	// exactly how the two would drift.
+	// What the floating button can be saying. "active" means a discussion is known
+	// to exist; the three greys each mean something different is on offer. One
+	// table, because two places paint this button and a colour written in both
+	// drifts.
 	const BUTTON_VARIANTS = {
 		active: {
 			background: ACCENT,
@@ -4991,24 +5798,65 @@ ${
 		}, 220);
 	}
 
-	// The only place these properties are set. They used to be spelled out in both
-	// createFloatingHNButton's cssText and applyButtonMobileStyle, which re-asserts
-	// them on every resize -- so a value applied to only one of them was silently
-	// reverted the next time the window changed size.
+	// The only place these properties are set, so applyButtonMobileStyle -- which
+	// re-asserts them on every resize -- cannot revert a value set anywhere else.
 	//
-	// The label belongs here for the same reason. createFloatingHNButton returns an
-	// existing button untouched and adopts a pending one by id, so neither path
-	// re-labels it: a mark changed while a button was already on the page stayed on
-	// the old one until a reload.
+	// Every one is written `!important`. The floating buttons live in the page
+	// rather than a shadow root, so they can be dragged around it and composite
+	// against it, which also puts them in range of the page's own CSS:
+	// `button { padding:18px !important }` is an ordinary line in a design system
+	// and it turns the circle into an 80px square with the mark letter-spaced
+	// across it. An important author rule beats a normal inline style -- the
+	// cascade working as specified -- and only an important inline style outranks
+	// it.
+	function pinButtonStyle(button, properties) {
+		for (const [name, value] of Object.entries(properties)) {
+			const property = name.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
+
+			if (value === null || value === undefined) {
+				button.style.removeProperty(property);
+				continue;
+			}
+
+			button.style.setProperty(property, String(value), "important");
+		}
+	}
+
+	// What a page can set that this button never does, and would be disfigured by.
+	// Pinned to their initial values rather than left alone, because "we do not set
+	// letter-spacing" is not a defence against a page that does.
+	const BUTTON_STYLE_RESET = {
+		margin: "0",
+		border: "0",
+		minWidth: "0",
+		maxWidth: "none",
+		minHeight: "0",
+		maxHeight: "none",
+		lineHeight: "1",
+		letterSpacing: "normal",
+		wordSpacing: "normal",
+		textTransform: "none",
+		textIndent: "0",
+		textDecoration: "none",
+		textAlign: "center",
+		fontStyle: "normal",
+		whiteSpace: "nowrap",
+		boxSizing: "border-box",
+		float: "none",
+		visibility: "visible",
+	};
+
 	function applyButtonAppearance(button) {
 		const size = buttonSizePreference;
 
 		button.textContent = buttonMarkPreference;
-		button.style.width = `${size}px`;
-		button.style.height = `${size}px`;
-		button.style.fontSize = `${buttonFontSizeFor(size)}px`;
-		button.style.borderRadius =
-			BUTTON_SHAPES[buttonShapePreference] || BUTTON_SHAPES.circle;
+		pinButtonStyle(button, {
+			width: `${size}px`,
+			height: `${size}px`,
+			fontSize: `${buttonFontSizeFor(size)}px`,
+			borderRadius:
+				BUTTON_SHAPES[buttonShapePreference] || BUTTON_SHAPES.circle,
+		});
 	}
 
 	async function refreshButtonAppearance() {
@@ -5052,19 +5900,21 @@ ${
 					: style.background;
 
 		button.dataset.hnewhereVariant = variant;
-		button.style.background = background;
-		// The mark sits on that background, so its colour is decided by it rather
-		// than fixed at white. The greys go through the same test as the accent --
-		// #b8b8b8 carries black, #4a4a4a carries white -- so one rule covers every
-		// variant instead of the accent being a special case.
-		button.style.color = readableInk(parseHexColor(background));
-		button.style.boxShadow = style.boxShadow;
+		pinButtonStyle(button, {
+			background,
+			// The mark sits on that background, so its colour is decided by it rather
+			// than fixed at white. The greys go through the same test as the accent --
+			// #b8b8b8 carries black, #4a4a4a carries white -- so one rule covers every
+			// variant instead of the accent being a special case.
+			color: readableInk(parseHexColor(background)),
+			boxShadow: style.boxShadow,
+		});
 		button.title = style.title;
 	}
 
 	function applyButtonMobileStyle(button) {
-		Object.assign(button.style, {
-			boxSizing: "border-box",
+		pinButtonStyle(button, {
+			...BUTTON_STYLE_RESET,
 			padding: "0",
 			display: "flex",
 			alignItems: "center",
@@ -5072,8 +5922,9 @@ ${
 			color: "white",
 			top: "16px",
 			right: "16px",
-			opacity: "1",
 		});
+
+		button.style.opacity = "1";
 
 		applyButtonAppearance(button);
 
@@ -5085,73 +5936,78 @@ ${
 		);
 	}
 
-		function createFloatingHNButton(id, variant = "active") {
-			let button = document.getElementById(id);
+	function createFloatingHNButton(id, variant = "active") {
+		let button = document.getElementById(id);
 
-			if (button) {
-				button.textContent = buttonMarkPreference;
-				return button;
-			}
-
-			// A button drawn before the lookup answered becomes whichever button the
-			// answer calls for, rather than being torn down and rebuilt: rebuilding
-			// would drop the ring mid-fade and discard a position the reader had
-			// already dragged it to.
-			button = document.getElementById(BUTTON_PENDING_ID);
-
-			if (button) {
-				button.id = id;
-				button.textContent = buttonMarkPreference;
-				setFloatingButtonVariant(button, variant);
-				return button;
-			}
-
-			button = document.createElement("button");
-			button.id = id;
+		if (button) {
 			button.textContent = buttonMarkPreference;
-
-			button.style.cssText = `
-					position:fixed;
-					top:16px;
-					right:16px;
-					z-index:2147483647;
-					color:white;
-					border:none;
-					padding:0;
-					font-family:Verdana,sans-serif;
-					font-weight:bold;
-					cursor:pointer;
-					user-select:none;
-					touch-action:none;
-					display:flex;
-					align-items:center;
-					justify-content:center;
-					-webkit-tap-highlight-color:transparent;
-					/* box-shadow rides along because setFloatingButtonVariant writes it
-					   too: without it the glow snapped while the fill cross-faded, which
-					   is visible when the button settles out of "checking". */
-					transition:background .2s ease, box-shadow .2s ease;
-					/* So the fill overlay can be clipped to the circle. */
-					overflow:hidden;
-					isolation:isolate;
-				`;
-
-			setFloatingButtonVariant(button, variant);
-
-			const updateButtonStyle = () => {
-				applyButtonMobileStyle(button);
-			};
-
-			updateButtonStyle();
-			window.addEventListener("resize", updateButtonStyle);
-			document.body.appendChild(button);
-
-			button._cleanup = () => {
-				window.removeEventListener("resize", updateButtonStyle);
-			};
-
 			return button;
 		}
+
+		// A button drawn before the lookup answered becomes whichever button the
+		// answer calls for, rather than being torn down and rebuilt: rebuilding
+		// would drop the ring mid-fade and discard a position the reader had
+		// already dragged it to.
+		button = document.getElementById(BUTTON_PENDING_ID);
+
+		if (button) {
+			button.id = id;
+			button.textContent = buttonMarkPreference;
+			setFloatingButtonVariant(button, variant);
+			return button;
+		}
+
+		button = document.createElement("button");
+		button.id = id;
+		button.textContent = buttonMarkPreference;
+
+		pinButtonStyle(button, {
+			...BUTTON_STYLE_RESET,
+			position: "fixed",
+			top: "16px",
+			right: "16px",
+			zIndex: "2147483647",
+			color: "white",
+			padding: "0",
+			fontFamily: "Verdana,sans-serif",
+			fontWeight: "bold",
+			cursor: "pointer",
+			userSelect: "none",
+			touchAction: "none",
+			display: "flex",
+			alignItems: "center",
+			justifyContent: "center",
+			// box-shadow rides along because setFloatingButtonVariant writes it
+			// too: without it the glow snapped while the fill cross-faded, which
+			// is visible when the button settles out of "checking".
+			transition: "background .2s ease, box-shadow .2s ease",
+			// So the fill overlay can be clipped to the circle.
+			overflow: "hidden",
+			isolation: "isolate",
+		});
+
+		button.style.setProperty(
+			"-webkit-tap-highlight-color",
+			"transparent",
+			"important",
+		);
+
+		setFloatingButtonVariant(button, variant);
+
+		const updateButtonStyle = () => {
+			applyButtonMobileStyle(button);
+		};
+
+		updateButtonStyle();
+		window.addEventListener("resize", updateButtonStyle);
+		document.body.appendChild(button);
+
+		button._cleanup = () => {
+			window.removeEventListener("resize", updateButtonStyle);
+		};
+
+		return button;
+	}
 
 	// -------------------------
 	// Submission helpers
@@ -5162,11 +6018,9 @@ ${
 	// than one source. og:title first because it is what the author wrote for
 	// sharing, whereas document.title routinely carries a " | Site Name" tail.
 	//
-	// The hostname floor is load-bearing. It is what makes an empty header
-	// unreachable rather than merely unlikely -- and unlikely was not enough: a
-	// Bluesky collective is honestly titled "" because nobody titled it, the sort
-	// is time-descending, and the header used to read whichever submission landed
-	// first.
+	// The hostname floor is load-bearing: it makes an empty header unreachable
+	// rather than merely unlikely, and unlikely is not enough when a Bluesky
+	// collective is honestly titled "" because nobody titled it.
 	//
 	// `doc` is a parameter for the same reason parseFrontPage takes one: it makes
 	// the precedence testable without a live page.
@@ -5195,57 +6049,6 @@ ${
 	// no such limit.
 	function suggestedSubmissionTitle() {
 		return pageTitle().slice(0, HN_TITLE_LIMIT);
-	}
-
-	// Fills the circle bottom-to-top, then leaves a plain orange button behind. Uses
-	// element.animate() rather than a keyframe rule so nothing has to be injected into
-	// the host page's stylesheet, and animates clip-path rather than a gradient
-	// because clip-path actually interpolates.
-	function animateButtonFill(button) {
-		const overlay = document.createElement("span");
-
-		overlay.textContent = buttonMarkPreference;
-		overlay.style.cssText = `
-			position:absolute;
-			inset:0;
-			display:flex;
-			align-items:center;
-			justify-content:center;
-			background:${BUTTON_VARIANTS.active.background};
-			color:white;
-			font:bold 13px Verdana,sans-serif;
-			border-radius:50%;
-			clip-path:inset(100% 0 0 0);
-			pointer-events:none;
-		`;
-
-		button.appendChild(overlay);
-
-		const fill = overlay.animate(
-			[{ clipPath: "inset(100% 0 0 0)" }, { clipPath: "inset(0 0 0 0)" }],
-			{
-				duration: 620,
-				easing: "cubic-bezier(.22,.61,.36,1)",
-				fill: "forwards",
-			},
-		);
-
-		// A short settle so the fill reads as landing rather than stopping.
-		button.animate(
-			[
-				{ transform: "scale(1)" },
-				{ transform: "scale(1.12)" },
-				{ transform: "scale(1)" },
-			],
-			{ duration: 420, delay: 480, easing: "ease-out" },
-		);
-
-		return fill.finished
-			.catch(() => {})
-			.then(() => {
-				setFloatingButtonVariant(button, "active");
-				overlay.remove();
-			});
 	}
 
 	// -------------------------
@@ -5277,10 +6080,6 @@ ${
 			"&t=" +
 			encodeURIComponent(title)
 		);
-	}
-
-	function editURL(storyID) {
-		return HN_ORIGIN + "/edit?id=" + storyID;
 	}
 
 	// -------------------------
@@ -5693,10 +6492,6 @@ ${
 		} catch {
 			return null;
 		}
-	}
-
-	function invalidateVoteLinks(storyID) {
-		voteLinkCache.delete(String(storyID));
 	}
 
 	function getVoteStateValue(voteInfo) {
@@ -6297,9 +7092,7 @@ ${
 
 		const { x, y } = clampButtonToViewport(button, saved.x, saved.y);
 
-		button.style.left = x + "px";
-		button.style.top = y + "px";
-		button.style.right = "auto";
+		pinButtonStyle(button, { left: x + "px", top: y + "px", right: "auto" });
 	}
 
 	// Anything anchored to the button -- currently the submit popover -- listens for
@@ -6326,9 +7119,7 @@ ${
 				button.offsetTop,
 			);
 
-			button.style.left = x + "px";
-			button.style.top = y + "px";
-			button.style.right = "auto";
+			pinButtonStyle(button, { left: x + "px", top: y + "px", right: "auto" });
 			notifyMoved();
 		};
 
@@ -6367,9 +7158,7 @@ ${
 				startTop + deltaY,
 			);
 
-			button.style.left = x + "px";
-			button.style.top = y + "px";
-			button.style.right = "auto";
+			pinButtonStyle(button, { left: x + "px", top: y + "px", right: "auto" });
 			notifyMoved();
 		});
 
@@ -6444,6 +7233,70 @@ ${
 	// One class toggle and a title. Both labels are already in the button and CSS
 	// picks between them, so nothing here rewrites markup on a control the reader
 	// is pointing at.
+	// The third view. Built on the way in rather than kept in the markup, because
+	// what the form contains depends on which source can take a submission -- a
+	// setting the reader can change while the panel is open.
+	async function setSubmitMode(ui, on) {
+		const panel = ui?.shadow?.querySelector("#panel");
+		const view = ui?.shadow?.querySelector("#submit-view");
+
+		if (!panel || !view) {
+			return;
+		}
+
+		if (!on) {
+			panel.classList.remove("submitting");
+			view.replaceChildren();
+
+			return;
+		}
+
+		const settings = await loadSettings();
+		const submitTarget = submitTargetFor(settings);
+
+		view.innerHTML = submitFormHTML({
+			submitTarget,
+			message: submitTarget ? "" : unsubmittableMessage(settings),
+		});
+
+		panel.classList.add("submitting");
+		setWordmarkLocation(ui, "Submit");
+
+		wireSubmitForm(view, {
+			submitTarget,
+			// Back to the front page rather than to the discussion: submitting is
+			// only reachable from there, and cancelling should undo the one step
+			// taken rather than two.
+			onCancel: () => {
+				setSubmitMode(ui, false).catch(console.error);
+				setBrowseMode(ui, true);
+			},
+			onSubmit: async (fields, form) => {
+				const result = await submitPageToHN(fields);
+
+				if (!result?.ok) {
+					form.setStatus(submitFailureMessage(result), { error: true });
+
+					return;
+				}
+
+				// The story id is not always recoverable -- a text-only submission has
+				// no URL to match on -- so the confirmation degrades to /newest rather
+				// than linking somewhere that may not be right.
+				form.setStatus(
+					result.storyID
+						? `Submitted. <a href="${escapeHTML(HN_ORIGIN)}/item?id=${encodeURIComponent(
+								result.storyID,
+							)}" target="_blank" rel="noopener noreferrer">See the discussion</a>`
+						: `Submitted. <a href="${escapeHTML(
+								HN_ORIGIN,
+							)}/newest" target="_blank" rel="noopener noreferrer">See it on HN</a>`,
+					{ html: true },
+				);
+			},
+		});
+	}
+
 	function setBrowseMode(ui, on, options = {}) {
 		const panel = ui?.shadow?.querySelector("#panel");
 		const toggle = ui?.shadow?.querySelector("#browse-toggle");
@@ -6470,8 +7323,7 @@ ${
 		// with something in it is what the reader came for -- they put it there --
 		// so it leads. Switching tabs while the panel is open lasts as long as the
 		// panel is open, and no longer: a latch that survived would mean one
-		// incidental press turning this off for good, invisibly, which is the fault
-		// the auto-open setting was already fixed for once.
+		// incidental press turning this off for good, invisibly.
 		if (on) {
 			// Queue first when it has something, and always when there is no front
 			// page to fall back on -- otherwise turning Hacker News off and pressing
@@ -6484,6 +7336,17 @@ ${
 		const swap = () => {
 			panel.classList.toggle("browsing", on);
 			toggle.title = on ? "Back to this page's discussion" : browseLabel();
+
+			// Either direction leaves the form: it is reached from the front page and
+			// returns there, so arriving anywhere else means it is no longer where the
+			// reader is. renderBrowseView names the browse half of the trail itself,
+			// once it knows which tab it settled on.
+			panel.classList.remove("submitting");
+			ui?.shadow?.querySelector("#submit-view")?.replaceChildren();
+
+			if (!on) {
+				setWordmarkLocation(ui, sidebarHasDiscussion ? "Discussion" : "");
+			}
 
 			// Whatever the queue did while the panel was shut is not news. Cleared
 			// on the way in so the first refresh paints the row as it stands, and
@@ -6539,32 +7402,83 @@ ${
 		}, VIEW_SWAP_FADE_MS);
 	}
 
+	// Opening a row goes to the page, always. The panel shows the discussion of the
+	// page behind it, so a conversation reached any other way is a conversation
+	// about something the reader is not looking at -- which is the one thing this
+	// whole panel exists not to do.
+	//
+	// The count and the title differ only in what the reader is asking for, which
+	// is what `openPanel` carries: the title says "read this", the count says "read
+	// what was said about this". Hacker News splits the same row the same way.
+	//
+	// The record is the one setupHNListener writes when you click a story on HN, so
+	// the page you land on reads the arrival it would have read coming from HN
+	// itself -- and automatic opening, and "only when arriving from Hacker News",
+	// apply to a story opened from here without either of them knowing this path
+	// exists.
+	//
+	// `source` is what stops the ids being misread. They are recovered as Algolia
+	// refs -- `{ objectID: id }` -- when discovery on the landing page comes back
+	// empty, which is only meaningful for Hacker News. Without it, a row from
+	// anywhere else whose discovery then failed would offer the reader a Hacker
+	// News item whose number is that source's own id.
+	function openStoryFromRow(story, event, { openPanel = false } = {}) {
+		const record = save(STORAGE.last, {
+			url: story.url,
+			source: story.source || "hn",
+			ids: [String(story.id)],
+			timestamp: Date.now(),
+			// Only ever true, never written false: an absent flag is a title click,
+			// and a record written by an older version has none.
+			...(openPanel ? { openPanel: true } : {}),
+		});
+
+		// A modified or middle click means "open it somewhere else" everywhere on
+		// the web, and it means that here too, so the default is left alone. The
+		// record is still made and simply not waited on: the browser is already
+		// opening the tab, and a GM write lands well inside a page load.
+		if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+			return;
+		}
+
+		event.preventDefault();
+
+		// Navigates either way. A storage error is not a reason to refuse to open
+		// the article -- it costs the arrival, not the click.
+		record.catch(() => {}).then(() => {
+			location.href = story.url;
+		});
+	}
+
 	// Borrowing the story vocabulary rather than renderStory itself: the title
 	// leads to the article here instead of to the discussion, there is no composer
 	// and no story text, and a rank sits in front. Same classes, so a browse row
 	// and the story at the top of a discussion read as the same kind of object.
 	function renderBrowseRow(story, container, rank, options = {}) {
-		// One comment link per source carrying this page, the lead first. With a
-		// single source this is the line it has always been; with two it becomes
-		// "HN 211 comments · Lobsters 24 comments", which is the merged row saying
-		// what merging it bought.
+		// One number across every source carrying this page, summed. The point of
+		// merging is that this is one thing people are talking about, so a count per
+		// source would ask the reader to add them up to find that out -- which is
+		// why the header above a discussion says "352 comments across 2 discussions"
+		// rather than listing them.
 		//
-		// Counts stay per source and are never added up. standing log-scales votes
-		// precisely because a Reddit number and an HN number are not the same unit,
-		// and a summed total would undo at display time what the blend was careful
-		// about at ranking time.
+		// Summing is a display decision and reaches no further. standing still
+		// log-scales each source's votes separately, because a Reddit number and an
+		// HN number are not the same unit for *ranking*. As a count of things said
+		// about a page, they are.
 		const discussions = [story, ...(options.also || [])];
-		const labelled = discussions.length > 1;
-		const commentLinks = discussions
-			.filter((each) => each.permalink)
-			.map(
-				(each) =>
-					`<a class="browse-comments-link" href="${escapeHTML(each.permalink)}"
-	target="_blank" rel="noopener noreferrer">${
-		labelled ? escapeHTML(sourceShortLabel(each)) + " " : ""
-	}${escapeHTML(pluralize(each.descendants, "comment"))}</a>`,
-			)
-			.join(`<span class="browse-comments-sep">·</span>`);
+		const totalComments = discussions.reduce(
+			(sum, each) => sum + (each.descendants || 0),
+			0,
+		);
+		const totalText = escapeHTML(pluralize(totalComments, "comment"));
+
+		// Marked as a floor, because it is one. A row knows what the front pages
+		// carry and nothing else -- r/popular held one thread about a story fifteen
+		// subreddits were arguing about, so the row said 2,419 where the article said
+		// 5,476. The error only ever runs one way, since a front page can omit a
+		// discussion and cannot invent one. Pressing it settles the question.
+		const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
+	title="Go to the page and read what was said about it">${totalText}<span class="browse-comments-floor" aria-hidden="true">+</span></a>`;
 
 		// Only where the reader has an account that can act. Every source declares
 		// its capabilities, and HN is the only one with any -- so flag and favorite
@@ -6591,7 +7505,7 @@ ${
 	<button class="browse-save-link" type="button">queue</button>
 	${actions}
 	|
-	${commentLinks}`;
+	${commentTotal}`;
 
 		const row = document.createElement("div");
 		row.className = "story browse-row";
@@ -6608,6 +7522,17 @@ ${
 	</div>
 	</div>
 	`;
+
+		// Wired per row rather than delegated, because the row is built here and
+		// thrown away whole, so there is nothing to keep in step.
+		const total = row.querySelector(".browse-comments-total");
+
+		if (total) {
+			total.onclick = (event) => {
+				event.stopPropagation();
+				openStoryFromRow(story, event, { openPanel: true });
+			};
+		}
 
 		const saveButton = row.querySelector(".browse-save-link");
 
@@ -6658,41 +7583,8 @@ ${
 			};
 		}
 
-		row.querySelector(".browse-title-link").onclick = (event) => {
-			// The same record setupHNListener writes when you click a story on HN.
-			// Written before navigating, so the page you land on reads the arrival it
-			// would have read coming from HN itself -- which is what makes automatic
-			// opening, and "only when arriving from Hacker News", apply to a story
-			// opened from here without either of them knowing this path exists.
-			//
-			// `source` is what stops the ids being misread. They are recovered as
-			// Algolia refs -- `{ objectID: id }` -- when discovery on the landing page
-			// comes back empty, which is only meaningful for Hacker News. Without it,
-			// a row from anywhere else whose discovery then failed would offer the
-			// reader a Hacker News item whose number is that source's own id.
-			const record = save(STORAGE.last, {
-				url: story.url,
-				source: story.source || "hn",
-				ids: [String(story.id)],
-				timestamp: Date.now(),
-			});
-
-			// A modified or middle click means "open it somewhere else" everywhere on
-			// the web, and it means that here too, so the default is left alone. The
-			// record is still made and simply not waited on: the browser is already
-			// opening the tab, and a GM write lands well inside a page load.
-			if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
-				return;
-			}
-
-			event.preventDefault();
-
-			// Navigates either way. A storage error is not a reason to refuse to open
-			// the article -- it costs the arrival, not the click.
-			record.catch(() => {}).then(() => {
-				location.href = story.url;
-			});
-		};
+		row.querySelector(".browse-title-link").onclick = (event) =>
+			openStoryFromRow(story, event);
 
 		container.appendChild(row);
 		return row;
@@ -6705,26 +7597,31 @@ ${
 	// on a settings read to do it.
 	let frontPageAvailable = true;
 
-	// What is actually behind the wordmark, in one place because three of them set
+	// What is actually behind the wordmark, in one place because three callers set
 	// this title -- the header template, setBrowseMode on every toggle, and
-	// refreshBrowseAffordances when the sources change. Kept as two literals, the
-	// last writer won, and a wordmark went on naming Hacker News after it had been
-	// switched off and its front page tab had already gone.
+	// refreshBrowseAffordances when the sources change. As three literals the last
+	// writer wins, and the wordmark goes on naming a source that is switched off.
 	//
-	// Plural at one source as well as four. Computing the number would mean the
-	// tab renaming itself as sources are toggled, and "front pages" describes the
-	// place rather than counting what is in it -- the way a newsstand is a
-	// newsstand with one paper on it.
-	//
-	// Lower case, like the tab it describes and like `queue` beside it. It named
-	// Hacker News before, where the capitals were a proper noun rather than a
-	// style, so dropping the name drops them with it.
+	// Plural at one source as well as four: computing the number would mean the tab
+	// renaming itself as sources are toggled, and "front pages" describes the place
+	// rather than counting what is in it.
 	function browseLabel() {
 		return frontPageAvailable ? "front pages and your queue" : "Your queue";
 	}
 
-	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
-	// rather than the ui object because a browse row only knows the tree it is in.
+	// Whether anything switched on can take a submission, which is what decides
+	// whether the front page offers to make one. Read from the settings rather
+	// than from the rendered view, and called from both the render and the moment
+	// a source is toggled -- switching Hacker News off with the front page already
+	// open has to withdraw the offer there and then, not at the next render.
+	async function refreshSubmitAffordance(root) {
+		const button = root?.querySelector?.("#header-submit");
+
+		if (button) {
+			button.hidden = !submitTargetFor(await loadSettings());
+		}
+	}
+
 	// The front page behind the wordmark is every enabled source's own, blended.
 	// With none of them switched on there is no front page to show, so the tab goes
 	// -- and if the queue is empty too there is nothing behind the wordmark at all,
@@ -6732,8 +7629,7 @@ ${
 	// tab for sources the reader turned off.
 	//
 	// A reader with only Bluesky and Wikipedia enabled is in exactly that position,
-	// and correctly: neither ranks URLs, so neither has a front page, and the tab
-	// is as absent as it is with everything off.
+	// and correctly: neither ranks URLs, so neither has a front page.
 	async function refreshBrowseAffordances(root) {
 		const frontTab = root?.querySelector?.("#browse-tab-front");
 		const wordmark = root?.querySelector?.("#browse-toggle");
@@ -6772,6 +7668,8 @@ ${
 		}
 	}
 
+	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
+	// rather than the ui object, because a browse row only knows the tree it is in.
 	async function refreshQueueCount(root) {
 		const tab = root?.querySelector?.("#browse-tab-queue");
 
@@ -6807,7 +7705,7 @@ ${
 		// Present or absent, never moved -- and now the arrival is visible. Zero
 		// width rather than `hidden`, because display:none cannot be transitioned;
 		// the tab stays in the tree, so it is taken out of the tab order and hidden
-		// from assistive technology by hand, which the attribute used to do.
+		// from assistive technology by hand.
 		tab.classList.toggle("is-collapsed", !queueHasItems);
 		tab.setAttribute("aria-hidden", String(!queueHasItems));
 		tab.tabIndex = queueHasItems ? 0 : -1;
@@ -6835,10 +7733,10 @@ ${
 			if (frontPageAvailable) {
 				renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
 			} else {
-				// The front page used to be "the only other place to be", which was
-				// true while Hacker News was the only source. Switched off, there is
-				// no front page to land on, and sending the reader to that tab was
-				// what made pressing the wordmark open browse and snap shut again.
+				// The front page is not "the only other place to be": with every
+				// source that has one switched off there is no front page to land
+				// on, and sending the reader to that tab is what makes pressing the
+				// wordmark open browse and snap shut again.
 				setBrowseMode(sidebarUI, false);
 			}
 		}
@@ -6935,8 +7833,14 @@ ${
 		title.onclick = (event) => {
 			// Same record and same rules as a browse row: this is a story being opened
 			// from HNewhere, and the page it lands on should read it as an arrival.
+			//
+			// `source` included for the reason the browse row gives: the landing page
+			// recovers these ids as Algolia refs when its own discovery comes back
+			// empty, and only Hacker News can be read that way. Absent, a queued
+			// Lobsters story would be offered as HN item "97laur".
 			const record = save(STORAGE.last, {
 				url: next.url,
+				source: next.source || "hn",
 				ids: [String(next.id)],
 				timestamp: Date.now(),
 			});
@@ -7016,11 +7920,12 @@ ${
 		);
 	}
 
-	// The trail's destination, which is not always the same place. Off an article it
-	// leads to Read more -- the front page and the queue together. On Hacker News
-	// the front page is already underneath the panel, so the only thing it can be
-	// offering is the queue, and it says so.
-	function setWordmarkDestination(ui, label) {
+	// Where the reader is, not where the trail leads. The front page is the root
+	// and says only "Backchannel"; everything else is a step off it and names
+	// itself after the separator. The chevron stays independent of this -- it is
+	// the way back to the discussion, which is a different question from where you
+	// are standing.
+	function setWordmarkLocation(ui, label) {
 		const tail = ui?.shadow?.querySelector(".wordmark-tail");
 		const sep = tail?.querySelector(".wordmark-sep");
 
@@ -7029,6 +7934,12 @@ ${
 		}
 
 		const swap = () => tail.replaceChildren(sep, document.createTextNode(label));
+
+		// An empty label is the root. The trail is not a crumb saying "Backchannel /
+		// Backchannel", it is simply absent, and the class is what the stylesheet
+		// watches -- reading the tail's own text to decide whether to show it would
+		// have it appear a frame before the word it is showing.
+		ui?.shadow?.querySelector("#panel")?.classList.toggle("has-trail", Boolean(label));
 
 		// Nothing to announce if it already says this, and animating it anyway would
 		// blink the trail every time the same tab is re-rendered.
@@ -7064,8 +7975,7 @@ ${
 
 	// The panel on Hacker News itself, offered only once there is a queue to work
 	// through. HN is where a queue gets filled, often across several pages, and
-	// what you do next is read it -- which until now meant remembering what you
-	// had put in.
+	// what you do next is read it.
 	async function offerQueueOnHN() {
 		if (document.getElementById("hn-queue-button")) {
 			return;
@@ -7119,18 +8029,15 @@ ${
 		}
 	}
 
-	// The queue rendered as rows, reusing the front page's row exactly -- it is the
-	// same object in the same list, and giving it a second appearance would say the
-	// two were different kinds of thing.
-	// Returns whether anything actually changed, so a redraw only happens when there
-	// is something new to show. Without that the refresh would redraw the list every
-	// time the tab is opened, and the redraw would start another refresh.
 	// A handful at a time rather than all at once. A queue is meant to be filled
 	// over days, so forty entries is an ordinary size and forty simultaneous
 	// requests is not -- getItem caches, so this is paid once a session, but paying
 	// it as one burst is how a reader ends up rate-limited for reading.
 	const QUEUE_REFRESH_BATCH = 6;
 
+	// Returns whether anything actually changed, so a redraw only happens when there
+	// is something new to show. Without that the refresh would redraw the list every
+	// time the tab is opened, and the redraw would start another refresh.
 	async function refreshQueueEntries(entries) {
 		const fetched = [];
 
@@ -7197,6 +8104,9 @@ ${
 		return changed;
 	}
 
+	// The queue rendered as rows, reusing the front page's row exactly -- it is the
+	// same object in the same list, and giving it a second appearance would say the
+	// two were different kinds of thing.
 	async function renderQueueView(ui, list) {
 		const entries = sortQueue(await loadQueue());
 
@@ -7366,10 +8276,17 @@ ${
 			tab.setAttribute("aria-selected", String(isCurrent));
 		}
 
-		// The trail names where you actually are, not where the door led. Read more
-		// is the pair of them; once you are standing in one of the two, saying so is
-		// the more useful thing for it to say.
-		setWordmarkDestination(ui, browseTab === "queue" ? "Queue" : "Read more");
+		// The front page is the root of the trail, so it names nothing after the
+		// wordmark -- "Backchannel" is where you are. The queue is a step off it and
+		// says so.
+		setWordmarkLocation(ui, browseTab === "queue" ? "Queue" : "");
+
+		// Offered only where it can be honoured. Hacker News is the one source that
+		// takes a submission, so with it switched off this button's whole form would
+		// be a sentence explaining why there is no form. Decided here rather than
+		// when the button was wired, because sources can be switched off while the
+		// panel is open and the answer changes with them.
+		await refreshSubmitAffordance(ui.shadow);
 
 		refreshQueueCount(ui.shadow);
 
@@ -7429,8 +8346,7 @@ ${
 
 	function pulseFloatingButtonFeedback(button, text) {
 		button.textContent = text;
-		button.style.fontSize = "11px";
-		button.style.color = "white";
+		pinButtonStyle(button, { fontSize: "11px", color: "white" });
 
 		window.setTimeout(() => {
 			button.textContent = buttonMarkPreference;
@@ -7438,26 +8354,19 @@ ${
 		}, 900);
 	}
 
-	// Takes a resolved array now rather than the resolver it used to accept: the
-	// discussion lookup moved ahead of the first paint in 1.5.3 so the button's
-	// colour can mean something, which leaves nothing left to resolve on click.
-	// The colour answers "is there a discussion here", the ring answers "am I still
-	// working". They are separate questions, so the colour settles the moment the
-	// lookup replies rather than waiting for the comments and the annotation pass
-	// -- which is what kept the button grey for the whole of startup.
+	// The colour answers "is there a discussion here"; the ring answers "am I still
+	// working". Separate questions, so the colour settles the moment the lookup
+	// replies rather than waiting on the comments and the annotation pass.
 	function settleButtonToDiscussion(button) {
 		if (button) {
 			setFloatingButtonVariant(button, "active");
 		}
 	}
 
-	// Drawn before the discussion lookup answers, so the page shows something at
-	// once. createFloatingHNButton adopts it as soon as the real button is asked
-	// for, which is also when it gains that button's behaviour.
-	// Pressed while the lookup was still running. The button spins for as long as
-	// that takes and used to do nothing at all when pressed, which is the one thing
-	// a button must not do -- so the press is remembered and honoured the moment
-	// there is an answer to honour it with.
+	// A press that landed while the lookup was still running. The button spins for
+	// as long as that takes, and a button that does nothing when pressed is the one
+	// thing a button must not be -- so the press is remembered and honoured the
+	// moment there is an answer to honour it with.
 	let openRequestedWhileChecking = false;
 
 	function takeRequestedOpen() {
@@ -7553,104 +8462,33 @@ ${
 
 	// Its own shadow root for the same reason the sidebar has one: this renders over
 	// an arbitrary page whose CSS would otherwise reach in and restyle it.
-	function createSubmitPopover(button, onSubmit, onClose, options = {}) {
-		const submitTarget = options.submitTarget ?? null;
-		const unsubmittableMessageText = options.message ?? "";
-		const host = document.createElement("div");
-
-		host.setAttribute("data-hnewhere-submit-popover", "1");
-		host.style.cssText = `
-			position:fixed;
-			z-index:2147483647;
-			top:0;
-			left:0;
-		`;
-
-		const shadow = host.attachShadow({ mode: "open" });
-
-		shadow.innerHTML = `
-<style>
-${THEME_CSS}
-${CHROME_CSS}
-
-#popover {
-	width:320px;
-	box-sizing:border-box;
-	background:var(--bg);
-	color:var(--text);
-	border:1px solid var(--border);
-	border-radius:8px;
-	box-shadow:0 8px 24px rgba(0,0,0,.18);
-    /* No padding of its own: the header runs edge to edge like the sidebar's and
-       rounds its own top corners. The body below carries the inset instead.
-       Deliberately no overflow:hidden -- it used to clip the header, but it also
-       clipped the absolutely positioned settings dropdown to this box, and the
-       popover is only as tall as a short submit form. */
-	padding:0;
-    /* Containing block for the absolutely positioned settings dropdown. */
-	position:relative;
-	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-	font-size:12px;
-	line-height:1.4;
-    /* The same inheritance the panel has to close off, for the same reason: this
-       is a second shadow root on the same page, and it reads whatever the host
-       inherited. See #panel for the full account. */
-	text-align:left;
-	text-indent:0;
-	text-transform:none;
-	letter-spacing:normal;
-	word-spacing:normal;
-	font-style:normal;
-	font-variant:normal;
-	white-space:normal;
-}
-
-/* Same inset the sidebar's #comments uses, so the two read as one product. */
-.popover-body {
-	padding:12px 12px 8px;
-    /* The form is tall enough to run off a short viewport, so it scrolls itself
-       rather than being clipped by the edge of the screen. Sized against the header
-       and the popover's own vertical margins. */
-	max-height:calc(100vh - 120px);
-	overflow-y:auto;
-}
-
-/* Rounds its own top corners now that #popover no longer clips its children. */
-#popover header {
-	border-radius:7px 7px 0 0;
-}
-
-/* Narrower host than the sidebar, so the dropdown spans the width rather than
-   sitting in a 240px column that would overhang the left edge. */
-.settings-panel {
-	top:44px;
-	right:8px;
-	left:8px;
-	width:auto;
-}
-
-.popover-title {
+	// The submission form, as markup and behaviour, with nothing about where it is
+	// mounted. It began life inside a floating popover anchored to the grey button
+	// and now lives in the panel as a view of its own; keeping the two halves free
+	// of their surroundings is what made moving it a change of address rather than
+	// a rewrite.
+	const SUBMIT_FORM_CSS = `
+.submit-title {
 	font-weight:600;
 	margin-bottom:8px;
 }
 
 /* HN's own explanation of how url and text interact. Kept because the two fields
    are genuinely non-obvious: a blank url turns the whole thing into an Ask HN. */
-.popover-note {
+.submit-note {
 	margin-top:8px;
 	color:var(--muted);
 	font-size:11px;
 }
 
-.popover-field + .popover-field {
+.submit-field + .submit-field {
 	margin-top:8px;
 }
 
-/* All of the following are scoped to .popover-field rather than bare element
-   selectors. The settings dropdown shares this shadow root now, and a bare
-   "input" rule would stretch its checkboxes to full width and give them a text
-   field's border. */
-.popover-field label {
+/* Scoped to .submit-field rather than bare element selectors, because the
+   settings dropdown shares this shadow root and a bare "input" rule would
+   stretch its checkboxes to full width and give them a text field's border. */
+.submit-field label {
 	display:block;
 	color:var(--muted);
 	font-size:10px;
@@ -7660,10 +8498,10 @@ ${CHROME_CSS}
 	margin-bottom:3px;
 }
 
-/* Label left, character count hard right, sharing one line above the field. Baseline
-   alignment rather than centre so the count sits on the label's baseline despite
-   being the smaller of the two. */
-.popover-field-head {
+/* Label left, character count hard right, sharing one line above the field.
+   Baseline rather than centre, so the count sits on the label's baseline
+   despite being the smaller of the two. */
+.submit-field-head {
 	display:flex;
 	align-items:baseline;
 	justify-content:space-between;
@@ -7671,12 +8509,12 @@ ${CHROME_CSS}
 	margin-bottom:3px;
 }
 
-.popover-field-head label {
+.submit-field-head label {
 	margin-bottom:0;
 }
 
-.popover-field input,
-.popover-field textarea {
+.submit-field input,
+.submit-field textarea {
 	width:100%;
 	box-sizing:border-box;
 	font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -7687,42 +8525,38 @@ ${CHROME_CSS}
 	color:var(--field-text);
 }
 
-.popover-field textarea {
+.submit-field textarea {
 	min-height:56px;
 	resize:vertical;
-    /* Same reasoning as the sidebar composer: HN reads leading spaces as code. */
+	/* Same reasoning as the sidebar composer: HN reads leading spaces as code. */
 	white-space:pre-wrap;
 }
 
-.popover-field input:focus,
-.popover-field textarea:focus {
+.submit-field input:focus,
+.submit-field textarea:focus {
 	outline:2px solid rgba(var(--accent-rgb),.4);
 	outline-offset:-1px;
 }
 
-.popover-count {
+.submit-count {
 	color:var(--meta);
 	font-size:10px;
-    /* Fixed digits would be better, but the count is short enough that reflow is
-       imperceptible; what matters is that it never pushes the label around. */
 	flex:0 0 auto;
 	white-space:nowrap;
 }
 
-.popover-count.over {
+.submit-count.over {
 	color:var(--error);
 }
 
-.popover-actions {
+.submit-actions {
 	display:flex;
 	justify-content:flex-end;
 	gap:6px;
 	margin-top:10px;
 }
 
-/* Scoped for the same reason as the fields above: the header's gear button lives
-   in this shadow root and must keep its own borderless styling. */
-.popover-actions button {
+.submit-actions button {
 	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	padding:5px 10px;
 	border-radius:4px;
@@ -7732,223 +8566,89 @@ ${CHROME_CSS}
 	color:var(--button-text);
 }
 
-.popover-actions button.primary {
+.submit-actions button.primary {
 	background:var(--accent);
 	border-color:var(--accent);
 	color:white;
 }
 
-.popover-actions button:disabled {
+.submit-actions button:disabled {
 	opacity:.6;
 	cursor:default;
 }
 
-.popover-status {
+.submit-status {
 	margin-top:8px;
 	font-size:11px;
 	line-height:1.4;
 }
 
-.popover-status.error {
+.submit-status.error {
 	color:var(--error);
 }
 
-.popover-status a {
+.submit-status a {
 	color:var(--link);
 }
+`;
 
-.hidden {
-	display:none;
-}
-</style>
-
-<div id="popover" role="dialog" aria-label="${escapeHTML(submitTarget ? "Submit to " + submitTarget.label : "Submitting not available")}">
-${headerHTML({ browse: true })}
-${settingsPanelHTML()}
-
-<div class="popover-body">
-<div class="popover-title">${
-	// Named, not bare. "Submit" was unambiguous while one source could take a
-	// submission; with a picker in front of the reader it has to say where.
-	submitTarget ? "Submit to " + escapeHTML(submitTarget.label) : "Submit"
-}</div>
+	function submitFormHTML({ submitTarget, message = "" }) {
+		return `
+<div class="submit-title">${
+			// Named, not bare. "Submit" was unambiguous while one source could take a
+			// submission; with a picker in front of the reader it has to say where.
+			submitTarget ? "Submit to " + escapeHTML(submitTarget.label) : "Submit"
+		}</div>
 ${
 	submitTarget
 		? `
-<div class="popover-field">
-<div class="popover-field-head">
+<div class="submit-field">
+<div class="submit-field-head">
 <label for="submit-title">title</label>
-<span id="submit-count" class="popover-count"></span>
+<span id="submit-count" class="submit-count"></span>
 </div>
 <input id="submit-title" type="text" maxlength="${HN_TITLE_LIMIT}" spellcheck="true">
 </div>
 
-<div class="popover-field">
+<div class="submit-field">
 <label for="submit-url">url</label>
 <input id="submit-url" type="text" spellcheck="false">
 </div>
 
-<div class="popover-field">
+<div class="submit-field">
 <label for="submit-text">text</label>
 <textarea id="submit-text" rows="3" spellcheck="true"></textarea>
 </div>
 
-<div class="popover-note">
+<div class="submit-note">
 Leave url blank to submit a question for discussion. If there is no url, text will appear at the top of the thread. If there is a url, text is optional.
 </div>`
 		: `
-<div class="popover-note">
-${escapeHTML(unsubmittableMessageText)}
+<div class="submit-note">
+${escapeHTML(message)}
 </div>`
 }
 
-<div class="popover-actions">
+<div class="submit-actions">
 <button id="submit-cancel" type="button">${submitTarget ? "Cancel" : "Close"}</button>
 ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</button>` : ""}
 </div>
 
-<div id="submit-status" class="popover-status hidden" role="status"></div>
-</div>
-</div>
+<div id="submit-status" class="submit-status hidden" role="status"></div>
 `;
+	}
 
-		guardHostKeyboard(host);
-		document.body.appendChild(host);
-
-		// Same palette as the sidebar, resolved independently because this is its own
-		// shadow root -- the two can be open at different times on different pages.
-		const stopWatchingTheme = watchTheme(host);
-
-		// The gear needs somewhere to open into, so the popover carries the same
-		// dropdown the sidebar does. No annotation refresh is passed: there is no
-		// sidebar to refresh when this is on screen.
-		wireSettingsPanel(shadow).catch(console.error);
-
-		// The wordmark is the way out of this page and into the rest of HN, which is
-		// as true here as it is in the sidebar -- more so, since this page has no
-		// discussion of its own to read. It opens the panel rather than trying to
-		// fit thirty stories into a 320px popover.
-		const browseToggle = shadow.querySelector("#browse-toggle");
-
-		if (browseToggle) {
-			browseToggle.onclick = () => {
-				// close(), not onClose(): the latter only tells the button its popover
-				// has gone, which would leave the popover itself sitting on the page
-				// behind the panel. Declared further down, which is fine -- nothing
-				// runs this until it has been clicked.
-				close();
-				openSidebar([], { browseOnly: true }).catch(console.error);
-			};
-		}
-
-		const titleInput = shadow.querySelector("#submit-title");
-		const countLabel = shadow.querySelector("#submit-count");
-		const urlInput = shadow.querySelector("#submit-url");
-		const textInput = shadow.querySelector("#submit-text");
-		const goButton = shadow.querySelector("#submit-go");
-		const cancelButton = shadow.querySelector("#submit-cancel");
-		const statusLine = shadow.querySelector("#submit-status");
-
-		// Only rendered when something can take the submission. With no such source
-		// the popover is a sentence and a close button, so there are no fields to
-		// fill or validate.
-		if (submitTarget) {
-			// Same two values HN's own bookmarklet passes to /submitlink, both editable
-			// here because the bookmarklet's weakness is that they are not.
-			titleInput.value = suggestedSubmissionTitle();
-			urlInput.value = location.href;
-
-			const updateCount = () => {
-				const remaining = HN_TITLE_LIMIT - titleInput.value.length;
-
-				countLabel.textContent = remaining + " left";
-				countLabel.classList.toggle("over", remaining < 0);
-
-				// HN requires a title, and requires at least one of url or text -- a
-				// submission with neither has nothing in it.
-				goButton.disabled =
-					!titleInput.value.trim() ||
-					(!urlInput.value.trim() && !textInput.value.trim());
-			};
-
-			updateCount();
-			titleInput.addEventListener("input", updateCount);
-			urlInput.addEventListener("input", updateCount);
-			textInput.addEventListener("input", updateCount);
-		}
-
-		// Anchored to the button rather than a fixed corner, because the button is
-		// draggable and may be sitting anywhere along the edge.
-		const position = () => {
-			const rect = button.getBoundingClientRect();
-			const popover = shadow.querySelector("#popover");
-			const width = popover.offsetWidth || 264;
-			const height = popover.offsetHeight || 180;
-			const gap = 8;
-
-			let left = rect.right - width;
-			let top = rect.bottom + gap;
-
-			// Flip above when there is no room below, and keep it on screen either way.
-			if (top + height > window.innerHeight - gap) {
-				top = Math.max(gap, rect.top - height - gap);
-			}
-
-			left = Math.min(Math.max(gap, left), window.innerWidth - width - gap);
-
-			host.style.left = left + "px";
-			host.style.top = top + "px";
-		};
-
-		position();
-		window.addEventListener("resize", position);
-		window.addEventListener("scroll", position, true);
-		// The button is draggable, and dragging it while this is open would otherwise
-		// leave the panel stranded where the button used to be.
-		button.addEventListener(BUTTON_MOVE_EVENT, position);
-
-		let closed = false;
-
-		const close = () => {
-			if (closed) {
-				return;
-			}
-
-			closed = true;
-			window.removeEventListener("resize", position);
-			window.removeEventListener("scroll", position, true);
-			button.removeEventListener(BUTTON_MOVE_EVENT, position);
-			stopWatchingTheme();
-			document.removeEventListener("pointerdown", onOutsidePointerDown, true);
-			document.removeEventListener("keydown", onKeyDown, true);
-			host.remove();
-			// Reported back so the button's toggle state cannot get out of step when the
-			// popover is dismissed by an outside click or Escape rather than by the
-			// button itself -- otherwise reopening it would take two clicks.
-			onClose?.();
-		};
-
-		function onOutsidePointerDown(event) {
-			const path = event.composedPath();
-
-			if (path.includes(host) || path.includes(button)) {
-				return;
-			}
-
-			close();
-		}
-
-		function onKeyDown(event) {
-			if (event.key === "Escape") {
-				event.stopPropagation();
-				close();
-			}
-		}
-
-		document.addEventListener("pointerdown", onOutsidePointerDown, true);
-		document.addEventListener("keydown", onKeyDown, true);
-
-		cancelButton.onclick = close;
+	// Takes the element the markup was rendered into rather than a shadow root, so
+	// the same wiring serves a view inside the panel and anything else that mounts
+	// the form later.
+	function wireSubmitForm(root, { submitTarget, onSubmit, onCancel }) {
+		const titleInput = root.querySelector("#submit-title");
+		const countLabel = root.querySelector("#submit-count");
+		const urlInput = root.querySelector("#submit-url");
+		const textInput = root.querySelector("#submit-text");
+		const goButton = root.querySelector("#submit-go");
+		const cancelButton = root.querySelector("#submit-cancel");
+		const statusLine = root.querySelector("#submit-status");
 
 		const setStatus = (message, { error = false, html = false } = {}) => {
 			statusLine.classList.remove("hidden");
@@ -7961,13 +8661,47 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			}
 		};
 
-		// Guarded for the same reason the fields are: with nothing able to take a
-		// submission this button was never rendered.
-		if (goButton) goButton.onclick = async () => {
+		if (cancelButton) {
+			cancelButton.onclick = () => onCancel?.();
+		}
+
+		// Only rendered when something can take the submission. With no such source
+		// this is a sentence and a close button, so there are no fields to fill or
+		// validate.
+		if (!submitTarget) {
+			cancelButton?.focus();
+
+			return { setStatus };
+		}
+
+		// Same two values HN's own bookmarklet passes to /submitlink, both editable
+		// here because the bookmarklet's weakness is that they are not.
+		titleInput.value = suggestedSubmissionTitle();
+		urlInput.value = location.href;
+
+		const updateCount = () => {
+			const remaining = HN_TITLE_LIMIT - titleInput.value.length;
+
+			countLabel.textContent = remaining + " left";
+			countLabel.classList.toggle("over", remaining < 0);
+
+			// HN requires a title, and requires at least one of url or text -- a
+			// submission with neither has nothing in it.
+			goButton.disabled =
+				!titleInput.value.trim() ||
+				(!urlInput.value.trim() && !textInput.value.trim());
+		};
+
+		updateCount();
+		titleInput.addEventListener("input", updateCount);
+		urlInput.addEventListener("input", updateCount);
+		textInput.addEventListener("input", updateCount);
+
+		goButton.onclick = async () => {
 			const title = titleInput.value.trim();
 			const url = urlInput.value.trim();
-			// Not trimmed: HN reads two leading spaces as a code block, so the body has
-			// to reach it exactly as typed.
+			// Not trimmed: HN reads two leading spaces as a code block, so the body
+			// has to reach it exactly as typed.
 			const text = textInput.value;
 
 			if (!title || (!url && !text.trim())) {
@@ -7982,7 +8716,7 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			setStatus("Opening Hacker News…");
 
 			try {
-				await onSubmit({ title, url, text }, { setStatus, close });
+				await onSubmit({ title, url, text }, { setStatus });
 			} finally {
 				cancelButton.disabled = false;
 			}
@@ -7990,7 +8724,7 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 
 		// Enter submits from the single-line fields only. In the text area it has to
 		// stay a newline, since blank lines are how HN separates paragraphs.
-		for (const field of [titleInput, urlInput].filter(Boolean)) {
+		for (const field of [titleInput, urlInput]) {
 			field.addEventListener("keydown", (event) => {
 				if (event.key === "Enter") {
 					event.preventDefault();
@@ -7999,12 +8733,10 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			});
 		}
 
-		// Focus lands on the way out when there is no form to fill, so the popover
-		// still answers the keyboard rather than leaving focus behind on the page.
-		(titleInput ?? cancelButton)?.focus();
-		titleInput?.select();
+		titleInput.focus();
+		titleInput.select();
 
-		return { close, host };
+		return { setStatus };
 	}
 
 	// Not async, for the same reason as submitCommentToHN: window.open has to happen
@@ -8117,6 +8849,9 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		return button;
 	}
 
+	// Grey means the lookup came back empty, and a page with no discussion is a
+	// good moment to be shown what does have one. So it opens the front page, and
+	// submitting is a button on that page rather than the only thing behind this.
 	async function createSubmitButton() {
 		const button = createFloatingHNButton("hn-submit-button", "inactive");
 
@@ -8128,74 +8863,11 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			await applyButtonPosition(button);
 		}
 
-		let popover = null;
-
-		// The popover lives outside the button, so destroying the button -- which
-		// happens the moment a sidebar opens -- would otherwise leave it orphaned on
-		// the page with nothing to anchor to.
-		const baseCleanup = button._cleanup;
-
-		button._cleanup = () => {
-			popover?.close();
-			popover = null;
-			baseCleanup?.();
-		};
-
-		button.onclick = async () => {
+		button.onclick = () => {
 			if (button._dragController.wasMoved()) return;
 
-			if (popover) {
-				popover.close();
-				popover = null;
-				return;
-			}
-
-			// Read before the popover is built, because it decides whether there is a
-			// form to build at all.
-			const settings = await loadSettings();
-			const submitTarget = submitTargetFor(settings);
-
-			popover = createSubmitPopover(
-				button,
-				async (fields, ui) => {
-					const result = await submitPageToHN(fields);
-
-					if (!result?.ok) {
-						ui.setStatus(submitFailureMessage(result), { error: true });
-						return;
-					}
-
-					await animateButtonFill(button);
-
-					// The story id is not always recoverable -- see the /newest branch in
-					// reportSubmitResultAfterReload -- so the confirmation degrades to a
-					// plain success rather than linking somewhere that may not be right.
-					if (result.storyID) {
-						ui.setStatus(
-							`Submitted. <a href="${escapeHTML(commentURL(result.storyID))}" target="_blank" rel="noopener noreferrer">View</a> &middot; <a href="${escapeHTML(editURL(result.storyID))}" target="_blank" rel="noopener noreferrer">Edit title</a>`,
-							{ html: true },
-						);
-
-						rebindSubmittedButton(button, result.storyID);
-					} else {
-						// No id came back -- either /newest could not be matched, or this
-						// was a text-only submission with no URL to match on. Point at
-						// /newest rather than claiming something about this page.
-						ui.setStatus(
-							`Submitted. <a href="${escapeHTML(HN_ORIGIN)}/newest" target="_blank" rel="noopener noreferrer">See it on HN</a>`,
-							{ html: true },
-						);
-						setFloatingButtonVariant(button, "active");
-					}
-				},
-				() => {
-					popover = null;
-				},
-				{
-					submitTarget,
-					message: submitTarget ? "" : unsubmittableMessage(settings),
-				},
-			);
+			destroyFloatingButton(button);
+			openSidebar([], { browseOnly: true }).catch(console.error);
 		};
 
 		return button;
@@ -8218,32 +8890,16 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		}
 	}
 
-	// Turns the grey submit button into an ordinary discussion button, so the click
-	// after a submission opens the thread instead of offering to submit again.
-	function rebindSubmittedButton(button, storyID) {
-		setFloatingButtonVariant(button, "active");
-
-		const stories = [{ objectID: String(storyID) }];
-
-		button.onclick = () => {
-			if (button._dragController?.wasMoved()) return;
-
-			destroyFloatingButton(button);
-			openSidebar(stories).catch(console.error);
-		};
-	}
-
 	// -------------------------
 	// Shared chrome
 	// -------------------------
 
-	// Palette for both themes. Defined on :host rather than on #panel -- which is
-	// where #21 put it -- because the submit popover is a separate shadow root with
-	// no #panel in it, and custom properties set on a host element inherit into its
-	// shadow tree. One definition therefore reaches every surface.
+	// Palette for both themes. Defined on :host rather than on #panel, because the
+	// submit popover is a separate shadow root with no #panel in it and custom
+	// properties set on a host element inherit into its shadow tree. One definition
+	// therefore reaches every surface.
 	//
-	// Light values are the originals; the dark set comes from #21, extended for the
-	// composer, popover and status surfaces added in 1.5.3.
+	// The dark set was contributed in #21.
 	const THEME_CSS = `
 :host {
 	--bg:#f6f6ef;
@@ -8382,6 +9038,12 @@ header {
 	align-items:center;
 	gap:8px;
 	font-weight:bold;
+	/* The containing block for the hide menu. It used to hang off the eye itself,
+	   and an absolutely positioned box shrink-fits against its containing block --
+	   so a menu anchored to a 36px icon was 46px wide with its labels spilling out
+	   of it. The header is the width of the panel, which is the room the menu
+	   actually has. */
+	position:relative;
 }
 
 /* Scoped to the action row rather than to every button in the header. It
@@ -8411,6 +9073,77 @@ header {
    where a real pointer can hover. */
 @media (hover: hover) {
 	.header-actions button:hover {
+		background:var(--hover-tint);
+	}
+}
+
+/* The eye and the choice behind it. Deliberately not the menu's containing
+   block -- see the note on header. */
+.hide-control {
+	display:inline-flex;
+}
+
+/* Only on a front page, where the eye has two meanings to choose between. It
+   rides inside the button rather than beside it so the pair is one target: a
+   caret with its own hit area would be a second control saying the same thing. */
+.hide-caret {
+	margin-left:1px;
+	font-size:18px;
+	line-height:1;
+}
+
+#hide-site.has-scope {
+	gap:0;
+}
+
+.hide-menu {
+	position:absolute;
+	/* The settings panel's own offsets. They are the two dropdowns in this header
+	   and they hang from the same bar, so a different gap reads as one of them
+	   being slightly wrong rather than as a distinction. */
+	top:46px;
+	right:8px;
+	/* Above the settings panel, which is also absolute in this header at z-index
+	   3. Opened with settings already down, this used to arrive behind it. */
+	z-index:5;
+	display:flex;
+	flex-direction:column;
+	/* Both, deliberately. min-width alone lets a flex column shrink-wrap to its
+	   widest child's *available* width rather than its content's, which wrapped
+	   "Hide on all www.macrumors.com pages" onto two lines inside a box sized for
+	   one. width states the intent; max-width keeps a very long host from running
+	   off the panel. */
+	width:max-content;
+	min-width:max-content;
+	/* px, not rem. rem inside a shadow root is measured against the page's own
+	   root font-size, so on any site using the 62.5% reset this ceiling silently
+	   became 200px. Nothing else in this stylesheet uses rem. */
+	max-width:min(320px, 82vw);
+	padding:4px;
+	border:1px solid var(--surface-border);
+	border-radius:6px;
+	background:var(--surface);
+	box-shadow:0 6px 18px rgba(0,0,0,.18);
+}
+
+.hide-menu[hidden] {
+	display:none;
+}
+
+.hide-menu button {
+	padding:5px 8px;
+	border:0;
+	border-radius:4px;
+	background:none;
+	color:var(--surface-text);
+	font:12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	text-align:left;
+	white-space:nowrap;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.hide-menu button:hover {
 		background:var(--hover-tint);
 	}
 }
@@ -8458,7 +9191,12 @@ header {
 	transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
 }
 
-#panel.browsing .wordmark-chevron {
+/* Only where there is somewhere to go back to. The front page is the root and
+   names nothing after the wordmark, so a chevron there points at nothing; the
+   queue, the submit form and a discussion are all a step off it and each says so
+   in the trail. Keyed on has-trail for exactly that reason -- the trail and the
+   chevron are answering the same question and cannot disagree. */
+#panel.has-trail .wordmark-chevron {
 	width:9px;
 	margin-right:5px;
 	opacity:1;
@@ -8509,7 +9247,10 @@ header {
 	transition:width .2s ease, margin-left .2s ease, opacity .2s ease;
 }
 
-#panel.browsing .wordmark-more {
+/* The ellipsis and the trail say the same thing -- there is more here than the
+   wordmark -- so whichever one is present, the other goes. The trail is the
+   better of the two because it names what is behind. */
+#panel.has-trail .wordmark-more {
 	width:0;
 	margin-left:0;
 	opacity:0;
@@ -8531,7 +9272,7 @@ header {
 	transition:opacity .2s ease, transform .2s ease;
 }
 
-#panel.browsing .wordmark-tail {
+#panel.has-trail .wordmark-tail {
 	opacity:1;
 	transform:none;
 	pointer-events:auto;
@@ -8716,6 +9457,34 @@ header {
 	color:var(--meta);
 }
 
+/* A control that has to sit inside a text line without becoming a widget: the
+   same font, colour and underline-on-hover as the links either side of it, so
+   the row still reads as one sentence. */
+/* An anchor rather than a button, so a modified click opens the page in a new tab
+   the way it does from the title beside it. Everything below is what it takes to
+   make one read as the rest of the meta line. */
+.browse-comments-total {
+	padding:0;
+	border:0;
+	background:none;
+	font:inherit;
+	color:inherit;
+	text-decoration:none;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.browse-comments-total:hover {
+		text-decoration:underline;
+	}
+}
+
+/* Quiet, because it qualifies the number rather than being part of it. Hidden
+   from screen readers, which would read it as arithmetic. */
+.browse-comments-floor {
+	color:var(--meta);
+}
+
 /* Which front pages this list came from, as a byline under the tab rather than a
    footnote after the rows. 'front pages' names the place and this names the
    places, so it belongs against the tab it qualifies -- and a reader deciding
@@ -8731,14 +9500,29 @@ header {
    they did; this tucks up into that gap rather than adding to it. Done this way
    rather than with :has() on the tabs, because the byline appears and disappears
    while the panel is open and some browsers do not re-evaluate :has() on that. */
+/* Tight under the tab it qualifies: "front pages" and the list of them are one
+   statement, and the gap was reading as a separation between two. */
 .browse-blend-note {
-	margin:-6px 0 10px var(--browse-indent);
+	margin:-7px 0 10px var(--browse-indent);
 	color:var(--meta);
 	font-size:11px;
 	font-family:Verdana, Geneva, sans-serif;
 }
 
 .browse-blend-note[hidden] {
+	display:none;
+}
+
+/* Submitting is offered from the front page and nowhere else -- it is the thing
+   to do about a page nothing has said anything about, and the front page is
+   where that becomes apparent. Hidden on the submit view itself, where it would
+   be pointing at the screen it is already on. */
+#panel:not(.browsing) #header-submit,
+#panel.submitting #header-submit {
+	display:none;
+}
+
+#header-submit[hidden] {
 	display:none;
 }
 
@@ -8794,6 +9578,19 @@ header {
 .browse-site {
 	color:var(--meta);
 	font-size:11px;
+}
+
+/* Read, and saying so. A list you come back to is mostly a list of things you
+   have already dealt with, and without this every row goes on looking equally
+   new -- which is the one thing a front page must not do.
+
+   The same grey Hacker News greys a visited title to, which --meta already is.
+   Left to the browser's own history rather than tracked here: it is the record
+   that already exists, it is right across tabs and sessions, and it costs no
+   storage. Browsers allow :visited to change little more than colour, which is
+   all this asks for. The queue gets it too, since it renders the same row. */
+.browse-title-link:visited {
+	color:var(--meta);
 }
 
 /* Indented to the rank column's right edge, so it starts where every title above
@@ -9077,7 +9874,10 @@ header button svg {
 /* Held while the dropdown is open so the gear reads as a toggle rather than a
    button that fired once. Darker than the hover tint so the two stay distinct on
    a pointer device, and outside the hover media query so touch gets it too. */
-#settings-toggle.is-open {
+/* Both dropdowns in this header stay lit while they are down, so the button and
+   the panel under it read as one thing rather than as a press that ended. */
+#settings-toggle.is-open,
+#hide-site.is-open {
 	background:var(--active-tint);
 }
 
@@ -9340,7 +10140,6 @@ header button svg {
 	display:none;
 }
 
-
 .source-strip-entry {
 	display:inline-flex;
 	align-items:baseline;
@@ -9553,11 +10352,12 @@ header button svg {
 	margin-bottom:16px;
 }
 
-/* Deliberately identical to .popover-actions and its primary button, restated
-	rather than shared. The submit popover is its own host with its own shadow root,
-	so a rule written there cannot reach in here -- only THEME_CSS crosses, which is
-	why the tokens do and the rules do not. Same values, so the two screens read as
-	one product; if you change one, change both. */
+/* Deliberately identical to .submit-actions and its primary button, restated
+	rather than shared. The two were in separate shadow roots when this was written
+	and are now in the same one, so they could be folded together -- left apart
+	because the picker's row and the submit form's row are not the same control and
+	changing one should not silently move the other. Same values, so the two screens
+	read as one product; if you change one, change both. */
 .source-picker-actions {
 	display:flex;
 	justify-content:flex-end;
@@ -9589,7 +10389,15 @@ header button svg {
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
-	max-height:8rem;
+	/* A ceiling for the collapse to animate against, not a size. It has to clear
+	   the longest caveat any source writes -- Reddit's runs to thirteen lines in
+	   this column -- because overflow is hidden and anything past it is a sentence
+	   cut in half rather than a sentence scrolled. max-height cannot animate from
+	   "none", which is why this is a number at all. */
+	   Stated in px for the same reason the hide menu is: rem here would be
+	   measured against the page's root font-size, and a site using the 62.5%
+	   reset would put this ceiling back below the caveats it has to clear. */
+	max-height:384px;
 	overflow:hidden;
 	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
 }
@@ -10256,20 +11064,35 @@ ${
 		? `<button id="browse-toggle" class="header-wordmark" type="button"
 title="${escapeHTML(browseLabel())}"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
 class="wordmark-root"><b>Back</b>channel</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
-class="wordmark-tail"><span class="wordmark-sep">/</span>Read more</span></button>`
+class="wordmark-tail"><span class="wordmark-sep">/</span>Discussion</span></button>`
 		: `<span><b>Back</b>channel</span>`
 }
 ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </span>
 
 <div class="header-actions">
-<button id="hide-site" aria-label="Hide Backchannel on this site" title="Hide Backchannel on this site">
+<button id="header-submit" type="button" aria-label="Submit this page" title="Submit this page" hidden>
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
-<path d="M1.4 8S3.9 3.9 8 3.9 14.6 8 14.6 8 12.1 12.1 8 12.1 1.4 8 1.4 8Z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
-<circle cx="8" cy="8" r="1.85" fill="none" stroke="currentColor" stroke-width="1.25"/>
-<line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>
+<path d="M8 12.7V4.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+<path d="M4.5 7.7 8 4.2l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
 </button>
+<span class="hide-control">
+<button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Hide Backchannel here" title="Hide Backchannel here">
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<!-- Filled rather than outlined. White on the header's green, a 1.25px stroke
+     is most of the way to invisible at 15px; a solid shape holds its detail.
+     The pupil is a hole punched with evenodd rather than a circle painted in
+     the background colour, so it survives whatever the header is behind it. -->
+<path fill="currentColor" fill-rule="evenodd" d="M1.4 8S3.9 3.9 8 3.9 14.6 8 14.6 8 12.1 12.1 8 12.1 1.4 8 1.4 8ZM8 6.15a1.85 1.85 0 1 0 0 3.7 1.85 1.85 0 1 0 0-3.7Z"/>
+<!-- The slash needs to read across a filled shape, so it is cut into it: a wide
+     line in the header's own colour, and the mark itself drawn on top. -->
+<line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="var(--header-bg)" stroke-width="3.4" stroke-linecap="round"/>
+<line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</svg>
+<span class="hide-caret" aria-hidden="true">&#9662;</span>
+</button>
+</span>
 <button id="settings-toggle" aria-label="Open Backchannel settings" title="Backchannel settings" aria-expanded="false" aria-controls="settings-panel">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>
@@ -10285,6 +11108,20 @@ ${
 		: ""
 }
 </div>
+${
+	// Outside the action row on purpose. That row styles every button in it as a
+	// 36px icon square, which is right for the three controls and would squeeze
+	// these two labels into 36px. It is positioned against the header rather than
+	// against anything in the row, so where it sits in the markup costs nothing.
+	//
+	// Always asked, everywhere. "Hide this page" and "hide this site" are different
+	// on every page, not only on a front page, and a control that is a menu here
+	// and a button there is two controls wearing one glyph.
+	`<div id="hide-menu" class="hide-menu" role="menu" hidden>
+<button type="button" role="menuitem" data-hide-scope="page">Hide on this page only</button>
+<button type="button" role="menuitem" data-hide-scope="site">Hide on all ${escapeHTML(siteKey())} pages</button>
+</div>`
+}
 
 </header>
 `;
@@ -10539,11 +11376,9 @@ ${[
 		const crumbTail = shadow.querySelector("#settings-crumb-tail");
 		const crumbName = shadow.querySelector("#settings-crumb-name");
 
-		// Takes a pane name, or null for the first level. It used to take a boolean,
-		// which was enough while "hidden sites" was the only second level -- the
-		// track is two slots wide, so exactly one secondary pane may occupy the
-		// second at a time, and the rest are display:none and therefore out of the
-		// flex flow entirely.
+		// Takes a pane name, or null for the first level. The track is two slots wide,
+		// so exactly one secondary pane may occupy the second at a time; the rest are
+		// display:none and therefore out of the flex flow entirely.
 		const showSecondaryPane = (paneName) => {
 			const secondary = Boolean(paneName);
 
@@ -10664,12 +11499,23 @@ ${[
 
 		applySettingsPanelState(await loadSettings());
 
+		// Assigned when the hide menu is wired, further down. Declared here because
+		// the two dropdowns have to be able to close each other and only one of them
+		// can be defined first.
+		let setHideMenuOpen = () => {};
+
 		// Single place the open state changes, so the button's pressed styling and
 		// aria-expanded cannot drift out of sync with the panel.
 		const setSettingsOpen = (open) => {
 			settingsPanel.classList.toggle("hidden", !open);
 			settingsToggle.classList.toggle("is-open", open);
 			settingsToggle.setAttribute("aria-expanded", open ? "true" : "false");
+
+			// The other half of the pair. Opening settings over an open hide menu left
+			// two dropdowns down at once, one of them stacked behind the other.
+			if (open) {
+				setHideMenuOpen(false);
+			}
 
 			// Measured only while visible: scrollHeight reads 0 under display:none,
 			// which is why this runs after the class toggle rather than before it.
@@ -10693,13 +11539,58 @@ ${[
 		// Wired here rather than per-surface because this is the one function both
 		// the sidebar header and the submit popover header pass through.
 		const hideSiteButton = shadow.querySelector("#hide-site");
+		const hideMenu = shadow.querySelector("#hide-menu");
 
-		if (hideSiteButton) {
+		// The same three things setSettingsOpen does, for the same reason: the
+		// panel, the button's lit state and what a screen reader is told cannot
+		// disagree about whether a menu is open.
+		setHideMenuOpen = (open) => {
+			if (!hideMenu || !hideSiteButton) {
+				return;
+			}
+
+			hideMenu.hidden = !open;
+			hideSiteButton.classList.toggle("is-open", open);
+			hideSiteButton.setAttribute("aria-expanded", open ? "true" : "false");
+		};
+
+		setHideMenuOpen(false);
+
+		if (hideSiteButton && hideMenu) {
 			hideSiteButton.onclick = (event) => {
 				event.preventDefault();
 				event.stopPropagation();
-				hideCurrentSite().catch(console.error);
+
+				const opening = hideMenu.hidden;
+
+				// Two dropdowns in one header row, and only one of them can be the
+				// thing being answered. Settings gives way here; setSettingsOpen
+				// returns the favour.
+				if (opening) {
+					setSettingsOpen(false);
+				}
+
+				setHideMenuOpen(opening);
 			};
+
+			for (const choice of hideMenu.querySelectorAll("[data-hide-scope]")) {
+				choice.onclick = (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					hideCurrentSite(choice.dataset.hideScope).catch(console.error);
+				};
+			}
+
+			// Anywhere else in the panel closes it, the same way the settings dropdown
+			// gives up its space. Registered on the shadow root rather than the
+			// document because that is where the presses the panel can see arrive.
+			shadow.addEventListener("click", (event) => {
+				if (event.composedPath().includes(hideSiteButton) || event.composedPath().includes(hideMenu)) {
+					return;
+				}
+
+				setHideMenuOpen(false);
+			});
 		}
 
 		settingsPanel.addEventListener("click", (event) => {
@@ -10732,6 +11623,11 @@ ${[
 						[sourceInput.dataset.source]: sourceInput.checked,
 					},
 				});
+
+				// The front page may be the thing on screen, and it is not what
+				// refreshForSourceChange re-renders. Whether it offers to submit
+				// depends on what is switched on, so it is answered here too.
+				await refreshSubmitAffordance(shadow);
 
 				// A source turned on mid-visit has never been looked up for this page,
 				// and one turned off may be on screen. Re-running the whole decision is
@@ -10994,14 +11890,17 @@ ${[
 				const row = document.createElement("div");
 				const name = document.createElement("span");
 				const remove = document.createElement("button");
+				// Storage is not language: an entry is stored as `page:host/path`
+				// and read as a sentence.
+				const label = describeBlockedEntry(host);
 
 				row.className = "settings-blocked-entry";
-				name.textContent = host;
+				name.textContent = label;
 
 				remove.type = "button";
 				remove.className = "settings-blocked-remove";
 				remove.textContent = "×";
-				remove.setAttribute("aria-label", `Stop hiding Backchannel on ${host}`);
+				remove.setAttribute("aria-label", `Stop hiding Backchannel on ${label}`);
 				remove.onclick = async () => {
 					const next = await loadBlockedSites();
 
@@ -11073,7 +11972,18 @@ ${[
 	position:fixed;
 	right:0;
 	top:0;
+	/* 100vh is the *large* viewport: on a phone it is the height the page would
+	   have with the browser's chrome collapsed, whether or not it currently is.
+	   Fixed to the top at that height, the foot of the panel sits behind the URL
+	   bar, and scrolling the list to its end cannot bring it back -- the end is
+	   below the screen, not below the scroll. The last thing in the list is what
+	   goes missing, which on the front page is the More button.
+
+	   dvh is the visible viewport and follows the chrome as it comes and goes.
+	   The vh line stays as the fallback: a browser that does not know dvh drops
+	   the second declaration and keeps the first, which is today's behaviour. */
 	height:100vh;
+	height:100dvh;
 	width:${width}px;
 	min-width:${isPortraitPhone() ? "0" : "280px"};
 	max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "80vw"};
@@ -11117,12 +12027,35 @@ ${[
 	--measure:1215px;
 }
 
-
 ${THEME_CSS}
 ${CHROME_CSS}
+${SUBMIT_FORM_CSS}
 
-/* Sidebar-only, so deliberately not part of CHROME_CSS: the submit popover has no
-   resize handle. #panel is position:fixed, which is already a containing block. */
+/* The third thing the panel can be showing. Submitting used to be a popover
+   hanging off the grey button; it is a place you go now, which is why it is a
+   view beside the discussion and the front page rather than a layer over them. */
+.submit-view {
+	display:none;
+	transition:opacity .16s ease;
+}
+
+#panel.submitting .submit-view {
+	display:block;
+}
+
+#panel.submitting #comments-content,
+#panel.submitting .browse-view,
+#panel.submitting .filter-banner,
+#panel.submitting .next-up {
+	display:none;
+}
+
+#comments.views-swapping > .submit-view {
+	opacity:0;
+}
+
+/* Sidebar-only, so deliberately not part of CHROME_CSS: #panel is position:fixed,
+   which is already a containing block. */
 #resize-handle {
 	position:absolute;
 	left:0;
@@ -11158,7 +12091,6 @@ ${CHROME_CSS}
 		background:var(--accent);
 	}
 }
-
 
 .submission {
 	margin:0;
@@ -11253,8 +12185,13 @@ ${CHROME_CSS}
 		scrollbar over the foot of the list -- and 8px was not enough to scroll the
 		last comment clear of it, which read as the thread being cut off. It also
 		gives a long thread somewhere to end: a list that stops flush against the
-		edge looks truncated even when it is complete. */
-	padding:12px 12px 32px;
+		edge looks truncated even when it is complete.
+
+		The inset is for the home indicator, which dvh does not account for -- it
+		is drawn over the visible viewport rather than subtracted from it, and it
+		is 34px on the phones that have one, which is more than the 32px here.
+		Resolves to zero everywhere else, so this is the same 32px on a desktop. */
+	padding:12px 12px calc(32px + env(safe-area-inset-bottom, 0px));
 	word-wrap:break-word;
 }
 
@@ -11374,7 +12311,6 @@ ${CHROME_CSS}
 	display:none;
 }
 
-
 /* A text link on the meta row, not a floating glyph. Same rule as .meta a and
    .composer-help-toggle: no underline until hover, no colour shift. */
 .filter-banner-close {
@@ -11471,11 +12407,6 @@ ${CHROME_CSS}
    the three, so it outranks the transparent rule at equal specificity. */
 .children > .comment.new-comment.comment-new-seen {
 	border-left-color:var(--border-soft);
-}
-
-.comment.comment-target {
-	background:rgba(var(--accent-rgb),.10);
-	border-radius:6px;
 }
 
 .comment.comment-filter-hidden {
@@ -12135,6 +13066,7 @@ ${settingsPanelHTML()}
 <div id="browse-blend-note" class="browse-blend-note" hidden></div>
 <div id="browse-list"></div>
 </div>
+<div id="submit-view" class="submit-view"></div>
 <div id="next-up" class="next-up hidden"></div>
 </div>
 
@@ -12370,7 +13302,6 @@ ${settingsPanelHTML()}
 			await refreshArticleAnnotations();
 		};
 
-
 		document
 			.querySelectorAll(
 				"#hn-restore-button, #hn-collapse-button, #hn-submit-button",
@@ -12414,6 +13345,18 @@ ${settingsPanelHTML()}
 			}
 		}
 
+		// Submitting acts on the page behind the panel, so it is offered where the
+		// reader is already looking at what else exists about it rather than from a
+		// control of its own out on the page.
+		const submitButton = shadow.querySelector("#header-submit");
+
+		if (submitButton) {
+			submitButton.onclick = () => {
+				scrollBrowseToTop(ui);
+				setSubmitMode(ui, true).catch(console.error);
+			};
+		}
+
 		refreshQueueCount(shadow).catch(console.error);
 		refreshNextUp(shadow).catch(console.error);
 
@@ -12454,12 +13397,8 @@ ${settingsPanelHTML()}
 		// own title so renderStory stays usable without the option.
 		const title = options.title ?? story.title;
 
-		// Read through the normalized names first, falling back to the raw Firebase
-		// ones. renderStory has two callers with different shapes: a discussion from
-		// an adapter, and a front-page row parsed straight out of HN's markup, which
-		// never passes through a mapper.
-		// Flag and favourite are Hacker News features. A source without them must
-		// not be given links that would act on an item id Hacker News never issued.
+		// Flag and favourite are Hacker News features. A source without them must not
+		// be given links that would act on an item id Hacker News never issued.
 		const showActions = options.actions !== false;
 		// The title row is dropped when it would only repeat the page header above
 		// it. It carries the only way out to the discussion though, so that link
@@ -12468,6 +13407,10 @@ ${settingsPanelHTML()}
 		// Separate from `actions`, which is about voting. A source can allow one and
 		// not the other, and the front-page rows pass neither.
 		const showComposer = options.compose === true;
+		// Read through the normalized names first, falling back to the raw Firebase
+		// ones. renderStory has two callers with different shapes: a discussion from an
+		// adapter, and a front-page row parsed straight out of HN's markup, which never
+		// passes through a mapper.
 		const storyAuthor = story.author ?? story.by;
 		const storyCreatedAt = story.createdAt ?? story.time;
 		// Read through ?? rather than ||, because 0 points is a real measurement
@@ -13439,6 +14382,7 @@ ${settingsPanelHTML()}
 				// Roots only. Replies inherit it through the indent guides, and
 				// repeating it on every nested comment would double the weight of the
 				// metadata line to say what the parent already said.
+				//
 				// baseLabel while the discussion is live, so this reads "HN" beside a
 				// comment posted a minute ago rather than "HN · Aug 2026 1 minute ago",
 				// which says the same thing twice and says the weaker half first.
@@ -13455,7 +14399,6 @@ ${settingsPanelHTML()}
 						)}</span>`
 					: ""
 			}
-
 
 		<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span><span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
 
@@ -13643,10 +14586,6 @@ ${settingsPanelHTML()}
 		});
 	}
 
-	// A source that withholds part of a thread says so, and this is the button that
-	// asks for the rest. Optional on both sides: a source with no gaps never sets
-	// `more`, and one that cannot fill them offers no expandMore -- in either case
-	// nothing is drawn, which is why Hacker News needed no changes for this.
 	// Whether any source currently on screen can be voted on. Read off the enabled
 	// sources rather than the rendered comments, so it is stable while a thread is
 	// still painting.
@@ -13656,6 +14595,10 @@ ${settingsPanelHTML()}
 		);
 	}
 
+	// A source that withholds part of a thread says so, and this is the button that
+	// asks for the rest. Optional on both sides: a source with no gaps never sets
+	// `more`, and one that cannot fill them offers no expandMore. In either case
+	// nothing is drawn.
 	function mountMoreReplies(more, thread, container, discussion, context) {
 		if (!more?.ids?.length || typeof thread.expandMore !== "function") {
 			return;
@@ -13743,20 +14686,43 @@ ${settingsPanelHTML()}
 	// Discussion loading
 	// -------------------------
 
+	// What to call the page a set of discussions is about.
+	//
+	// The document's own title, because the panel shows the discussions of the page
+	// behind it -- every path into a list renders the page the reader is looking at.
+	// Checked rather than assumed: a set about somewhere else would otherwise be
+	// titled with wherever the reader happens to be standing, which is one article's
+	// name over another article's comments, and nothing on screen saying so.
+	//
+	// A set that is about somewhere else has to name itself instead. Falls back to
+	// the document only when no discussion carries a title of its own, which is a
+	// worse answer than a wrong one is a lie.
+	function discussionsPageTitle(stories) {
+		const article = (stories || []).find((story) => story.articleURL)?.articleURL;
+
+		if (!article || sameURL(article, location.href)) {
+			return pageTitle();
+		}
+
+		return (stories || []).find((story) => story.title)?.title || pageTitle();
+	}
+
 	async function renderDiscussions(stories, ui) {
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
+		// Where the reader is, said once the panel is actually showing it. The trail
+		// is otherwise only written on the way out of browse, which never runs for
+		// the ordinary arrival: opening straight onto a discussion.
+		setWordmarkLocation(ui, "Discussion");
 		// The observer holds the elements about to be thrown away with the list.
 		stopObservingNewComments();
 		renderedComments = [];
 		ui.body.innerHTML = "";
-		// "submissions on HN" was true while HN was the only source. It stops being
-		// Nothing at rest. This counted submissions back when the panel had no other
-		// way to say there were several; the source strip now names each one and
-		// carries its own count, so a bare "7 discussions" under the wordmark is a
-		// worse version of the row directly beneath it. Still cleared on every
-		// render rather than left alone, because the subtitle carries the loading
-		// stages and must not keep a previous page's text behind them.
+		// Nothing at rest: the source strip names each discussion and carries its own
+		// count, so a bare "7 discussions" under the wordmark would be a worse version
+		// of the row directly beneath it. Still cleared on every render rather than
+		// left alone, because the subtitle also carries the loading stages and must
+		// not keep a previous page's text behind them.
 		setSidebarRestingSubtitle(ui, "");
 
 		const generation = sidebarGeneration;
@@ -13824,7 +14790,18 @@ ${settingsPanelHTML()}
 			}
 		});
 
+		// The content's own name, not whichever submission sorted first. That would
+		// put one submitter's framing where the page's name belongs -- and render
+		// nothing at all for a Bluesky collective, honestly titled "" because nobody
+		// titled it, which a time-descending sort can put first.
+		//
+		// Read once and handed down. Two independent reads of the document is the
+		// same question asked twice, and the header and the submission blocks
+		// answering it differently is exactly the disagreement this avoids.
+		const page = discussionsPageTitle(stories);
+
 		const headerElement = renderPageHeader(stories, ui.body, {
+			page,
 			sort: settings.commentSort,
 			// The whole panel, not a re-sort in place. Changing the order changes
 			// which comment each batch renders, and renderDiscussions is what owns
@@ -13852,12 +14829,6 @@ ${settingsPanelHTML()}
 		details.className = "submission-details";
 		ui.body.appendChild(details);
 
-		// The content's own name, not whichever submission sorted first. That used
-		// to read stories[0].title, which put one submitter's framing where the
-		// page's name belongs -- and rendered nothing at all once a Bluesky
-		// collective, honestly titled "" because nobody titled it, could sort to
-		// the front of a time-descending list.
-		const page = pageTitle();
 		// A submitted title is an identifier only when there is another discussion
 		// to tell it apart from. syncSubmissionDetails shows a lone block
 		// unconditionally and hides all but the filtered one when there are
@@ -13877,11 +14848,9 @@ ${settingsPanelHTML()}
 				// meta line with no heading above it reads as though the panel lost
 				// something.
 				//
-				// It was once suppressed when it matched the header, back when the
-				// header showed a submission's title and the match meant a literal
-				// duplicate. The header names the content now, so a submitter using
-				// the article's own title -- the common case -- was silently costing
-				// the block its heading.
+				// Never suppressed on a match with the header. The header names the
+				// content, so a submitter who used the article's own title -- the
+				// common case -- would silently cost the block its heading.
 				showTitle: true,
 			});
 
@@ -14054,6 +15023,17 @@ ${settingsPanelHTML()}
 			hydrateVoteControlsForStory(story.id, await loadVoteLinks(story.id));
 			hydrateDisplayAges(story.id);
 		}
+
+		// Every stage this render announced is over. Cleared here rather than by each
+		// caller because there are four of them -- the first open, a sort change, a
+		// front-page count, a source toggle -- and only the first had a finally to do
+		// it, so the other three left the subtitle claiming to be loading for good.
+		//
+		// Not on the early returns above: those mean a newer render has taken over,
+		// and the stage on screen is now that one's to clear.
+		if (generation === sidebarGeneration) {
+			clearSidebarStage(ui);
+		}
 	}
 
 	// discover sees root posts and their direct reply counts, never the replies,
@@ -14133,14 +15113,6 @@ ${settingsPanelHTML()}
 		}
 	}
 
-	// The subject is the page, not any one submission of it. `renderStory` put a
-	// submission's own title and score at the top because there was only ever one;
-	// with several, across several sites, that is trivia sitting where the article
-	// should be.
-	// The pill counts every comment in a discussion, not the roots it happens to
-	// have loaded. Roots made the pills disagree with everything around them: the
-	// header totalled 325 while they summed to 100, and filtering to a pill that
-	// said 26 opened a submission line reading "96 comments".
 	// Which live discussions the reader can actually see, which is not the same as
 	// which are live. Filtering to one discussion hides the rest, and a bookend that
 	// went on naming a hidden conversation would be describing something that is no
@@ -14206,8 +15178,17 @@ ${settingsPanelHTML()}
 		}
 	}
 
+	// The subject is the page, not any one submission of it: with several
+	// discussions across several sites, one submitter's title and score at the top
+	// is trivia sitting where the article should be.
+	//
+	// Each pill counts every comment in its discussion, not the roots it happens to
+	// have loaded. Counting roots makes the pills disagree with everything around
+	// them -- a header totalling 325 above pills summing to 100, and a pill reading
+	// 26 opening a submission line reading "96 comments".
 	function renderPageHeader(stories, container, options = {}) {
 		const sort = options.sort || "best";
+		const page = options.page ?? discussionsPageTitle(stories);
 		const total = stories.reduce(
 			(sum, story) => sum + (story.commentCount || 0),
 			0,
@@ -14217,14 +15198,13 @@ ${settingsPanelHTML()}
 
 		// With one discussion the header steps aside entirely and the submission
 		// below renders the way a Hacker News story does: the arrow, the title and
-		// the subline as one unit. Holding the title up here instead left the arrow
-		// pointing at an empty cell, with our own heading and a rule above it --
-		// which is what stopped it reading like HN.
+		// the subline as one unit. Holding the title up here instead leaves the arrow
+		// pointing at an empty cell, under a heading and a rule of our own.
 		const single = stories.length < 2;
 
 		wrapper.className = single ? "page-header page-header-quiet" : "page-header";
 		wrapper.innerHTML = `
-<div class="page-header-title">${single ? "" : escapeHTML(pageTitle())}</div>
+<div class="page-header-title">${single ? "" : escapeHTML(page)}</div>
 <div class="page-header-meta">${
 	// With one discussion there is nothing to break down and nothing to switch
 	// between, so the header is the title and nothing else: the submission's own
@@ -14265,7 +15245,6 @@ title="Show only this discussion">
 		// permanently under the title.
 		const strip = wrapper.querySelector(".source-strip");
 		const disclosure = wrapper.querySelector(".page-header-disclosure");
-
 
 		// Nothing to disclose with a single discussion: no button was rendered, and
 		// the strip stays out of the layout entirely.
@@ -14433,10 +15412,9 @@ title="Show only this discussion">
 	}
 
 	// Both of these read activeCommentFilter and nothing else, so they belong on
-	// the same trigger. Kept apart, the strip was synced only by its own click
-	// handler -- so focusing a comment inside a filtered discussion, then pressing
-	// "show all comments", cleared the filter while leaving the pill lit for a
-	// filter that was no longer on.
+	// the same trigger. Synced separately, the strip only ever hears about its own
+	// clicks -- and clearing a filter from the banner leaves the pill lit for a
+	// filter that is no longer on.
 	function syncFilterAffordances() {
 		const wrapper = sidebarUI?.body?.querySelector(".source-strip");
 
@@ -14537,6 +15515,7 @@ title="Show only this discussion">
 	// idle, how many submissions it is showing. The resting text is recorded rather
 	// than written straight out, so a render finishing mid-stage cannot overwrite
 	// the stage the reader is currently being shown.
+	//
 	// Every write goes through here, so the collapsed-when-empty class can never
 	// drift out of step with the text that justifies it.
 	function writeSidebarSubtitle(element, text) {
@@ -14738,17 +15717,20 @@ title="Show only this discussion">
 
 			setSidebarStage(ui, "comments");
 
-			// One path, whatever the count. Two renderers meant the panel looked
-			// like a different product depending on how many places a link happened
-			// to be posted to -- a submission header for one, a page header for
-			// several -- and every fix had to be made twice.
+			// Read before the render rather than after it. renderDiscussions ends by
+			// clearing the stage it announced, and an await between that and the next
+			// one would let the subtitle start collapsing and then come back.
+			const settings = await loadSettings();
+
+			// One path, whatever the count. Two renderers meant the panel looked like a
+			// different product depending on how many places a link happened to be
+			// posted to -- a submission header for one, a page header for several --
+			// and every fix had to be made twice.
 			await renderDiscussions(loaded, ui);
 
 			if (generation === sidebarGeneration) {
 				// Announced only when the pass will actually run, so the sidebar never
 				// claims to be doing work that is switched off.
-				const settings = await loadSettings();
-
 				if (settings.annotations && shouldShowArticleAnnotations(settings)) {
 					setSidebarStage(ui, "annotations");
 				}
@@ -14953,13 +15935,10 @@ title="Show only this discussion">
 			// presence *is* the state: "unflag" showing means flagged, "flag"
 			// showing means not.
 			//
-			// Deriving it from the action instead is what broke unflagging. The
-			// check was "is the opposite link here" -- true after flagging, because
-			// unflag appears; but also true after unflagging, because flag appears.
-			// So a successful unflag recorded itself as flagged and the label never
-			// changed back. Favorite escaped it by luck: /fave lands on the
-			// favorites list, where a story just un-favorited is no longer named, so
-			// neither link was found and the fallback happened to be right.
+			// Deriving it from the action instead breaks unflagging, and subtly:
+			// "is the opposite link here" is true after flagging, because unflag
+			// appears -- and equally true after unflagging, because flag does. A
+			// successful unflag then records itself as flagged.
 			const onLink = findItemActionAnchor(document, "un" + base, payload.itemId);
 			const offLink = findItemActionAnchor(document, base, payload.itemId);
 
@@ -15102,7 +16081,7 @@ title="Show only this discussion">
 			return true;
 		}
 
-		// Deliberately NOT voteAnchor.click(): HN's own handler updates the arrow
+		// Deliberately NOT anchor.click(): HN's own handler updates the arrow
 		// optimistically and sends /vote in the background, so closing the popup
 		// moments later aborts the request and the vote never reaches the server.
 		// A top-level navigation cannot be aborted that way -- HN commits the vote
@@ -15556,7 +16535,7 @@ title="Show only this discussion">
 			// Shaped rather than used raw. This is the other place a story enters the
 			// queue, and an entry made here has to be indistinguishable from one made
 			// in the panel -- same key, so the two lists agree about what is already
-			// saved, and same permalink, so the row can draw its comment link.
+			// saved, and same source, so the queue knows what kind of id it holds.
 			const parsed = parseFrontPageRow(row);
 			const story = parsed ? hnStory(parsed) : null;
 			const subline = row.nextElementSibling?.querySelector(".subline, .subtext");
@@ -15613,14 +16592,14 @@ title="Show only this discussion">
 			// then the comment count -- so the age is the one thing that reliably
 			// marks where the actions start.
 			//
-			// Anchoring on a particular action instead is what put this in the wrong
-			// place: the favorites list carries neither flag nor hide, so a rule
-			// written in terms of those had nothing to find and fell through to the
-			// end of the line, landing queue after the comment count.
+			// Deliberately not anchored on a particular action: the favorites list
+			// carries neither flag nor hide, so a rule written in terms of those
+			// finds nothing and falls through to the end of the line, landing queue
+			// after the comment count.
 			//
 			// It also lands where the order says it should: decide whether you want
-			// to read it, flag it if it should not be there, hide it if it is not for
-			// you, open the comments if it is.
+			// to read it, flag it if it should not be there, hide it if it is not
+			// for you, open the comments if it is.
 			const age = subline.querySelector(".age");
 
 			if (age) {
@@ -15722,12 +16701,6 @@ title="Show only this discussion">
 			.map(parseFrontPageRow)
 			.filter(Boolean);
 	}
-
-	// parseFrontPageNextPage lived here and is gone. It read HN's "More" link to
-	// find the next ?p=, which the blend has nowhere to use: every source is
-	// fetched once to a fixed depth and the merged pool is paged locally, so page 2
-	// is made of rows that lost on page 1 rather than of Hacker News' next thirty.
-	// Kept as a note rather than as dead code with passing tests behind it.
 
 	// #endregion hnewhere-test-export
 
@@ -16110,10 +17083,6 @@ title="Show only this discussion">
 					element.classList.remove("comment-quote-promoted");
 					delete element.dataset.hnewhereQuotePromoted;
 				});
-
-			sidebarUI.shadow
-				.querySelectorAll(".comment-target")
-				.forEach((element) => element.classList.remove("comment-target"));
 		}
 	}
 
@@ -16891,14 +17860,6 @@ title="Show only this discussion">
 		});
 	}
 
-	function flashSidebarComment(element) {
-		element.classList.add("comment-target");
-
-		window.setTimeout(() => {
-			element.classList.remove("comment-target");
-		}, 1200);
-	}
-
 	function buildAnnotationGroups(comments, providedIndex = null) {
 		const articleIndex = providedIndex || buildArticleTextIndex();
 
@@ -17468,6 +18429,7 @@ title="Show only this discussion">
 	// layer that is itself partly transparent cannot compound, so every quote reads
 	// the same. How much a passage is discussed is the heat layer's job, and it was
 	// only ever being said twice.
+	//
 	// Meant to read as a highlighter drawn over the line, not as a tint on it: half
 	// strength puts white paper at rgb(173,173,235). The overlay blends, so the accent
 	// cannot touch the glyphs however heavy it gets -- text on a highlight keeps a
@@ -17551,12 +18513,10 @@ title="Show only this discussion">
 	// being replied to, and everything below, so they get the conversation rather
 	// than one turn of it.
 	//
-	// The descent keeps its own visited set. Guarding it on `visible` instead is
-	// what stopped it working at all: the climb below used to run first and add the
-	// seed, so the descent found its own starting point already visible and
-	// returned before adding a single reply -- and a focus on a thread's root
-	// showed the root alone. The two walks ask different questions. "Have I already
-	// walked this subtree" is not "is this comment on screen".
+	// The descent keeps its own visited set, and must: "have I already walked this
+	// subtree" is a different question from "is this comment on screen". Guarded on
+	// `visible` instead, a seed added by the climb makes the descent return before
+	// adding a single reply, and a focus on a thread's root shows the root alone.
 	//
 	// Descending first is what makes a seed that is also another seed's ancestor
 	// come out whole: reached as an ancestor it is only added to `visible`, and its
@@ -18245,10 +19205,9 @@ title="Show only this discussion">
 	// is. With the panel open it is re-rendered in place behind the same cross-fade
 	// the front-page swap uses: the comments go, the new ones arrive as they load.
 	//
-	// It used to tear the panel down and re-run the page pass, which was wrong
-	// twice over. The reader lost their place mid-checkbox, and the pass could take
-	// a branch that produced neither a sidebar nor a button -- so turning a source
-	// off could leave the page with nothing on it at all until a reload.
+	// Deliberately not a teardown and a fresh page pass: that loses the reader's
+	// place mid-checkbox, and the pass can take a branch producing neither a
+	// sidebar nor a button -- leaving the page with nothing on it until a reload.
 	//
 	// Same contract as teardownForBlockedSite: persist before calling.
 	async function refreshForSourceChange() {
@@ -18283,11 +19242,9 @@ title="Show only this discussion">
 				// and the wordmark has to be told either way.
 				await refreshBrowseAffordances(ui.shadow);
 
-				// Nothing enabled is a state, not an error: the panel offers the
-				// picker rather than emptying and leaving the reader to guess.
-				// Nothing enabled is a state the reader chose, and the picker is how
-				// they undo it -- so the panel stays and offers it rather than
-				// vanishing and leaving them to find the grey button.
+				// Nothing enabled is a state the reader chose, not an error, and the
+				// picker is how they undo it -- so the panel stays and offers it rather
+				// than vanishing and leaving them to find the grey button.
 				if (!enabledSourceIds(settings, registeredSourceIds()).length) {
 					sidebarHasDiscussion = false;
 					renderSourcePicker(ui);
@@ -18302,12 +19259,21 @@ title="Show only this discussion">
 					return;
 				}
 
-				// No source turned anything up, which is exactly what a page with no
-				// discussion has always looked like: the grey button, offering to
-				// submit. Keeping the panel open around a message would be a third
-				// state that says less than the button it replaced.
+				// No source turned anything up, which is not the same as the panel
+				// having nothing left to be: there is still a front page and a queue
+				// behind the wordmark. Tearing down here would take away the thing the
+				// reader may well be reading -- switching a source off while looking
+				// at the front page would close the front page. So it steps back to
+				// browse, and only tears down when there is nothing behind the
+				// wordmark either.
 				if (!discussions.length) {
 					sidebarHasDiscussion = false;
+
+					if (frontPageAvailable || queueHasItems) {
+						setBrowseMode(ui, true);
+						return;
+					}
+
 					teardownSurfaces();
 					await runPagePass();
 					return;
@@ -18331,13 +19297,18 @@ title="Show only this discussion">
 		crossFadeCommentsView(comments, render);
 	}
 
-
-	// Shared by both headers. Persists before tearing down, because the teardown
-	// destroys the surface this was clicked in.
-	async function hideCurrentSite() {
+	// Persists before tearing down, because the teardown destroys the surface this
+	// was clicked in. The default is the page rather than the site: it is the
+	// reversible half, and a reader who wanted the whole site said so.
+	async function hideCurrentSite(scope = "page") {
 		const sites = await loadBlockedSites();
+		const entry = scope === "site" ? siteKey() : blockedPageEntry(location.href);
 
-		sites.add(siteKey());
+		if (!entry) {
+			return;
+		}
+
+		sites.add(entry);
 		await saveBlockedSites(sites);
 		teardownForBlockedSite();
 	}
@@ -18669,25 +19640,30 @@ title="Show only this discussion">
 		// some browsers withhold it -- and arrival decides one thing only: whether
 		// the panel opens itself. It does not decide what the panel shows.
 		//
-		// It used to. This branch opened the recorded id and skipped the lookup,
-		// which was invisible while a page had one discussion and wrong the moment
-		// it could have several: an article resubmitted this morning opened on a
-		// thread from 2024 or one from today depending on which link had been
-		// clicked, with no sign the rest existed.
+		// Deliberately not used to choose that: opening the recorded id and skipping
+		// the lookup means an article resubmitted this morning opens on a thread from
+		// 2024 or one from today depending on which link was clicked, with no sign the
+		// rest exist.
 		const arrivedFromClick = Boolean(
 			last &&
 				sameURL(last.url, location.href) &&
 				Date.now() - last.timestamp < 300000,
 		);
 
+		// Pressing a comment count is a press, and a press outranks the automatic
+		// rules for the reason one on the button does: those describe what the reader
+		// wanted in general, and this is what they are asking for now. Read before
+		// the record is cleared, and only for the page it was made about.
+		const arrivedForComments = arrivedFromClick && Boolean(last.openPanel);
+
 		if (arrivedFromClick) {
 			await save(STORAGE.last, null);
 		}
 
-		// Looked up here rather than on click. 1.5.3 makes the button's colour mean
-		// "a discussion exists", which is only answerable before it is drawn. Each
-		// source caches per URL for an hour, so this is one request per source per
-		// new page rather than one per visit.
+		// Looked up here rather than on click: the button's colour means "a discussion
+		// exists", which is only answerable before it is drawn. Each source caches per
+		// URL for an hour, so this is one request per source per new page rather than
+		// one per visit.
 		const found = await discoverAll(location.href, settings);
 
 		// The recorded ids stand in only when the lookup comes back with nothing.
@@ -18716,7 +19692,7 @@ title="Show only this discussion">
 			// A press outranks every automatic rule, including the per-site memory --
 			// that is about what the reader did here last time, and this is what they
 			// are doing now. Recorded like any other open they asked for.
-			if (requestedOpen) {
+			if (requestedOpen || arrivedForComments) {
 				destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
 				// Passed whole rather than reduced to ids. A Reddit discussion cannot
 				// be rebuilt from an HN item number, and reducing these to refs was
@@ -18737,10 +19713,15 @@ title="Show only this discussion">
 			return;
 		}
 
-		// Nothing on HN for this page, but the panel has not been only about this
+		// Nothing found for this page, but the panel has not been only about this
 		// page since the front page and the queue went behind it -- and that is what
 		// a reader who pressed the button while it was still looking asked to see.
-		if (requestedOpen) {
+		//
+		// A count press lands here too, and can: the number is a floor drawn from
+		// what the front pages carry, so a trending link with no thread behind it
+		// counts posts and finds no discussion. Better the front page than a grey
+		// button on a page they arrived at asking to read something.
+		if (requestedOpen || arrivedForComments) {
 			destroyFloatingButton(pendingButton);
 			await openSidebar([], { browseOnly: true });
 			return;

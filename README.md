@@ -15,7 +15,7 @@ See what everyone's talking about.
 
 - **The web's commentary track:** Avoid the two-tab-tango and conveniently read the community's comments in-context.
 - **Never miss a thread:** Every page you land on gets checked against the sources you've picked, so you find out a discussion exists without going hunting for one.
-- **What the internet is saying, in one thread:** Hacker News, Bluesky, Reddit, & others merged into a single conversation, each comment quietly noting where it came from. Pick your sources with a checkbox.
+- **What the internet is saying, in one thread:** Every source you've switched on, merged into a single conversation, each comment quietly noting where it came from. Pick them with a checkbox.
 - **See what they're talking about:** Quotes in the comments get matched back to the article and lit as annotations in articles. Click a highlight to filter the thread to the people discussing that passage.
    - _Currently in beta. Enable Annotations in the settings menu to try it out!_ 
 - **Read, then join in:** Vote, reply, and even submit on supported sources. It uses the session you already have, in a popup on news.ycombinator.com. The script never sees your password.
@@ -39,7 +39,13 @@ Constellation names. No account is needed and neither host sets a cookie.
 - Lobsters sends only the domain of each page you visit to lobste.rs, to find that domain's submissions. Signed in or out, the request
 carries no account.
 - Wikipedia sends the pages you visit to Wikipedia's API, to find the Talk and
-project pages that link them. No account, signed in or out.
+project pages that link them, and then reads what was said on them. No account,
+signed in or out.
+- Mastodon sends only the domain of each page you visit to Tootfinder, an opt-in
+index of Mastodon posts, not to Mastodon. It holds only people who chose to be
+searchable, so it finds a slice of the fediverse rather than all of it. The front
+page asks mastodon.social what it's currently linking to, which tells it nothing
+about you. No account, signed in or out.
 - Lemmy sends the pages you visit to lemmy.world, a large instance whose
 federation reaches across the wider network. No account, signed in or out.
 
@@ -51,9 +57,8 @@ Full detail, including a host-by-host table, in [SECURITY.md](SECURITY.md).
 
 Nothing went anywhere. **HNewhere is now Backchannel**. Same project, same
 history, same install URL, same settings. It was renamed in v1.6.0 when it
-stopped being about one site: it now reads Hacker News and/or Reddit, and each
-source is a checkbox you control. The repository has since been renamed to
-match, and links to the old one redirect.
+stopped being about one site: it now offers many sources and each
+source is a checkbox you control.
 
 If you already have it installed it updates itself and renames in place. Your hidden sites, your reading queue, your collapsed threads and your
 preferences all carry over untouched.
@@ -68,7 +73,7 @@ preferences all carry over untouched.
 2. [Install Backchannel](https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js)
    - *Upgrading from HNewhere?* Let it auto-update and it renames itself. If you
      install from this link instead, delete the old **HNewhere** entry afterwards.
-3. Browse the web as usual. If a thread exists for that page the (BC) button lights up. Clicking it opens the sidebar. Still grey? Nobody's posted it yet-- click to submit it yourself.
+3. Browse the web as usual. If a thread exists for that page the (BC) button lights up. Clicking it opens the sidebar. Still grey? Click to view the front page when you're done or submit your current article (currently only supported for Hacker News).
 
 ## Contributing
 

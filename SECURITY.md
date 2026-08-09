@@ -44,6 +44,11 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Reddit (fallback) | `arctic-shift.photon-reddit.com` | the URL of each page you visit, with no identifier. Used automatically when reddit.com declines the request |
   | Bluesky (discovery) | `constellation.microcosm.blue` | the URL of each page you visit, with no identifier attached |
   | Bluesky | `public.api.bsky.app` | post identifiers only — **never the URL of the page you are on** |
+  | Lobsters | `lobste.rs` | the **domain** of each page you visit — never the full address. It has no URL search, so the exact match is made here |
+  | Wikipedia | `en.wikipedia.org` | the URL of each page you visit, to find the Talk pages citing it, and then those pages' names to read what was said. No account, signed in or out |
+  | Lemmy | `lemmy.world` | the URL of each page you visit, with no account |
+  | Mastodon (discovery) | `www.tootfinder.ch` | the **domain** of each page you visit — never the full address. An opt-in index of Mastodon posts, not Mastodon, and it holds only people who chose to be searchable |
+  | Mastodon (front page) | `mastodon.social` | **nothing about you.** Asked only what that instance is currently linking to |
   | *no source enabled* | none | nothing — the script performs no lookup at all |
 
 - **`@connect` is a ceiling, not a statement of use.** The header is static, so
