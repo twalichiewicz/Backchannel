@@ -7214,6 +7214,15 @@ ${
 		);
 	}
 
+	// Submitting is layered on top of browsing rather than replacing it -- the panel
+	// wears both classes while the form is up -- so isBrowsing alone cannot tell the
+	// front page from the form standing on it.
+	function isSubmitting(ui) {
+		return Boolean(
+			ui?.shadow?.querySelector("#panel")?.classList.contains("submitting"),
+		);
+	}
+
 	// Hiding the discussion keeps every reference into it alive, but it does not
 	// keep the reader's place: #comments is the scroll container for both views, so
 	// hiding one collapses its height and the browser clamps scrollTop to zero long
@@ -13325,6 +13334,22 @@ ${settingsPanelHTML()}
 
 		if (browseToggle) {
 			browseToggle.onclick = () => {
+				// The trail says what pressing the root means: from "Backchannel /
+				// Submit", back to Backchannel. The form is a third place standing on
+				// the front page rather than a second state of it, so a plain toggle
+				// read the press as "leave the front page" and left through the wrong
+				// door -- onto the discussion of a page that, since the reader was
+				// submitting it, almost never has one. What they got for pressing the
+				// wordmark was "No discussion found for this page yet."
+				//
+				// Where Cancel goes, for the same reason Cancel goes there: the form is
+				// only reachable from the front page, so leaving it undoes the one step
+				// taken rather than two.
+				if (isSubmitting(ui)) {
+					setBrowseMode(ui, true);
+					return;
+				}
+
 				// Read off the panel rather than kept in a flag of its own, so a
 				// teardown that rebuilds the panel cannot leave the two disagreeing.
 				setBrowseMode(ui, !isBrowsing(ui));
