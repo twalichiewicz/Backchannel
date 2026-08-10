@@ -19861,9 +19861,22 @@ title="Show only this discussion">
 		// the lookup means an article resubmitted this morning opens on a thread from
 		// 2024 or one from today depending on which link was clicked, with no sign the
 		// rest exist.
+		// pageAddress on this side, because the two sides were recorded at different
+		// moments and only one of them has been touched since. What was written down
+		// is the address the source holds -- a row's story.url, a queue entry's, or
+		// the href of the link on Hacker News -- and what the reader has now is
+		// whatever the site handed back, which is where a campaign or syndication
+		// parameter gets added. Compared against the address bar, a site that
+		// appends one on the way in made every arrival look like a page nobody had
+		// clicked towards: the panel did not open itself, and a comment count
+		// pressed to read what was said about a story landed on it silently.
+		//
+		// Only the query can differ this way. pageAddress cannot move the host or
+		// the path, so nothing here can start matching a page the reader never
+		// asked for.
 		const arrivedFromClick = Boolean(
 			last &&
-				sameURL(last.url, location.href) &&
+				sameURL(last.url, pageAddress()) &&
 				Date.now() - last.timestamp < 300000,
 		);
 
