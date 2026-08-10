@@ -8792,8 +8792,16 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 
 		// Same two values HN's own bookmarklet passes to /submitlink, both editable
 		// here because the bookmarklet's weakness is that they are not.
+		//
+		// The page's own address rather than the address bar's, because Hacker News
+		// tells a resubmission from a new story by comparing the URL it is given. A
+		// campaign or syndication parameter the reader happened to arrive with walks
+		// straight past that check, and what it produces is not a failed submission
+		// but a successful one: a second story for an article that already had a
+		// thread, posted from here. Editable, and visibly so -- a reader who meant
+		// to submit the address exactly as they have it can put it back.
 		titleInput.value = suggestedSubmissionTitle();
-		urlInput.value = location.href;
+		urlInput.value = pageAddress();
 
 		const updateCount = () => {
 			const remaining = HN_TITLE_LIMIT - titleInput.value.length;
