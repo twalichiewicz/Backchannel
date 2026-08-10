@@ -7937,12 +7937,19 @@ ${
 	function setWordmarkLocation(ui, label) {
 		const tail = ui?.shadow?.querySelector(".wordmark-tail");
 		const sep = tail?.querySelector(".wordmark-sep");
+		// The label lives in a box of its own rather than as a bare text node, so a
+		// narrow header can cut it with an ellipsis. Written into rather than
+		// replaced, which keeps the separator and the ellipsis box in place across a
+		// swap instead of rebuilding the trail on every render.
+		const where = tail?.querySelector(".wordmark-where");
 
-		if (!tail || !sep) {
+		if (!tail || !sep || !where) {
 			return;
 		}
 
-		const swap = () => tail.replaceChildren(sep, document.createTextNode(label));
+		const swap = () => {
+			where.textContent = label;
+		};
 
 		// An empty label is the root. The trail is not a crumb saying "Backchannel /
 		// Backchannel", it is simply absent, and the class is what the stylesheet
@@ -9161,6 +9168,12 @@ header {
 	display:flex;
 	align-items:center;
 	gap:0;
+    /* The buttons are a fixed cost -- three 36px squares, four on a front page --
+       and what gives when the header runs out of room is the text beside them,
+       never the targets. Without this they are shrinkable flex items and close up
+       towards their 15px glyphs, which on a phone is where the tapping goes wrong.
+       #78. */
+	flex-shrink:0;
 }
 
 /* The wordmark is the way back, so it has to look like the wordmark and behave
@@ -9174,6 +9187,20 @@ header {
 	align-self:flex-start;
 	display:flex;
 	align-items:baseline;
+    /* .header-title has min-width:0 and shrinks; this did not, so the button stood
+       out of a parent narrower than itself and painted over the icons to its right
+       -- at the panel's 280px floor, "Backchannel / Discussion" ran 40px into the
+       eye and the gear. Nothing clipped it: no box was overflowing anything with
+       overflow to hide, the header row had simply run out of width and drew its two
+       halves on top of each other. #78.
+
+       max-width rather than min-width, which is the part worth remembering.
+       .header-title is a *column* flex container, so its main axis is vertical and
+       min-width:0 there relaxes nothing horizontal. The wordmark's width comes from
+       align-self:flex-start sizing it to its content on the cross axis, and a cross
+       axis does not shrink an item to fit -- it lets it overflow. A cap is what a
+       cap has to be. */
+	max-width:100%;
 	border:0;
 	padding:0;
 	margin:0;
@@ -9219,6 +9246,11 @@ header {
    rather than the panel's grey, because this sits on the header's own bar. */
 .wordmark-root {
 	transition:color .2s ease;
+    /* The root never gives. It is one unbreakable word, so it could not shrink far
+       anyway, but saying so is what decides where the shortfall lands when the
+       header is squeezed: on the trail, which can lose its end and still be read,
+       not on the brand, where "Backch..." reads as a rendering fault. */
+	flex:0 0 auto;
 }
 
 #panel.browsing .wordmark-root {
@@ -9279,6 +9311,25 @@ header {
 	transform:translateX(-4px);
 	pointer-events:none;
 	transition:opacity .2s ease, transform .2s ease;
+    /* Where the shortfall lands. Everything else across the header holds its size,
+       so this is the one item that can absorb a narrow panel. */
+	min-width:0;
+}
+
+/* The location, in a box of its own so it can be cut. The separator stays whole
+   beside it -- an ellipsis after a bare "/" would read as a path with something
+   missing rather than as a word that ran out of room -- and the cut end is the
+   least load-bearing text in the header: the chevron already says there is
+   somewhere behind this, and the view underneath says what you are looking at.
+
+   text-overflow needs inline content in a block box. A flex item is blockified,
+   so this works where the same pair on .wordmark-tail would not: its children are
+   flex items, and an ellipsis has no inline run to end. */
+.wordmark-where {
+	min-width:0;
+	overflow:hidden;
+	text-overflow:ellipsis;
+	white-space:nowrap;
 }
 
 #panel.has-trail .wordmark-tail {
@@ -9290,6 +9341,8 @@ header {
 .wordmark-sep {
 	font-weight:400;
 	color:var(--subtitle-stage);
+    /* Beside a label that may be cut, so it must not be the thing that gives. */
+	flex:0 0 auto;
 }
 
 .header-wordmark:focus-visible {
@@ -11073,7 +11126,8 @@ ${
 		? `<button id="browse-toggle" class="header-wordmark" type="button"
 title="${escapeHTML(browseLabel())}"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
 class="wordmark-root"><b>Back</b>channel</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
-class="wordmark-tail"><span class="wordmark-sep">/</span>Discussion</span></button>`
+class="wordmark-tail"><span class="wordmark-sep">/</span><span
+class="wordmark-where">Discussion</span></span></button>`
 		: `<span><b>Back</b>channel</span>`
 }
 ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
