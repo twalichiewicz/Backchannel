@@ -8,6 +8,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.6] — 2026-08-10
+
+### Fixed
+
+- **A page can say which parts of its address are not the page, and is now
+  believed.** A reader arriving from a newsletter or a syndication partner
+  carries parameters the submitter's copy did not — ft.com hands out
+  `?syn-25a6b1a6=1` — and the comparison every source ends with is equality, so
+  an article sitting on the front page two rows down came back as no discussion
+  at all. The list of tracking parameters could not answer this: the suffix on
+  that one is per-link, and the next publisher's name for the same idea would be
+  the next report. The canonical link is read instead, or `og:url` where a page
+  publishes no canonical, as ft.com does not to a logged-out reader. It is
+  allowed to do exactly one thing — drop query parameters — and a hint that
+  moves the host or the path, or introduces a parameter of its own, is refused
+  whole. Hacker News' own canonical keeps `?id=`, so nothing is stripped there;
+  arXiv's `og:url` names `…v1` to a reader standing on the version-less address
+  and is turned down. (#82)
+- **A queued article counts as read however you got back to it.** The queue was
+  always meant to survive this — a parameter picked up on the way in should not
+  stop it recognising where you have got to — and it only half did, because the
+  seven parameter names it knew did not include the ones publishers actually
+  add. Saving an article from a front page and arriving from a newsletter left
+  the entry sitting unread on the page you had just finished.
+- **Arriving on a story you pressed still counts as arriving.** What gets
+  written down when you press a row is the address its source holds; what you
+  have when the page loads is whatever the site handed back, and some hand back
+  more. Measured against the wrong one of those, a site that appends a parameter
+  on the way in made every arrival look like a page nobody had clicked towards —
+  the panel did not open itself, and a comment count pressed to read what was
+  said about a story landed on it in silence.
+- **Submitting sends the address the page claims, not the one you arrived
+  with.** Hacker News tells a resubmission from a new story by comparing the URL
+  it is handed, and a campaign parameter walks straight past that. What that
+  produces is not a rejected submission but an accepted one: a second thread for
+  an article that already had a thread. The field is still yours to edit.
+- **Arbitrary page styling stops at the panel.** Shadow DOM encapsulates
+  selectors, not inheritance, so every inherited property flowed in from the
+  page — a glow set on one site's root text put the same glow on every comment
+  in the sidebar. The panel used to pin the eight properties known to have
+  caused trouble; that same page was measured pushing thirty-two more through,
+  two of them CSS additions recent enough that no list built from bug reports
+  could have named them. The whole set is reset in one declaration now, and
+  stays right as the set grows. Line height still follows the page, and text
+  direction still follows the reader's language. (#79)
+- **The header no longer runs its own title over its buttons.** At a narrow
+  panel — a small phone, or the width a reader drags it to — "Backchannel /
+  Discussion" was drawn straight through the eye and the gear. The buttons hold
+  their size now and the trail gives way instead, losing its end to an ellipsis
+  rather than the wordmark losing its. (#78)
+- **Pressing Backchannel from the submit form goes back to the front page.** The
+  trail read "Backchannel / Submit" and the wordmark left through the wrong
+  door, landing on the discussion of a page that — the reader being in the middle
+  of submitting it — almost never had one. What it offered instead was "No
+  discussion found for this page yet." It now goes where Cancel goes, and where
+  the trail says it goes. (#83)
+
 ## [1.6.5] — 2026-08-08
 
 ### Added
