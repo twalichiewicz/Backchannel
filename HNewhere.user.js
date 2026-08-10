@@ -11978,6 +11978,48 @@ ${[
 <style>
 
 #panel {
+    /* Shadow DOM encapsulates selectors, not inheritance. Every inherited property
+       flows in from the host unless the shadow tree sets its own, so a page that
+       centres its body -- victoriametrics.com does -- centres the entire panel,
+       comments and all, and one that puts a glow on its root text puts the same
+       glow on every comment in here. That is #79.
+
+       This was a list of the properties known to have done damage, and the list was
+       the bug. It named eight; the page in #79 was measured pushing thirty-two more
+       through -- word-break, user-select, cursor, list-style, hyphens,
+       text-size-adjust, caret-color, writing-mode, visibility, pointer-events and
+       the rest. Two of them, text-wrap-style and text-spacing-trim, are recent
+       enough additions to CSS that no list assembled from bug reports could have
+       named them, which is the whole problem with assembling one: it is finished
+       only by whoever trips over the next.
+
+       The all property is the set rather than a sample of it, and stays right as
+       the set grows. It has to be the first declaration in this block -- everything
+       below overrides it, which is the point, and anything above would be erased.
+
+       Pinned on #panel rather than on :host, because a rule in the page that
+       happens to match the host element outranks a :host rule from inside. Nothing
+       in the page can reach this one, and #panel is the only element in the shadow
+       root, so its subtree is the entire panel.
+
+       What it exempts is what should be exempt: direction, which says something
+       real about a reader's language and is not ours to overrule, and custom
+       properties, which is where the palette lives. Three more are restored by hand
+       below. */
+	all:initial;
+    /* The panel has never set a line-height -- the components that care carry their
+       own -- so pinning one here would restyle every site rather than fix one.
+       Inheriting explicitly reads it off the host, which is where it arrived from
+       before. */
+	line-height:inherit;
+    /* Set on :host for both themes, and what the browser draws form controls and
+       scrollbars from. Resetting it would land on normal, which is the light one. */
+	color-scheme:inherit;
+    /* Neither inherited from the page nor left to the browser. iOS inflates text in
+       a narrow column on its own, and a panel that sizes its own type to the pixel
+       has nothing to gain from being second-guessed. */
+	-webkit-text-size-adjust:100%;
+	text-size-adjust:100%;
 	position:fixed;
 	right:0;
 	top:0;
@@ -12009,28 +12051,6 @@ ${[
 	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
 	font-size:13px;
 	overflow:visible;
-    /* Shadow DOM encapsulates selectors, not inheritance. Every inherited property
-       flows in from the host unless the shadow tree sets its own, so a page that
-       centres its body -- victoriametrics.com does -- centres the entire panel,
-       comments and all. The same hole is open for everything else that moves text
-       about, and each one is a bug report waiting for the site that trips it.
-
-       Pinned on #panel rather than on :host, because a rule in the page that
-       happens to match the host element outranks a :host rule from inside. Nothing
-       in the page can reach this one.
-
-       line-height and direction are deliberately absent. The panel has never set a
-       line-height and the components that care carry their own, so pinning one now
-       would restyle every site rather than fix one; and direction says something
-       real about a reader's language, which is not ours to overrule. */
-	text-align:left;
-	text-indent:0;
-	text-transform:none;
-	letter-spacing:normal;
-	word-spacing:normal;
-	font-style:normal;
-	font-variant:normal;
-	white-space:normal;
     /* Reading width for a single block of prose. Never applied to a container: a
        cap on any ancestor of .children narrows every reply nested under it. */
 	--measure:1215px;
