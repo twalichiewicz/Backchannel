@@ -828,10 +828,18 @@
 	// parameter added on the way in, or a fragment, does not stop the queue
 	// recognising where you have got to.
 	//
+	// That was the intent and normalizeURL only got part of the way to it: it knows
+	// seven parameter names, and the one ft.com adds is not among them and could
+	// not be, since its suffix is per-link. Queueing an article from a front page
+	// stores the submitted address; arriving from a newsletter puts you on the same
+	// article under a different one; and the entry stayed unread on a page the
+	// reader had just finished. pageAddress asks the page which of the two it is,
+	// which is the same question discovery asks a line above this in the page pass.
+	//
 	// Writes only when something actually changed. A page pass runs on every load
 	// and on every soft navigation, and storing an identical list each time would
 	// be a write per navigation for nothing.
-	async function markQueueArrival(url = location.href, now = Date.now()) {
+	async function markQueueArrival(url = pageAddress(), now = Date.now()) {
 		const entries = await loadQueue();
 
 		if (!entries.length) {
