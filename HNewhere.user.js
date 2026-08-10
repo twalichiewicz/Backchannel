@@ -4873,7 +4873,99 @@ ${
 			return "";
 		}
 	}
+
+	// What a page says its own address is, for the case where the address bar and
+	// the page disagree about which parts of it are the page.
+	//
+	// A reader arriving from a newsletter, an app or a syndication partner carries
+	// parameters the submitter's copy did not. ft.com hands out
+	// ?syn-25a6b1a6=1; the same article on Hacker News is the bare URL; and the
+	// equality every discover() gates on -- normalizeURL(hit) === target -- threw
+	// away a 128-comment thread the reader could see two rows down the front page.
+	// That is #82.
+	//
+	// TRACKING_PARAMS cannot answer this and should not be asked to. It is a list,
+	// the suffix on ft.com's parameter is per-link so no literal entry would match,
+	// and the next publisher's name for the same idea is the next bug report. The
+	// page already states the answer, and states it for search engines that have
+	// exactly this problem.
+	//
+	// Allowed to do one thing: drop query parameters. It may not move the host or
+	// the path, and it may not introduce or change a parameter of its own. Measured
+	// across twenty live Hacker News front-page URLs fetched with tracking
+	// parameters appended, sixteen published a hint, none broke that rule, and
+	// three published none at all and are left exactly as they are today. The rule
+	// earns its keep on the two ends of the range: arxiv.org's og:url names
+	// /abs/2401.00001v1 to a reader standing on /abs/2401.00001 and is refused,
+	// while news.ycombinator.com's own canonical keeps ?id=49243880 and so strips
+	// nothing. A hint that oversteps is discarded whole rather than trusted in
+	// part, because what it would otherwise cause -- the discussion of a different
+	// page, shown as though it were this one -- is worse than the miss it is here
+	// to fix.
+	function canonicalPageURL(href, hint) {
+		if (!hint) {
+			return href;
+		}
+
+		let page;
+		let named;
+
+		try {
+			page = new URL(href);
+			// Against the page, because a canonical may be written relative.
+			named = new URL(hint, href);
+		} catch {
+			return href;
+		}
+
+		const bare = (path) => path.replace(/\/+$/, "");
+
+		if (
+			named.hostname.toLowerCase() !== page.hostname.toLowerCase() ||
+			bare(named.pathname) !== bare(page.pathname)
+		) {
+			return href;
+		}
+
+		// Every parameter it keeps has to be one the reader already carries, at the
+		// same value. A hint that adds or changes one is describing some other
+		// address, whatever its path claims.
+		for (const [key, value] of named.searchParams) {
+			if (page.searchParams.get(key) !== value) {
+				return href;
+			}
+		}
+
+		// The reader's own address with the dropped parameters removed, rather than
+		// the hint itself. Rebuilt from the hint this would also adopt its scheme and
+		// its trailing slash, and the slash is not a detail: the Bluesky spike
+		// measured the address bar's own form finding the maximum on 22 of 22 URLs
+		// where the variants found one. Only the query is in question here, so only
+		// the query moves.
+		const out = new URL(href);
+
+		for (const key of [...out.searchParams.keys()]) {
+			if (!named.searchParams.has(key)) {
+				out.searchParams.delete(key);
+			}
+		}
+
+		return out.href;
+	}
 	// #endregion hnewhere-test-export
+
+	// The link element first: it is the element for this, and a page carrying one
+	// has said so deliberately. og:url is what is left on a page that has not --
+	// ft.com serves no canonical to a logged-out reader, and does carry an og:url
+	// naming the address Hacker News holds, which is the whole of #82. Both go
+	// through the same constraint, so the weaker source cannot do more damage than
+	// the stronger one.
+	function pageAddress() {
+		const link = document.querySelector('link[rel~="canonical" i]')?.href;
+		const og = document.querySelector('meta[property="og:url" i]')?.content;
+
+		return canonicalPageURL(location.href, link || og || "");
+	}
 
 	// -------------------------
 	// Site suppression
@@ -14799,7 +14891,14 @@ ${settingsPanelHTML()}
 	function discussionsPageTitle(stories) {
 		const article = (stories || []).find((story) => story.articleURL)?.articleURL;
 
-		if (!article || sameURL(article, location.href)) {
+		// pageAddress, because both sides of this comparison are already speaking it.
+		// A source's articleURL is either the address it was submitted under -- the
+		// bare one, on a reader carrying a campaign tag -- or, for the collectives
+		// that were never submitted at all, the address discovery was given, which is
+		// this. Measured against the address bar instead, a tagged arrival made every
+		// discussion look like it was about somewhere else, and the panel titled
+		// itself with a story's title while sitting on the page that story is about.
+		if (!article || sameURL(article, pageAddress())) {
 			return pageTitle();
 		}
 
@@ -19352,7 +19451,10 @@ title="Show only this discussion">
 
 				setSidebarStage(ui, "discussion");
 
-				const discussions = await discoverAll(location.href, settings);
+				// pageAddress rather than location.href: what is being looked up is
+				// which submissions are of this page, and a parameter the page itself
+				// says is not part of it must not decide that.
+				const discussions = await discoverAll(pageAddress(), settings);
 
 				if (generation !== sidebarGeneration) {
 					return;
@@ -19763,7 +19865,10 @@ title="Show only this discussion">
 		// exists", which is only answerable before it is drawn. Each source caches per
 		// URL for an hour, so this is one request per source per new page rather than
 		// one per visit.
-		const found = await discoverAll(location.href, settings);
+		// Same address the panel will look up when it opens. Deciding the button's
+		// colour from one URL and filling the panel from another would light a
+		// button that opens onto nothing, or leave a grey one over a live thread.
+		const found = await discoverAll(pageAddress(), settings);
 
 		// The recorded ids stand in only when the lookup comes back with nothing.
 		// They are a discussion we know exists, and a network hiccup on a page the
