@@ -9510,7 +9510,7 @@ header {
 }
 
 /* The bar hangs off the queue rather than sitting between the two as a sibling
-   rule, so that hiding the queue takes the bar with it. As `+` it would stay
+   rule, so that hiding the queue takes the bar with it. As \`+\` it would stay
    attached to whichever tab came second and leave a leading bar in front of
    front pages on its own. */
 #browse-tab-queue::after {
