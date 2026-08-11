@@ -14823,8 +14823,6 @@ title="Show only this discussion">
 		};
 	}
 
-	// #endregion hnewhere-test-export
-
 	function getArticleSearchRoot() {
 		const candidates = [
 			document.querySelector("main article"),
@@ -14863,16 +14861,68 @@ title="Show only this discussion">
 		return best;
 	}
 
+	// Where the text is, what a highlight hangs off, and what scrolls. A page in a
+	// browser answers all three the same way; a PDF viewer answers none of them
+	// that way, so the answers live behind this rather than inside the matcher.
+	//
+	// originFor is an offset ADDED to viewport rects, not a rect to subtract. For
+	// HTML that is exactly the arithmetic this code always did. Deriving it from
+	// the host's own rect would look tidier and be wrong: the overlay's containing
+	// block is the initial containing block, not body, so a body margin would move
+	// every highlight by its width.
+	const HTML_DOCUMENT_SOURCE = {
+		id: "html",
+
+		buildIndex() {
+			return buildTextIndex(getArticleSearchRoot(), {
+				skipHidden: true,
+				excludeSelectors: [
+					"#hn-restore-button",
+					"#hn-collapse-button",
+					"[data-hnewhere-annotation-overlay]",
+					"[data-hnewhere-sidebar]",
+				],
+			});
+		},
+
+		hostFor() {
+			return document.body;
+		},
+
+		originFor() {
+			return { left: window.scrollX, top: window.scrollY };
+		},
+
+		heightFor() {
+			return Math.max(
+				document.body.scrollHeight,
+				document.documentElement.scrollHeight,
+			);
+		},
+
+		scrollIntoView(range) {
+			const rect = range.getBoundingClientRect();
+
+			window.scrollTo({
+				top: Math.max(0, rect.top + window.scrollY - window.innerHeight * 0.3),
+				behavior: prefersReducedMotion() ? "auto" : "smooth",
+			});
+		},
+
+		onReindex() {
+			return () => {};
+		},
+	};
+
+	let activeDocumentSource = HTML_DOCUMENT_SOURCE;
+
+	function documentSource() {
+		return activeDocumentSource;
+	}
+	// #endregion hnewhere-test-export
+
 	function buildArticleTextIndex() {
-		return buildTextIndex(getArticleSearchRoot(), {
-			skipHidden: true,
-			excludeSelectors: [
-				"#hn-restore-button",
-				"#hn-collapse-button",
-				"[data-hnewhere-annotation-overlay]",
-				"[data-hnewhere-sidebar]",
-			],
-		});
+		return documentSource().buildIndex();
 	}
 
 	// #region hnewhere-test-export
@@ -15164,26 +15214,23 @@ title="Show only this discussion">
 		return best;
 	}
 
-	function getPageRectsForRange(range) {
+	function getPageRectsForRange(range, source = documentSource()) {
+		const origin = source.originFor(source.hostFor(range));
+
 		return [...range.getClientRects()]
 			.filter((rect) => rect.width > 0 && rect.height > 0)
 			.map((rect) => ({
-				left: rect.left + window.scrollX,
-				top: rect.top + window.scrollY,
+				left: rect.left + origin.left,
+				top: rect.top + origin.top,
 				width: rect.width,
 				height: rect.height,
-				right: rect.right + window.scrollX,
+				right: rect.right + origin.left,
 			}));
 	}
 	// #endregion hnewhere-test-export
 
 	function scrollRangeIntoView(range) {
-		const rect = range.getBoundingClientRect();
-
-		window.scrollTo({
-			top: Math.max(0, rect.top + window.scrollY - window.innerHeight * 0.3),
-			behavior: prefersReducedMotion() ? "auto" : "smooth",
-		});
+		documentSource().scrollIntoView(range);
 	}
 
 	function buildAnnotationGroups(comments, providedIndex = null) {
@@ -16136,7 +16183,11 @@ title="Show only this discussion">
 		`;
 
 		overlay.append(heatLayer, baseLayer, activeLayer);
-		document.body.appendChild(overlay);
+
+		const source = documentSource();
+		const overlayHost = source.hostFor(groups[0]?.range || regions?.[0]?.range);
+
+		overlayHost.appendChild(overlay);
 
 		let heatRegions = regions || [];
 
@@ -16188,9 +16239,7 @@ title="Show only this discussion">
 		};
 
 		const render = () => {
-			overlay.style.height =
-				Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) +
-				"px";
+			overlay.style.height = source.heightFor(overlayHost) + "px";
 			baseLayer.replaceChildren();
 			heatLayer.replaceChildren();
 			rectsByGroup.clear();
