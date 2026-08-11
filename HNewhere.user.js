@@ -5015,6 +5015,29 @@ ${
 		return canonicalPageURL(location.href, link || og || "");
 	}
 
+	// pageAddress reads the head, and until it existed nothing about a page's
+	// identity did -- location.href is valid from the first instruction, a meta tag
+	// is not. The script declares @run-at document-end and every manager honoured
+	// that until one did not; asked before the head is parsed, querySelector finds
+	// no meta at all. Measured in WebKit: metas=0 and og:url absent at
+	// document-start, both present at DOMContentLoaded. The fallback in that case
+	// is the address bar, which is the one address the reader may not be findable
+	// by -- so the lookup silently answers about the wrong page.
+	//
+	// Resolved rather than awaited when the DOM is already parsed, so on a manager
+	// that keeps its promise this is a spent microtask and nothing else.
+	function documentReady() {
+		if (document.readyState !== "loading") {
+			return Promise.resolve();
+		}
+
+		return new Promise((resolve) => {
+			document.addEventListener("DOMContentLoaded", () => resolve(), {
+				once: true,
+			});
+		});
+	}
+
 	// -------------------------
 	// Site suppression
 	// -------------------------
@@ -19819,6 +19842,12 @@ title="Show only this discussion">
 		if (isHiddenSite()) {
 			return;
 		}
+
+		// Everything past this line may ask what page it is on, and pageAddress
+		// answers that from the head. Placed after the suppression check rather than
+		// before it, so a page we are about to leave alone is left alone without
+		// waiting for anything.
+		await documentReady();
 
 		// Four independent reads, run together rather than one after another in front
 		// of the first paint. The blocked-site check is one of them: it is a read of
