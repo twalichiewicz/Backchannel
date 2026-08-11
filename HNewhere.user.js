@@ -402,6 +402,8 @@
 	const RESUME_BRIDGE_STORAGE_KEY = "hnewhere-resume-bridge";
 
 	const BRIDGE_PAYLOAD_PREFIX = "HNewhere:bridge_payload:";
+	const BRIDGE_RESULT_PREFIX = "HNewhere:bridge_result:";
+	const BRIDGE_POLL_MS = 400;
 
 	// Long enough to survive a slow HN, short enough that an abandoned popup's
 	// payload does not sit in storage indefinitely.
@@ -5407,23 +5409,55 @@ ${
 
 	// #endregion hnewhere-test-export
 
-	function postBridgeResult(source, payload, result) {
-		if (!window.opener) {
-			return;
-		}
+	// window.opener does not survive every source -- Reddit's pages arrive with it
+	// already gone -- so a popup that only posted would report to nobody. The
+	// shared store is the channel that always gets through; the post is the fast
+	// path when it is there.
+	async function postBridgeResult(source, payload, result) {
+		const message = { source, nonce: payload.nonce, ...result };
 
 		try {
-			window.opener.postMessage(
-				{
-					source,
-					nonce: payload.nonce,
-					...result,
-				},
-				payload.origin || "*",
-			);
+			window.opener?.postMessage(message, payload.origin || "*");
 		} catch (error) {
 			console.error("Failed posting bridge result:", error);
 		}
+
+		try {
+			await save(BRIDGE_RESULT_PREFIX + payload.nonce, {
+				...message,
+				ts: Date.now(),
+			});
+		} catch (error) {
+			console.error("Failed staging bridge result:", error);
+		}
+	}
+
+	// Read by whichever tab is waiting, then cleared so it is delivered once.
+	function watchBridgeResult(nonce, deliver) {
+		let stopped = false;
+
+		const tick = async () => {
+			if (stopped) {
+				return;
+			}
+
+			const stored = await load(BRIDGE_RESULT_PREFIX + nonce, null);
+
+			if (stored && !stopped) {
+				await save(BRIDGE_RESULT_PREFIX + nonce, null);
+				deliver(stored);
+			}
+
+			if (!stopped) {
+				window.setTimeout(tick, BRIDGE_POLL_MS);
+			}
+		};
+
+		window.setTimeout(tick, BRIDGE_POLL_MS);
+
+		return () => {
+			stopped = true;
+		};
 	}
 
 	// One-shot listener per bridge kind, resolving whichever request matches the
@@ -5432,6 +5466,51 @@ ${
 		const pending = new Map();
 		let installed = false;
 
+		const settle = (nonce, data) => {
+			const request = pending.get(nonce);
+
+			if (!request) {
+				return;
+			}
+
+			clearTimeout(request.timeoutId);
+			request.stopWatching?.();
+			pending.delete(nonce);
+
+			try {
+				request.popup?.close();
+			} catch {}
+
+			request.resolve(data);
+		};
+
+		// Whichever channel gets here first wins; the other finds nothing pending.
+		const deliver = (data) => {
+			if (!data || data.source !== source || !data.nonce) {
+				return;
+			}
+
+			const request = pending.get(data.nonce);
+
+			if (!request) {
+				return;
+			}
+
+			// Not an answer: leave the request open so the draft survives and
+			// nothing closes while the reader is signing in.
+			if (data.interim) {
+				request.onInterim?.(data);
+				clearTimeout(request.timeoutId);
+				request.timeoutId = window.setTimeout(
+					() => settle(data.nonce, { ok: false, reason: "timeout" }),
+					SIGN_IN_TIMEOUT,
+				);
+				return;
+			}
+
+			settle(data.nonce, data);
+		};
+
 		const install = () => {
 			if (installed) {
 				return;
@@ -5439,40 +5518,13 @@ ${
 
 			installed = true;
 			window.addEventListener("message", (event) => {
-				const data = event.data;
-
-				if (!data || data.source !== source || !data.nonce) {
-					return;
-				}
-
-				const request = pending.get(data.nonce);
-
 				// Checked against the popup this nonce was opened for: each source
 				// answers from its own origin.
-				if (!request || event.origin !== request.origin) {
+				if (event.origin !== pending.get(event.data?.nonce)?.origin) {
 					return;
 				}
 
-				// Not an answer: leave the request open so the draft survives and
-				// nothing closes while the reader is signing in.
-				if (data.interim) {
-					request.onInterim?.(data);
-					clearTimeout(request.timeoutId);
-					request.timeoutId = window.setTimeout(() => {
-						pending.delete(data.nonce);
-						request.resolve({ ok: false, reason: "timeout" });
-					}, SIGN_IN_TIMEOUT);
-					return;
-				}
-
-				clearTimeout(request.timeoutId);
-				pending.delete(data.nonce);
-
-				try {
-					request.popup?.close();
-				} catch {}
-
-				request.resolve(data);
+				deliver(event.data);
 			});
 		};
 
@@ -5497,10 +5549,10 @@ ${
 			}
 
 			const result = new Promise((resolve) => {
-				const timeoutId = window.setTimeout(() => {
-					pending.delete(nonce);
-					resolve({ ok: false, reason: "timeout" });
-				}, timeout);
+				const timeoutId = window.setTimeout(
+					() => settle(nonce, { ok: false, reason: "timeout" }),
+					timeout,
+				);
 
 				pending.set(nonce, {
 					resolve,
@@ -5508,6 +5560,7 @@ ${
 					popup,
 					origin,
 					onInterim,
+					stopWatching: watchBridgeResult(nonce, deliver),
 				});
 			});
 
@@ -5665,7 +5718,7 @@ ${
 	// Fields an action echoes back on every result, so the sidebar knows which
 	// control the answer belongs to.
 	function postWriteResult(action, payload, result) {
-		postBridgeResult(action.messageSource, payload, {
+		return postBridgeResult(action.messageSource, payload, {
 			...action.echo?.(payload),
 			...result,
 		});
@@ -5682,7 +5735,7 @@ ${
 			? await readBridgePayload(payload.nonce)
 			: null;
 
-		finishWriteAction(
+		await finishWriteAction(
 			action,
 			payload,
 			await runWriteAction(action, { payload, staged, root }),
@@ -5718,7 +5771,7 @@ ${
 				"z-index:2147483647",
 				"margin:0",
 				"padding:10px 14px",
-				"background:#ff6600",
+				"background:#237140",
 				"color:#fff",
 				"font:600 13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
 				"text-align:center",
@@ -5730,7 +5783,7 @@ ${
 
 	// The popup stays open on an awaited sign-in, holding the action beside the
 	// login page the reader was sent to.
-	function finishWriteAction(action, payload, result) {
+	async function finishWriteAction(action, payload, result) {
 		if (result === BRIDGE_NAVIGATED) {
 			return;
 		}
@@ -5742,7 +5795,7 @@ ${
 				payload,
 			});
 			showSignInNote(action);
-			postWriteResult(action, payload, {
+			await postWriteResult(action, payload, {
 				ok: false,
 				reason: "awaiting-sign-in",
 				interim: true,
@@ -5750,7 +5803,9 @@ ${
 			return;
 		}
 
-		postWriteResult(action, payload, result);
+		// Awaited before the close is scheduled: a window that shuts while the
+		// answer is still being written takes the answer with it.
+		await postWriteResult(action, payload, result);
 
 		if (action.closeAfter) {
 			window.setTimeout(() => window.close(), action.closeAfter);
@@ -5787,7 +5842,7 @@ ${
 
 		if (resumeShouldWait(result)) {
 			showSignInNote(action);
-			postWriteResult(action, stored.payload, {
+			await postWriteResult(action, stored.payload, {
 				ok: false,
 				reason: "awaiting-sign-in",
 				interim: true,
@@ -5796,25 +5851,25 @@ ${
 		}
 
 		clearBridgeReload(RESUME_BRIDGE_STORAGE_KEY);
-		finishWriteAction(action, stored.payload, result);
+		await finishWriteAction(action, stored.payload, result);
 		return true;
 	}
 
-	function reportWriteAction(action, root = document) {
+	async function reportWriteAction(action, root = document) {
 		const reported = action.report?.(root);
 
 		if (!reported) {
 			return false;
 		}
 
-		postWriteResult(action, reported.payload, reported.result);
+		await postWriteResult(action, reported.payload, reported.result);
 		window.setTimeout(() => window.close(), 60);
 		return true;
 	}
 
-	function reportWriteBridge(bridge, root = document) {
+	async function reportWriteBridge(bridge, root = document) {
 		for (const action of Object.values(bridge?.actions || {})) {
-			if (reportWriteAction(action, root)) {
+			if (await reportWriteAction(action, root)) {
 				return true;
 			}
 		}
@@ -6436,20 +6491,27 @@ ${
 		);
 	}
 
-	function setupItemActionListener() {
-		if (window.__hnewhereItemActionListenerInstalled) {
+	function settleItemAction(nonce, data) {
+		const pending = itemActionRequests.get(nonce);
+
+		if (!pending) {
 			return;
 		}
 
-		window.__hnewhereItemActionListenerInstalled = true;
-		window.addEventListener("message", (event) => {
-			// Any source this script writes to, rather than one fixed site.
-			if (!isWriteBridgeOrigin(event.origin)) {
-				return;
-			}
+		clearTimeout(pending.timeoutId);
+		pending.stopWatching?.();
+		itemActionRequests.delete(nonce);
 
-			const data = event.data;
+		try {
+			pending.popup?.close();
+		} catch {}
 
+		pending.resolve(data);
+	}
+
+	// Fed by both channels: the post when the opener survived, the shared store
+	// when it did not.
+	function deliverItemAction(data) {
 			if (!data || data.source !== ITEM_ACTION_BRIDGE_MESSAGE_SOURCE || !data.nonce) {
 				return;
 			}
@@ -6492,21 +6554,29 @@ ${
 			if (data.interim) {
 				pending.onInterim?.(data);
 				clearTimeout(pending.timeoutId);
-				pending.timeoutId = window.setTimeout(() => {
-					itemActionRequests.delete(data.nonce);
-					pending.resolve({ ok: false, reason: "timeout" });
-				}, SIGN_IN_TIMEOUT);
+				pending.timeoutId = window.setTimeout(
+					() => settleItemAction(data.nonce, { ok: false, reason: "timeout" }),
+					SIGN_IN_TIMEOUT,
+				);
 				return;
 			}
 
-			clearTimeout(pending.timeoutId);
-			itemActionRequests.delete(data.nonce);
+			settleItemAction(data.nonce, data);
+	}
 
-			try {
-				pending.popup?.close();
-			} catch {}
+	function setupItemActionListener() {
+		if (window.__hnewhereItemActionListenerInstalled) {
+			return;
+		}
 
-			pending.resolve(data);
+		window.__hnewhereItemActionListenerInstalled = true;
+		window.addEventListener("message", (event) => {
+			// Any source this script writes to, rather than one fixed site.
+			if (!isWriteBridgeOrigin(event.origin)) {
+				return;
+			}
+
+			deliverItemAction(event.data);
 		});
 	}
 
@@ -6548,27 +6618,29 @@ ${
 				itemActionRequests.set(nonce, {
 					resolve: () => {},
 					timeoutId: window.setTimeout(
-						() => itemActionRequests.delete(nonce),
+						() => settleItemAction(nonce, { ok: false, reason: "timeout" }),
 						SIGN_IN_TIMEOUT,
 					),
 					popup: null,
 					origin: bridge.origin,
 					onInterim,
+					stopWatching: watchBridgeResult(nonce, deliverItemAction),
 				});
 				resolve({ ok: false, reason: "popup-blocked" });
 				return;
 			}
 
-			const timeoutId = window.setTimeout(() => {
-				itemActionRequests.delete(nonce);
-				resolve({ ok: false, reason: "timeout" });
-			}, 12000);
+			const timeoutId = window.setTimeout(
+				() => settleItemAction(nonce, { ok: false, reason: "timeout" }),
+				12000,
+			);
 
 			itemActionRequests.set(nonce, {
 				resolve,
 				timeoutId,
 				popup,
 				origin: bridge.origin,
+				stopWatching: watchBridgeResult(nonce, deliverItemAction),
 				onInterim,
 			});
 		});
@@ -11852,10 +11924,9 @@ blockquote.comment-quote-redundant {
 	max-width:calc(100% - 24px);
 	padding:8px 12px;
 	border-radius:6px;
-	background:var(--surface);
-	color:var(--surface-text);
-	border:1px solid var(--surface-divider);
-	box-shadow:0 4px 14px rgba(0,0,0,.18);
+	background:var(--accent);
+	color:var(--accent-ink);
+	box-shadow:0 4px 14px rgba(0,0,0,.22);
 	font-size:12px;
 	line-height:1.4;
 	text-align:center;
@@ -18148,7 +18219,7 @@ title="Show only this discussion">
 				return;
 			}
 
-			if (reportWriteBridge(bridge)) {
+			if (await reportWriteBridge(bridge)) {
 				return;
 			}
 
