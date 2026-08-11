@@ -14390,13 +14390,13 @@ title="Show only this discussion">
 			};
 		}
 
-		// The page cannot show this: the request was ours, not a click, so nothing
-		// on it moved. What was asked for is what Reddit accepted.
+		// Reddit accepted it, and the page this landed on cannot say otherwise: it
+		// may have been served from cache, still showing the vote before this one.
 		const state = payload.action === "un" ? "none" : payload.action;
 
 		return {
 			ok: true,
-			reason: state === before ? "unchanged" : "updated",
+			reason: "updated",
 			voteInfo: cloneVoteInfo({ state, hasAuth: true }),
 		};
 	}
