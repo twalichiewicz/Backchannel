@@ -6775,7 +6775,15 @@ ${
 
 		const swap = () => {
 			panel.classList.toggle("browsing", on);
-			toggle.title = on ? "Back to this page's discussion" : browseLabel();
+
+			const stranded = on && !sidebarHasDiscussion;
+
+			toggle.disabled = panel.classList.contains("queue-only") || stranded;
+			toggle.title = stranded
+				? "No discussion found for this page"
+				: on
+					? "Back to this page's discussion"
+					: browseLabel();
 
 			panel.classList.remove("submitting");
 			ui?.shadow?.querySelector("#submit-view")?.replaceChildren();
@@ -8201,9 +8209,15 @@ header {
 	color:var(--subtitle-stage);
 }
 
-#panel.queue-only .header-wordmark {
+.header-wordmark:disabled {
 	cursor:default;
 	opacity:1;
+}
+
+.header-wordmark:disabled .wordmark-more {
+	width:0;
+	margin-left:0;
+	opacity:0;
 }
 
 .wordmark-more {
