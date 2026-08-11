@@ -2970,6 +2970,29 @@ ${
 
 	const REDDIT_SELF_HOSTS = ["reddit.com", "redd.it"];
 
+	// #region hnewhere-test-export
+	// The exact lookup matches the submitted address character for character, so a
+	// submission carrying a tracking parameter is invisible to it -- and the share
+	// buttons publishers ship add one. Search finds those. It is not a substitute:
+	// measured over ten articles it found 75 where the exact lookup found 91.
+	function redditDiscoveryPaths(bare) {
+		const exact = (query) => [
+			"/api/info.json?url=" + encodeURIComponent(query),
+			"/api/posts/search?limit=25&url=" + encodeURIComponent(query),
+		];
+
+		return [
+			exact(bare),
+			exact(bare + "/"),
+			[
+				"/search.json?type=link&limit=25&q=" +
+					encodeURIComponent("url:" + bare),
+				null,
+			],
+		];
+	}
+	// #endregion hnewhere-test-export
+
 	registerSource({
 		id: "reddit",
 		// All four are real places a reader clicks a link from, and Reddit does not
@@ -2994,16 +3017,10 @@ ${
 
 			const scheme = url.startsWith("http://") ? "http://" : "https://";
 			const bare = scheme + target;
-			const queries = [bare, bare + "/"];
-
 			const matches = new Map();
 
-			for (const query of queries) {
-				const encoded = encodeURIComponent(query);
-				const result = await redditFetch(
-					"/api/info.json?url=" + encoded,
-					"/api/posts/search?limit=25&url=" + encoded,
-				);
+			for (const [path, archivePath] of redditDiscoveryPaths(bare)) {
+				const result = await redditFetch(path, archivePath);
 
 				if (!result) {
 					continue;
