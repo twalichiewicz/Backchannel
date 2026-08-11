@@ -520,6 +520,46 @@
 		"fbclid",
 		"gclid",
 	]);
+
+	// Families rather than names, for the ones whose suffix is per-link and which
+	// therefore no literal entry could ever match.
+	//
+	// This list exists because a page's own canonical is not always the answer.
+	// canonicalPageURL reads what the publisher says the address is, and it is the
+	// better mechanism where it works -- sixteen of twenty sampled front-page URLs
+	// published a usable hint. But ft.com serves two different renders: the
+	// paywalled one names the bare address, and the subscriber one names the
+	// reader's address back with the syndication parameter still on it. Asked what
+	// the page is, the article page answers with the tracking tag included, so
+	// canonicalPageURL correctly strips nothing and #82 survived its own fix.
+	//
+	// This catches what a canonical lies about, and the two are complementary
+	// rather than alternatives: one fails on publishers that echo, the other on
+	// publishers that publish nothing.
+	//
+	// Deliberately short and deliberately not clever. Stripping a parameter that is
+	// part of a page's identity shows the discussion of a different page, which is
+	// a far worse failure than the missed match it is here to fix -- so `ref`,
+	// `source`, `id`, `v` and `p` are all absent and belong absent.
+	const TRACKING_PATTERNS = [
+		// utm_id, utm_source_platform, utm_creative_format and the rest of the
+		// family beyond the five spelled out above.
+		/^utm_/,
+		// ft.com syndication: ?syn-25a6b1a6=1, where the suffix is per link.
+		/^syn-/,
+	];
+
+	// One question asked in two places -- normalizeURL, which decides whether two
+	// addresses are the same page, and bskyTarget, which asks Constellation about
+	// one. They must not be able to disagree.
+	function isTrackingParam(key) {
+		const name = String(key || "").toLowerCase();
+
+		return (
+			TRACKING_PARAMS.has(name) ||
+			TRACKING_PATTERNS.some((pattern) => pattern.test(name))
+		);
+	}
 	// #endregion hnewhere-test-export
 
 	let sidebar = null;
@@ -2922,7 +2962,7 @@
 			const parsed = new URL(url);
 
 			for (const key of [...parsed.searchParams.keys()]) {
-				if (TRACKING_PARAMS.has(key.toLowerCase())) {
+				if (isTrackingParam(key)) {
 					parsed.searchParams.delete(key);
 				}
 			}
@@ -4861,7 +4901,7 @@ ${
 			const keysToRemove = [];
 
 			for (const key of u.searchParams.keys()) {
-				if (TRACKING_PARAMS.has(key.toLowerCase())) {
+				if (isTrackingParam(key)) {
 					keysToRemove.push(key);
 				}
 			}

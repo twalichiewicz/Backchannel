@@ -23,7 +23,11 @@ use to detect updates, so every release bumps it.
   publishes no canonical, as ft.com does not to a logged-out reader. It is
   allowed to do exactly one thing — drop query parameters — and a hint that
   moves the host or the path, or introduces a parameter of its own, is refused
-  whole. Hacker News' own canonical keeps `?id=`, so nothing is stripped there;
+  whole. Where a page will not admit to a parameter it is not the answer:
+  ft.com's paywalled render names the bare address and its subscriber render
+  names the reader's own address back with the syndication tag still on it, so
+  the tracking list gains families — `utm_*`, `syn-*` — for the names whose
+  suffix is per link. The two catch what the other cannot. Hacker News' own canonical keeps `?id=`, so nothing is stripped there;
   arXiv's `og:url` names `…v1` to a reader standing on the version-less address
   and is turned down. (#82)
 - **A queued article counts as read however you got back to it.** The queue was
