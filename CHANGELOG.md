@@ -100,6 +100,12 @@ use to detect updates, so every release bumps it.
 
 ### Fixed
 
+- **Reddit discussions submitted through a publisher's share button are found.**
+  Reddit was asked for the article's exact address, and a share-to-Reddit button
+  appends `utm_source=reddit`, so a post made through one carried an address the
+  lookup could not see. On one Fortune article that hid the conversation: the
+  63-comment thread was found and the 725-comment one was not.
+
 - **A vote that did not go through says so.** The sidebar asked the popup to
   vote and then looked only at the answer it wanted, so a vote that failed —
   not signed in, no such arrow, rate limited, popup blocked — looked exactly
