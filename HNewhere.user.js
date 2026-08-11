@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.6
+// @version      1.6.7
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -39,10 +39,10 @@
 // @exclude      https://*.netflix.com/*
 // @exclude      https://web.whatsapp.com/*
 // @exclude      https://*.instagram.com/*
-// @exclude      *://*/*.pdf
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
+// @grant        unsafeWindow
 // @connect      hacker-news.firebaseio.com
 // @connect      hn.algolia.com
 // @connect      news.ycombinator.com
@@ -55,6 +55,7 @@
 // @connect      lemmy.world
 // @connect      mastodon.social
 // @connect      www.tootfinder.ch
+// @connect      api.hypothes.is
 // @run-at       document-end
 // @noframes
 // ==/UserScript==
@@ -157,8 +158,6 @@
 		return false;
 	}
 
-	// Runs before every other migration, because those write, and "has this reader
-	// been here before" is only answerable while the store is still untouched.
 	async function seedSources() {
 		if (await load(SOURCE_SEED_MIGRATION, false)) {
 			return;
@@ -197,11 +196,6 @@
 	};
 
 	// #region hnewhere-test-export
-	// Identifiers carry their source. Two sources number their comments
-	// independently, and buildCommentGraph walks parent links by identity, so
-	// unprefixed ids make the graph correct only by the accident that HN's are
-	// integers and Reddit's are base36. A graph that is acyclic only by luck will
-	// eventually not be.
 	const SOURCE_KEY_SEPARATOR = ":";
 
 	function sourceKey(source, id) {
@@ -243,8 +237,6 @@
 		return migrated;
 	}
 
-	// Registration order decides the answer, not the stored object's key order: a
-	// reader who enabled Reddit first must not get Reddit-first discovery for it.
 	function normalizeSourceSettings(stored, registeredIds) {
 		const source =
 			stored && typeof stored === "object" && !Array.isArray(stored)
@@ -259,8 +251,6 @@
 		return normalized;
 	}
 
-	// Anything unreadable reads as nothing enabled. The failure mode of this
-	// function is network traffic to somebody else's server, so it fails closed.
 	function enabledSourceIds(settings, registeredIds) {
 		const normalized = normalizeSourceSettings(settings?.sources, registeredIds);
 
@@ -284,8 +274,6 @@
 	const BUTTON_SIZE_STEP = 4;
 	const BUTTON_SIZE_DEFAULT = 44;
 
-	// 1.5.4 stored these as named presets. Mapped rather than discarded so an
-	// existing choice survives the change to a pixel value.
 	const LEGACY_BUTTON_SIZES = {
 		small: 36,
 		medium: 44,
@@ -297,7 +285,6 @@
 		squircle: "30%",
 	};
 
-	// One or two characters, because that is what a 44px circle holds.
 	const BUTTON_MARK_DEFAULT = "BC";
 	const BUTTON_MARK_MAX = 2;
 
@@ -331,8 +318,6 @@
 		return normalizeButtonSize(next);
 	}
 
-	// Kept proportional to the button rather than fixed, and bounded so "HN" still
-	// fits inside a 24px button and does not swamp a 64px one.
 	function buttonFontSizeFor(size) {
 		return Math.min(18, Math.max(9, Math.round(size * 0.3)));
 	}
@@ -343,8 +328,6 @@
 	let buttonMarkPreference = BUTTON_MARK_DEFAULT;
 	let accentPreference = null;
 
-	// The only writer of the caches. Called by loadSettings and saveSettings so they
-	// cannot drift from stored settings, and directly by tests.
 	function syncAppearancePreferences(settings) {
 		themePreference = settings.theme || "auto";
 		buttonShapePreference = BUTTON_SHAPES[settings.buttonShape]
@@ -365,7 +348,6 @@
 		hideWithoutDiscussion: false,
 		showButtonWithQueue: false,
 		sources: undefined,
-		// "auto" reproduces the pre-1.5.4 behaviour of following the page.
 		theme: "auto",
 		buttonShape: "circle",
 		buttonSize: BUTTON_SIZE_DEFAULT,
@@ -392,18 +374,20 @@
 	const SUBMIT_BRIDGE_MESSAGE_SOURCE = "HNewhereSubmitBridge";
 	const COMMENT_BRIDGE_MESSAGE_SOURCE = "HNewhereCommentBridge";
 
-	// HN truncates submission titles at 80 characters.
 	const HN_TITLE_LIMIT = 80;
 
 	const ITEM_ACTION_BRIDGE_STORAGE_KEY = "hnewhere-vote-bridge";
 	const SUBMIT_BRIDGE_STORAGE_KEY = "hnewhere-submit-bridge";
 	const COMMENT_BRIDGE_STORAGE_KEY = "hnewhere-comment-bridge";
+	const RESUME_BRIDGE_STORAGE_KEY = "hnewhere-resume-bridge";
 
 	const BRIDGE_PAYLOAD_PREFIX = "HNewhere:bridge_payload:";
+	const BRIDGE_RESULT_PREFIX = "HNewhere:bridge_result:";
+	const BRIDGE_POLL_MS = 400;
 
-	// Long enough to survive a slow HN, short enough that an abandoned popup's
-	// payload does not sit in storage indefinitely.
 	const BRIDGE_PAYLOAD_TTL = 10 * 60 * 1000;
+
+	const SIGN_IN_TIMEOUT = 5 * 60 * 1000;
 	// #region hnewhere-test-export
 	const TRACKING_PARAMS = new Set([
 		"utm_source",
@@ -415,8 +399,6 @@
 		"gclid",
 	]);
 
-	// Families, for the names whose suffix is per link. Kept narrow: stripping a
-	// parameter that identifies a page shows the wrong discussion.
 	const TRACKING_PATTERNS = [/^utm_/, /^syn-/];
 
 	function isTrackingParam(key) {
@@ -435,11 +417,10 @@
 	let openingRun = null;
 	let sidebarGeneration = 0;
 	let renderedComments = [];
-	// Which sources the open sidebar is showing, so per-thread decisions -- the vote
-	// gutter, for one -- do not have to walk the comment list to find out.
 	const sidebarSourceKeys = new Set();
 	const liveDiscussions = new Map();
 	let annotationController = null;
+	let stopDocumentReindex = null;
 	let activeCommentFilter = null;
 
 	let preFilterPosition = null;
@@ -527,8 +508,6 @@
 		return location.hostname;
 	}
 
-	// Exact hostname only, matching how per-site widths are keyed. Subdomains are
-	// therefore independent entries, which is what "hide it on this site" means.
 	async function loadBlockedSites() {
 		const stored = await load(STORAGE.blocked, []);
 
@@ -676,7 +655,6 @@
 
 		await saveQueue(marked);
 
-		// The strip is showing what comes next, and what comes next has just changed.
 		if (sidebarUI?.shadow) {
 			refreshQueueCount(sidebarUI.shadow).catch(console.error);
 			refreshNextUp(sidebarUI.shadow).catch(console.error);
@@ -760,8 +738,6 @@
 	// Remembered votes
 	// -------------------------
 
-	// Mirrors the persisted map so render paths stay synchronous. Populated once
-	// at startup by loadRememberedVotes().
 	let rememberedVotes = {};
 
 	let rememberedItemActions = {};
@@ -836,7 +812,6 @@
 		return rememberedItemActions[String(itemId)] || null;
 	}
 
-	// Kept under a key no story id can collide with, since it is not about a story.
 	const ITEM_ACTION_ACCOUNT_KEY = "account";
 
 	function rememberItemActionUnavailable(field) {
@@ -869,16 +844,25 @@
 		);
 	}
 
-	function itemActionLinksHTML(itemId) {
+	function sourceHasItemActions(sourceID) {
+		return Boolean(getWriteBridge(sourceID)?.actions?.vote?.itemActions);
+	}
+
+	function itemActionLinksHTML(itemId, sourceID) {
+		if (!sourceHasItemActions(sourceID)) {
+			return "";
+		}
+
 		const id = escapeHTML(String(itemId));
+		const source = escapeHTML(String(sourceID || ""));
 
 		return `
       |
       <button class="item-action-link" type="button"
-      data-item-action="flag" data-item-action-id="${id}">flag</button>
+      data-item-action="flag" data-item-action-source="${source}" data-item-action-id="${id}">flag</button>
       |
       <button class="item-action-link" type="button"
-      data-item-action="fave" data-item-action-id="${id}">favorite</button>`;
+      data-item-action="fave" data-item-action-source="${source}" data-item-action-id="${id}">favorite</button>`;
 	}
 
 	const ITEM_ACTION_FIELD = { fave: "favorite", flag: "flagged" };
@@ -938,9 +922,13 @@
 		button.disabled = true;
 
 		try {
-			// No URL to pass: unlike a vote there is no client-injected link to hand
-			// over, so the popup finds the anchor on the page it lands on.
-			await openItemActionPopup(itemId, itemId, action, null);
+			await openItemActionPopup(
+				button.dataset.itemActionSource,
+				itemId,
+				itemId,
+				action,
+				null,
+			);
 		} finally {
 			button.disabled = false;
 			refreshItemActionControls(itemId);
@@ -966,7 +954,6 @@
 		save(STORAGE.votes, rememberedVotes).catch(console.error);
 	}
 
-	// Replays what the popup told us over a page HN served anonymously.
 	function applyRememberedVotes(voteLinks) {
 		for (const [itemId, record] of Object.entries(rememberedVotes)) {
 			const entry = voteLinks.get(itemId);
@@ -975,7 +962,6 @@
 				continue;
 			}
 
-			// A fetched page cannot contradict this: it never sees any vote at all.
 			entry.state = record.state;
 			entry.unUrl = entry.unUrl || record.unUrl;
 		}
@@ -1089,11 +1075,6 @@
 	}
 
 	// #region hnewhere-test-export
-	// Stories reach the sort in three shapes: Algolia hits from findHN, Firebase
-	// items from loadStories, and normalized discussions from a source adapter.
-	// Reading all three here keeps one ordering rule instead of three that can
-	// disagree -- the normalized names are read first, since they are the shape
-	// everything is heading towards.
 	function discussionRank(story) {
 		return {
 			comments: story.commentCount ?? story.descendants ?? story.num_comments ?? 0,
@@ -1158,6 +1139,8 @@
 		rootKeys: { type: "array" },
 		rootTimes: { type: "array" },
 		wikiPages: { type: "array", optional: true },
+		annotations: { type: "array", optional: true },
+		collective: { type: "boolean", optional: true },
 		statuses: { type: "array", optional: true },
 		creatorId: { type: ["number", "string"], optional: true },
 	};
@@ -1169,6 +1152,7 @@
 		discussionKey: { type: "string" },
 		parentKey: { type: "string", nullable: true },
 		author: { type: "string" },
+		authorName: { type: "string", optional: true },
 		bodyHTML: { type: "string" },
 		score: { type: "number", nullable: true },
 		createdAt: { type: "number" },
@@ -1182,13 +1166,9 @@
 		source: { type: "string" },
 		key: { type: "string" },
 		id: { type: ["number", "string"] },
-		// The page, which is what the title links to. For an Ask HN this is the
-		// discussion, because for an Ask HN those are the same thing.
 		url: { type: "string" },
 		title: { type: "string" },
 		by: { type: "string" },
-		// Nullable for the reason it is in DISCUSSION_SHAPE: a source can have no
-		// number worth reporting, and a displayed 0 would claim it scored nothing.
 		score: { type: "number", nullable: true },
 		time: { type: "number" },
 		descendants: { type: "number" },
@@ -1259,7 +1239,6 @@
 			label: "HN",
 			bodyHTML: story.text || "",
 			rootKeys: (story.kids || []).map((id) => sourceKey("hn", id)),
-			// The item carries kids but not their times. loadThread reads those.
 			rootTimes: [],
 		};
 	}
@@ -1278,8 +1257,6 @@
 			articleURL: hit.url || "",
 			label: "HN",
 			bodyHTML: hit.story_text || "",
-			// Deliberately empty. The roots live on the Firebase item, and loadThread
-			// is where that is fetched -- which is the whole point of the split.
 			rootKeys: [],
 			rootTimes: [],
 		};
@@ -1317,8 +1294,6 @@
 		};
 	}
 
-	// A Lemmy row is spread over three objects: the post carries the link, the
-	// counts carry the numbers, and the creator carries the name.
 	function lemmyStory(view) {
 		const post = view.post || {};
 
@@ -1378,8 +1353,6 @@
 		};
 	}
 
-	// A query that answered with nothing and a query that never answered produce
-	// the same empty result set. Only the first is worth remembering for an hour.
 	function shouldCacheDiscovery(answered) {
 		return answered.some(Boolean);
 	}
@@ -1436,12 +1409,8 @@
 			createdAt: post.created_utc ?? 0,
 			permalink: "https://www.reddit.com" + (post.permalink || ""),
 			articleURL: post.url || "",
-			// The subreddit, not "Reddit". A blended thread shows this beside a
-			// comment, and r/science and r/conspiracy are not interchangeable.
 			label: post.subreddit_name_prefixed || "r/" + (post.subreddit || ""),
 			bodyHTML: unescapeRedditHTML(post.selftext_html),
-			// The listing carries no comments at all -- loadThread fetches the tree,
-			// and every root's time arrives with it.
 			rootKeys: [],
 			rootTimes: [],
 		};
@@ -1476,7 +1445,6 @@
 		return {
 			source: "mastodon",
 			key: normalizeURL(url),
-			// No id of its own: a trending link is a URL and a count, not a post.
 			id: normalizeURL(url),
 			url,
 			title: link?.title || "",
@@ -1518,11 +1486,7 @@
 			discussionKey: discussion?.key,
 			parentKey: null,
 			author: mastodonAuthorFromURL(url),
-			// The status is already HTML, and goes through sanitizeHTML at render
-			// like every other source's body.
 			bodyHTML: status?.content || "",
-			// The index reports no favourites and no boosts, so a number here would
-			// be invented rather than measured.
 			score: null,
 			createdAt: Math.floor(Date.parse(status?.created_at || "") / 1000) || 0,
 			isOP: false,
@@ -1544,16 +1508,15 @@
 			source: "mastodon",
 			key: sourceKey("mastodon", "links:" + url),
 			id: "links:" + url,
-			title: "",
+			title: "Mastodon posts",
 			author: "",
 			score: null,
 			commentCount: statuses.length,
-			// The newest post, because a collective was never submitted and the only
-			// honest timestamp is when it last moved.
 			createdAt: Math.max(...times, 0),
 			permalink: null,
 			articleURL: url,
 			label: "Mastodon",
+			collective: true,
 			bodyHTML: "",
 			rootKeys: statuses.map(
 				(status) => sourceKey("mastodon", status?.url || status?.uri || ""),
@@ -1714,8 +1677,6 @@
 
 		const cites = (html) => {
 			for (const match of String(html || "").matchAll(/href="([^"]*)"/g)) {
-				// The href arrives HTML-escaped inside a JSON string, so a query with
-				// more than one parameter reads as &amp; and parses as a different URL.
 				if (normalizeURL(match[1].replace(/&amp;/g, "&")) === target) {
 					return true;
 				}
@@ -1742,8 +1703,6 @@
 	const WIKIPEDIA_SIGNATURE_TIME = /\d{1,2}:\d{2},\s+\d{1,2}\s+\w+\s+\d{4}\s+\(UTC[^)]*\)\s*$/;
 	const WIKIPEDIA_SIGNATURE_LINK =
 		/^(?:\.\/|https:\/\/en\.wikipedia\.org\/wiki\/)(?:User:|User_talk:|Special:Contributions\/)/;
-	// The punctuation a signature is assembled from -- "(talk | contribs)" and the
-	// dash some editors put in front of their name. Letters and digits are prose.
 	const WIKIPEDIA_SIGNATURE_PUNCTUATION = /[^\s(),|·—–\- ]/;
 
 	function isWikipediaSignaturePart(node) {
@@ -1759,8 +1718,6 @@
 			return WIKIPEDIA_SIGNATURE_LINK.test(node.getAttribute("href") || "");
 		}
 
-		// The wrappers editors decorate a signature with. Only when everything
-		// inside is itself signature, so a <small> holding a real aside stays.
 		if (["SMALL", "SPAN", "B", "I", "SUB", "SUP", "BDI"].includes(node.tagName)) {
 			return [...node.childNodes].every(isWikipediaSignaturePart);
 		}
@@ -1788,8 +1745,6 @@
 
 		const match = last && WIKIPEDIA_SIGNATURE_TIME.exec(last.textContent);
 
-		// No timestamp at the end is no signature, and the comment is returned
-		// exactly as it arrived rather than trimmed on a guess.
 		if (!match) {
 			return String(html || "");
 		}
@@ -1798,7 +1753,6 @@
 
 		let cursor = last.previousSibling;
 
-		// "(talk) 15:29, …" leaves ") " behind once the time is gone.
 		if (!WIKIPEDIA_SIGNATURE_PUNCTUATION.test(last.textContent)) {
 			last.remove();
 		}
@@ -1835,8 +1789,6 @@
 			bodyHTML: wikipediaAbsoluteLinks(wikipediaStripSignature(item?.html)),
 			score: null,
 			createdAt: Math.floor(Date.parse(item?.timestamp || "") / 1000) || 0,
-			// The article's editors are not an OP; a Talk page was not submitted by
-			// anybody, the same reason the Bluesky collective marks none.
 			isOP: false,
 			deleted: false,
 			replyKeys: [],
@@ -1916,7 +1868,7 @@
 			source: "wikipedia",
 			key: sourceKey("wikipedia", "linksearch:" + pageURL),
 			id: "linksearch:" + pageURL,
-			title: "",
+			title: "Wikipedia talk pages",
 			author: "",
 			score: null,
 			commentCount: pages.length,
@@ -1924,11 +1876,189 @@
 			permalink: "https://en.wikipedia.org/wiki/Special:LinkSearch/" + pageURL,
 			articleURL: pageURL,
 			label: "Wikipedia",
+			collective: true,
 			bodyHTML: "",
 			rootKeys,
 			rootTimes,
 			wikiPages,
 		};
+	}
+
+	function hypothesisTime(stamp) {
+		const parsed = Date.parse(stamp || "");
+
+		return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : NaN;
+	}
+
+	function hypothesisAuthor(row) {
+		const account = String(row?.user || "");
+
+		return account.match(/^acct:([^@]+)@/)?.[1] || account;
+	}
+
+	function hypothesisAuthorName(row) {
+		return String(row?.user_info?.display_name || "").trim();
+	}
+
+	function hypothesisSelector(row) {
+		for (const target of row?.target || []) {
+			for (const selector of target?.selector || []) {
+				if (
+					selector?.type === "TextQuoteSelector" &&
+					String(selector.exact || "").trim()
+				) {
+					return {
+						exact: String(selector.exact),
+						prefix: String(selector.prefix || ""),
+						suffix: String(selector.suffix || ""),
+					};
+				}
+			}
+		}
+
+		return null;
+	}
+
+	function hypothesisQuote(row) {
+		return hypothesisSelector(row)?.exact || "";
+	}
+
+	function hypothesisNoteHTML(note) {
+		if (/<[a-z][^>]*>/i.test(note)) {
+			return note;
+		}
+
+		return note
+			.split(/\n{2,}/)
+			.map((part) => part.trim())
+			.filter(Boolean)
+			.map((part) => `<p>${escapeHTML(part).replace(/\n/g, "<br>")}</p>`)
+			.join("");
+	}
+
+	function hypothesisBodyHTML(row) {
+		const selector = hypothesisSelector(row);
+		const context = selector
+			? (selector.prefix
+					? ` data-hnewhere-prefix="${escapeHTML(selector.prefix)}"`
+					: "") +
+				(selector.suffix
+					? ` data-hnewhere-suffix="${escapeHTML(selector.suffix)}"`
+					: "")
+			: "";
+
+		return (
+			(selector
+				? `<blockquote data-hnewhere-exact="1"${context}>${escapeHTML(selector.exact)}</blockquote>`
+				: "") + hypothesisNoteHTML(String(row?.text || "").trim())
+		);
+	}
+
+	function hypothesisKeptRows(rows, target) {
+		return (rows || []).filter(
+			(row) =>
+				row?.id &&
+				row.hidden !== true &&
+				String(row.text || "").trim() &&
+				normalizeURL(row.uri) === target &&
+				Number.isFinite(hypothesisTime(row.created)),
+		);
+	}
+
+	function hypothesisComment(row, discussion, keptIds) {
+		const references = row?.references || [];
+		const parentId = references.length ? references[references.length - 1] : null;
+
+		return {
+			source: "hypothesis",
+			key: sourceKey("hypothesis", row.id),
+			id: row.id,
+			discussionKey: discussion?.key,
+			parentKey:
+				parentId && keptIds.has(parentId)
+					? sourceKey("hypothesis", parentId)
+					: null,
+			author: hypothesisAuthor(row),
+			authorName: hypothesisAuthorName(row),
+			bodyHTML: hypothesisBodyHTML(row),
+			score: null,
+			createdAt: hypothesisTime(row.created),
+			isOP: false,
+			deleted: false,
+			replyKeys: [],
+		};
+	}
+
+	function hypothesisCollective(target, rows, articleURL = target) {
+		const kept = hypothesisKeptRows(rows, target);
+
+		if (!kept.length) {
+			return null;
+		}
+
+		const keptIds = new Set(kept.map((row) => row.id));
+		const rootKeys = [];
+		const rootTimes = [];
+		let newest = 0;
+
+		for (const row of kept) {
+			const references = row.references || [];
+			const parentId = references.length ? references[references.length - 1] : null;
+			const time = hypothesisTime(row.updated) || hypothesisTime(row.created);
+
+			if (!parentId || !keptIds.has(parentId)) {
+				rootKeys.push(sourceKey("hypothesis", row.id));
+				rootTimes.push(hypothesisTime(row.created));
+			}
+
+			if (time > newest) {
+				newest = time;
+			}
+		}
+
+		return {
+			source: "hypothesis",
+			key: sourceKey("hypothesis", "annotations:" + target),
+			id: "annotations:" + target,
+			title: "Hypothes.is annotations",
+			author: "",
+			score: null,
+			commentCount: kept.length,
+			createdAt: newest,
+			permalink:
+				"https://hypothes.is/search?q=" + encodeURIComponent("url:" + target),
+			articleURL,
+			label: "Hypothes.is",
+			collective: true,
+			bodyHTML: "",
+			rootKeys,
+			rootTimes,
+			annotations: kept,
+		};
+	}
+
+	function hypothesisThreadIndex(rows, discussion) {
+		const keptIds = new Set((rows || []).map((row) => row.id));
+		const byKey = new Map();
+		const rootKeys = [];
+
+		for (const row of rows || []) {
+			const comment = hypothesisComment(row, discussion, keptIds);
+
+			byKey.set(comment.key, comment);
+		}
+
+		for (const comment of byKey.values()) {
+			const parent = comment.parentKey ? byKey.get(comment.parentKey) : null;
+
+			if (parent) {
+				parent.replyKeys.push(comment.key);
+			} else {
+				rootKeys.push(comment.key);
+			}
+		}
+
+		return { byKey, rootKeys };
 	}
 
 	function lemmyHost(actorId) {
@@ -1939,13 +2069,17 @@
 		}
 	}
 
-	// name for a local user, name@instance for a federated one -- the way Lemmy
-	// prints a handle, and what a profile link needs to resolve.
 	function lemmyHandle(creator) {
 		const name = creator?.name || "";
 		const host = lemmyHost(creator?.actor_id);
 
 		return host && host !== "lemmy.world" ? name + "@" + host : name;
+	}
+
+	function lemmyDisplayName(creator) {
+		const display = String(creator?.display_name || "").trim();
+
+		return display && display !== creator?.name ? display : "";
 	}
 
 	function lemmyDiscussion(postView) {
@@ -1962,12 +2096,8 @@
 			score: postView.counts?.score ?? null,
 			commentCount: postView.counts?.comments ?? 0,
 			createdAt: Math.floor(Date.parse(post.published) / 1000) || 0,
-			// The instance's own view resolves even when the post originated on a
-			// smaller server the reader has never heard of.
 			permalink: "https://lemmy.world/post/" + post.id,
 			articleURL: post.url || "",
-			// !community@instance -- how Lemmy names one, and what tells apart the
-			// several communities a link gets cross-posted to.
 			label: "!" + (community.name || "") + (host ? "@" + host : ""),
 			bodyHTML: escapeHTML(post.body || ""),
 			rootKeys: [],
@@ -1976,8 +2106,6 @@
 		};
 	}
 
-	// Lemmy threads via a materialized path: "0.<id>" is a root, "0.<parent>.<id>"
-	// a reply. The immediate parent is the id before this one in the path.
 	function lemmyComment(commentView, discussion) {
 		const comment = commentView.comment || {};
 		const parts = String(comment.path || "0").split(".");
@@ -1991,6 +2119,7 @@
 			discussionKey: discussion.key,
 			parentKey: parentId ? sourceKey("lemmy", parentId) : null,
 			author: lemmyHandle(commentView.creator),
+			authorName: lemmyDisplayName(commentView.creator),
 			bodyHTML: removed ? "" : escapeHTML(comment.content || ""),
 			score: commentView.counts?.score ?? null,
 			createdAt: Math.floor(Date.parse(comment.published) / 1000) || 0,
@@ -2040,8 +2169,6 @@
 
 	const STANDING_GRAVITY = 1;
 	const STANDING_ARRIVAL_BOOST = 1.5;
-	// A day. Long enough that a thread posted last night is still live when the
-	// reader wakes up, short enough that "live" means what it says.
 	const STANDING_LIVE_WINDOW = 86400;
 	const SECONDS_PER_YEAR = 31557600;
 
@@ -2188,8 +2315,6 @@
 		try {
 			parsed = new URL(url);
 		} catch {
-			// Includes the empty string, which is how Lobsters and Lemmy both write
-			// "this submission is its own text". Nothing to open, so not a row.
 			return false;
 		}
 
@@ -2240,8 +2365,6 @@
 		return sourceKey("bsky", `${record?.did || ""}/${record?.rkey || ""}`);
 	}
 
-	// at://did/app.bsky.feed.post/rkey -> the key form. The inverse of
-	// bskyURIFromKey, for the path where a post arrives already hydrated.
 	function bskyKeyFromURI(uri) {
 		const match = /^at:\/\/([^/]+)\/[^/]+\/(.+)$/.exec(String(uri || ""));
 
@@ -2288,17 +2411,14 @@
 			key: sourceKey("bsky", normalizeURL(url)),
 			id: normalizeURL(url),
 			title: "Bluesky comments",
-			// Nobody authored a collective. NON_AUTHORS already contains "", so
-			// nothing tries to link it to a profile.
 			author: "",
 			score: null,
 			commentCount: admitted.length + replies,
 			createdAt: Math.max(...admitted.map((post) => bskyTime(post))),
-			// Bluesky has no page showing everything that linked a URL. Rather than
-			// invent one, this says so and renderStory prints an unlinked title.
 			permalink: null,
 			articleURL: url,
 			label: "Bluesky",
+			collective: true,
 			bodyHTML: "",
 			rootKeys: admitted.map((post) => bskyKeyFromURI(post.uri)),
 			rootTimes: admitted.map((post) => bskyTime(post)),
@@ -2336,8 +2456,6 @@
 			.map((facet) => ({
 				start: facet?.index?.byteStart,
 				end: facet?.index?.byteEnd,
-				// First recognised feature wins. A facet may carry several, and the
-				// range is one stretch of text that can only be one link.
 				uri: (facet?.features || []).map(bskyFacetHref).find(Boolean) || null,
 			}))
 			.filter(
@@ -2382,12 +2500,11 @@
 		return {
 			source: "bsky",
 			key,
-			// Through parseSourceKey rather than slicing a literal prefix off: the
-			// separator is declared in one place and this is what reads it back.
 			id: parseSourceKey(key)?.id ?? "",
 			discussionKey: discussion?.key,
 			parentKey: parentKey || null,
 			author: post?.author?.handle || "",
+			authorName: post?.author?.displayName || "",
 			bodyHTML: bskyRichText(post?.record?.text, post?.record?.facets),
 			score: post?.likeCount ?? 0,
 			createdAt: bskyTime(post),
@@ -2509,12 +2626,24 @@
 		return getSource(sourceId)?.profileURL?.(author) || null;
 	}
 
-	function authorLinkHTML(sourceId, author) {
+	// #region hnewhere-test-export
+	function authorDisplay(author, authorName = "") {
+		const shown = authorName || author || "";
+
+		return {
+			shown,
+			title: shown && author && shown !== author ? author : "",
+		};
+	}
+	// #endregion hnewhere-test-export
+
+	function authorLinkHTML(sourceId, author, authorName = "") {
 		const href = authorProfileURL(sourceId, author);
+		const { shown, title } = authorDisplay(author, authorName);
 
 		return href
-			? `<a target="_blank" rel="noopener noreferrer" href="${escapeHTML(href)}">${escapeHTML(author)}</a>`
-			: escapeHTML(author);
+			? `<a target="_blank" rel="noopener noreferrer"${title ? ` title="${escapeHTML(title)}"` : ""} href="${escapeHTML(href)}">${escapeHTML(shown)}</a>`
+			: escapeHTML(shown);
 	}
 
 	function registeredSourceIds() {
@@ -2565,8 +2694,6 @@ ${
 
 	registerSource({
 		id: "hn",
-		// What a referrer has to match for arrivalSource to call this the source
-		// the reader came from. Bare hostnames, compared for equality.
 		origins: ["news.ycombinator.com"],
 		label: "Hacker News",
 		shortLabel: "HN",
@@ -2632,8 +2759,6 @@ ${
 
 	const REDDIT_TIER_KEY = "HNewhere:reddit_tier";
 	const REDDIT_TIER_TTL = 10 * 60 * 1000;
-	// Below this the budget is left alone. Most pages have no Reddit thread, and
-	// spending the last of it on them would leave none for the one that does.
 	const REDDIT_RATE_FLOOR = 10;
 
 	let redditRateRemaining = Infinity;
@@ -2648,8 +2773,6 @@ ${
 		return "loid";
 	}
 
-	// One request, through whichever tier is current, falling to the next on the
-	// one status that means "your cookie is not good here".
 	async function redditFetch(path, archivePath) {
 		let tier = await redditTier();
 
@@ -2705,17 +2828,34 @@ ${
 
 	const REDDIT_SELF_HOSTS = ["reddit.com", "redd.it"];
 
+	// #region hnewhere-test-export
+	function redditDiscoveryPaths(bare) {
+		const exact = (query) => [
+			"/api/info.json?url=" + encodeURIComponent(query),
+			"/api/posts/search?limit=25&url=" + encodeURIComponent(query),
+		];
+
+		return [
+			exact(bare),
+			exact(bare + "/"),
+			[
+				"/search.json?type=link&limit=25&q=" +
+					encodeURIComponent("url:" + bare),
+				null,
+			],
+		];
+	}
+	// #endregion hnewhere-test-export
+
 	registerSource({
 		id: "reddit",
-		// All four are real places a reader clicks a link from, and Reddit does not
-		// redirect between them before the referrer is written.
 		origins: ["reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com"],
 		label: "Reddit",
 		shortLabel: "Reddit",
 		beta: true,
 		caveat:
-			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds.",
-		capabilities: { vote: false, reply: false, submit: false },
+			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds. Vote and reply through your existing Reddit session.",
+		capabilities: { vote: true, reply: true, submit: false },
 
 		profileURL: (author) =>
 			"https://www.reddit.com/user/" + encodeURIComponent(author) + "/",
@@ -2729,16 +2869,10 @@ ${
 
 			const scheme = url.startsWith("http://") ? "http://" : "https://";
 			const bare = scheme + target;
-			const queries = [bare, bare + "/"];
-
 			const matches = new Map();
 
-			for (const query of queries) {
-				const encoded = encodeURIComponent(query);
-				const result = await redditFetch(
-					"/api/info.json?url=" + encoded,
-					"/api/posts/search?limit=25&url=" + encoded,
-				);
+			for (const [path, archivePath] of redditDiscoveryPaths(bare)) {
+				const result = await redditFetch(path, archivePath);
 
 				if (!result) {
 					continue;
@@ -2758,8 +2892,6 @@ ${
 
 			return [...matches.values()]
 				.filter(redditHitPasses)
-				// The same correctness check findHN applies to Algolia: the query is a
-				// hint, and this comparison is the answer.
 				.filter((post) => normalizeURL(post.url) === target)
 				.map(redditDiscussion);
 		},
@@ -2794,8 +2926,6 @@ ${
 
 			return {
 				rootKeys: index.rootKeys,
-				// Free here: the whole tree arrived in one response, so every root's
-				// time is already in the map getComment reads.
 				rootTimes: new Map(
 					index.rootKeys.map((key) => [key, index.byKey.get(key)?.createdAt || 0]),
 				),
@@ -2837,8 +2967,6 @@ ${
 						added.push(comment);
 					}
 
-					// Linked into the tree first, so a reply whose parent came down in
-					// this same batch is reachable from it.
 					for (const comment of added) {
 						const parent =
 							comment.parentKey && index.byKey.get(comment.parentKey);
@@ -2903,8 +3031,6 @@ ${
 
 	registerSource({
 		id: "bsky",
-		// The app, not the PDS or the AppView. A reader clicks a link from
-		// bsky.app; nothing navigates out of public.api.bsky.app.
 		origins: ["bsky.app"],
 		label: "Bluesky",
 		shortLabel: "Bluesky",
@@ -2979,8 +3105,6 @@ ${
 
 			return {
 				rootKeys: discussion.rootKeys,
-				// Carried from discovery rather than fetched. The subtrees stay lazy,
-				// which is the whole point of this adapter's shape.
 				rootTimes: new Map(
 					(discussion.rootKeys || []).map((key, index) => [
 						key,
@@ -3003,8 +3127,6 @@ ${
 					);
 
 					if (!thread?.thread) {
-						// Remembered as absent, so a failed root is not refetched for
-						// every reply the renderer then asks about.
 						byKey.set(key, null);
 
 						return null;
@@ -3056,8 +3178,6 @@ ${
 						}
 					}
 
-					// This gap is closed whatever came back. Anything deeper is a new
-					// gap, carried by whichever node now sits at the bottom.
 					if (parent) {
 						parent.more = null;
 					}
@@ -3127,7 +3247,6 @@ ${
 
 			return {
 				rootKeys: index.rootKeys,
-				// The whole tree arrived, so every root's time is already known.
 				rootTimes: new Map(
 					index.rootKeys.map((key) => [key, index.byKey.get(key)?.createdAt || 0]),
 				),
@@ -3174,11 +3293,7 @@ ${
 		shortLabel: "Wikipedia",
 		slow: true,
 		beta: true,
-		// A collective was never posted; its byline is the last edit among the pages
-		// that cite the URL. Named so the panel does not read "Last comment".
 		ageLabel: "Last active on Wikipedia",
-		// The roots are known at discovery and carried on the discussion, so the
-		// whole thing is on screen as soon as it renders.
 		threadArrivesWhole: true,
 		caveat:
 			"Will send each page you visit to Wikipedia's API to find pages that link it. No account, signed in or out.",
@@ -3200,8 +3315,6 @@ ${
 				`${api}?action=query&list=exturlusage&eunamespace=${encodeURIComponent("1|3|4|5")}&euquery=${encodeURIComponent(query)}&eulimit=100&format=json&formatversion=2`,
 			);
 
-			// The euquery is a hint; this comparison is the answer, the same check the
-			// other sources apply to their own search results.
 			const rows = (ext?.query?.exturlusage || []).filter(
 				(row) => normalizeURL(row.url) === target,
 			);
@@ -3211,8 +3324,6 @@ ${
 				return [];
 			}
 
-			// Dates every page in batches of 50. The last edit is an approximate
-			// "last active", which is all the blend needs to place the roots.
 			const times = new Map();
 
 			for (let i = 0; i < pages.length; i += 50) {
@@ -3257,8 +3368,6 @@ ${
 				),
 			);
 
-			// One set for the whole discussion, so the pages are deduplicated against
-			// each other in the order they are walked -- newest edit first.
 			const seen = new Set();
 
 			pages.forEach((page, index) => {
@@ -3300,6 +3409,66 @@ ${
 		},
 	});
 
+	const HYPOTHESIS_API = "https://api.hypothes.is/api/search";
+	const HYPOTHESIS_LIMIT = 200;
+
+	async function hypothesisJSON(url) {
+		const result = await requestWithMeta(url);
+
+		return result.ok ? result.json : null;
+	}
+
+	registerSource({
+		id: "hypothesis",
+		origins: ["hypothes.is", "web.hypothes.is"],
+		label: "Hypothes.is",
+		shortLabel: "Hypothes.is",
+		beta: true,
+		ageLabel: "Last annotation",
+		threadArrivesWhole: true,
+		caveat:
+			"Will send each page you visit to the Hypothes.is API to find public annotations on it. No account, signed in or out.",
+		capabilities: { vote: false, reply: false, submit: false },
+
+		profileURL: (author) =>
+			"https://hypothes.is/users/" + encodeURIComponent(author),
+
+		async discover(url) {
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return [];
+			}
+
+			const found = await hypothesisJSON(
+				`${HYPOTHESIS_API}?url=${encodeURIComponent(target)}&limit=${HYPOTHESIS_LIMIT}`,
+			);
+			const collective = hypothesisCollective(target, found?.rows || [], url);
+
+			return collective ? [collective] : [];
+		},
+
+		async loadThread(discussion) {
+			const index = hypothesisThreadIndex(
+				discussion.annotations || [],
+				discussion,
+			);
+			const rootTimes = new Map();
+
+			for (const key of index.rootKeys) {
+				rootTimes.set(key, index.byKey.get(key)?.createdAt || 0);
+			}
+
+			return {
+				rootKeys: index.rootKeys,
+				rootTimes,
+				async getComment(key) {
+					return index.byKey.get(key) || null;
+				},
+			};
+		},
+	});
+
 	const MASTODON_INSTANCE = "https://mastodon.social";
 	const TOOTFINDER = "https://www.tootfinder.ch";
 
@@ -3311,18 +3480,12 @@ ${
 
 	registerSource({
 		id: "mastodon",
-		// Where a reader arrives from. Not exhaustive -- there are thousands of
-		// instances -- and arrival is only a blend hint, so a miss costs nothing.
 		origins: ["mastodon.social", "hachyderm.io", "fosstodon.org", "mstdn.social"],
 		label: "Mastodon",
 		shortLabel: "Mastodon",
 		slow: true,
 		beta: true,
-		// A collective was never posted, so a bare age would read as "posted then".
-		// The only honest timestamp is when it last moved.
 		ageLabel: "Last Mastodon post",
-		// The index answers with whole statuses, so loadThread fetches nothing and
-		// what is on screen is the discussion.
 		threadArrivesWhole: true,
 		caveat:
 			"Will send the domain of each page you visit to Tootfinder, an opt-in index of Mastodon posts. It indexes only people who chose to be searchable. Signed in or out, these requests carry no account.",
@@ -3367,7 +3530,6 @@ ${
 			return collective ? [collective] : [];
 		},
 
-		// Nothing to fetch: discovery already holds every status this will show.
 		async loadThread(discussion) {
 			const byKey = new Map();
 
@@ -3464,7 +3626,6 @@ ${
 
 			return {
 				rootKeys: index.rootKeys,
-				// The tree arrived in one call, so every root's time is known.
 				rootTimes: new Map(
 					index.rootKeys.map((key) => [key, index.byKey.get(key)?.createdAt || 0]),
 				),
@@ -3497,21 +3658,26 @@ ${
 		});
 	}
 
-	async function discoverAll(url, settings) {
+	async function discoverAll(urls, settings) {
+		const targets = [...new Set([].concat(urls).filter(Boolean))];
 		const results = await Promise.all(
-			enabledSources(settings).map((source) =>
-				discoverWithCeiling(
-					source.discover(url).catch((e) => {
-						console.error("Backchannel " + source.id + " discovery failed:", e);
-						return [];
-					}),
-					source.id,
+			enabledSources(settings).flatMap((source) =>
+				targets.map((target) =>
+					discoverWithCeiling(
+						source.discover(target).catch((e) => {
+							console.error("Backchannel " + source.id + " discovery failed:", e);
+							return [];
+						}),
+						source.id,
+					),
 				),
 			),
 		);
 
 		return disambiguateLabels(
-			results.flat().filter(Boolean).sort(compareStoriesByDiscussion),
+			dedupeDiscussions(results.flat().filter(Boolean)).sort(
+				compareStoriesByDiscussion,
+			),
 		);
 	}
 
@@ -3560,8 +3726,6 @@ ${
 		const cached = await load(cacheKey, null);
 
 		if (cached && Date.now() - cached.timestamp < 3600000) {
-			// Re-sorted on read rather than trusted as stored, so an ordering change
-			// applies immediately instead of waiting out an hour of cached results.
 			return [...cached.results].sort(compareStoriesByDiscussion);
 		}
 
@@ -3606,8 +3770,6 @@ ${
 
 	const FRONT_PAGE_TTL = 5 * 60 * 1000;
 
-	// Which enabled sources have a front page to contribute. See hasFrontPage for
-	// why that is a method on the source rather than a list kept here.
 	function frontPageSourceIds(settings) {
 		return enabledSourceIds(settings, registeredSourceIds()).filter((id) =>
 			hasFrontPage(getSource(id)),
@@ -3662,18 +3824,7 @@ ${
 	// Helpers
 	// -------------------------
 
-	// Hosts that renamed under Hacker News' feet. HN holds years of submissions
-	// under the old name while the site now serves the new one, so a reader on
-	// x.com looking at something submitted as twitter.com finds nothing at all --
-	// 179 comments, and a grey button.
-	//
-	// Folded onto one name rather than searched for twice, and because normalizeURL
-	// is applied to both sides -- the address in hand and every hit it is measured
-	// against -- it does not matter which way round the two arrive.
 	// #region hnewhere-test-export
-	// Wrapped with normalizeURL below rather than separately: normalizeURL reads
-	// this map, so exporting the function without it is a ReferenceError the
-	// moment a test calls it.
 	const HOST_ALIASES = new Map([
 		["x.com", "twitter.com"],
 		["www.x.com", "twitter.com"],
@@ -3739,8 +3890,6 @@ ${
 			}
 		}
 
-		// The reader's address minus what the hint dropped, not the hint itself:
-		// rebuilding would adopt its scheme and trailing slash too.
 		const out = new URL(href);
 
 		for (const key of [...out.searchParams.keys()]) {
@@ -3751,17 +3900,112 @@ ${
 
 		return out.href;
 	}
-	// #endregion hnewhere-test-export
 
-	function pageAddress() {
-		const link = document.querySelector('link[rel~="canonical" i]')?.href;
-		const og = document.querySelector('meta[property="og:url" i]')?.content;
+	const ARCHIVE_HOSTS = new Set([
+		"archive.is",
+		"archive.today",
+		"archive.ph",
+		"archive.li",
+		"archive.vn",
+		"archive.md",
+		"archive.fo",
+		"web.archive.org",
+	]);
 
-		return canonicalPageURL(location.href, link || og || "");
+	function isArchiveHost(hostname) {
+		return ARCHIVE_HOSTS.has(
+			String(hostname || "").toLowerCase().replace(/^www\./, ""),
+		);
 	}
 
-	// pageAddress reads the head, so it needs one. @run-at document-end is not
-	// honoured by every manager.
+	function safeDecode(value) {
+		try {
+			return decodeURIComponent(value);
+		} catch {
+			return null;
+		}
+	}
+
+	function archivedOriginalURL(href, hint) {
+		let here;
+
+		try {
+			here = new URL(href);
+		} catch {
+			return null;
+		}
+
+		if (!isArchiveHost(here.hostname)) {
+			return null;
+		}
+
+		const usable = (candidate) => {
+			let parsed;
+
+			try {
+				parsed = new URL(candidate);
+			} catch {
+				return null;
+			}
+
+			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+				return null;
+			}
+
+			if (isArchiveHost(parsed.hostname)) {
+				return null;
+			}
+
+			return isHiddenSite(parsed.href) ? null : parsed.href;
+		};
+
+		for (const path of [here.pathname, safeDecode(here.pathname)]) {
+			const found = path?.match(/\/(https?:\/{1,2}.+)$/i);
+
+			if (found) {
+				const repaired = found[1].replace(/^(https?:)\/(?!\/)/i, "$1//");
+
+				return usable(repaired + here.search + here.hash);
+			}
+		}
+
+		return hint ? usable(hint) : null;
+	}
+
+	function dedupeDiscussions(discussions) {
+		const seen = new Set();
+
+		return (discussions || []).filter((discussion) => {
+			if (!discussion || seen.has(discussion.key)) {
+				return false;
+			}
+
+			seen.add(discussion.key);
+
+			return true;
+		});
+	}
+	// #endregion hnewhere-test-export
+
+	function canonicalHint() {
+		return (
+			document.querySelector('link[rel~="canonical" i]')?.href ||
+			document.querySelector('meta[property="og:url" i]')?.content ||
+			""
+		);
+	}
+
+	function pageAddress() {
+		return canonicalPageURL(location.href, canonicalHint());
+	}
+
+	function pageAddresses() {
+		const here = pageAddress();
+		const original = archivedOriginalURL(location.href, canonicalHint());
+
+		return original && !sameURL(original, here) ? [here, original] : [here];
+	}
+
 	function documentReady() {
 		if (document.readyState !== "loading") {
 			return Promise.resolve();
@@ -3778,28 +4022,16 @@ ${
 	// Site suppression
 	// -------------------------
 
-	// Pages that could never be a Hacker News submission: someone's mail, their
-	// money, an auth flow, a document they are editing, or something only reachable
-	// from inside a network. The @exclude header catches the worst of these before
-	// the script loads at all, but a header pattern cannot look at a URL path, so
-	// anything path-shaped has to be caught here.
-	//
-	// Deliberately conservative. A missed site shows a button that does nothing
-	// useful, which is a far cheaper mistake than suppressing a site people
-	// genuinely read articles on, and adding an entry is a one-line change.
 	// #region hnewhere-test-export
 	const HIDDEN_HOST_PATTERNS = [
-		// Mail
 		/^(mail|inbox|webmail|email)\./,
 		/(^|\.)(gmail|outlook|hotmail|fastmail|zoho|superhuman|hey)\.com$/,
 		/(^|\.)proton\.(me|mail)$/,
 		/(^|\.)mail\.(ru|yahoo)\.com$/,
 
-		// Auth and identity
 		/^(accounts?|login|signin|auth|sso|idp|id|oauth)\./,
 		/(^|\.)(okta|onelogin|duosecurity|auth0|clerk|workos)\.com$/,
 
-		// Money
 		/(^|\.)bank(ing)?\./,
 		/(^|\.)(chase|bankofamerica|wellsfargo|citibank|capitalone|usbank)\.com$/,
 		/(^|\.)(hsbc|barclays|lloydsbank|natwest|santander|monzo|revolut)\.(com|co\.uk)$/,
@@ -3807,37 +4039,29 @@ ${
 		/(^|\.)(schwab|fidelity|vanguard|etrade|robinhood|coinbase)\.com$/,
 		/(^|\.)(paypal|venmo|wise|stripe|squareup|plaid)\.com$/,
 
-		// Consoles and dashboards. "portal." is deliberately not in the generic list:
-		// portal.acm.org and friends host papers that get submitted all the time.
 		/^(console|dashboard|admin|manage)\./,
 		/(^|\.)console\.(aws\.amazon|cloud\.google)\.com$/,
 		/(^|\.)portal\.azure\.com$/,
 
-		// Documents being edited, not read
 		/(^|\.)(docs|drive|sheets|slides|calendar|keep)\.google\.com$/,
 		/(^|\.)(notion|coda|airtable|figma|miro|canva)\.(so|io|com)$/,
 		/(^|\.)(linear|asana|monday|clickup|trello|basecamp)\.(app|com)$/,
 		/(^|\.)atlassian\.net$/,
 
-		// Chat and meetings
 		/(^|\.)(slack|discord|zoom)\.(com|us)$/,
 		/(^|\.)(teams|outlook)\.(microsoft|office|live)\.com$/,
 		/(^|\.)meet\.google\.com$/,
 		/(^|\.)web\.(whatsapp|telegram)\.(com|org)$/,
 		/(^|\.)messenger\.com$/,
 
-		// Feeds with nothing stable to link to
 		/(^|\.)(instagram|tiktok|snapchat|threads)\.(com|net)$/,
 
-		// Streaming
 		/(^|\.)(netflix|hulu|disneyplus|max|primevideo|spotify|tidal)\.com$/,
 		/(^|\.)music\.(apple|youtube)\.com$/,
 
-		// Search result pages
 		/(^|\.)(duckduckgo|bing|baidu|yandex|ecosia|startpage|qwant)\.com$/,
 		/^search\./,
 	];
-	// #endregion hnewhere-test-export
 
 	const HIDDEN_PATH_PATTERNS = [
 		/^\/(login|log-in|signin|sign-in|signup|sign-up|register|logout|log-out|sign-out)(\/|$)/,
@@ -3848,16 +4072,11 @@ ${
 		/^\/(compose|inbox|messages|dm|chat)(\/|$)/,
 	];
 
-	// Whole classes of host for one rule each: anything not reachable from the
-	// public internet cannot be submitted, whatever it is serving.
 	function isPrivateHostname(hostname) {
 		return (
 			hostname === "localhost" ||
-			// IPv4 literal, or an IPv6 literal (which arrives bracketed, so testing for
-			// a colon is enough to tell it from a name).
 			/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) ||
 			hostname.includes(":") ||
-			// No dot at all means a single-label intranet name.
 			!hostname.includes(".") ||
 			/\.(local|internal|test|localhost|lan|invalid|example)$/.test(hostname) ||
 			hostname.endsWith(".home.arpa")
@@ -3870,7 +4089,6 @@ ${
 		try {
 			parsed = new URL(url);
 		} catch {
-			// Unparseable means there is nothing to submit either.
 			return true;
 		}
 
@@ -3972,7 +4190,6 @@ ${
 		return template.innerHTML;
 	}
 
-	// #region hnewhere-test-export
 	function escapeHTML(value) {
 		return String(value || "")
 			.replace(/&/g, "&amp;")
@@ -3996,8 +4213,6 @@ ${
 	}
 
 	// #region hnewhere-test-export
-	// What the sidebar is waiting on, named rather than measured. Lowercase to sit
-	// under the header title the way the rest of the secondary text does.
 	const SIDEBAR_STAGES = {
 		discussion: "loading discussion…",
 		comments: "loading comments…",
@@ -4005,8 +4220,6 @@ ${
 		annotations: "loading annotations…",
 	};
 
-	// Returns "" for no stage and for an unrecognised one, so the caller can clear
-	// the subtitle by passing null and never has to strip a placeholder.
 	function sidebarStageLabel(stage) {
 		return SIDEBAR_STAGES[stage] || "";
 	}
@@ -4051,8 +4264,6 @@ ${
 		return comment.createdAt && comment.createdAt > seenTimestamp;
 	}
 
-	// Sliver of the page left showing down the left edge on a portrait phone, so it
-	// still reads as a panel over the article rather than a new page.
 	const PORTRAIT_SIDEBAR_GUTTER = 28;
 
 	function isPortraitPhone() {
@@ -4071,14 +4282,7 @@ ${
 	// -------------------------
 	// Theme detection
 	// -------------------------
-	//
-	// Matching the page rather than the OS is deliberate: a reader running Dark
-	// Reader or a site's own dark theme has a dark page under a light OS, and a
-	// sidebar that follows the OS would be the one bright rectangle on screen.
-	// Originally contributed by @bennetthanke in #21.
 
-	// Returns null when the colour says nothing about the page -- fully transparent,
-	// or a format this cannot read -- so the caller can look somewhere else.
 	// #region hnewhere-test-export
 	function isDarkColor(color) {
 		const match = /rgba?\(([^)]+)\)/.exec(color || "");
@@ -4093,14 +4297,10 @@ ${
 			return null;
 		}
 
-		// Mostly transparent is treated the same as transparent: what shows through is
-		// whatever is behind, so this element is not the one to judge by.
 		if (!Number.isFinite(a) || a < 0.5) {
 			return null;
 		}
 
-		// Rec. 709 coefficients over gamma-encoded sRGB. Not true relative luminance,
-		// but the error is far smaller than the light/dark margin being tested.
 		return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
 	}
 
@@ -4145,7 +4345,6 @@ ${
 		);
 	}
 
-	// getComputedStyle needs an element, and a range routinely lands on a text node.
 	function nearestElement(node) {
 		if (!node) {
 			return null;
@@ -4158,10 +4357,6 @@ ${
 
 	const DARK_CLASS = "hnewhere-dark";
 
-	// The reader's accent split into its light and dark halves, or null while they
-	// are on the built-in one. Memoised on the stored string: activeAccent is asked
-	// once per highlight rect, and a page with a busy article asks hundreds of
-	// times for an answer that only changes when the setting does.
 	// #region hnewhere-test-export
 	let accentMemoKey = false;
 	let accentMemo = null;
@@ -4198,8 +4393,6 @@ ${
 	}
 	// #endregion hnewhere-test-export
 
-	// loadSettings and saveSettings have already refreshed the cache the palette
-	// memoises off, so this only has to push the new colour out to what is mounted.
 	async function refreshAccentOverride() {
 		for (const apply of themeAppliers) {
 			apply();
@@ -4231,8 +4424,6 @@ ${
 			properties["--accent-rgb"] = half.accentRgb;
 			properties["--accent-ink"] = half.ink;
 			properties["--subtitle-stage"] = half.subtitleStage;
-			// Light follows the accent through var(--header-bg:var(--accent)); dark
-			// is a literal in the stylesheet and has to be replaced outright.
 			properties["--header-bg"] = dark ? half.headerBg : null;
 		}
 
@@ -4245,12 +4436,8 @@ ${
 		}
 	}
 
-	// Every mounted surface registers its applier here so a settings change can be
-	// pushed to all of them; matchMedia only covers the OS-level trigger.
 	const themeAppliers = new Set();
 
-	// Returns a cleanup function. The OS setting can change while a surface is open,
-	// and it is the fallback whenever the page background is transparent.
 	function watchTheme(host) {
 		const apply = () => applyThemeToHost(host);
 		const query = window.matchMedia("(prefers-color-scheme: dark)");
@@ -4283,8 +4470,6 @@ ${
 		}
 	}
 
-	// The floating buttons sit in the page rather than a shadow root, so they
-	// resolve their own colour and have to be repainted by hand.
 	function refreshThemeSurfaces() {
 		for (const apply of themeAppliers) {
 			apply();
@@ -4315,20 +4500,11 @@ ${
 		);
 	}
 
-	// The floating button lives in the page rather than a shadow root, so it cannot
-	// read the panel's CSS variables and needs the accent as a value. Same colour,
-	// stated twice -- which is why both live here rather than in the rules that use
-	// them.
 	// #region hnewhere-test-export
-	// In a region because the heat palette is built from ACCENT_RGB and is itself
-	// tested: the harness evaluates the regions alone, so an identifier one region
-	// borrows from another has to be inside one too.
 	const ACCENT = "#237140";
 	const ACCENT_DARK = "#3fa96a";
 
 	const ACCENT_RGB = "35,113,64";
-	// The dark half's channels, beside the hex they belong to rather than written
-	// out again wherever they are needed.
 	const ACCENT_DARK_RGB = "63,169,106";
 
 	const PANEL_BG_LIGHT = { r: 246, g: 246, b: 239 };
@@ -4338,8 +4514,6 @@ ${
 	function parseHexColor(value) {
 		const text = String(value ?? "").trim().replace(/^#/, "");
 
-		// Three digits is the shorthand every colour picker accepts, so a reader
-		// typing #0a0 means the same thing here as everywhere else.
 		const full =
 			text.length === 3
 				? text.replace(/./g, (character) => character + character)
@@ -4512,8 +4686,6 @@ ${
 	const BUTTON_VARIANTS = {
 		active: {
 			background: ACCENT,
-			// The accent is tuned for a light page; on a dark one the same value reads
-			// muddy, so it lifts -- unlike the old orange, which carried itself on both.
 			darkBackground: ACCENT_DARK,
 			boxShadow: "0 1px 4px rgba(0,0,0,.25)",
 			title: "Discussion found",
@@ -4575,7 +4747,6 @@ ${
 		ring.appendChild(sweep);
 		button.appendChild(ring);
 
-		// Next frame, so the transition has a 0 to animate away from.
 		requestAnimationFrame(() => {
 			ring.style.opacity = "1";
 		});
@@ -4709,8 +4880,6 @@ ${
 
 		applyButtonAppearance(button);
 
-		// Re-asserted because this runs on every resize and would otherwise reset a
-		// button that is deliberately showing the inactive colour.
 		setFloatingButtonVariant(
 			button,
 			button.dataset.hnewhereVariant || "active",
@@ -4755,7 +4924,6 @@ ${
 			alignItems: "center",
 			justifyContent: "center",
 			transition: "background .2s ease, box-shadow .2s ease",
-			// So the fill overlay can be clipped to the circle.
 			overflow: "hidden",
 			isolation: "isolate",
 		});
@@ -4788,16 +4956,6 @@ ${
 	// -------------------------
 
 	// #region hnewhere-test-export
-	// The content's own name, which is what the panel shows once it reads more
-	// than one source. og:title first because it is what the author wrote for
-	// sharing, whereas document.title routinely carries a " | Site Name" tail.
-	//
-	// The hostname floor is load-bearing: it makes an empty header unreachable
-	// rather than merely unlikely, and unlikely is not enough when a Bluesky
-	// collective is honestly titled "" because nobody titled it.
-	//
-	// `doc` is a parameter for the same reason parseFrontPage takes one: it makes
-	// the precedence testable without a live page.
 	function pageTitle(doc = document) {
 		const candidates = [
 			doc.querySelector('meta[property="og:title"]')?.content,
@@ -4904,6 +5062,7 @@ ${
 
 			if (Number.isFinite(entry.ts) && now - entry.ts > BRIDGE_PAYLOAD_TTL) {
 				await save(BRIDGE_PAYLOAD_PREFIX + entry.nonce, null);
+				await save(BRIDGE_RESULT_PREFIX + entry.nonce, null);
 				continue;
 			}
 
@@ -4923,16 +5082,16 @@ ${
 		await save(BRIDGE_PAYLOAD_PREFIX + "index", next);
 	}
 
-	// Parses the fragment the sidebar attaches when it opens a bridge popup. Shared
-	// by the submit and comment bridges, which differ only in their marker key.
-	function parseBridgeHash(marker) {
-		const hash = location.hash.replace(/^#/, "");
+	// #region hnewhere-test-export
 
-		if (!hash) {
+	function parseBridgeHash(marker, fields = [], hash = location.hash) {
+		const raw = hash.replace(/^#/, "");
+
+		if (!raw) {
 			return null;
 		}
 
-		const params = new URLSearchParams(hash);
+		const params = new URLSearchParams(raw);
 
 		if (params.get(marker) !== "1") {
 			return null;
@@ -4944,37 +5103,129 @@ ${
 			return null;
 		}
 
-		return {
+		const payload = {
 			nonce,
 			origin: params.get("origin"),
 			storyID: params.get("story"),
 		};
-	}
 
-	function postBridgeResult(source, payload, result) {
-		if (!window.opener) {
-			return;
+		for (const field of fields) {
+			payload[field] = params.get(field);
 		}
 
+		return payload;
+	}
+
+	function bridgeHash(action, nonce, values = {}, origin = location.origin) {
+		const hash = new URLSearchParams();
+
+		hash.set(action.marker, "1");
+		hash.set("nonce", nonce);
+		hash.set("origin", origin);
+
+		for (const [key, value] of Object.entries(values)) {
+			if (value !== null && value !== undefined && value !== "") {
+				hash.set(key, String(value));
+			}
+		}
+
+		return hash.toString();
+	}
+
+	// #endregion hnewhere-test-export
+
+	async function postBridgeResult(source, payload, result) {
+		const message = { source, nonce: payload.nonce, ...result };
+
 		try {
-			window.opener.postMessage(
-				{
-					source,
-					nonce: payload.nonce,
-					...result,
-				},
-				payload.origin || "*",
-			);
+			window.opener?.postMessage(message, payload.origin || "*");
 		} catch (error) {
 			console.error("Failed posting bridge result:", error);
 		}
+
+		try {
+			await save(BRIDGE_RESULT_PREFIX + payload.nonce, {
+				...message,
+				ts: Date.now(),
+			});
+		} catch (error) {
+			console.error("Failed staging bridge result:", error);
+		}
 	}
 
-	// One-shot listener per bridge kind, resolving whichever request matches the
-	// nonce the popup reports back. Modelled on setupItemActionListener.
+	function watchBridgeResult(nonce, deliver) {
+		let stopped = false;
+
+		const tick = async () => {
+			if (stopped) {
+				return;
+			}
+
+			const stored = await load(BRIDGE_RESULT_PREFIX + nonce, null);
+
+			if (stored && !stopped) {
+				await save(BRIDGE_RESULT_PREFIX + nonce, null);
+				deliver(stored);
+			}
+
+			if (!stopped) {
+				window.setTimeout(tick, BRIDGE_POLL_MS);
+			}
+		};
+
+		window.setTimeout(tick, BRIDGE_POLL_MS);
+
+		return () => {
+			stopped = true;
+			save(BRIDGE_RESULT_PREFIX + nonce, null).catch(() => {});
+		};
+	}
+
 	function createBridgeChannel(source) {
 		const pending = new Map();
 		let installed = false;
+
+		const settle = (nonce, data) => {
+			const request = pending.get(nonce);
+
+			if (!request) {
+				return;
+			}
+
+			clearTimeout(request.timeoutId);
+			request.stopWatching?.();
+			pending.delete(nonce);
+
+			try {
+				request.popup?.close();
+			} catch {}
+
+			request.resolve(data);
+		};
+
+		const deliver = (data) => {
+			if (!data || data.source !== source || !data.nonce) {
+				return;
+			}
+
+			const request = pending.get(data.nonce);
+
+			if (!request) {
+				return;
+			}
+
+			if (data.interim) {
+				request.onInterim?.(data);
+				clearTimeout(request.timeoutId);
+				request.timeoutId = window.setTimeout(
+					() => settle(data.nonce, { ok: false, reason: "timeout" }),
+					SIGN_IN_TIMEOUT,
+				);
+				return;
+			}
+
+			settle(data.nonce, data);
+		};
 
 		const install = () => {
 			if (installed) {
@@ -4983,34 +5234,18 @@ ${
 
 			installed = true;
 			window.addEventListener("message", (event) => {
-				if (event.origin !== HN_ORIGIN) {
+				if (event.origin !== pending.get(event.data?.nonce)?.origin) {
 					return;
 				}
 
-				const data = event.data;
-
-				if (!data || data.source !== source || !data.nonce) {
-					return;
-				}
-
-				const request = pending.get(data.nonce);
-
-				if (!request) {
-					return;
-				}
-
-				clearTimeout(request.timeoutId);
-				pending.delete(data.nonce);
-
-				try {
-					request.popup?.close();
-				} catch {}
-
-				request.resolve(data);
+				deliver(event.data);
 			});
 		};
 
-		return function openBridge(nonce, { timeout = 60000, features } = {}) {
+		return function openBridge(
+			nonce,
+			{ origin = HN_ORIGIN, timeout = 60000, features, onInterim } = {},
+		) {
 			install();
 
 			const popup = window.open(
@@ -5028,20 +5263,25 @@ ${
 			}
 
 			const result = new Promise((resolve) => {
-				const timeoutId = window.setTimeout(() => {
-					pending.delete(nonce);
-					resolve({ ok: false, reason: "timeout" });
-				}, timeout);
+				const timeoutId = window.setTimeout(
+					() => settle(nonce, { ok: false, reason: "timeout" }),
+					timeout,
+				);
 
-				pending.set(nonce, { resolve, timeoutId, popup });
+				pending.set(nonce, {
+					resolve,
+					timeoutId,
+					popup,
+					origin,
+					onInterim,
+					stopWatching: watchBridgeResult(nonce, deliver),
+				});
 			});
 
 			return {
 				blocked: false,
 				result,
 				navigate(url) {
-					// about:blank inherits this origin, so assigning location is allowed
-					// even though the destination is cross-origin.
 					try {
 						popup.location = url;
 					} catch (error) {
@@ -5050,6 +5290,289 @@ ${
 				},
 			};
 		};
+	}
+
+	// -------------------------
+	// Write bridges
+	// -------------------------
+
+	const WRITE_BRIDGES = new Map();
+
+	function registerWriteBridge(bridge) {
+		WRITE_BRIDGES.set(bridge.id, bridge);
+	}
+
+	function getWriteBridge(id) {
+		return WRITE_BRIDGES.get(id) || null;
+	}
+
+	function writeBridges() {
+		return [...WRITE_BRIDGES.values()];
+	}
+
+	function isWriteBridgeOrigin(origin) {
+		return writeBridges().some((bridge) => bridge.origin === origin);
+	}
+
+	// #region hnewhere-test-export
+
+	const BRIDGE_NAVIGATED = { navigated: true };
+
+	const BRIDGE_AWAITING_SIGN_IN = { awaitingSignIn: true };
+
+	function resumeShouldWait(result) {
+		return (
+			result === BRIDGE_AWAITING_SIGN_IN || result?.reason === "item-missing"
+		);
+	}
+
+	function signInNoteText(sourceLabel, noun) {
+		return `Backchannel is holding your ${noun}. Sign in to ${sourceLabel} and it will be posted from here.`;
+	}
+
+	function writeBridgeForHost(bridges, hostname) {
+		return (
+			bridges.find((bridge) => bridge?.hosts?.includes(hostname)) || null
+		);
+	}
+
+	function stageBridgeReload(key, payload) {
+		try {
+			window.sessionStorage.setItem(key, JSON.stringify(payload));
+			return true;
+		} catch (error) {
+			console.error("HNewhere: could not stage bridge payload", error);
+			return false;
+		}
+	}
+
+	function clearBridgeReload(key) {
+		try {
+			window.sessionStorage.removeItem(key);
+		} catch {}
+	}
+
+	function takeBridgeReload(key) {
+		let stored = null;
+
+		try {
+			stored = window.sessionStorage.getItem(key);
+			window.sessionStorage.removeItem(key);
+		} catch {
+			return null;
+		}
+
+		if (!stored) {
+			return null;
+		}
+
+		try {
+			const payload = JSON.parse(stored);
+
+			return payload?.nonce ? payload : null;
+		} catch {
+			return null;
+		}
+	}
+
+	function peekBridgeReload(key) {
+		let stored = null;
+
+		try {
+			stored = window.sessionStorage.getItem(key);
+		} catch {
+			return null;
+		}
+
+		if (!stored) {
+			return null;
+		}
+
+		try {
+			const payload = JSON.parse(stored);
+
+			if (payload?.nonce) {
+				return payload;
+			}
+		} catch {}
+
+		clearBridgeReload(key);
+		return null;
+	}
+
+	async function runWriteAction(action, { payload, staged, root }) {
+		if (action.requiresDraft && !staged?.text) {
+			return { ok: false, reason: "draft-missing" };
+		}
+
+		try {
+			return await action.act({ payload, staged, root });
+		} catch (error) {
+			console.error("HNewhere: write bridge action failed", error);
+			return { ok: false, reason: "bridge-failed" };
+		}
+	}
+
+	// #endregion hnewhere-test-export
+
+	function postWriteResult(action, payload, result) {
+		return postBridgeResult(action.messageSource, payload, {
+			...action.echo?.(payload),
+			...result,
+		});
+	}
+
+	async function dispatchWriteAction(action, root = document) {
+		const payload = parseBridgeHash(action.marker, action.fields);
+
+		if (!payload || action.accepts?.(payload) === false) {
+			return false;
+		}
+
+		const staged = action.stagesDraft
+			? await readBridgePayload(payload.nonce)
+			: null;
+
+		await finishWriteAction(
+			action,
+			payload,
+			await runWriteAction(action, { payload, staged, root }),
+		);
+
+		return true;
+	}
+
+	const SIGN_IN_NOTE_ID = "hnewhere-sign-in-note";
+
+	function showSignInNote(action) {
+		if (document.getElementById(SIGN_IN_NOTE_ID)) {
+			return;
+		}
+
+		const bridge = writeBridgeForHost(writeBridges(), location.hostname);
+		const note = document.createElement("div");
+
+		note.id = SIGN_IN_NOTE_ID;
+		note.textContent = signInNoteText(
+			getSource(bridge?.id)?.label || "this site",
+			action.noun || "action",
+		);
+		note.setAttribute(
+			"style",
+			[
+				"position:fixed",
+				"top:0",
+				"left:0",
+				"right:0",
+				"z-index:2147483647",
+				"margin:0",
+				"padding:10px 14px",
+				"background:#237140",
+				"color:#fff",
+				"font:600 13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+				"text-align:center",
+			].join(";"),
+		);
+
+		document.body?.appendChild(note);
+	}
+
+	async function finishWriteAction(action, payload, result) {
+		if (result === BRIDGE_NAVIGATED) {
+			return;
+		}
+
+		if (result === BRIDGE_AWAITING_SIGN_IN) {
+			stageBridgeReload(RESUME_BRIDGE_STORAGE_KEY, {
+				nonce: payload.nonce,
+				marker: action.marker,
+				payload,
+			});
+			showSignInNote(action);
+			await postWriteResult(action, payload, {
+				ok: false,
+				reason: "awaiting-sign-in",
+				interim: true,
+			});
+			return;
+		}
+
+		await postWriteResult(action, payload, result);
+
+		if (action.closeAfter) {
+			window.setTimeout(() => window.close(), action.closeAfter);
+		}
+	}
+
+	async function resumeWriteBridge(bridge, root = document) {
+		const stored = peekBridgeReload(RESUME_BRIDGE_STORAGE_KEY);
+
+		if (!stored?.marker || !stored?.payload?.nonce) {
+			return false;
+		}
+
+		const action = Object.values(bridge?.actions || {}).find(
+			(candidate) => candidate.marker === stored.marker,
+		);
+
+		if (!action) {
+			return false;
+		}
+
+		const staged = action.stagesDraft
+			? await readBridgePayload(stored.payload.nonce)
+			: null;
+		const result = await runWriteAction(action, {
+			payload: stored.payload,
+			staged,
+			root,
+		});
+
+		if (resumeShouldWait(result)) {
+			showSignInNote(action);
+			await postWriteResult(action, stored.payload, {
+				ok: false,
+				reason: "awaiting-sign-in",
+				interim: true,
+			});
+			return true;
+		}
+
+		clearBridgeReload(RESUME_BRIDGE_STORAGE_KEY);
+		await finishWriteAction(action, stored.payload, result);
+		return true;
+	}
+
+	async function reportWriteAction(action, root = document) {
+		const reported = action.report?.(root);
+
+		if (!reported) {
+			return false;
+		}
+
+		await postWriteResult(action, reported.payload, reported.result);
+		window.setTimeout(() => window.close(), 60);
+		return true;
+	}
+
+	async function reportWriteBridge(bridge, root = document) {
+		for (const action of Object.values(bridge?.actions || {})) {
+			if (await reportWriteAction(action, root)) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	async function dispatchWriteBridge(bridge, root = document) {
+		for (const action of Object.values(bridge?.actions || {})) {
+			if (await dispatchWriteAction(action, root)) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	function normalizeVoteURL(href) {
@@ -5122,8 +5645,6 @@ ${
 			} else {
 				entry.unUrl = voteURL;
 
-				// When an unvote link is present its label is authoritative about
-				// direction: "undown" removes a downvote, "unvote" an upvote.
 				if (!hidden) {
 					const label = (anchor.textContent || "").trim().toLowerCase();
 					entry.state = label.includes("undown") ? "down" : "up";
@@ -5148,7 +5669,6 @@ ${
 				entry.unUrl = deriveUnvoteURL(entry.upUrl || entry.downUrl);
 			}
 
-			// Kept off the shape cloneVoteInfo copies, but tidy up regardless.
 			delete entry.upHidden;
 			delete entry.downHidden;
 		}
@@ -5244,6 +5764,113 @@ ${
 		return null;
 	}
 
+	// #region hnewhere-test-export
+
+	const SIDEBAR_LEVEL_REASONS = new Set([
+		"popup-blocked",
+		"timeout",
+		"rate-limited",
+		"no-bridge",
+		"bridge-failed",
+	]);
+
+	function isSidebarLevelReason(reason) {
+		return SIDEBAR_LEVEL_REASONS.has(reason);
+	}
+
+	function voteFailureMessage(result, sourceLabel = "the source") {
+		switch (result?.reason) {
+			case "popup-blocked":
+				return "Your browser blocked the popup. Allow popups for this site and try again.";
+			case "timeout":
+				return `${sourceLabel} did not respond in time.`;
+			case "not-logged-in":
+			case "awaiting-sign-in":
+				return `Sign in to ${sourceLabel} to vote.`;
+			case "action-unavailable":
+				return `${sourceLabel} is not offering that vote here.`;
+			case "rate-limited":
+				return `${sourceLabel} is rate limiting votes. Wait a moment and try again.`;
+			default:
+				return result?.message || "That vote did not go through.";
+		}
+	}
+	// #endregion hnewhere-test-export
+
+	let toastTimer = 0;
+
+	function showToast(message, { persist = false } = {}) {
+		const toast = sidebarUI?.shadow?.getElementById("toast");
+
+		if (!toast) {
+			return;
+		}
+
+		clearTimeout(toastTimer);
+
+		if (!message) {
+			toast.classList.remove("is-showing");
+			return;
+		}
+
+		toast.textContent = message;
+		toast.classList.add("is-showing");
+
+		if (!persist) {
+			toastTimer = window.setTimeout(
+				() => toast.classList.remove("is-showing"),
+				5200,
+			);
+		}
+	}
+
+	function voteStatusSlots(itemId) {
+		const escapedId = CSS.escape(String(itemId));
+
+		return (
+			sidebarUI?.body?.querySelectorAll(
+				`.story-vote-status[data-vote-status-id="${escapedId}"],` +
+					`.comment-vote-status[data-vote-status-id="${escapedId}"]`,
+			) || []
+		);
+	}
+
+	function showVoteMessage(itemId, message, action = null) {
+		voteStatusSlots(itemId).forEach((element) => {
+			element.replaceChildren();
+
+			if (!message) {
+				return;
+			}
+
+			element.appendChild(document.createTextNode(" | "));
+
+			const note = document.createElement("span");
+
+			note.className = "vote-note";
+			note.textContent = message;
+			element.appendChild(note);
+
+			if (!action) {
+				return;
+			}
+
+			const button = document.createElement("button");
+
+			button.type = "button";
+			button.className = "vote-unvote-link";
+			button.textContent = action.label;
+			button.onclick = (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				action.onPress();
+			};
+
+			element.appendChild(document.createTextNode(" "));
+			element.appendChild(button);
+		});
+	}
+
 	function updateVoteStatus(itemId, state, onUnvote) {
 		const label =
 			state === "up" ? "unvote" : state === "down" ? "undown" : null;
@@ -5253,8 +5880,6 @@ ${
 			`.story-vote-status[data-vote-status-id="${escapedId}"],` +
 			`.comment-vote-status[data-vote-status-id="${escapedId}"]`;
 
-		// Scoped to the sidebar's shadow root: document.querySelector cannot
-		// cross that boundary and would silently match nothing.
 		(sidebarUI?.body?.querySelectorAll(selector) || []).forEach((element) => {
 			element.replaceChildren();
 
@@ -5412,7 +6037,6 @@ ${
 				updateStoryScoreDisplay(storyID, trueScore);
 			}
 
-			// Same fetch, so HN's own displayed ages come along at no extra cost.
 			displayAgeCache.set(cacheKey, extractDisplayAgesFromRoot(doc));
 
 			return applyRememberedVotes(extractVoteLinksFromRoot(doc));
@@ -5430,26 +6054,43 @@ ${
 		}
 	}
 
-	function getVoteDescriptors(voteInfo) {
-		if (!voteInfo) {
+	function voteDescriptorsFor(sourceID, voteInfo) {
+		const action = getWriteBridge(sourceID)?.actions?.vote;
+
+		return action?.descriptors
+			? action.descriptors(voteInfo, getSource(sourceID)?.label || "the source")
+			: [];
+	}
+
+	async function loadVoteState(sourceID, storyID) {
+		const action = getWriteBridge(sourceID)?.actions?.vote;
+
+		if (action?.voteLinks) {
+			return await action.voteLinks(storyID);
+		}
+
+		const map = new Map();
+
+		for (const [itemId, record] of Object.entries(rememberedVotes)) {
+			map.set(itemId, cloneVoteInfo(record));
+		}
+
+		return map;
+	}
+
+	// #region hnewhere-test-export
+
+	function hnVoteDescriptors(voteInfo, label) {
+		if (!voteInfo || voteInfo.state === "up" || voteInfo.state === "down") {
 			return [];
 		}
 
 		const descriptors = [];
 
-		if (voteInfo.state === "up" && voteInfo.unUrl) {
+		if (voteInfo.upUrl) {
 			descriptors.push({
 				label: "▲",
-				title: "Remove upvote on Hacker News",
-				action: "un",
-				url: voteInfo.unUrl,
-				active: true,
-				variant: "up",
-			});
-		} else if (voteInfo.upUrl) {
-			descriptors.push({
-				label: "▲",
-				title: "Upvote on Hacker News",
+				title: "Upvote on " + label,
 				action: "up",
 				url: voteInfo.upUrl,
 				active: false,
@@ -5457,19 +6098,10 @@ ${
 			});
 		}
 
-		if (voteInfo.state === "down" && voteInfo.unUrl) {
+		if (voteInfo.downUrl) {
 			descriptors.push({
 				label: "▼",
-				title: "Remove downvote on Hacker News",
-				action: "un",
-				url: voteInfo.unUrl,
-				active: true,
-				variant: "down",
-			});
-		} else if (voteInfo.downUrl) {
-			descriptors.push({
-				label: "▼",
-				title: "Downvote on Hacker News",
+				title: "Downvote on " + label,
 				action: "down",
 				url: voteInfo.downUrl,
 				active: false,
@@ -5480,7 +6112,7 @@ ${
 		if (!descriptors.length && voteInfo.unUrl) {
 			descriptors.push({
 				label: "↺",
-				title: "Remove vote on Hacker News",
+				title: "Remove vote on " + label,
 				action: "un",
 				url: voteInfo.unUrl,
 				active: true,
@@ -5491,37 +6123,64 @@ ${
 		return descriptors;
 	}
 
-	function itemActionPageURL(storyID, itemId, action, voteURL, nonce) {
-		const url = new URL(commentURL(itemId));
-		const hash = new URLSearchParams();
-		hash.set("hnewhere-vote", "1");
-		hash.set("story", String(storyID));
-		hash.set("item", String(itemId));
-		hash.set("action", action);
+	function buttonVoteDescriptors(voteInfo, label) {
+		const state = voteInfo?.state || "none";
 
-		if (voteURL) {
-			hash.set("voteURL", voteURL);
-		}
-
-		hash.set("origin", location.origin);
-		hash.set("nonce", nonce);
-		url.hash = hash.toString();
-		return url.href;
+		return [
+			{
+				label: "▲",
+				title: (state === "up" ? "Remove upvote on " : "Upvote on ") + label,
+				action: state === "up" ? "un" : "up",
+				url: null,
+				active: state === "up",
+				variant: "up",
+			},
+			{
+				label: "▼",
+				title:
+					(state === "down" ? "Remove downvote on " : "Downvote on ") + label,
+				action: state === "down" ? "un" : "down",
+				url: null,
+				active: state === "down",
+				variant: "down",
+			},
+		];
 	}
 
-	function setupItemActionListener() {
-		if (window.__hnewhereItemActionListenerInstalled) {
+	// #endregion hnewhere-test-export
+
+	function itemActionPageURL(voteAction, { storyID, itemId, action, voteURL, nonce }) {
+		return (
+			voteAction.url({ storyID, itemId }) +
+			"#" +
+			bridgeHash(voteAction, nonce, {
+				story: storyID,
+				item: itemId,
+				action,
+				voteURL,
+			})
+		);
+	}
+
+	function settleItemAction(nonce, data) {
+		const pending = itemActionRequests.get(nonce);
+
+		if (!pending) {
 			return;
 		}
 
-		window.__hnewhereItemActionListenerInstalled = true;
-		window.addEventListener("message", (event) => {
-			if (event.origin !== HN_ORIGIN) {
-				return;
-			}
+		clearTimeout(pending.timeoutId);
+		pending.stopWatching?.();
+		itemActionRequests.delete(nonce);
 
-			const data = event.data;
+		try {
+			pending.popup?.close();
+		} catch {}
 
+		pending.resolve(data);
+	}
+
+	function deliverItemAction(data) {
 			if (!data || data.source !== ITEM_ACTION_BRIDGE_MESSAGE_SOURCE || !data.nonce) {
 				return;
 			}
@@ -5560,56 +6219,121 @@ ${
 				return;
 			}
 
-			clearTimeout(pending.timeoutId);
-			itemActionRequests.delete(data.nonce);
+			if (data.interim) {
+				pending.onInterim?.(data);
+				clearTimeout(pending.timeoutId);
+				pending.timeoutId = window.setTimeout(
+					() => settleItemAction(data.nonce, { ok: false, reason: "timeout" }),
+					SIGN_IN_TIMEOUT,
+				);
+				return;
+			}
 
-			try {
-				pending.popup?.close();
-			} catch {}
+			settleItemAction(data.nonce, data);
+	}
 
-			pending.resolve(data);
+	function setupItemActionListener() {
+		if (window.__hnewhereItemActionListenerInstalled) {
+			return;
+		}
+
+		window.__hnewhereItemActionListenerInstalled = true;
+		window.addEventListener("message", (event) => {
+			if (!isWriteBridgeOrigin(event.origin)) {
+				return;
+			}
+
+			deliverItemAction(event.data);
 		});
 	}
 
-	function openItemActionPopup(storyID, itemId, action, voteURL) {
+	function openItemActionPopup(
+		sourceID,
+		storyID,
+		itemId,
+		action,
+		voteURL,
+		onInterim,
+	) {
+		const bridge = getWriteBridge(sourceID);
+		const voteAction = bridge?.actions?.vote;
+
+		if (!voteAction) {
+			return Promise.resolve({ ok: false, reason: "no-bridge" });
+		}
+
 		setupItemActionListener();
 
 		return new Promise((resolve) => {
-			const nonce =
-				String(Date.now()) + Math.random().toString(36).slice(2, 10);
-			const bridgeURL = itemActionPageURL(
-				storyID,
-				itemId,
-				action,
-				voteURL,
-				nonce,
-			);
+			const nonce = bridgeNonce();
 			const popup = window.open(
-				bridgeURL,
+				itemActionPageURL(voteAction, {
+					storyID,
+					itemId,
+					action,
+					voteURL,
+					nonce,
+				}),
 				"hnewhere_vote_bridge_" + nonce,
 				"width=420,height=320,resizable=yes,scrollbars=yes",
 			);
 
 			if (!popup) {
+				itemActionRequests.set(nonce, {
+					resolve: () => {},
+					timeoutId: window.setTimeout(
+						() => settleItemAction(nonce, { ok: false, reason: "timeout" }),
+						SIGN_IN_TIMEOUT,
+					),
+					popup: null,
+					origin: bridge.origin,
+					onInterim,
+					stopWatching: watchBridgeResult(nonce, deliverItemAction),
+				});
 				resolve({ ok: false, reason: "popup-blocked" });
 				return;
 			}
 
-			const timeoutId = window.setTimeout(() => {
-				itemActionRequests.delete(nonce);
-				resolve({ ok: false, reason: "timeout" });
-			}, 12000);
+			const timeoutId = window.setTimeout(
+				() => settleItemAction(nonce, { ok: false, reason: "timeout" }),
+				12000,
+			);
 
 			itemActionRequests.set(nonce, {
 				resolve,
 				timeoutId,
 				popup,
+				origin: bridge.origin,
+				stopWatching: watchBridgeResult(nonce, deliverItemAction),
+				onInterim,
 			});
 		});
 	}
 
-	async function submitVote(storyID, itemId, descriptor, container) {
+	async function submitVote(
+		sourceID,
+		storyID,
+		itemId,
+		descriptor,
+		container,
+		{ force = false } = {},
+	) {
 		if (!container || container.dataset.votePending === "1") {
+			return;
+		}
+
+		if (!force && shouldAskToSignIn(await readAuthVerdict(sourceID), Date.now())) {
+			showVoteMessage(
+				itemId,
+				`Sign in to ${getSource(sourceID)?.label || "the source"} to vote.`,
+				{
+					label: "sign in and vote",
+					onPress: () =>
+						submitVote(sourceID, storyID, itemId, descriptor, container, {
+							force: true,
+						}),
+				},
+			);
 			return;
 		}
 
@@ -5619,17 +6343,31 @@ ${
 			button.disabled = true;
 		});
 
+		const label = getSource(sourceID)?.label || "the source";
+
 		try {
 			const result = await openItemActionPopup(
+				sourceID,
 				storyID,
 				itemId,
 				descriptor.action,
 				descriptor.url,
+				() => showToast(`Waiting for sign-in on ${label}…`, { persist: true }),
 			);
 
 			if (result?.storyID && result?.itemId && result?.voteInfo) {
 				setVoteInfoForStoryItem(result.storyID, result.itemId, result.voteInfo);
 			}
+
+			if (result?.ok) {
+				showToast(null);
+			} else if (isSidebarLevelReason(result?.reason)) {
+				showToast(voteFailureMessage(result, label));
+			} else {
+				showVoteMessage(itemId, voteFailureMessage(result, label));
+			}
+
+			await rememberAuthFromResult(sourceID, result);
 		} finally {
 			delete container.dataset.votePending;
 			container.classList.remove("vote-controls-pending");
@@ -5639,21 +6377,80 @@ ${
 		}
 	}
 
+	// -------------------------
+	// Whether a reader can act
+	// -------------------------
+
+	const AUTH_PREFIX = "HNewhere:auth:";
+
+	// #region hnewhere-test-export
+
+	const AUTH_TTL = { out: 3 * 60 * 1000, in: 12 * 60 * 60 * 1000 };
+
+	function verdictFromResult(result) {
+		if (result?.ok) {
+			return "in";
+		}
+
+		if (
+			result?.reason === "not-logged-in" ||
+			result?.reason === "awaiting-sign-in"
+		) {
+			return "out";
+		}
+
+		return null;
+	}
+
+	function authVerdictUsable(verdict, now) {
+		if (!verdict?.state || !Number.isFinite(verdict.at)) {
+			return false;
+		}
+
+		return now - verdict.at < (AUTH_TTL[verdict.state] ?? 0);
+	}
+
+	function shouldAskToSignIn(verdict, now) {
+		return verdict?.state === "out" && authVerdictUsable(verdict, now);
+	}
+
+	function capabilityMark(supported, verdict, now) {
+		if (!supported) {
+			return "no";
+		}
+
+		return shouldAskToSignIn(verdict, now) ? "signin" : "yes";
+	}
+
+	// #endregion hnewhere-test-export
+
+	function readAuthVerdict(sourceID) {
+		return load(AUTH_PREFIX + sourceID, null);
+	}
+
+	async function rememberAuthFromResult(sourceID, result) {
+		const state = verdictFromResult(result);
+
+		if (state) {
+			await save(AUTH_PREFIX + sourceID, { state, at: Date.now() });
+		}
+	}
+
 	function renderVoteControls(container, storyID, itemId, voteInfo) {
 		if (!container) {
 			return;
 		}
 
+		const sourceID = container.dataset.hnVoteSource;
+
 		container.replaceChildren();
 
-		const descriptors = getVoteDescriptors(voteInfo);
+		const descriptors = voteDescriptorsFor(sourceID, voteInfo);
 		const state = voteInfo?.state;
-		const hasVote = state === "up" || state === "down";
 
-		// Only offer the link when there is a URL behind it, so it never renders
-		// as something that looks clickable but does nothing.
 		updateVoteStatus(itemId, voteInfo?.unUrl ? state : null, () => {
 			submitVote(
+				sourceID,
 				storyID,
 				itemId,
 				{ action: "un", url: voteInfo.unUrl },
@@ -5661,9 +6458,7 @@ ${
 			);
 		});
 
-		// HN hides the arrows entirely once you have voted; the unvote link in the
-		// byline becomes the only control.
-		if (!descriptors.length || hasVote) {
+		if (!descriptors.length) {
 			container.classList.add("hidden");
 			return;
 		}
@@ -5700,7 +6495,7 @@ ${
 			button.onclick = async (event) => {
 				event.preventDefault();
 				event.stopPropagation();
-				await submitVote(storyID, itemId, descriptor, container);
+				await submitVote(sourceID, storyID, itemId, descriptor, container);
 			};
 
 			container.appendChild(button);
@@ -5742,8 +6537,6 @@ ${
 		return {
 			minX: BUTTON_EDGE_MARGIN,
 			minY: BUTTON_EDGE_MARGIN,
-			// Never negative: a button wider than the viewport clamps to the margin
-			// rather than to a max below its min, which would pin it off-screen left.
 			maxX: Math.max(
 				BUTTON_EDGE_MARGIN,
 				width - button.offsetWidth - BUTTON_EDGE_MARGIN,
@@ -5774,8 +6567,6 @@ ${
 		pinButtonStyle(button, { left: x + "px", top: y + "px", right: "auto" });
 	}
 
-	// Anything anchored to the button -- currently the submit popover -- listens for
-	// this rather than reaching into the drag state, so the two stay independent.
 	const BUTTON_MOVE_EVENT = "hnewhere:buttonmove";
 
 	function makeButtonDraggable(button) {
@@ -5829,8 +6620,6 @@ ${
 				moved = true;
 			}
 
-			// Same bounds as every other clamp: the visible viewport, not
-			// window.innerWidth, so a drag cannot park the button under a scrollbar.
 			const { x, y } = clampButtonToViewport(
 				button,
 				startLeft + deltaX,
@@ -5893,8 +6682,6 @@ ${
 		);
 	}
 
-	// The panel wears both classes while the form is up, so isBrowsing alone cannot
-	// tell the front page from the form standing on it.
 	function isSubmitting(ui) {
 		return Boolean(
 			ui?.shadow?.querySelector("#panel")?.classList.contains("submitting"),
@@ -5903,8 +6690,6 @@ ${
 
 	let discussionScrollTop = 0;
 
-	// Matches the .16s the two views transition over, so the outgoing one is gone
-	// before the swap rather than being cut off partway down.
 	const VIEW_SWAP_FADE_MS = 160;
 
 	async function setSubmitMode(ui, on) {
@@ -5940,10 +6725,13 @@ ${
 				setBrowseMode(ui, true);
 			},
 			onSubmit: async (fields, form) => {
-				const result = await submitPageToHN(fields);
+				const result = await submitPageThroughBridge(submitTarget.id, fields);
 
 				if (!result?.ok) {
-					form.setStatus(submitFailureMessage(result), { error: true });
+					form.setStatus(
+						submitFailureMessage(result, submitTarget.label),
+						{ error: true },
+					);
 
 					return;
 				}
@@ -5987,7 +6775,15 @@ ${
 
 		const swap = () => {
 			panel.classList.toggle("browsing", on);
-			toggle.title = on ? "Back to this page's discussion" : browseLabel();
+
+			const stranded = on && !sidebarHasDiscussion;
+
+			toggle.disabled = panel.classList.contains("queue-only") || stranded;
+			toggle.title = stranded
+				? "No discussion found for this page"
+				: on
+					? "Back to this page's discussion"
+					: browseLabel();
 
 			panel.classList.remove("submitting");
 			ui?.shadow?.querySelector("#submit-view")?.replaceChildren();
@@ -6009,8 +6805,6 @@ ${
 			}
 		};
 
-		// animate:false is for a panel that is not on screen yet. Cross-fading two
-		// views nobody can see would only delay the one they are about to.
 		if (!comments || options.animate === false || prefersReducedMotion()) {
 			swap();
 			return;
@@ -6040,8 +6834,6 @@ ${
 			source: story.source || "hn",
 			ids: [String(story.id)],
 			timestamp: Date.now(),
-			// Only ever true, never written false: an absent flag is a title click,
-			// and a record written by an older version has none.
 			...(openPanel ? { openPanel: true } : {}),
 		});
 
@@ -6051,8 +6843,6 @@ ${
 
 		event.preventDefault();
 
-		// Navigates either way. A storage error is not a reason to refuse to open
-		// the article -- it costs the arrival, not the click.
 		record.catch(() => {}).then(() => {
 			location.href = story.url;
 		});
@@ -6071,7 +6861,7 @@ ${
 
 		const actions =
 			!story.source || getSource(story.source)?.capabilities?.vote
-				? itemActionLinksHTML(story.id)
+				? itemActionLinksHTML(story.id, story.source || "hn")
 				: "";
 
 		const meta = `${escapeHTML(pluralize(story.score, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}
@@ -6098,8 +6888,6 @@ ${
 	</div>
 	`;
 
-		// Wired per row rather than delegated, because the row is built here and
-		// thrown away whole, so there is nothing to keep in step.
 		const total = row.querySelector(".browse-comments-total");
 
 		if (total) {
@@ -6116,8 +6904,6 @@ ${
 
 			const key = queueKey(story);
 
-			// Read once per row rather than passed in, so a row rendered after
-			// something was queued elsewhere still opens in the right state.
 			loadQueue()
 				.then((entries) => {
 					saveButton.textContent = entries.some((e) => queueKey(e) === key)
@@ -6165,7 +6951,8 @@ ${
 		const button = root?.querySelector?.("#header-submit");
 
 		if (button) {
-			button.hidden = !submitTargetFor(await loadSettings());
+			button.hidden =
+				!submitTargetFor(await loadSettings()) || sidebarHasDiscussion;
 		}
 	}
 
@@ -6187,8 +6974,6 @@ ${
 		if (wordmark) {
 			wordmark.hidden = !frontPageAvailable && !queueHasItems;
 
-			// Only while the panel is showing this page's discussion. In browse mode
-			// the title is the way back out, and setBrowseMode owns it.
 			if (!isBrowsing({ shadow: root })) {
 				wordmark.title = browseLabel();
 			}
@@ -6203,8 +6988,6 @@ ${
 		}
 	}
 
-	// The count belongs on the tab, so saving anywhere has to reach it. Takes a root
-	// rather than the ui object, because a browse row only knows the tree it is in.
 	async function refreshQueueCount(root) {
 		const tab = root?.querySelector?.("#browse-tab-queue");
 
@@ -6227,8 +7010,6 @@ ${
 		tab.setAttribute("aria-hidden", String(!queueHasItems));
 		tab.tabIndex = queueHasItems ? 0 : -1;
 
-		// Next frame, so this pass paints in whatever state it found and only what
-		// happens after it moves. setBrowseMode clears it again on the way in.
 		const tabs = tab.parentElement;
 
 		if (tabs && !tabs.classList.contains("is-ready")) {
@@ -6249,8 +7030,6 @@ ${
 	let browsePage = 1;
 	let browseTab = "front";
 
-	// HN numbers its rows continuously across pages -- page 2 starts at 31 -- and
-	// the rank is only useful if it says the same thing.
 	const FRONT_PAGE_SIZE = 30;
 
 	function renderBrowseNav(view, { page, nextPage }, onNavigate) {
@@ -6382,7 +7161,8 @@ ${
 		);
 	}
 
-	function setWordmarkLocation(ui, label) {
+	// #region hnewhere-test-export
+	function setWordmarkLocation(ui, label, { elsewhere = false } = {}) {
 		const tail = ui?.shadow?.querySelector(".wordmark-tail");
 		const sep = tail?.querySelector(".wordmark-sep");
 		const where = tail?.querySelector(".wordmark-where");
@@ -6395,10 +7175,11 @@ ${
 			where.textContent = label;
 		};
 
-		ui?.shadow?.querySelector("#panel")?.classList.toggle("has-trail", Boolean(label));
+		const panel = ui?.shadow?.querySelector("#panel");
 
-		// Nothing to announce if it already says this, and animating it anyway would
-		// blink the trail every time the same tab is re-rendered.
+		panel?.classList.toggle("has-trail", Boolean(label));
+		panel?.classList.toggle("trail-elsewhere", Boolean(label) && elsewhere);
+
 		if (tail.textContent.endsWith(label)) {
 			return;
 		}
@@ -6425,6 +7206,7 @@ ${
 			})
 			.catch(() => swap());
 	}
+	// #endregion hnewhere-test-export
 
 	async function offerQueueOnHN() {
 		if (document.getElementById("hn-queue-button")) {
@@ -6495,8 +7277,6 @@ ${
 		const next = entries.map((entry, index) => {
 			const item = fetched[index];
 
-			// A dead or deleted story returns nothing useful. What was stored is then
-			// the best record there is, and is left alone.
 			if (!item?.id) {
 				return entry;
 			}
@@ -6538,8 +7318,6 @@ ${
 		if (!entries.length) {
 			const empty = document.createElement("div");
 			empty.className = "browse-empty";
-			// Names the control rather than describing the feature: the tab is here
-			// from the start, so the one thing a reader needs is where "queue" lives.
 			empty.textContent =
 				"Nothing queued yet. Use queue on any story, here or on Hacker News, to read it later.";
 			list.appendChild(empty);
@@ -6602,8 +7380,6 @@ ${
 		const requested = browsePage;
 		const { rows, sources } = await loadFrontPages();
 
-		// A second click while the first was still in flight, so this answer is for
-		// a page nobody is waiting for any more.
 		if (browsePage !== requested || browseTab !== "front") {
 			return;
 		}
@@ -6634,8 +7410,6 @@ ${
 			list,
 			{ page, nextPage: page < lastPage ? page + 1 : null },
 			(target) => {
-				// Back to the top: the reader asked for a different page, not for the same
-				// place in a new one.
 				scrollBrowseToTop(ui);
 				renderBrowseView(ui, { page: target }).catch(console.error);
 			},
@@ -6664,7 +7438,11 @@ ${
 			tab.setAttribute("aria-selected", String(isCurrent));
 		}
 
-		setWordmarkLocation(ui, browseTab === "queue" ? "Queue" : "");
+		if (sidebarHasDiscussion) {
+			setWordmarkLocation(ui, "Discussion", { elsewhere: true });
+		} else {
+			setWordmarkLocation(ui, browseTab === "queue" ? "Queue" : "");
+		}
 
 		await refreshSubmitAffordance(ui.shadow);
 
@@ -6829,8 +7607,6 @@ ${
 	margin-bottom:8px;
 }
 
-/* HN's own explanation of how url and text interact. Kept because the two fields
-   are genuinely non-obvious: a blank url turns the whole thing into an Ask HN. */
 .submit-note {
 	margin-top:8px;
 	color:var(--muted);
@@ -6878,7 +7654,6 @@ ${
 .submit-field textarea {
 	min-height:56px;
 	resize:vertical;
-	/* Same reasoning as the sidebar composer: HN reads leading spaces as code. */
 	white-space:pre-wrap;
 }
 
@@ -6945,8 +7720,6 @@ ${
 	function submitFormHTML({ submitTarget, message = "" }) {
 		return `
 <div class="submit-title">${
-			// Named, not bare. "Submit" was unambiguous while one source could take a
-			// submission; with a picker in front of the reader it has to say where.
 			submitTarget ? "Submit to " + escapeHTML(submitTarget.label) : "Submit"
 		}</div>
 ${
@@ -7027,8 +7800,6 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			countLabel.textContent = remaining + " left";
 			countLabel.classList.toggle("over", remaining < 0);
 
-			// HN requires a title, and requires at least one of url or text -- a
-			// submission with neither has nothing in it.
 			goButton.disabled =
 				!titleInput.value.trim() ||
 				(!urlInput.value.trim() && !textInput.value.trim());
@@ -7042,8 +7813,6 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		goButton.onclick = async () => {
 			const title = titleInput.value.trim();
 			const url = urlInput.value.trim();
-			// Not trimmed: HN reads two leading spaces as a code block, so the body
-			// has to reach it exactly as typed.
 			const text = textInput.value;
 
 			if (!title || (!url && !text.trim())) {
@@ -7064,8 +7833,6 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			}
 		};
 
-		// Enter submits from the single-line fields only. In the text area it has to
-		// stay a newline, since blank lines are how HN separates paragraphs.
 		for (const field of [titleInput, urlInput]) {
 			field.addEventListener("keydown", (event) => {
 				if (event.key === "Enter") {
@@ -7081,11 +7848,16 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		return { setStatus };
 	}
 
-	// Not async, for the same reason as submitCommentToHN: window.open has to happen
-	// before the first await or the browser blocks it.
-	function submitPageToHN({ title, url, text }) {
+	function submitPageThroughBridge(sourceID, { title, url, text }) {
+		const bridge = getWriteBridge(sourceID);
+		const action = bridge?.actions?.submit;
+
+		if (!action) {
+			return Promise.resolve({ ok: false, reason: "no-bridge" });
+		}
+
 		const nonce = bridgeNonce();
-		const session = openSubmitBridgePopup(nonce);
+		const session = openSubmitBridgePopup(nonce, { origin: bridge.origin });
 
 		if (session.blocked) {
 			return session.result;
@@ -7098,20 +7870,14 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 					url,
 					title,
 					text,
-					// Blank for a text-only submission, which is what tells the reporter
-					// there is no URL to match against /newest.
 					normalized: url ? normalizeURL(url) : "",
 					origin: location.origin,
 				});
 				await indexBridgePayload(nonce);
 
-				const hash = new URLSearchParams();
-
-				hash.set("hnewhere-submit", "1");
-				hash.set("nonce", nonce);
-				hash.set("origin", location.origin);
-
-				session.navigate(submitURL(url, title) + "#" + hash.toString());
+				session.navigate(
+					action.url({ url, title }) + "#" + bridgeHash(action, nonce),
+				);
 
 				return await session.result;
 			} finally {
@@ -7134,8 +7900,6 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		const list = ui.body.querySelector(".source-picker-list");
 		const save = ui.body.querySelector(".source-picker-save");
 
-		// Saving nothing is the state the picker exists to leave, so the way out has
-		// to be closed until there is something to save.
 		const syncSave = () => {
 			save.disabled = !list.querySelector("input[data-source]:checked");
 		};
@@ -7163,8 +7927,6 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		};
 	}
 
-	// Deliberately plainer than createSubmitButton, which carries a popover for
-	// composing a submission. This one only has to open the picker.
 	async function createSetupButton() {
 		const button = createFloatingHNButton("hn-setup-button", "setup");
 
@@ -7207,22 +7969,24 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		return button;
 	}
 
-	function submitFailureMessage(result) {
+	// #region hnewhere-test-export
+	function submitFailureMessage(result, sourceLabel = "Hacker News") {
 		switch (result?.reason) {
 			case "popup-blocked":
 				return "Your browser blocked the popup. Allow popups for this site and try again.";
 			case "timeout":
-				return "Hacker News did not respond in time. Check the popup window.";
+				return `${sourceLabel} did not respond in time. Check the popup window.`;
 			case "not-logged-in":
-				return "Log in to Hacker News in the popup, then try again.";
+				return `Log in to ${sourceLabel} in the popup, then try again.`;
 			case "dupe":
-				return "Hacker News already has this URL. Reload the page to see the discussion.";
+				return `${sourceLabel} already has this URL. Reload the page to see the discussion.`;
 			case "no-form":
-				return "Could not find the submission form on Hacker News.";
+				return `Could not find the submission form on ${sourceLabel}.`;
 			default:
 				return result?.message || "Submission did not go through.";
 		}
 	}
+	// #endregion hnewhere-test-export
 
 	// -------------------------
 	// Shared chrome
@@ -7243,8 +8007,6 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 	--muted:#666;
 	--accent:#237140;
 	--accent-rgb:35,113,64;
-	/* What reads on the accent, for the mark that sits directly on it. White here
-		because #237140 carries white at 6:1 and black at 3.5. */
 	--accent-ink:#ffffff;
 	--surface:#fff;
 	--surface-text:#222;
@@ -7256,7 +8018,6 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 	--quote-text:#5f5f5f;
 	--quote-ornament:#b4b4b4;
 
-    /* 1.5.3 surfaces */
 	--field-bg:#fff;
 	--field-text:#000;
 	--field-border:#ccc;
@@ -7265,8 +8026,6 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 	--help-border:#e2e2d9;
 	--help-text:#555;
 	--code-bg:#efefe6;
-    /* Deliberately cool against the panel's warm neutrals: the preview is a
-       measuring surface, not part of the orange brand language. */
 	--blueprint-bg:#f6f8fa;
 	--blueprint-grid:rgba(64,86,112,.13);
 	--blueprint-line:rgba(64,86,112,.22);
@@ -7287,7 +8046,6 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 	--text:#dcdcdc;
 	--header-bg:#1b5732;
 	--header-text:#f0fff5;
-	/* Dimmer to hold the same relationship against the dimmer header. */
 	--subtitle-stage:#8fbda2;
 	--subtitle-stage-peak:#e6fff0;
 	--border:#3d3d3d;
@@ -7367,8 +8125,6 @@ header {
 	}
 }
 
-/* The eye and the choice behind it. Deliberately not the menu's containing
-   block -- see the note on header. */
 .hide-control {
 	display:inline-flex;
 }
@@ -7387,8 +8143,6 @@ header {
 	position:absolute;
 	top:46px;
 	right:8px;
-	/* Above the settings panel, which is also absolute in this header at z-index
-	   3. Opened with settings already down, this used to arrive behind it. */
 	z-index:5;
 	display:flex;
 	flex-direction:column;
@@ -7435,8 +8189,6 @@ header {
 	align-self:flex-start;
 	display:flex;
 	align-items:baseline;
-    /* max-width, not min-width: .header-title is a column flex container, so its
-       main axis is vertical and min-width relaxes nothing horizontal. */
 	max-width:100%;
 	border:0;
 	padding:0;
@@ -7448,38 +8200,24 @@ header {
 	text-align:left;
 }
 
-.wordmark-chevron {
-	flex:0 0 auto;
-	width:0;
-	margin-right:0;
-	overflow:hidden;
-	opacity:0;
-	color:var(--subtitle-stage);
-	transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
-}
-
-#panel.has-trail .wordmark-chevron {
-	width:9px;
-	margin-right:5px;
-	opacity:1;
-}
-
 .wordmark-root {
 	transition:color .2s ease;
 	flex:0 0 auto;
 }
 
-#panel.browsing .wordmark-root {
+#panel.has-trail:not(.trail-elsewhere) .wordmark-root {
 	color:var(--subtitle-stage);
 }
 
-#panel.queue-only .wordmark-chevron {
-	display:none;
-}
-
-#panel.queue-only .header-wordmark {
+.header-wordmark:disabled {
 	cursor:default;
 	opacity:1;
+}
+
+.header-wordmark:disabled .wordmark-more {
+	width:0;
+	margin-left:0;
+	opacity:0;
 }
 
 .wordmark-more {
@@ -7510,13 +8248,12 @@ header {
 	min-width:0;
 }
 
-/* The location, in a box of its own so it can be cut. text-overflow needs inline
-   content in a block box, which .wordmark-tail is not. */
 .wordmark-where {
 	min-width:0;
 	overflow:hidden;
 	text-overflow:ellipsis;
 	white-space:nowrap;
+	transition:color .2s ease;
 }
 
 #panel.has-trail .wordmark-tail {
@@ -7529,6 +8266,10 @@ header {
 	font-weight:400;
 	color:var(--subtitle-stage);
 	flex:0 0 auto;
+}
+
+#panel.trail-elsewhere .wordmark-where {
+	color:var(--subtitle-stage);
 }
 
 .header-wordmark:focus-visible {
@@ -7558,7 +8299,6 @@ header {
 	opacity:0;
 }
 
-/* Starts exactly where every title beneath it does. */
 .browse-tabs {
 	display:flex;
 	align-items:baseline;
@@ -7583,8 +8323,6 @@ header {
 #browse-tab-queue.is-collapsed {
 	max-width:0;
 	opacity:0;
-	/* Zero width already makes it unclickable; this says so rather than relying
-	   on it, since the tab is in the tree and no longer hidden by attribute. */
 	pointer-events:none;
 }
 
@@ -7655,14 +8393,10 @@ header {
 	}
 }
 
-/* Quiet, because it qualifies the number rather than being part of it. Hidden
-   from screen readers, which would read it as arithmetic. */
 .browse-comments-floor {
 	color:var(--meta);
 }
 
-/* Tight under the tab it qualifies: "front pages" and the list of them are one
-   statement, and the gap was reading as a separation between two. */
 .browse-blend-note {
 	margin:-7px 0 10px var(--browse-indent);
 	color:var(--meta);
@@ -7674,7 +8408,6 @@ header {
 	display:none;
 }
 
-#panel:not(.browsing) #header-submit,
 #panel.submitting #header-submit {
 	display:none;
 }
@@ -7683,8 +8416,6 @@ header {
 	display:none;
 }
 
-/* A rank column wide enough for two digits and the stop after them, which is
-   every row on a thirty-story page. */
 .browse-row {
 	display:flex;
 	gap:6px;
@@ -7715,8 +8446,6 @@ header {
 	min-width:0;
 }
 
-/* Beside the title at meta weight, the way HN sets it: it qualifies the link
-   rather than competing with it. */
 .browse-site {
 	color:var(--meta);
 	font-size:11px;
@@ -7726,8 +8455,6 @@ header {
 	color:var(--meta);
 }
 
-/* Indented to the rank column's right edge, so it starts where every title above
-   it starts rather than at the panel's edge. */
 .browse-nav {
 	display:flex;
 	align-items:baseline;
@@ -7738,8 +8465,6 @@ header {
 	color:var(--meta);
 }
 
-/* Set as a meta-row text link, like every other action on these rows. HN writes
-   favorite and flag exactly this way and puts them in exactly this company. */
 .item-action-link {
 	border:0;
 	padding:0;
@@ -7793,8 +8518,6 @@ header {
 	text-decoration:underline;
 }
 
-/* Text links on a meta row, the same treatment .filter-banner-close gets: no
-   underline until hover, no colour shift. */
 .browse-nav-link {
 	border:0;
 	padding:0;
@@ -7807,8 +8530,6 @@ header {
 	text-underline-offset:2px;
 }
 
-/* Dimmed and inert rather than removed. Which end of the list you are at is
-   information, and a control that vanishes makes the reader work out why. */
 .browse-nav-link:disabled {
 	opacity:.4;
 	cursor:default;
@@ -7842,8 +8563,6 @@ header {
 	color:var(--meta);
 }
 
-/* The title carries the panel's own text colour and the panel's own size: it is
-   the thing being offered, and the row around it is the label. */
 .next-up-title {
 	flex:1 1 auto;
 	min-width:0;
@@ -7910,8 +8629,6 @@ header {
 	color:var(--subtitle-stage);
 }
 
-/* A highlight swept across the text itself rather than a spinner beside it, so
-   the header gains no furniture for a state that is usually brief. */
 .header-subtitle-loading {
     background:linear-gradient(
         90deg,
@@ -7957,8 +8674,6 @@ header button svg {
 	display:block;
 }
 
-/* Both dropdowns in this header stay lit while they are down, so the button and
-   the panel under it read as one thing rather than as a press that ended. */
 #settings-toggle.is-open,
 #hide-site.is-open {
 	background:var(--active-tint);
@@ -7994,8 +8709,6 @@ header button svg {
 	transition:background .14s ease, border-color .14s ease;
 }
 
-/* Same accent the selected segment uses, so a checked box and a chosen segment
-   read as the same kind of "on". */
 .settings-option input[type="checkbox"]:checked {
 	border-color:transparent;
 	background:#0b63ce;
@@ -8017,8 +8730,6 @@ header button svg {
 	outline-offset:1px;
 }
 
-/* Sub-options are disabled while their parent is off, and an appearance:none box
-   has no UA disabled styling of its own. */
 .settings-option input[type="checkbox"]:disabled {
 	opacity:.45;
 	cursor:default;
@@ -8040,7 +8751,6 @@ header button svg {
 .settings-suboptions.is-visible {
 	max-height:140px;
 	opacity:1;
-	/* Separates the first sub-option from whatever it belongs to above it. */
 	margin-top:8px;
 }
 
@@ -8052,7 +8762,6 @@ header button svg {
 	margin-top:8px;
 }
 
-/* Version on the left, issues link on the right, one row. */
 .settings-credits {
 	display:flex;
 	align-items:baseline;
@@ -8077,8 +8786,6 @@ header button svg {
 	}
 }
 
-/* The page, not a submission of it. Sized like a story header used to be, so the
-	panel opens onto the same shape it always did. */
 .page-header {
 	padding:0 14px 10px;
 	border-bottom:1px solid var(--border-soft);
@@ -8096,8 +8803,6 @@ header button svg {
 	font-size:11px;
 }
 
-/* One discussion leaves this empty, and an empty line still takes a line's
-	height plus its margin -- a gap under the title with nothing in it. */
 .page-header-meta:empty {
 	display:none;
 }
@@ -8107,10 +8812,6 @@ header button svg {
 	border-bottom:0;
 }
 
-/* The aggregate leads and this is what a reader reaches for, so it sits below the
-	count at metadata weight rather than above it as a masthead. */
-/* The same slide the settings sub-options use, down to the durations, because it
-	is the same gesture: a group opening inside a panel rather than a new surface. */
 .source-strip {
 	display:flex;
 	flex-wrap:wrap;
@@ -8131,8 +8832,6 @@ header button svg {
 	margin-top:8px;
 }
 
-/* Reads as the affordance it is: the count is the thing you press, so it carries
-	a dotted underline rather than looking like the prose around it. */
 .page-header-disclosure {
 	font:inherit;
 	color:inherit;
@@ -8187,8 +8886,6 @@ header button svg {
 	cursor:pointer;
 }
 
-/* The pill that is currently filtering. Pressing it again clears, so it reads as
-	a toggle rather than a destination. */
 .source-strip-entry-active {
 	background:var(--active-tint);
 	font-weight:600;
@@ -8268,14 +8965,56 @@ header button svg {
 }
 
 .live-bookend-text {
+	display:flex;
+	align-items:baseline;
+	gap:4px;
 	min-width:0;
 	overflow:hidden;
-	text-overflow:ellipsis;
 	white-space:nowrap;
 }
 
-/* The closing rule leads instead of trailing, so the pair reads as a bracket
-	around the run rather than as two identical headings. */
+.live-bookend-lead {
+	flex:0 0 auto;
+}
+
+.live-bookend-names {
+	min-width:0;
+	overflow:hidden;
+	text-overflow:ellipsis;
+}
+
+.live-bookend-scroll {
+	display:inline-block;
+}
+
+.live-bookend-names.is-marquee {
+	text-overflow:clip;
+}
+
+.live-bookend-names.is-marquee .live-bookend-scroll {
+	animation:live-bookend-marquee var(--marquee-duration, 6s) ease-in-out infinite alternate;
+}
+
+@keyframes live-bookend-marquee {
+	0%, 18% {
+		transform:translateX(0);
+	}
+
+	82%, 100% {
+		transform:translateX(var(--marquee-shift, 0));
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.live-bookend-names.is-marquee .live-bookend-scroll {
+		animation:none;
+	}
+
+	.live-bookend-names.is-marquee {
+		text-overflow:ellipsis;
+	}
+}
+
 .live-bookend-close {
 	padding:14px 12px 0;
 	flex-direction:row-reverse;
@@ -8344,15 +9083,11 @@ header button svg {
 	color:white;
 }
 
-/* Disabled rather than hidden, so the way out of this screen stays visible along
-	with what it is waiting for. */
 .source-picker-save:disabled {
 	opacity:.6;
 	cursor:default;
 }
 
-/* Indented to clear the checkbox so the text starts under the option's label rather
-   than under its box. 13px is the native checkbox width, plus the flex gap. */
 .settings-option-hint {
 	margin:3px 0 0 21px;
 	color:var(--muted);
@@ -8366,7 +9101,6 @@ header button svg {
 	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
 }
 
-/* The slower-fetch note, added as its own paragraph under a slow source's caveat. */
 .settings-option-hint-slow {
 	margin:6px 0 0;
 }
@@ -8386,8 +9120,6 @@ header button svg {
 	margin-left:41px;
 }
 
-/* Shared: the settings panel's BETA pill needs this in the popover, and comment
-   rendering needs it in the sidebar. */
 .op-pill {
 	display:inline-block;
 	margin-left:1px;
@@ -8455,8 +9187,6 @@ header button svg {
 
 .settings-panel {
 	overflow-x:hidden;
-    /* The popover no longer clips this, so the panel bounds itself against a
-       short viewport rather than running off the bottom of the screen. */
 	max-height:calc(100vh - 120px);
 	overflow-y:auto;
 }
@@ -8483,8 +9213,6 @@ header button svg {
 	flex:0 0 50%;
 	width:50%;
 	min-width:0;
-    /* Delayed on the way out so the outgoing pane stays visible for the whole
-       slide, then drops out of the tab order once it is off-screen. */
 	visibility:hidden;
 	transition:visibility 0s linear .26s;
 }
@@ -8503,8 +9231,6 @@ header button svg {
 	display:block;
 }
 
-/* Small enough to sit in a dropdown, which is the constraint: five rows and a
-	column per source is about what fits before it stops being glanceable. */
 .source-matrix-caption {
 	margin:14px 0 5px;
 	color:var(--muted);
@@ -8563,23 +9289,22 @@ header button svg {
 	color:var(--muted);
 }
 
-/* Separates the source checkboxes from the support table below them. */
+.source-matrix .signin {
+	color:var(--muted);
+}
+
 .sources-divider {
 	border:none;
 	border-top:1px solid var(--surface-divider);
 	margin:14px 0;
 }
 
-/* No gap: the chevron animates its own width and margin, and a flex gap would
-   still reserve space for it while collapsed, indenting the title on level one. */
 .settings-head {
 	display:flex;
 	align-items:baseline;
 	margin:0 0 8px;
 }
 
-/* Collapsed to zero width rather than hidden, so entering the second level slides
-   it open and pushes the trail across instead of snapping. */
 .settings-back {
 	flex:0 0 auto;
 	width:0;
@@ -8611,13 +9336,10 @@ header button svg {
 	font-size:12px;
 	font-weight:600;
 	line-height:1.3;
-    /* Inert on the first level, where it is simply the panel's title. */
 	cursor:default;
 	transition:color .2s ease, font-weight .2s ease;
 }
 
-/* Enabled only on the second level, where it stops being the title and becomes
-   the way back -- so emphasis moves off it and onto the current page. */
 .settings-crumb-root:enabled {
 	cursor:pointer;
 	font-weight:400;
@@ -8630,8 +9352,6 @@ header button svg {
 	display:flex;
 	align-items:baseline;
 	gap:5px;
-    /* The head has no flex gap -- the chevron animates its own -- so the space
-       before the separator belongs to the trail. */
 	margin-left:5px;
 	font-size:12px;
 	font-weight:600;
@@ -8671,8 +9391,6 @@ header button svg {
 	border-left:1px solid var(--help-border);
 }
 
-/* Full-bleed rather than display:none so the control stays keyboard reachable and
-   arrow keys still move through the group. */
 .segment input {
 	position:absolute;
 	inset:0;
@@ -8715,8 +9433,6 @@ header button svg {
 	gap:10px;
 }
 
-/* flex-start so the "Button" label sits level with the top of the preview box
-   beside it rather than floating in the middle of the column. */
 .button-designer-controls {
 	flex:1 1 auto;
 	min-width:0;
@@ -8725,8 +9441,6 @@ header button svg {
 	justify-content:flex-start;
 }
 
-/* align-self so the row is only as wide as its three controls; stretched to the
-   column it left the two buttons marooned at opposite edges. */
 .stepper {
 	display:flex;
 	align-items:center;
@@ -8812,7 +9526,6 @@ header button svg {
 	background-position:center center;
 }
 
-/* Fixed so the panel does not jump as the button grows through its range. */
 .button-preview-stage {
 	height:68px;
 	display:flex;
@@ -8826,8 +9539,6 @@ header button svg {
 	justify-content:center;
 	border:0;
 	cursor:text;
-	/* Both follow the accent rather than assuming white, the same way the real
-		button's mark does -- the preview is meant to be what it will look like. */
 	caret-color:var(--accent-ink);
 	outline-offset:2px;
 	background:var(--accent);
@@ -8853,8 +9564,6 @@ header button svg {
 	position:absolute;
 	top:calc(50% - 5px);
 	height:5px;
-	/* Clears the caption, which is now a seven-character hex rather than the two
-		digits the ticks were spaced for. */
 	width:calc(50% - 27px);
 	border-bottom:1px solid var(--blueprint-ink);
 }
@@ -8955,7 +9664,7 @@ header button svg {
 ${
 	browse
 		? `<button id="browse-toggle" class="header-wordmark" type="button"
-title="${escapeHTML(browseLabel())}"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
+title="${escapeHTML(browseLabel())}"><span
 class="wordmark-root"><b>Back</b>channel</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
 class="wordmark-tail"><span class="wordmark-sep">/</span><span
 class="wordmark-where">Discussion</span></span></button>`
@@ -9139,6 +9848,8 @@ ${[
 	["Vote", (source) => Boolean(source.capabilities.vote)],
 	["Reply", (source) => Boolean(source.capabilities.reply)],
 	["Submit", (source) => Boolean(source.capabilities.submit)],
+	["Favorite", (source) => Boolean(source.capabilities.favorite)],
+	["Flag", (source) => Boolean(source.capabilities.flag)],
 ]
 	.map(
 		([label, supported]) => `<tr><th>${escapeHTML(label)}</th>${[
@@ -9146,7 +9857,7 @@ ${[
 		]
 			.map((source) => {
 				const yes = Boolean(supported(source));
-				return `<td class="${yes ? "yes" : "no"}" aria-label="${yes ? "yes" : "no"}">${yes ? "&check;" : "&ndash;"}</td>`;
+				return `<td class="${yes ? "yes" : "no"}" data-capability-source="${escapeHTML(source.id)}" aria-label="${yes ? "yes" : "no"}">${yes ? "&check;" : "&ndash;"}</td>`;
 			})
 			.join("")}</tr>`,
 	)
@@ -9166,7 +9877,37 @@ ${[
 `;
 	}
 
+	async function markCapabilityAuth(shadow) {
+		const now = Date.now();
+		const verdicts = new Map();
+
+		for (const cell of shadow.querySelectorAll("[data-capability-source]")) {
+			const sourceID = cell.dataset.capabilitySource;
+
+			if (!verdicts.has(sourceID)) {
+				verdicts.set(sourceID, await readAuthVerdict(sourceID));
+			}
+
+			const mark = capabilityMark(
+				cell.classList.contains("yes"),
+				verdicts.get(sourceID),
+				now,
+			);
+
+			if (mark !== "signin") {
+				continue;
+			}
+
+			cell.classList.remove("yes");
+			cell.classList.add("signin");
+			cell.textContent = "○";
+			cell.setAttribute("aria-label", "sign in required");
+			cell.title = `Sign in to ${getSource(sourceID)?.label || "this source"}`;
+		}
+	}
+
 	async function wireSettingsPanel(shadow, { onAnnotationChange } = {}) {
+		markCapabilityAuth(shadow).catch(console.error);
 		const settingsPanel = shadow.querySelector("#settings-panel");
 		const settingsToggle = shadow.querySelector("#settings-toggle");
 
@@ -9205,8 +9946,6 @@ ${[
 		];
 
 		const syncPanesHeight = () => {
-			// scrollHeight reads 0 under display:none, so measuring while the panel
-			// is closed would pin the track to zero until the next open.
 			if (!panes || settingsPanel.classList.contains("hidden")) {
 				return;
 			}
@@ -9252,19 +9991,13 @@ ${[
 
 			panes?.classList.toggle("is-secondary", secondary);
 
-			// One class drives the whole trail so the chevron, the de-emphasis of
-			// "Settings", and the trail fading in all run off the same transition.
 			head?.classList.toggle("is-secondary", secondary);
 			crumbTail?.setAttribute("aria-hidden", secondary ? "false" : "true");
 
-			// Disabled rather than hidden: both stay in the layout for the animation,
-			// and disabling is what keeps them out of the tab order meanwhile.
 			if (crumbBack) {
 				crumbBack.disabled = !secondary;
 			}
 
-			// On the first level "Settings" is the panel's title, not a link back to
-			// somewhere.
 			if (crumbRoot) {
 				crumbRoot.disabled = !secondary;
 			}
@@ -9277,8 +10010,6 @@ ${[
 			const radius =
 				BUTTON_SHAPES[settings.buttonShape] || BUTTON_SHAPES.circle;
 
-			// Left alone while focused, so a half-typed value is not overwritten
-			// mid-keystroke by a refresh triggered elsewhere in the panel.
 			if (sizeInput && shadow.activeElement !== sizeInput) {
 				sizeInput.value = String(size);
 			}
@@ -9295,16 +10026,12 @@ ${[
 				previewShape.style.fontSize = `${buttonFontSizeFor(size)}px`;
 			}
 
-			// Disabled only when stepping cannot move at all, which is the ends of
-			// the range. From a typed 63 the + button still works, landing on 64.
 			for (const button of stepperButtons) {
 				button.disabled =
 					stepButtonSize(size, Number(button.dataset.sizeStep)) === size;
 			}
 		};
 
-		// Found by the setting each group hangs off rather than by id, so a third
-		// group needs markup and nothing here.
 		const suboptionGroups = [
 			...settingsPanel.querySelectorAll("[data-suboptions-of]"),
 		];
@@ -9351,27 +10078,20 @@ ${[
 
 		let setHideMenuOpen = () => {};
 
-		// Single place the open state changes, so the button's pressed styling and
-		// aria-expanded cannot drift out of sync with the panel.
 		const setSettingsOpen = (open) => {
 			settingsPanel.classList.toggle("hidden", !open);
 			settingsToggle.classList.toggle("is-open", open);
 			settingsToggle.setAttribute("aria-expanded", open ? "true" : "false");
 
-			// The other half of the pair. Opening settings over an open hide menu left
-			// two dropdowns down at once, one of them stacked behind the other.
 			if (open) {
 				setHideMenuOpen(false);
 			}
 
-			// Measured only while visible: scrollHeight reads 0 under display:none,
-			// which is why this runs after the class toggle rather than before it.
 			if (open) {
 				syncPanesHeight();
 				return;
 			}
 
-			// Reopening lands on the main pane rather than wherever it was left.
 			showSecondaryPane(null);
 		};
 
@@ -9383,8 +10103,6 @@ ${[
 			setSettingsOpen(settingsPanel.classList.contains("hidden"));
 		};
 
-		// Wired here rather than per-surface because this is the one function both
-		// the sidebar header and the submit popover header pass through.
 		const hideSiteButton = shadow.querySelector("#hide-site");
 		const hideMenu = shadow.querySelector("#hide-menu");
 
@@ -9449,8 +10167,6 @@ ${[
 			const sourceInput = event.target.closest("input[data-source]");
 
 			if (sourceInput) {
-				// Collapse (or restore) this source's caveat immediately, without
-				// waiting on :has() re-evaluation the browser may not do live.
 				syncSourceHint(sourceInput);
 
 				const current = await loadSettings();
@@ -9483,8 +10199,6 @@ ${[
 
 			const setting = input.dataset.setting;
 
-			// saveSettings re-syncs the appearance caches from its patched result, so
-			// they are current by the time these refreshers run.
 			if (setting === "theme") {
 				refreshThemeSurfaces();
 				await onAnnotationChange?.();
@@ -9535,8 +10249,6 @@ ${[
 				commitMark().catch(console.error);
 			});
 
-			// Paste arrives as whatever was on the clipboard, including newlines and
-			// markup. Taken as text and normalised rather than inserted.
 			previewShape.addEventListener("paste", (event) => {
 				event.preventDefault();
 				previewShape.textContent = normalizeButtonMark(
@@ -9551,8 +10263,6 @@ ${[
 				const parsed = typed ? parseHexColor(typed) : null;
 
 				if (typed && !parsed) {
-					// Unparseable: snap back to what is actually painting rather than
-					// storing something the panel cannot use.
 					applySettingsPanelState(await loadSettings());
 					return;
 				}
@@ -9570,8 +10280,6 @@ ${[
 					return;
 				}
 
-				// Escape abandons rather than commits, so a half-typed value does not
-				// become the accent because the reader changed their mind.
 				if (event.key === "Escape") {
 					event.preventDefault();
 					loadSettings()
@@ -9587,8 +10295,6 @@ ${[
 				commitAccent().catch(console.error);
 			});
 
-			// Paste arrives as whatever was on the clipboard. Taken as plain text so
-			// a copied swatch cannot bring markup into a caption.
 			previewDim.addEventListener("paste", (event) => {
 				event.preventDefault();
 				previewDim.textContent = (
@@ -9609,8 +10315,6 @@ ${[
 					Number(button.dataset.sizeStep),
 				);
 
-				// The ends of the range produce no change; skip the write rather than
-				// churning storage on a click that cannot move anything.
 				if (next === current) {
 					return;
 				}
@@ -9631,8 +10335,6 @@ ${[
 					: current;
 
 				if (next === current) {
-					// Snap the field back: it may hold "5" or "abc" that resolved to
-					// the value already in effect.
 					sizeInput.value = String(current);
 					return;
 				}
@@ -9653,8 +10355,6 @@ ${[
 				}
 
 				event.preventDefault();
-				// Blur rather than committing directly, so Enter and click-away take
-				// exactly the same path through onchange.
 				sizeInput.blur();
 			};
 		}
@@ -9671,8 +10371,6 @@ ${[
 
 				applySettingsPanelState(settings);
 				await refreshButtonAppearance();
-				// Reaches further than the button: the accent is the panel's, the
-				// article highlights' and the header's as well.
 				await refreshAccentOverride();
 			};
 		}
@@ -9703,8 +10401,6 @@ ${[
 				const row = document.createElement("div");
 				const name = document.createElement("span");
 				const remove = document.createElement("button");
-				// Storage is not language: an entry is stored as `page:host/path`
-				// and read as a sentence.
 				const label = describeBlockedEntry(host);
 
 				row.className = "settings-blocked-entry";
@@ -9735,8 +10431,6 @@ ${[
 			".settings-link-button[data-pane]",
 		)) {
 			entry.onclick = async () => {
-				// The blocked list is built on demand rather than kept in sync, so it
-				// has to be rendered before the pane it lives in slides in.
 				if (entry.dataset.pane === "blocked") {
 					await renderBlockedList();
 				}
@@ -9795,8 +10489,6 @@ ${[
 	width:${width}px;
 	min-width:${isPortraitPhone() ? "0" : "280px"};
 	max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "80vw"};
-    /* Without this the 1px border-left is added to the width, so a panel sized to
-       the viewport renders a pixel past its left edge. */
 	box-sizing:border-box;
 	background:var(--bg);
 	color:var(--text);
@@ -9808,8 +10500,6 @@ ${[
 	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
 	font-size:13px;
 	overflow:visible;
-    /* Reading width for a single block of prose. Never applied to a container: a
-       cap on any ancestor of .children narrows every reply nested under it. */
 	--measure:1215px;
 }
 
@@ -9837,8 +10527,6 @@ ${SUBMIT_FORM_CSS}
 	opacity:0;
 }
 
-/* Sidebar-only, so deliberately not part of CHROME_CSS: #panel is position:fixed,
-   which is already a containing block. */
 #resize-handle {
 	position:absolute;
 	left:0;
@@ -9847,13 +10535,9 @@ ${SUBMIT_FORM_CSS}
 	width:8px;
 	cursor:col-resize;
 	z-index:3;
-    /* Keeps the browser from turning the drag into a scroll or a page-back swipe
-       before the resize handlers see it. */
 	touch-action:none;
 }
 
-/* A finger needs a far bigger target than a cursor, and an invisible edge strip is
-   undiscoverable, so coarse pointers get a wider strip with a visible grip. */
 @media (pointer: coarse) {
 	#resize-handle {
 		width:20px;
@@ -9909,8 +10593,6 @@ ${SUBMIT_FORM_CSS}
 	margin-top:0;
 }
 
-/* The band is always here and merely collapsed, so turning a filter on has
-	something to grow from rather than putting a rule on screen in one frame. */
 .submission-detail::before {
 	transition:
 		height .2s ease,
@@ -10021,8 +10703,6 @@ ${SUBMIT_FORM_CSS}
 	font-style:normal;
 }
 
-/* The one piece of contrast in the line, the same job .filter-banner-title does in
-   the row above: without it the author reads as part of the sentence. */
 .filter-banner-author {
 	color:var(--text);
 }
@@ -10032,14 +10712,10 @@ ${SUBMIT_FORM_CSS}
 	color:var(--meta);
 }
 
-/* Unboxed, an empty quote was invisible. Boxed, it would render as a stray
-   empty rectangle whenever a group carries no quote text. */
 .filter-banner-quote:empty {
 	display:none;
 }
 
-/* A text link on the meta row, not a floating glyph. Same rule as .meta a and
-   .composer-help-toggle: no underline until hover, no colour shift. */
 .filter-banner-close {
 	border:0;
 	padding:0;
@@ -10052,8 +10728,6 @@ ${SUBMIT_FORM_CSS}
 	text-underline-offset:2px;
 }
 
-/* Split from :hover deliberately, same as the quote links: keyboard focus must
-   show regardless of pointer type. */
 .filter-banner-close:focus-visible {
 	text-decoration:underline;
 }
@@ -10090,7 +10764,6 @@ ${SUBMIT_FORM_CSS}
 	transition:box-shadow .9s ease;
 }
 
-/* A top-level comment has no divider under the accent, so it does fade to nothing. */
 .comment.new-comment.comment-new-seen {
 	border-left-color:transparent;
 }
@@ -10154,6 +10827,13 @@ ${SUBMIT_FORM_CSS}
 .story-text ul,
 .story-text ol {
 	padding-left:22px;
+}
+
+.text hr,
+.story-text hr {
+	border:none;
+	border-top:1px solid var(--surface-divider);
+	margin:8px 0;
 }
 
 .text a {
@@ -10227,8 +10907,6 @@ ${SUBMIT_FORM_CSS}
 	align-items:flex-start;
 }
 
-/* Collapsed rather than hidden: the slot still exists so the layout is one rule,
-   it just stops reserving width when nothing in the thread can be voted on. */
 .comment-vote-slot-empty {
 	flex-basis:0;
 	width:0;
@@ -10281,8 +10959,6 @@ ${SUBMIT_FORM_CSS}
 	top:2px;
 }
 
-/* Split deliberately: the -active colour marks a recorded vote and must apply on
-   touch, so only the :hover half is gated. */
 .vote-button-active::before {
 	border-bottom-color:var(--accent);
 }
@@ -10337,7 +11013,6 @@ ${SUBMIT_FORM_CSS}
 	color:var(--meta);
 }
 
-/* Sits in the byline as plain text, the way HN's own unvote link does. */
 .vote-unvote-link {
 	background:none;
 	border:0;
@@ -10400,8 +11075,6 @@ ${SUBMIT_FORM_CSS}
 	text-decoration:none;
 }
 
-/* A hairline. 1.5px was landing on three device pixels at 2x, which read as a rule
-   under the text rather than as a mark on it. */
 .comment-quote-link-inline {
 	text-decoration:underline;
 	text-decoration-color:rgba(var(--accent-rgb),.32);
@@ -10409,8 +11082,6 @@ ${SUBMIT_FORM_CSS}
 	text-underline-offset:2px;
 }
 
-/* Split deliberately: :focus-visible is keyboard navigation and must keep working
-   regardless of pointer type, so only the :hover half is gated. */
 .comment-quote-link:focus-visible {
 	background:rgba(var(--accent-rgb),.06);
 }
@@ -10434,8 +11105,6 @@ blockquote.comment-quote-link:focus-visible {
 	cursor:default;
 }
 
-/* Outside the hover media query and more specific than the rules there, so a
-   quote the reader cannot usefully click does not light up under the pointer. */
 .comment-quote-redundant.comment-quote-link-inline:hover,
 .comment-quote-redundant.comment-quote-link-inline:focus-visible {
 	background:transparent;
@@ -10471,7 +11140,6 @@ blockquote.comment-quote-redundant {
 	padding-top:2px;
 }
 
-/* Matches .meta a, so the submitter reads the same as any commenter's name. */
 .story-meta a {
 	color:var(--meta);
 	text-decoration:none;
@@ -10512,12 +11180,9 @@ blockquote.comment-quote-redundant {
 .reply-composer.collapsed {
 	max-height:0;
 	opacity:0;
-    /* Nothing inside a collapsed box should be reachable by keyboard. */
 	visibility:hidden;
 }
 
-/* Matches .composer-help-toggle: a text link that keeps its underline while the
-   thing it toggles is open. */
 .reply-link.is-open {
 	text-decoration:underline;
 }
@@ -10527,8 +11192,6 @@ blockquote.comment-quote-redundant {
 	width:100%;
 	box-sizing:border-box;
 	min-height:72px;
-    /* Both axes, but bounded by the wrapper: a textarea dragged wider than the
-       sidebar would just be clipped by #comments' overflow-x:hidden. */
 	max-width:100%;
 	resize:both;
 	padding:6px 7px;
@@ -10537,7 +11200,6 @@ blockquote.comment-quote-redundant {
 	background:var(--field-bg);
 	color:var(--field-text);
 	font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    /* Whitespace is significant to HN's formatter, so never collapse it visually. */
 	white-space:pre-wrap;
 	tab-size:4;
 	cursor:text;
@@ -10553,8 +11215,6 @@ blockquote.comment-quote-redundant {
 	color:var(--muted);
 }
 
-/* space-between rather than a margin on the link, so the button stays left and the
-   formatting link stays flush right however either one is relabelled. */
 .composer-actions {
 	display:flex;
 	align-items:center;
@@ -10563,8 +11223,6 @@ blockquote.comment-quote-redundant {
 	margin-top:6px;
 }
 
-/* HN renders "add comment" as a real submit input, so it inherits the platform's
-   default button chrome. Deliberately left unstyled to match. */
 .composer-submit {
 	cursor:pointer;
 }
@@ -10585,7 +11243,6 @@ blockquote.comment-quote-redundant {
 	text-decoration:underline;
 }
 
-/* Underline only, no colour shift -- exactly what .meta a does for usernames. */
 @media (hover: hover) {
 	.composer-help-toggle:hover {
 		text-decoration:underline;
@@ -10628,8 +11285,6 @@ blockquote.comment-quote-redundant {
 	transition:opacity .14s ease;
 }
 
-/* Held while the message is being swapped, so one state fades out before the next
-   fades in rather than the text changing under the reader. */
 .composer-status.is-fading {
 	opacity:0;
 }
@@ -10638,8 +11293,6 @@ blockquote.comment-quote-redundant {
 	color:var(--error);
 }
 
-/* Braille frames rather than a spinning glyph: they animate in place without the
-   baseline wobble a rotating character gives you, and need no image or keyframes. */
 .composer-spinner {
 	display:inline-block;
 	width:1em;
@@ -10651,6 +11304,38 @@ blockquote.comment-quote-redundant {
 	color:var(--link);
 }
 
+.toast-layer {
+	position:relative;
+	height:0;
+	z-index:6;
+}
+
+.toast {
+	position:absolute;
+	top:8px;
+	left:50%;
+	transform:translate(-50%,-14px);
+	max-width:calc(100% - 24px);
+	padding:8px 12px;
+	border-radius:6px;
+	background:var(--accent);
+	color:var(--accent-ink);
+	box-shadow:0 4px 14px rgba(0,0,0,.22);
+	font-size:12px;
+	line-height:1.4;
+	text-align:center;
+	opacity:0;
+	visibility:hidden;
+	pointer-events:none;
+	transition:opacity .18s ease, transform .18s ease, visibility .18s;
+}
+
+.toast.is-showing {
+	opacity:1;
+	visibility:visible;
+	transform:translate(-50%,0);
+}
+
 </style>
 
 <div id="panel">
@@ -10658,6 +11343,7 @@ blockquote.comment-quote-redundant {
 <div id="resize-handle" aria-hidden="true"></div>
 
 ${headerHTML({ subtitle: true, minimize: true, browse: true })}
+<div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div></div>
 ${settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
@@ -10684,21 +11370,15 @@ ${settingsPanelHTML()}
 
 		const panel = shadow.querySelector("#panel");
 
-		// Applied to the host, not the panel, so the custom properties inherit into
-		// everything in this shadow tree.
 		const stopWatchingTheme = watchTheme(host);
 		const filterBanner = shadow.querySelector("#filter-banner");
 		const filterBannerQuote = shadow.querySelector("#filter-banner-quote");
 		const clearFilterButton = shadow.querySelector("#clear-filter");
 
-		// Stop scroll/touch events moving out of sidebar so sites with
-		// JS scroll hijacking (wheel listeners on window) don't scroll behind
 		for (const type of ["wheel", "touchmove"]) {
 			host.addEventListener(type, (event) => event.stopPropagation());
 		}
 
-		// Shared with the submit popover; the annotation refresh is the one piece
-		// that only makes sense here, so it is passed in rather than assumed.
 		const { setSettingsOpen } = await wireSettingsPanel(shadow, {
 			onAnnotationChange: refreshArticleAnnotations,
 		});
@@ -10712,15 +11392,11 @@ ${settingsPanelHTML()}
 		let resizing = false;
 		let startX = 0;
 		let startWidth = 0;
-		// Set once a width has been dragged, so the orientation handling below knows
-		// to leave a deliberately chosen width alone.
 		let userResized = false;
 
 		const resizeHandle = shadow.querySelector("#resize-handle");
 
 		const onResizeMouseDown = (e) => {
-			// Ignore anything but a primary-button drag, so a right-click on the edge
-			// cannot leave the panel stuck in a resize that never gets a mouseup.
 			if (e.button !== 0) {
 				return;
 			}
@@ -10774,8 +11450,6 @@ ${settingsPanelHTML()}
 
 		let destroyed = false;
 
-		// Touch never fires the mouse drag above, so resizing is wired separately
-		// here. Non-passive so preventDefault can stop the page scrolling mid-drag.
 		const onTouchStart = (e) => {
 			const touch = e.touches[0];
 
@@ -10877,8 +11551,6 @@ ${settingsPanelHTML()}
 				await saveSidebarState("collapsed");
 				await createRestoreButton();
 			} else if (location.hostname === "news.ycombinator.com") {
-				// Back to the button that opened it. A submit button here would be
-				// offering to submit Hacker News to Hacker News.
 				await offerQueueOnHN();
 			} else {
 				await createSubmitButton();
@@ -10907,14 +11579,11 @@ ${settingsPanelHTML()}
 
 		if (browseToggle) {
 			browseToggle.onclick = () => {
-				// Pressing the root goes to the root, which is where Cancel goes.
 				if (isSubmitting(ui)) {
 					setBrowseMode(ui, true);
 					return;
 				}
 
-				// Read off the panel rather than kept in a flag of its own, so a
-				// teardown that rebuilds the panel cannot leave the two disagreeing.
 				setBrowseMode(ui, !isBrowsing(ui));
 			};
 		}
@@ -10970,12 +11639,8 @@ ${settingsPanelHTML()}
 		const hnURL = discussionURL(story);
 		const title = options.title ?? story.title;
 
-		// Flag and favourite are Hacker News features. A source without them must not
-		// be given links that would act on an item id Hacker News never issued.
 		const showActions = options.actions !== false;
 		const showTitle = options.showTitle !== false;
-		// Separate from `actions`, which is about voting. A source can allow one and
-		// not the other, and the front-page rows pass neither.
 		const showComposer = options.compose === true;
 		const storyAuthor = story.author ?? story.by;
 		const storyCreatedAt = story.createdAt ?? story.time;
@@ -10984,9 +11649,8 @@ ${settingsPanelHTML()}
 		const storyCommentCount = story.commentCount ?? story.descendants ?? 0;
 		const storyBodyHTML = story.bodyHTML ?? story.text;
 
-		// Lifted out because it goes in one of two cells: beside the title when
-		// there is one, and beside the byline when there is not.
 		const voteControlsHTML = `<span class="story-vote-controls vote-controls hidden"
+	data-hn-vote-source="${escapeHTML(String(story.source || "hn"))}"
 	data-hn-vote-story-id="${escapeHTML(storyID)}"
 	data-hn-vote-item-id="${escapeHTML(storyID)}"></span>`;
 
@@ -11027,16 +11691,12 @@ ${settingsPanelHTML()}
 			? ""
 			: `<span class="story-score" data-story-score-id="${escapeHTML(storyID)}" data-story-score="${escapeHTML(String(storyScore))}">${storyScore}</span> points `
 	}${
-		// "by" belongs to the name, so a discussion nobody authored drops both
-		// rather than trailing a preposition into the timestamp.
 		storyAuthor ? `by ${authorLinkHTML(story.source, storyAuthor)} ` : ""
 	}${
 		ageLabel ? escapeHTML(ageLabel) + " " : ""
 	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
-	${showActions ? itemActionLinksHTML(storyID) : ""}
+	${showActions ? itemActionLinksHTML(storyID, story.source || "hn") : ""}
 	${
-		// The separator belongs to the link, so a source with no page of its own
-		// renders neither rather than leaving a bare pipe pointing nowhere.
 		showTitle || !hnURL
 			? ""
 			: `| <a class="story-open-link" target="_blank" rel="noopener noreferrer"
@@ -11071,13 +11731,12 @@ ${settingsPanelHTML()}
 		const storyElement = wrapper.firstElementChild;
 		storyElement.dataset.storyId = storyID;
 
-		// Same treatment a comment gets: a story's opening paragraph arrives unwrapped
-		// too, so without this the first-child rule would land on its second paragraph.
 		wrapLooseCommentText(storyElement.querySelector(".story-text"));
 
 		container.appendChild(storyElement);
 
 		wireComposer(storyElement.querySelector(".comment-composer"), {
+			source: story.source,
 			storyID,
 		});
 
@@ -11112,16 +11771,12 @@ ${settingsPanelHTML()}
 `;
 	}
 
-	// Keyed on the comment being replied to, or the story for a top-level comment, so
-	// two drafts in the same thread cannot overwrite each other.
 	function composerDraftKey({ storyID, parentId }) {
 		return "HNewhere:comment_draft:" + (parentId || storyID);
 	}
 
 	const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-	// Returns a stop function. The caller owns the lifetime, because the spinner has
-	// to survive across the await that opens the popup and outlive any one message.
 	function startSpinner(element) {
 		let frame = 0;
 
@@ -11135,9 +11790,10 @@ ${settingsPanelHTML()}
 		return () => window.clearInterval(timer);
 	}
 
-	// parentId set means this is a reply to that comment; absent means a top-level
-	// comment on the story. Everything else about the two is identical.
-	function wireComposer(composer, { storyID, parentId = null, onPosted } = {}) {
+	function wireComposer(
+		composer,
+		{ source = "hn", storyID, parentId = null, onPosted } = {},
+	) {
 		if (!composer) {
 			return null;
 		}
@@ -11176,7 +11832,6 @@ ${settingsPanelHTML()}
 				}
 			};
 
-			// Nothing showing yet, so there is nothing to fade out of.
 			if (status.classList.contains("hidden")) {
 				write();
 				return;
@@ -11217,8 +11872,6 @@ ${settingsPanelHTML()}
 			helpToggle.setAttribute("aria-expanded", hidden ? "false" : "true");
 		};
 
-		// Restored asynchronously, and only into a box the reader has not already
-		// started typing in, so a slow storage read cannot overwrite live input.
 		load(draftKey, "")
 			.then((draft) => {
 				if (draft && !textarea.value) {
@@ -11240,8 +11893,6 @@ ${settingsPanelHTML()}
 		const setBusy = (busy) => {
 			submitButton.disabled = busy;
 			textarea.disabled = busy;
-			// Ellipsis form of whatever the button says, so "reply" and "add comment"
-			// both read correctly without the caller having to supply a second label.
 			submitButton.textContent = busy ? submitLabel + "…" : submitLabel;
 		};
 
@@ -11258,12 +11909,24 @@ ${settingsPanelHTML()}
 			showSpinner();
 
 			try {
-				// Called before any await in this handler, so window.open still counts as
-				// user-initiated. Do not introduce an await above this line.
-				const result = await submitCommentToHN(storyID, text, parentId);
+				const result = await submitCommentThroughBridge(
+					source,
+					storyID,
+					text,
+					parentId,
+					() =>
+						setStatus(
+							`Waiting for sign-in on ${getSource(source)?.label || "the source"}…`,
+						),
+				);
+
+				await rememberAuthFromResult(source, result);
 
 				if (!result?.ok) {
-					setStatus(commentFailureMessage(result), { error: true });
+					setStatus(
+						commentFailureMessage(result, getSource(source)?.label || "the source"),
+						{ error: true },
+					);
 					return;
 				}
 
@@ -11285,9 +11948,25 @@ ${settingsPanelHTML()}
 		return { focus: () => textarea.focus() };
 	}
 
-	function submitCommentToHN(storyID, text, parentId = null) {
+	function submitCommentThroughBridge(
+		sourceID,
+		storyID,
+		text,
+		parentId = null,
+		onInterim,
+	) {
+		const bridge = getWriteBridge(sourceID);
+		const action = bridge?.actions?.reply;
+
+		if (!action) {
+			return Promise.resolve({ ok: false, reason: "no-bridge" });
+		}
+
 		const nonce = bridgeNonce();
-		const session = openCommentBridgePopup(nonce);
+		const session = openCommentBridgePopup(nonce, {
+			origin: bridge.origin,
+			onInterim,
+		});
 
 		if (session.blocked) {
 			return session.result;
@@ -11304,20 +11983,11 @@ ${settingsPanelHTML()}
 				});
 				await indexBridgePayload(nonce);
 
-				const hash = new URLSearchParams();
-
-				hash.set("hnewhere-comment", "1");
-				hash.set("nonce", nonce);
-				hash.set("story", String(storyID));
-				hash.set("origin", location.origin);
-
-				// /reply carries its own goto back to the item page, so both paths land
-				// somewhere reportCommentResultAfterReload can read the result from.
-				const target = parentId
-					? replyURL({ id: parentId }, storyID)
-					: commentURL(storyID);
-
-				session.navigate(target + "#" + hash.toString());
+				session.navigate(
+					action.url({ storyID, parentId }) +
+						"#" +
+						bridgeHash(action, nonce, { story: storyID }),
+				);
 
 				return await session.result;
 			} finally {
@@ -11326,24 +11996,26 @@ ${settingsPanelHTML()}
 		})();
 	}
 
-	function commentFailureMessage(result) {
+	// #region hnewhere-test-export
+	function commentFailureMessage(result, sourceLabel = "Hacker News") {
 		switch (result?.reason) {
 			case "popup-blocked":
 				return "Your browser blocked the popup. Allow popups for this site and try again.";
 			case "timeout":
-				return "Hacker News did not respond in time. Check the popup window — your draft is saved.";
+				return `${sourceLabel} did not respond in time. Check the popup window — your draft is saved.`;
 			case "not-logged-in":
-				return "Log in to Hacker News in the popup, then submit again.";
+				return `Log in to ${sourceLabel} in the popup, then submit again.`;
 			case "rate-limited":
-				return "Hacker News is rate limiting comments. Wait a moment and try again.";
+				return `${sourceLabel} is rate limiting comments. Wait a moment and try again.`;
 			case "no-form":
-				return "Could not find the comment box on Hacker News. The thread may be locked.";
+				return `Could not find the comment box on ${sourceLabel}. The thread may be locked.`;
 			case "unconfirmed":
-				return "Submitted, but Hacker News did not show the comment back. Check the thread before reposting.";
+				return `Submitted, but ${sourceLabel} did not show the comment back. Check the thread before reposting.`;
 			default:
 				return result?.message || "Comment did not go through — your draft is saved.";
 		}
 	}
+	// #endregion hnewhere-test-export
 
 	function reloadDiscussion(storyID) {
 		itemCache.clear();
@@ -11477,10 +12149,6 @@ ${settingsPanelHTML()}
 	}
 
 	// #region hnewhere-test-export
-	// Tags sanitizeHTML can emit that establish a block. Deliberately not
-	// SEARCH_BLOCK_TAGS, which counts BR because the text index wants a line break
-	// there — here BR must stay inline, or a comment's first line would split at
-	// the break and only its first fragment would be tested for a quote marker.
 	const QUOTE_BLOCK_CONTAINERS = new Set(["P", "PRE", "BLOCKQUOTE", "UL", "OL", "LI", "HR"]);
 
 	function readQuoteMarker(text) {
@@ -11496,7 +12164,6 @@ ${settingsPanelHTML()}
 	function readQuotationWrapper(text) {
 		const trimmed = (text || "").trim();
 
-		// Two marks and something between them.
 		if (trimmed.length < 3) {
 			return null;
 		}
@@ -11546,8 +12213,6 @@ ${settingsPanelHTML()}
 		}
 	}
 
-	// The mirror of the above, for the closing mark of a quotation. `>` needs no such
-	// thing -- it only ever has a front -- so this exists solely for the wrapped form.
 	function dropTrailingCharacters(nodes, count) {
 		let remaining = count;
 
@@ -11636,8 +12301,6 @@ ${settingsPanelHTML()}
 			block.blank = !text.trim();
 			block.depth = 0;
 
-			// A quote line is a bare leading run or a <p>. A <pre> is excluded on
-			// purpose: shell prompts and diffs legitimately begin lines with `>`.
 			if (block.blank || (block.element && block.element.tagName !== "P")) {
 				continue;
 			}
@@ -11650,8 +12313,6 @@ ${settingsPanelHTML()}
 				continue;
 			}
 
-			// Tried second, so a line carrying both -- `> "quoted"` -- keeps its `>`
-			// depth and its marks, which is what the commenter typed.
 			const wrapper = readQuotationWrapper(text);
 
 			if (wrapper) {
@@ -11679,15 +12340,11 @@ ${settingsPanelHTML()}
 			lines.push({ depth: block.depth, nodes });
 		}
 
-		// Hold the position before building, because building moves the run's own
-		// nodes into the new blockquote and they can no longer anchor the insert.
 		const placeholder = document.createComment("");
 
 		root.insertBefore(placeholder, run[0].nodes[0]);
 		root.replaceChild(buildQuoteTree(lines), placeholder);
 
-		// Whatever the tree did not adopt — emptied <p> shells, blank lines — is
-		// still a direct child of root and is now redundant.
 		for (const block of run) {
 			for (const node of block.nodes) {
 				if (node.parentNode === root) {
@@ -11711,8 +12368,6 @@ ${settingsPanelHTML()}
 				continue;
 			}
 
-			// Blank blocks do not break a run; they are absorbed and dropped, so a
-			// stray whitespace node between two quote lines cannot split the quote.
 			let last = index;
 			let end = index + 1;
 
@@ -11729,8 +12384,6 @@ ${settingsPanelHTML()}
 		}
 	}
 
-	// Blocks that stand on their own. Anything else at the top level of a comment is
-	// inline and belongs to whatever paragraph surrounds it.
 	const COMMENT_BLOCK_TAGS = new Set([
 		"P",
 		"BLOCKQUOTE",
@@ -11749,8 +12402,6 @@ ${settingsPanelHTML()}
 		let run = [];
 
 		const flush = () => {
-			// A run of nothing but whitespace is the surrounding template's own
-			// indentation. Wrapping it would invent a paragraph.
 			const meaningful = run.some(
 				(node) => node.nodeType !== 3 || node.textContent.trim(),
 			);
@@ -11816,6 +12467,7 @@ ${settingsPanelHTML()}
       <div class="comment-layout">
       <span class="comment-vote-slot${threadCanVote ? "" : " comment-vote-slot-empty"}">
       <span class="comment-vote-controls vote-controls hidden"
+      data-hn-vote-source="${escapeHTML(String(comment.source || "hn"))}"
       data-hn-vote-story-id="${escapeHTML(String(storyID))}"
       data-hn-vote-item-id="${escapeHTML(commentID)}"></span>
       </span>
@@ -11823,7 +12475,7 @@ ${settingsPanelHTML()}
       <div class="comment-main">
       <div class="meta">
 
-      ${authorLinkHTML(comment.source, comment.author)}
+      ${authorLinkHTML(comment.source, comment.author, comment.authorName)}
 
 		${comment.isOP ? `<span class="op-pill">OP</span>` : ""}
 
@@ -11854,7 +12506,7 @@ ${settingsPanelHTML()}
       <a class="focus-link" href="#">
       focus
       </a>
-		${capabilities.vote ? itemActionLinksHTML(commentID) : ""}
+		${capabilities.vote ? itemActionLinksHTML(commentID, comment.source || "hn") : ""}
 
       <span class="toggle">
       [–]
@@ -11867,8 +12519,6 @@ ${settingsPanelHTML()}
         		${sanitizeHTML(comment.bodyHTML) || ""}
        	</div>
        	${
-					// Collapsed, so it was invisible either way -- but a reply box with
-					// no reply link to open it is markup that can never be reached.
 					capabilities.reply
 						? `<div class="reply-composer collapsed">
        	${composerHTML({ label: "reply", placeholder: "Reply…" })}
@@ -11888,8 +12538,6 @@ ${settingsPanelHTML()}
 		const children = div.querySelector(".children");
 		const toggle = div.querySelector(".toggle");
 
-		// After folding, so the quote detector still sees the raw line structure it
-		// partitions on rather than paragraphs this put around it.
 		foldQuoteBlocks(textElement);
 		wrapLooseCommentText(textElement);
 
@@ -11948,7 +12596,6 @@ ${settingsPanelHTML()}
 
 		let composerAPI = null;
 
-		// Absent on a read-only source, where the link was never rendered.
 		if (replyButton) {
 			replyButton.onclick = function (event) {
 				event.preventDefault();
@@ -11962,19 +12609,16 @@ ${settingsPanelHTML()}
 					return;
 				}
 
-				// Expanding a collapsed reply box inside a collapsed comment would put it
-				// somewhere invisible, so make sure the comment itself is showing.
 				if (content.classList.contains("hidden")) {
 					content.classList.remove("hidden");
 					toggle.textContent = "[–]";
 					toggleCollapsed(comment.key, false).catch(console.error);
 				}
 
-				// comment.id, not comment.key: this becomes HN's own reply URL, and a
-				// namespaced value lands on a 404.
 				composerAPI ||= wireComposer(
 					replyComposer.querySelector(".comment-composer"),
 					{
+						source: comment.source,
 						storyID,
 						parentId: comment.id,
 					},
@@ -12055,8 +12699,6 @@ ${settingsPanelHTML()}
 				return;
 			}
 
-			// Rendered before the button so the thread reads in order, and the button
-			// stays beneath whatever it just produced.
 			const holder = document.createElement("div");
 
 			container.insertBefore(holder, button);
@@ -12077,12 +12719,8 @@ ${settingsPanelHTML()}
 			);
 
 			pending = remaining;
-			// Counted against everything that arrived, not just the direct children:
-			// a nested reply is one fewer comment behind the gap too.
 			remainingCount = Math.max(0, remainingCount - added.length);
 
-			// The gap is genuinely closed: the source answered, and either it gave
-			// back nothing or there are no ids left to ask about.
 			if (!pending.length || !added.length) {
 				button.remove();
 				return;
@@ -12100,20 +12738,20 @@ ${settingsPanelHTML()}
 	function discussionsPageTitle(stories) {
 		const article = (stories || []).find((story) => story.articleURL)?.articleURL;
 
-		// pageAddress, because articleURL is either the address a story was submitted
-		// under or the one discovery was given -- never the address bar's.
 		if (!article || sameURL(article, pageAddress())) {
 			return pageTitle();
 		}
 
-		return (stories || []).find((story) => story.title)?.title || pageTitle();
+		return (
+			(stories || []).find((story) => story.title && !story.collective)?.title ||
+			pageTitle()
+		);
 	}
 
 	async function renderDiscussions(stories, ui) {
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
 		setWordmarkLocation(ui, "Discussion");
-		// The observer holds the elements about to be thrown away with the list.
 		stopObservingNewComments();
 		renderedComments = [];
 		ui.body.innerHTML = "";
@@ -12164,8 +12802,6 @@ ${settingsPanelHTML()}
 
 		stories.forEach((story, index) => {
 			if (isDiscussionLive(threads[index], liveNow)) {
-				// baseLabel, not label: the run is current by definition, so the date
-				// disambiguateLabels adds is answering a question nobody asked here.
 				liveDiscussions.set(story.key, story.baseLabel || story.label || "");
 			}
 		});
@@ -12326,7 +12962,10 @@ ${settingsPanelHTML()}
 			}
 
 			setSidebarStage(ui, "votes");
-			hydrateVoteControlsForStory(story.id, await loadVoteLinks(story.id));
+			hydrateVoteControlsForStory(
+				story.id,
+				await loadVoteState(story.source, story.id),
+			);
 			hydrateDisplayAges(story.id);
 		}
 
@@ -12421,7 +13060,12 @@ ${settingsPanelHTML()}
 		node.dataset.liveBookend = edge;
 
 		if (edge === "open") {
-			node.innerHTML = `<span class="live-bookend-mark">LIVE</span><span class="live-bookend-text"></span>`;
+			node.innerHTML =
+				`<span class="live-bookend-mark">LIVE</span>` +
+				`<span class="live-bookend-text">` +
+				`<span class="live-bookend-lead"></span>` +
+				`<span class="live-bookend-names"><span class="live-bookend-scroll"></span></span>` +
+				`</span>`;
 		} else {
 			node.innerHTML = `<span class="live-bookend-text">end of the live discussion</span>`;
 		}
@@ -12429,8 +13073,6 @@ ${settingsPanelHTML()}
 		return node;
 	}
 
-	// Re-read on every filter change rather than written once at render. The run is
-	// a statement about what is on screen, and the filter is what changes that.
 	function syncLiveBookends() {
 		const host = sidebarUI?.body;
 
@@ -12439,16 +13081,69 @@ ${settingsPanelHTML()}
 		}
 
 		const labels = visibleLiveLabels();
-		const named = labels.length ? ` in ${labels.join(", ")}` : "";
 
 		for (const node of host.querySelectorAll("[data-live-bookend]")) {
 			node.classList.toggle("live-bookend-hidden", !labels.length);
 
 			if (node.dataset.liveBookend === "open") {
-				node.querySelector(".live-bookend-text").textContent =
-					`happening now${named}`;
+				setLiveBookendNames(node, labels);
 			}
 		}
+	}
+
+	const MARQUEE_PIXELS_PER_SECOND = 26;
+
+	function setLiveBookendNames(node, labels) {
+		const lead = node.querySelector(".live-bookend-lead");
+		const names = node.querySelector(".live-bookend-names");
+		const scroll = node.querySelector(".live-bookend-scroll");
+
+		if (!lead || !names || !scroll) {
+			return;
+		}
+
+		lead.textContent = labels.length ? "happening now in" : "happening now";
+		scroll.textContent = labels.join(", ");
+
+		requestAnimationFrame(() => measureLiveBookendMarquee(names, scroll));
+		watchLiveBookendMarquee(names, scroll);
+	}
+
+	function measureLiveBookendMarquee(names, scroll) {
+		const overflow = scroll.scrollWidth - names.clientWidth;
+
+		if (overflow <= 1 || prefersReducedMotion()) {
+			names.classList.remove("is-marquee");
+			scroll.style.removeProperty("--marquee-shift");
+			scroll.style.removeProperty("--marquee-duration");
+
+			return;
+		}
+
+		scroll.style.setProperty("--marquee-shift", `-${overflow}px`);
+		scroll.style.setProperty(
+			"--marquee-duration",
+			`${Math.max(3, overflow / MARQUEE_PIXELS_PER_SECOND).toFixed(1)}s`,
+		);
+		names.classList.add("is-marquee");
+	}
+
+	const liveBookendObservers = new WeakMap();
+
+	function watchLiveBookendMarquee(names, scroll) {
+		if (
+			typeof ResizeObserver === "undefined" ||
+			liveBookendObservers.has(names)
+		) {
+			return;
+		}
+
+		const observer = new ResizeObserver(() =>
+			measureLiveBookendMarquee(names, scroll),
+		);
+
+		observer.observe(names);
+		liveBookendObservers.set(names, observer);
 	}
 
 	function renderPageHeader(stories, container, options = {}) {
@@ -12490,8 +13185,6 @@ title="Show only this discussion">
 		const strip = wrapper.querySelector(".source-strip");
 		const disclosure = wrapper.querySelector(".page-header-disclosure");
 
-		// Nothing to disclose with a single discussion: no button was rendered, and
-		// the strip stays out of the layout entirely.
 		if (!disclosure) {
 			container.appendChild(wrapper);
 
@@ -12504,8 +13197,6 @@ title="Show only this discussion">
 
 			strip.style.maxHeight = open ? `${strip.scrollHeight}px` : "0px";
 
-			// Collapsed content stays in the layout for the slide, so it has to leave
-			// the tab order by hand or a hidden pill can still be focused.
 			for (const entry of strip.querySelectorAll(".source-strip-entry")) {
 				entry.tabIndex = open ? 0 : -1;
 			}
@@ -12516,8 +13207,6 @@ title="Show only this discussion">
 		disclosure.onclick = () => {
 			const opening = !strip.classList.contains("is-open");
 
-			// Put the whole blend back before the strip goes, so the reader is never
-			// left filtered with the only control that undoes it off screen.
 			if (stripCloseClearsFilter(opening, activeCommentFilter)) {
 				clearCommentFilter({ restore: true });
 				syncFilterAffordances();
@@ -12542,8 +13231,6 @@ title="Show only this discussion">
 			}
 
 			syncFilterAffordances();
-			// Left open on purpose: collapsing the strip out from under the press
-			// that just filtered would take away the control needed to undo it.
 			setStripOpen(true);
 		});
 
@@ -12585,7 +13272,6 @@ title="Show only this discussion">
 			return;
 		}
 
-		// One discussion has no ambiguity to resolve, so its block simply stays.
 		if (blocks.length === 1) {
 			blocks[0].hidden = false;
 			return;
@@ -12689,8 +13375,6 @@ title="Show only this discussion">
 		);
 	}
 
-	// Must outlast the .2s max-height transition on .header-subtitle, or the text
-	// disappears while the header is still closing.
 	const SUBTITLE_COLLAPSE_MS = 240;
 
 	function writeSidebarSubtitle(element, text) {
@@ -12767,8 +13451,6 @@ title="Show only this discussion">
 		return names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
 	}
 
-	// Still one open at a time, but the guard hands the in-flight run back rather
-	// than only refusing, so a navigation can wait for it to unwind.
 	function openSidebar(stories, options = {}) {
 		if (opening) {
 			return openingRun ?? Promise.resolve();
@@ -12851,10 +13533,9 @@ title="Show only this discussion">
 			const settings = await loadSettings();
 
 			await renderDiscussions(loaded, ui);
+			await refreshSubmitAffordance(ui.shadow);
 
 			if (generation === sidebarGeneration) {
-				// Announced only when the pass will actually run, so the sidebar never
-				// claims to be doing work that is switched off.
 				if (settings.annotations && shouldShowArticleAnnotations(settings)) {
 					setSidebarStage(ui, "annotations");
 				}
@@ -12873,43 +13554,6 @@ title="Show only this discussion">
 	// Hacker News click tracking / vote bridge
 	// -------------------------
 
-	function parseItemActionPayload() {
-		const hash = location.hash.replace(/^#/, "");
-
-		if (!hash) {
-			return null;
-		}
-
-		const params = new URLSearchParams(hash);
-
-		if (params.get("hnewhere-vote") !== "1") {
-			return null;
-		}
-
-		const storyID = params.get("story");
-		const itemId = params.get("item");
-		const action = params.get("action");
-		const origin = params.get("origin");
-		const nonce = params.get("nonce");
-
-		if (!storyID || !itemId || !nonce) {
-			return null;
-		}
-
-		if (!ITEM_ACTIONS.includes(action)) {
-			return null;
-		}
-
-		return {
-			storyID,
-			itemId,
-			action,
-			origin,
-			nonce,
-			voteURL: normalizeVoteURL(params.get("voteURL")),
-		};
-	}
-
 	// #region hnewhere-test-export
 
 	const ITEM_ACTION_PATHS = {
@@ -12919,7 +13563,9 @@ title="Show only this discussion">
 		unflag: { path: "flag", params: { un: "t" } },
 	};
 
-	const ITEM_ACTIONS = ["up", "down", "un", ...Object.keys(ITEM_ACTION_PATHS)];
+	const VOTE_ACTIONS = ["up", "down", "un"];
+
+	const ITEM_ACTIONS = [...VOTE_ACTIONS, ...Object.keys(ITEM_ACTION_PATHS)];
 
 	function findItemActionAnchor(root, action, itemId) {
 		const shape = ITEM_ACTION_PATHS[action];
@@ -12950,76 +13596,31 @@ title="Show only this discussion">
 
 	// #endregion hnewhere-test-export
 
-	function postItemActionResult(payload, result) {
-		if (!window.opener) {
-			return;
-		}
-
-		try {
-			window.opener.postMessage(
-				{
-					source: ITEM_ACTION_BRIDGE_MESSAGE_SOURCE,
-					storyID: payload.storyID,
-					itemId: payload.itemId,
-					action: payload.action,
-					nonce: payload.nonce,
-					...result,
-				},
-				payload.origin || "*",
-			);
-		} catch (error) {
-			console.error("Failed posting vote bridge result:", error);
-		}
-	}
-
-	function currentVoteInfoFor(itemId) {
+	function currentVoteInfoFor(root, itemId) {
 		return cloneVoteInfo(
-			extractVoteLinksFromRoot(document).get(String(itemId)) || null,
+			extractVoteLinksFromRoot(root).get(String(itemId)) || null,
 		);
 	}
 
-	// Runs on the page HN redirects to after the vote is committed. The hash is
-	// gone by now, so the payload comes back out of sessionStorage.
-	function reportItemActionAfterReload() {
-		const forget = () => {
-			try {
-				window.sessionStorage.removeItem(ITEM_ACTION_BRIDGE_STORAGE_KEY);
-			} catch {}
-		};
+	function reportHNItemAction(root) {
+		const payload = peekBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY);
 
-		let stored = null;
-
-		try {
-			stored = window.sessionStorage.getItem(ITEM_ACTION_BRIDGE_STORAGE_KEY);
-		} catch {
-			return false;
+		if (!payload) {
+			return null;
 		}
 
-		if (!stored) {
-			return false;
-		}
-
-		let payload = null;
-
-		try {
-			payload = JSON.parse(stored);
-		} catch {
-			forget();
-			return false;
-		}
-
-		if (!payload?.itemId || !payload?.nonce) {
-			forget();
-			return false;
+		if (!payload.item) {
+			clearBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY);
+			return null;
 		}
 
 		const isFaveOrFlag = Boolean(ITEM_ACTION_PATHS[payload.action]);
 
 		if (!isFaveOrFlag && location.pathname !== "/item") {
-			return false;
+			return null;
 		}
 
-		forget();
+		clearBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY);
 
 		if (isFaveOrFlag) {
 			const base = payload.action.startsWith("un")
@@ -13027,40 +13628,38 @@ title="Show only this discussion">
 				: payload.action;
 			const wanted = !payload.action.startsWith("un");
 
-			const onLink = findItemActionAnchor(document, "un" + base, payload.itemId);
-			const offLink = findItemActionAnchor(document, base, payload.itemId);
+			const onLink = findItemActionAnchor(root, "un" + base, payload.item);
+			const offLink = findItemActionAnchor(root, base, payload.item);
 
 			const applied = onLink ? true : offLink ? false : wanted;
 
-			postItemActionResult(payload, {
-				ok: applied === wanted,
-				reason: applied === wanted ? "updated" : "unchanged",
-				action: payload.action,
-				applied,
-			});
-
-			window.setTimeout(() => window.close(), 60);
-			return true;
+			return {
+				payload,
+				result: {
+					ok: applied === wanted,
+					reason: applied === wanted ? "updated" : "unchanged",
+					action: payload.action,
+					applied,
+				},
+			};
 		}
 
-		// Server-rendered state, so this is the vote HN actually holds.
-		const voteInfo = currentVoteInfoFor(payload.itemId);
+		const voteInfo = currentVoteInfoFor(root, payload.item);
 		const changed = voteInfo?.state !== payload.beforeState;
 
-		postItemActionResult(payload, {
-			ok: changed,
-			reason: changed ? "updated" : "unchanged",
-			voteInfo,
-			// HN's own tally, read off the page it just served.
-			score: extractScoreFromRoot(document, payload.itemId),
-		});
-
-		window.setTimeout(() => window.close(), 60);
-		return true;
+		return {
+			payload,
+			result: {
+				ok: changed,
+				reason: changed ? "updated" : "unchanged",
+				voteInfo,
+				score: extractScoreFromRoot(root, payload.item),
+			},
+		};
 	}
 
-	function handleFaveFlagAction(payload) {
-		const anchor = findItemActionAnchor(document, payload.action, payload.itemId);
+	function actHNFaveFlag(payload, root) {
+		const anchor = findItemActionAnchor(root, payload.action, payload.item);
 
 		if (!anchor) {
 			const base = payload.action.startsWith("un")
@@ -13068,109 +13667,73 @@ title="Show only this discussion">
 				: payload.action;
 			const opposite = payload.action.startsWith("un") ? base : "un" + base;
 
-			const already = findItemActionAnchor(document, opposite, payload.itemId);
+			const already = findItemActionAnchor(root, opposite, payload.item);
 
-			postItemActionResult(payload, {
+			return {
 				ok: Boolean(already),
 				reason: already ? "already" : "action-unavailable",
 				action: payload.action,
 				...(already ? { applied: !payload.action.startsWith("un") } : {}),
-			});
-			window.setTimeout(() => window.close(), 80);
-			return true;
+			};
 		}
 
 		const target = new URL(anchor.getAttribute("href"), HN_ORIGIN + "/");
 
-		target.searchParams.set("goto", "item?id=" + payload.itemId);
+		target.searchParams.set("goto", "item?id=" + payload.item);
 
-		try {
-			window.sessionStorage.setItem(
-				ITEM_ACTION_BRIDGE_STORAGE_KEY,
-				JSON.stringify(payload),
-			);
-		} catch (error) {
-			console.error("HNewhere: could not stage item action payload", error);
-			postItemActionResult(payload, {
+		if (!stageBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY, payload)) {
+			return {
 				ok: false,
 				reason: "storage-unavailable",
 				action: payload.action,
-			});
-			window.setTimeout(() => window.close(), 80);
-			return true;
+			};
 		}
 
 		location.href = target.href;
-		return true;
+		return BRIDGE_NAVIGATED;
 	}
 
-	function maybeHandleHNItemAction() {
-		const payload = parseItemActionPayload();
-
-		if (!payload) {
-			return false;
-		}
-
+	function actHNItemAction({ payload, root }) {
 		if (ITEM_ACTION_PATHS[payload.action]) {
-			return handleFaveFlagAction(payload);
+			return actHNFaveFlag(payload, root);
 		}
 
-		const before = currentVoteInfoFor(payload.itemId);
+		const before = currentVoteInfoFor(root, payload.item);
 
-		const anchor = document.getElementById(
-			payload.action + "_" + payload.itemId,
-		);
+		const anchor = root.getElementById(payload.action + "_" + payload.item);
 		const voteURL =
 			(anchor instanceof HTMLAnchorElement
 				? normalizeVoteURL(anchor.getAttribute("href"))
 				: null) ||
 			(payload.action === "un" ? before?.unUrl : null) ||
-			payload.voteURL;
+			normalizeVoteURL(payload.voteURL);
 
 		if (!voteURL) {
-			postItemActionResult(payload, {
-				ok: false,
-				reason: "vote-url-missing",
-				voteInfo: before,
-			});
-			window.setTimeout(() => window.close(), 80);
-			return true;
+			return { ok: false, reason: "vote-url-missing", voteInfo: before };
 		}
 
 		const target = new URL(voteURL);
-		target.searchParams.set("goto", "item?id=" + payload.itemId);
+		target.searchParams.set("goto", "item?id=" + payload.item);
 
-		try {
-			window.sessionStorage.setItem(
-				ITEM_ACTION_BRIDGE_STORAGE_KEY,
-				JSON.stringify({
-					...payload,
-					beforeState: before?.state ?? "none",
-				}),
-			);
-		} catch (error) {
-			console.error("HNewhere: could not stage vote payload", error);
-			postItemActionResult(payload, {
-				ok: false,
-				reason: "storage-unavailable",
-				voteInfo: before,
-			});
-			window.setTimeout(() => window.close(), 80);
-			return true;
+		if (
+			!stageBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY, {
+				...payload,
+				beforeState: before?.state ?? "none",
+			})
+		) {
+			return { ok: false, reason: "storage-unavailable", voteInfo: before };
 		}
 
 		location.href = target.href;
-		return true;
+		return BRIDGE_NAVIGATED;
 	}
 
 	// -------------------------
 	// HN side: submit bridge
 	// -------------------------
 
-	// HN's submit form posts to /r. Login pages have no such form, which is how being
-	// logged out is detected.
-	function findSubmitForm() {
-		for (const form of document.querySelectorAll("form")) {
+	function findSubmitForm(root) {
+		for (const form of root.querySelectorAll("form")) {
 			if (
 				form.querySelector('input[name="title"]') &&
 				form.querySelector('input[name="url"]')
@@ -13182,10 +13745,8 @@ title="Show only this discussion">
 		return null;
 	}
 
-	// Scrapes whatever HN said went wrong. Its error pages are bare text, so this
-	// looks for the phrases rather than a structure that does not exist.
-	function readSubmitError() {
-		const text = (document.body?.textContent || "").toLowerCase();
+	function readSubmitError(root) {
+		const text = (root.body?.textContent || "").toLowerCase();
 
 		if (text.includes("that link has already been submitted")) {
 			return { reason: "dupe" };
@@ -13205,69 +13766,52 @@ title="Show only this discussion">
 		return null;
 	}
 
-	function reportSubmitResultAfterReload() {
-		let stored = null;
+	function reportHNSubmit(root) {
+		const payload = takeBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY);
 
-		try {
-			stored = window.sessionStorage.getItem(SUBMIT_BRIDGE_STORAGE_KEY);
-			// Cleared first: if anything below throws, a stale payload must not make the
-			// next HN page load try to report again.
-			window.sessionStorage.removeItem(SUBMIT_BRIDGE_STORAGE_KEY);
-		} catch {
-			return false;
+		if (!payload) {
+			return null;
 		}
 
-		if (!stored) {
-			return false;
-		}
-
-		let payload = null;
-
-		try {
-			payload = JSON.parse(stored);
-		} catch {
-			return false;
-		}
-
-		if (!payload?.nonce) {
-			return false;
-		}
-
-		const finish = (result) => {
-			postBridgeResult(SUBMIT_BRIDGE_MESSAGE_SOURCE, payload, result);
-			window.setTimeout(() => window.close(), 60);
-		};
-
-		// Already submitted by someone: HN redirects straight to the existing item.
 		if (location.pathname === "/item") {
 			const id = new URLSearchParams(location.search).get("id");
 
-			finish({ ok: Boolean(id), storyID: id, reason: id ? "existing" : "dupe" });
-			return true;
+			return {
+				payload,
+				result: {
+					ok: Boolean(id),
+					storyID: id,
+					reason: id ? "existing" : "dupe",
+				},
+			};
 		}
 
-		// The success case. HN drops you on /newest, so the new story has to be found
-		// by matching the URL that was just submitted.
 		if (location.pathname === "/newest") {
-			finish({
-				ok: true,
-				storyID: findSubmittedStoryID(payload.normalized),
-				reason: "submitted",
-			});
-			return true;
+			return {
+				payload,
+				result: {
+					ok: true,
+					storyID: findSubmittedStoryID(root, payload.normalized),
+					reason: "submitted",
+				},
+			};
 		}
 
-		// Still on a form or an error page: the submission did not go through.
-		finish({ ok: false, ...(readSubmitError() || { reason: "unknown" }) });
-		return true;
+		return {
+			payload,
+			result: {
+				ok: false,
+				...(readSubmitError(root) || { reason: "unknown" }),
+			},
+		};
 	}
 
-	function findSubmittedStoryID(normalized) {
+	function findSubmittedStoryID(root, normalized) {
 		if (!normalized) {
 			return null;
 		}
 
-		for (const link of document.querySelectorAll(".titleline > a")) {
+		for (const link of root.querySelectorAll(".titleline > a")) {
 			if (normalizeURL(link.href) !== normalized) {
 				continue;
 			}
@@ -13282,22 +13826,11 @@ title="Show only this discussion">
 		return null;
 	}
 
-	async function maybeHandleHNSubmitBridge() {
-		const payload = parseBridgeHash("hnewhere-submit");
-
-		if (!payload) {
-			return false;
-		}
-
-		const staged = await readBridgePayload(payload.nonce);
-		const form = findSubmitForm();
+	function actHNSubmit({ payload, staged, root }) {
+		const form = findSubmitForm(root);
 
 		if (!form) {
-			postBridgeResult(SUBMIT_BRIDGE_MESSAGE_SOURCE, payload, {
-				ok: false,
-				reason: "not-logged-in",
-			});
-			return true;
+			return { ok: false, reason: "not-logged-in" };
 		}
 
 		const titleInput = form.querySelector('input[name="title"]');
@@ -13312,43 +13845,29 @@ title="Show only this discussion">
 			urlInput.value = staged?.url || "";
 		}
 
-		// Assigned verbatim, for the same reason as the comment bridge: HN's formatter
-		// is the only thing that should interpret this.
 		if (textInput) {
 			textInput.value = staged?.text || "";
 		}
 
-		try {
-			window.sessionStorage.setItem(
-				SUBMIT_BRIDGE_STORAGE_KEY,
-				JSON.stringify({
-					...payload,
-					normalized: staged?.normalized || null,
-				}),
-			);
-		} catch (error) {
-			console.error("HNewhere: could not stage submit payload", error);
-			postBridgeResult(SUBMIT_BRIDGE_MESSAGE_SOURCE, payload, {
-				ok: false,
-				reason: "storage-unavailable",
-			});
-			return true;
+		if (
+			!stageBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY, {
+				...payload,
+				normalized: staged?.normalized || null,
+			})
+		) {
+			return { ok: false, reason: "storage-unavailable" };
 		}
 
-		// Same reasoning as the vote bridge: submit the form as a navigation rather
-		// than clicking, so closing the popup cannot abort an in-flight request.
 		form.submit();
-		return true;
+		return BRIDGE_NAVIGATED;
 	}
 
 	// -------------------------
 	// HN side: comment bridge
 	// -------------------------
 
-	// The top-level comment form on an item page. A locked thread or a logged-out
-	// reader gets no such form, which is how both are detected.
-	function findCommentForm() {
-		for (const form of document.querySelectorAll("form")) {
+	function findHNCommentForm(root) {
+		for (const form of root.querySelectorAll("form")) {
 			const textarea = form.querySelector('textarea[name="text"]');
 
 			if (textarea) {
@@ -13359,8 +13878,8 @@ title="Show only this discussion">
 		return null;
 	}
 
-	function readCommentError() {
-		const text = (document.body?.textContent || "").toLowerCase();
+	function readHNCommentError(root) {
+		const text = (root.body?.textContent || "").toLowerCase();
 
 		if (text.includes("you're posting too fast") || text.includes("posting too fast")) {
 			return { reason: "rate-limited" };
@@ -13374,14 +13893,6 @@ title="Show only this discussion">
 	}
 
 	// #region hnewhere-test-export
-	// Comparison key for "did HN echo our comment back". Whitespace and case are
-	// normalized because HN reflows the text into paragraphs, and only a prefix is
-	// used because it wraps long comments in markup this cannot see through.
-	//
-	// Emphasis markers go too, because HN eats them: a comment typed `*minimum*`
-	// comes back as `<i>minimum</i>`, whose text has no asterisks. Both sides pass
-	// through here, so dropping them from both is what makes the two comparable.
-	// Measured at 15 of 468 real comments on one thread.
 	function commentMatchKey(text) {
 		return (text || "")
 			.replace(/[*_]/g, "")
@@ -13406,119 +13917,354 @@ title="Show only this discussion">
 	}
 	// #endregion hnewhere-test-export
 
-	function reportCommentResultAfterReload() {
-		let stored = null;
+	function reportHNComment(root) {
+		const payload = takeBridgeReload(COMMENT_BRIDGE_STORAGE_KEY);
 
-		try {
-			stored = window.sessionStorage.getItem(COMMENT_BRIDGE_STORAGE_KEY);
-			window.sessionStorage.removeItem(COMMENT_BRIDGE_STORAGE_KEY);
-		} catch {
-			return false;
+		if (!payload) {
+			return null;
 		}
 
-		if (!stored) {
-			return false;
-		}
-
-		let payload = null;
-
-		try {
-			payload = JSON.parse(stored);
-		} catch {
-			return false;
-		}
-
-		if (!payload?.nonce) {
-			return false;
-		}
-
-		const finish = (result) => {
-			postBridgeResult(COMMENT_BRIDGE_MESSAGE_SOURCE, payload, result);
-			window.setTimeout(() => window.close(), 60);
-		};
-
-		const error = readCommentError();
+		const error = readHNCommentError(root);
 
 		if (error) {
-			finish({ ok: false, ...error });
-			return true;
+			return { payload, result: { ok: false, ...error } };
 		}
 
-		// Server-rendered proof: HN redirected back to the item page, so if the comment
-		// landed it is on this page.
-		const needle = payload.matchKey;
-		let found = false;
+		return {
+			payload,
+			result: hnCommentEchoed(root, payload.matchKey)
+				? { ok: true, reason: "posted" }
+				: { ok: false, reason: "unconfirmed" },
+		};
+	}
 
-		if (needle) {
-			for (const node of document.querySelectorAll(".commtext")) {
-				if (commentMatchKey(commentNodeText(node)).startsWith(needle.slice(0, 60))) {
-					found = true;
-					break;
-				}
+	function hnCommentEchoed(root, needle) {
+		if (!needle) {
+			return false;
+		}
+
+		for (const node of root.querySelectorAll(".commtext")) {
+			if (commentMatchKey(commentNodeText(node)).startsWith(needle.slice(0, 60))) {
+				return true;
 			}
 		}
 
-		finish(
-			found
-				? { ok: true, reason: "posted" }
-				: { ok: false, reason: "unconfirmed" },
-		);
-		return true;
+		return false;
 	}
 
-	async function maybeHandleHNCommentBridge() {
-		const payload = parseBridgeHash("hnewhere-comment");
-
-		if (!payload) {
-			return false;
-		}
-
-		const staged = await readBridgePayload(payload.nonce);
-
-		if (!staged?.text) {
-			postBridgeResult(COMMENT_BRIDGE_MESSAGE_SOURCE, payload, {
-				ok: false,
-				reason: "draft-missing",
-			});
-			return true;
-		}
-
-		const target = findCommentForm();
+	function actHNComment({ payload, staged, root }) {
+		const target = findHNCommentForm(root);
 
 		if (!target) {
-			postBridgeResult(COMMENT_BRIDGE_MESSAGE_SOURCE, payload, {
+			return {
 				ok: false,
-				...(readCommentError() || { reason: "no-form" }),
-			});
-			return true;
+				...(readHNCommentError(root) || { reason: "no-form" }),
+			};
 		}
 
-		// Assigned verbatim. HN's formatter is the only thing that should interpret
-		// this text, so nothing here trims, collapses or re-wraps it.
 		target.textarea.value = staged.text;
 
-		try {
-			window.sessionStorage.setItem(
-				COMMENT_BRIDGE_STORAGE_KEY,
-				JSON.stringify({
-					...payload,
-					matchKey: commentMatchKey(staged.text),
-				}),
-			);
-		} catch (error) {
-			console.error("HNewhere: could not stage comment payload", error);
-			postBridgeResult(COMMENT_BRIDGE_MESSAGE_SOURCE, payload, {
-				ok: false,
-				reason: "storage-unavailable",
-			});
-			return true;
+		if (
+			!stageBridgeReload(COMMENT_BRIDGE_STORAGE_KEY, {
+				...payload,
+				matchKey: commentMatchKey(staged.text),
+			})
+		) {
+			return { ok: false, reason: "storage-unavailable" };
 		}
 
-		// Navigation rather than a click, for the same reason as the vote bridge: a
-		// backgrounded request dies with the popup, a form navigation does not.
 		target.form.submit();
-		return true;
+		return BRIDGE_NAVIGATED;
 	}
+
+	registerWriteBridge({
+		id: "hn",
+		origin: HN_ORIGIN,
+		hosts: ["news.ycombinator.com"],
+		actions: {
+			vote: {
+				marker: "hnewhere-vote",
+				messageSource: ITEM_ACTION_BRIDGE_MESSAGE_SOURCE,
+				noun: "vote",
+				fields: ["item", "action", "voteURL"],
+				accepts: (payload) =>
+					Boolean(payload.storyID && payload.item) &&
+					ITEM_ACTIONS.includes(payload.action),
+				echo: (payload) => ({
+					storyID: payload.storyID,
+					itemId: payload.item,
+					action: payload.action,
+				}),
+				closeAfter: 80,
+				url: ({ itemId }) => commentURL(itemId),
+				descriptors: hnVoteDescriptors,
+				voteLinks: loadVoteLinks,
+				itemActions: true,
+				act: actHNItemAction,
+				report: reportHNItemAction,
+			},
+			submit: {
+				marker: "hnewhere-submit",
+				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
+				noun: "submission",
+				stagesDraft: true,
+				url: ({ url, title }) => submitURL(url, title),
+				act: actHNSubmit,
+				report: reportHNSubmit,
+			},
+			reply: {
+				marker: "hnewhere-comment",
+				messageSource: COMMENT_BRIDGE_MESSAGE_SOURCE,
+				noun: "comment",
+				stagesDraft: true,
+				requiresDraft: true,
+				url: ({ storyID, parentId }) =>
+					parentId ? replyURL({ id: parentId }, storyID) : commentURL(storyID),
+				act: actHNComment,
+				report: reportHNComment,
+			},
+		},
+	});
+
+	// -------------------------
+	// Reddit side: write bridge
+	// -------------------------
+
+	const REDDIT_WRITE_ORIGIN = "https://old.reddit.com";
+
+	// #region hnewhere-test-export
+
+	const REDDIT_VOTE_DIR = { up: "1", down: "-1", un: "0" };
+
+	function redditThing(root, itemId) {
+		if (!itemId) {
+			return null;
+		}
+
+		for (const prefix of ["t3_", "t1_"]) {
+			const thing = root.querySelector(
+				'.thing[data-fullname="' + prefix + itemId + '"]',
+			);
+
+			if (thing) {
+				return thing;
+			}
+		}
+
+		return null;
+	}
+
+	function redditVoteState(thing) {
+		const midcol = thing?.querySelector(".midcol");
+
+		if (!midcol) {
+			return null;
+		}
+
+		if (midcol.classList.contains("likes")) {
+			return "up";
+		}
+
+		if (midcol.classList.contains("dislikes")) {
+			return "down";
+		}
+
+		return "none";
+	}
+
+	function redditArrow(thing, action) {
+		const midcol = thing?.querySelector(".midcol");
+
+		if (!midcol) {
+			return null;
+		}
+
+		if (action === "un") {
+			return midcol.querySelector(".arrow.upmod, .arrow.downmod, .arrow");
+		}
+
+		return midcol.querySelector(
+			action === "up"
+				? ".arrow.up, .arrow.upmod"
+				: ".arrow.down, .arrow.downmod",
+		);
+	}
+
+	function redditWriteError(errors) {
+		const [code, message] = errors?.[0] || [];
+
+		switch (String(code || "").toUpperCase()) {
+			case "RATELIMIT":
+				return { reason: "rate-limited", message };
+			case "USER_REQUIRED":
+			case "NOT_AUTHENTICATED":
+				return { reason: "not-logged-in" };
+			default:
+				return { reason: "rejected", message: message || undefined };
+		}
+	}
+
+	// #endregion hnewhere-test-export
+
+	function redditModhash(root) {
+		const field = root.querySelector('input[name="uh"]');
+
+		if (field?.value) {
+			return field.value;
+		}
+
+		const scopes = [
+			typeof unsafeWindow !== "undefined" ? unsafeWindow : null,
+			typeof window !== "undefined" ? window : null,
+		];
+
+		for (const scope of scopes) {
+			if (scope?.___r?.modhash) {
+				return scope.___r.modhash;
+			}
+		}
+
+		return null;
+	}
+
+	async function redditPost(path, fields) {
+		const response = await fetch(REDDIT_WRITE_ORIGIN + path, {
+			method: "POST",
+			credentials: "same-origin",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: new URLSearchParams({ ...fields, api_type: "json" }).toString(),
+		});
+
+		if (!response.ok) {
+			return { ok: false, errors: null };
+		}
+
+		const json = await response.json().catch(() => null);
+
+		return { ok: true, errors: json?.json?.errors || null };
+	}
+
+	function redditPermalink(storyID, itemId) {
+		return (
+			REDDIT_WRITE_ORIGIN +
+			"/comments/" +
+			encodeURIComponent(storyID) +
+			(itemId && itemId !== storyID ? "/_/" + encodeURIComponent(itemId) : "")
+		);
+	}
+
+	async function actRedditVote({ payload, root }) {
+		const uh = redditModhash(root);
+
+		if (!uh) {
+			return BRIDGE_AWAITING_SIGN_IN;
+		}
+
+		const thing = redditThing(root, payload.item);
+
+		if (!thing) {
+			return { ok: false, reason: "item-missing" };
+		}
+
+		const before = redditVoteState(thing);
+
+		if (!redditArrow(thing, payload.action)) {
+			return {
+				ok: false,
+				reason: "action-unavailable",
+				voteInfo: cloneVoteInfo({ state: before, hasAuth: true }),
+			};
+		}
+
+		const sent = await redditPost("/api/vote", {
+			id: thing.getAttribute("data-fullname"),
+			dir: REDDIT_VOTE_DIR[payload.action],
+			uh,
+		});
+
+		if (!sent.ok || sent.errors?.length) {
+			return {
+				ok: false,
+				...(sent.errors?.length
+					? redditWriteError(sent.errors)
+					: { reason: "rejected" }),
+				voteInfo: cloneVoteInfo({ state: before, hasAuth: true }),
+			};
+		}
+
+		const state = payload.action === "un" ? "none" : payload.action;
+
+		return {
+			ok: true,
+			reason: "updated",
+			voteInfo: cloneVoteInfo({ state, hasAuth: true }),
+		};
+	}
+
+	async function actRedditReply({ payload, staged, root }) {
+		const uh = redditModhash(root);
+
+		if (!uh) {
+			return BRIDGE_AWAITING_SIGN_IN;
+		}
+
+		const thing = redditThing(root, staged.parentId || payload.storyID);
+
+		if (!thing) {
+			return { ok: false, reason: "no-form" };
+		}
+
+		const sent = await redditPost("/api/comment", {
+			thing_id: thing.getAttribute("data-fullname"),
+			text: staged.text,
+			uh,
+		});
+
+		if (!sent.ok) {
+			return { ok: false, reason: "rejected" };
+		}
+
+		if (sent.errors?.length) {
+			return { ok: false, ...redditWriteError(sent.errors) };
+		}
+
+		return { ok: true, reason: "posted" };
+	}
+
+	registerWriteBridge({
+		id: "reddit",
+		origin: REDDIT_WRITE_ORIGIN,
+		hosts: ["old.reddit.com"],
+		actions: {
+			vote: {
+				marker: "hnewhere-vote",
+				messageSource: ITEM_ACTION_BRIDGE_MESSAGE_SOURCE,
+				noun: "vote",
+				fields: ["item", "action", "voteURL"],
+				accepts: (payload) =>
+					Boolean(payload.storyID && payload.item) &&
+					VOTE_ACTIONS.includes(payload.action),
+				echo: (payload) => ({
+					storyID: payload.storyID,
+					itemId: payload.item,
+					action: payload.action,
+				}),
+				closeAfter: 80,
+				url: ({ storyID, itemId }) => redditPermalink(storyID, itemId),
+				descriptors: buttonVoteDescriptors,
+				act: actRedditVote,
+			},
+			reply: {
+				marker: "hnewhere-comment",
+				messageSource: COMMENT_BRIDGE_MESSAGE_SOURCE,
+				noun: "comment",
+				stagesDraft: true,
+				requiresDraft: true,
+				url: ({ storyID, parentId }) => redditPermalink(storyID, parentId),
+				act: actRedditReply,
+			},
+		},
+	});
 
 	function setupHNListener() {
 		document.addEventListener(
@@ -13560,8 +14306,6 @@ title="Show only this discussion">
 			const story = parsed ? hnStory(parsed) : null;
 			const subline = row.nextElementSibling?.querySelector(".subline, .subtext");
 
-			// A job post has no subline worth appending to and cannot be read later in
-			// any useful sense -- it is a listing, not an article.
 			if (!story || !subline || !story.by) {
 				continue;
 			}
@@ -13626,8 +14370,6 @@ title="Show only this discussion">
 		const id = Number(row.id);
 		const link = row.querySelector(".titleline > a");
 
-		// Both are real rows on a real page: HN pads the list with `pagespace` and
-		// `morespace` rows carrying no title, and their ids are words.
 		if (!Number.isFinite(id) || !id || !link) {
 			return null;
 		}
@@ -13653,11 +14395,8 @@ title="Show only this discussion">
 			title: (link.textContent || "").trim(),
 			url,
 			by: subtext?.querySelector(".hnuser")?.textContent || "",
-			// Job posts carry no score. Absent is not zero, but every consumer here
-			// displays it, and a displayed zero is honest about there being none.
 			score: parseInt(subtext?.querySelector(".score")?.textContent || "", 10) || 0,
 			time: Number.isFinite(time) ? time : 0,
-			// \D+ rather than a split: the separator is a non-breaking space.
 			descendants:
 				parseInt((commentLink?.textContent || "").replace(/\D+/g, ""), 10) || 0,
 			site: row.querySelector(".sitestr")?.textContent || "",
@@ -13673,14 +14412,6 @@ title="Show only this discussion">
 	// #endregion hnewhere-test-export
 
 	// #region hnewhere-test-export
-	// True when this document was reached by clicking a link on HN. HN serves
-	// <meta name="referrer" content="origin">, so the value arrives as the bare
-	// origin rather than the item URL; comparing origins accepts that and a
-	// full-URL referrer alike. A typed URL or a bookmark leaves it empty, which
-	// makes the URL constructor throw -- that throw is the direct-visit answer.
-	// The argument defaults to the real referrer and exists so tests can hand it a
-	// string; document.referrer is read-only, and faking it would mean redefining a
-	// property of the live document.
 	function referrerIsHN(referrer = document.referrer) {
 		try {
 			return new URL(referrer).origin === HN_ORIGIN;
@@ -13729,16 +14460,24 @@ title="Show only this discussion">
 			return;
 		}
 
-		const storyIDs = [
-			...new Set(
-				[...sidebarUI.body.querySelectorAll("[data-hn-vote-story-id]")]
-					.map((element) => element.dataset.hnVoteStoryId)
-					.filter(Boolean),
-			),
+		const containers = [
+			...sidebarUI.body.querySelectorAll("[data-hn-vote-story-id]"),
 		];
+		const bySource = new Map();
 
-		for (const storyID of storyIDs) {
-			hydrateVoteControlsForStory(storyID, await loadVoteLinks(storyID));
+		for (const container of containers) {
+			const storyID = container.dataset.hnVoteStoryId;
+
+			if (storyID && !bySource.has(storyID)) {
+				bySource.set(storyID, container.dataset.hnVoteSource);
+			}
+		}
+
+		for (const [storyID, sourceID] of bySource) {
+			hydrateVoteControlsForStory(
+				storyID,
+				await loadVoteState(sourceID, storyID),
+			);
 			hydrateDisplayAges(storyID);
 		}
 	}
@@ -13748,8 +14487,6 @@ title="Show only this discussion">
 	// -------------------------
 
 	function transitionCommentList(update, options = {}) {
-		// Entering or leaving a focused discussion hides and restores comments in
-		// bulk, which moves everything below them without the reader scrolling.
 		suppressNewCommentAutoClear();
 
 		const container = sidebarUI?.body;
@@ -13793,8 +14530,6 @@ title="Show only this discussion">
 		}
 	}
 
-	// Matches #comments' own top padding, so the banner lands where a first item
-	// would sit rather than jammed against the edge.
 	const FILTER_BANNER_SCROLL_MARGIN = 12;
 
 	function commentScrollContainer() {
@@ -13818,8 +14553,6 @@ title="Show only this discussion">
 
 			const rect = rendered.element.getBoundingClientRect();
 
-			// The first whose bottom edge has not yet passed the top of the viewport.
-			// That is what the reader is looking at, even part-scrolled.
 			if (rect.bottom > top) {
 				position.commentId = rendered.id;
 				position.offset = rect.top - top;
@@ -13830,15 +14563,11 @@ title="Show only this discussion">
 		return position;
 	}
 
-	// Called once the list is whole again, so the thread is measured against the
-	// layout the reader is about to see rather than the filtered one.
 	function restoreReadingPosition(position) {
 		if (!position) {
 			return;
 		}
 
-		// Putting the reader back sweeps every comment the focus had been hiding past
-		// the top of the panel. None of them has been read.
 		suppressNewCommentAutoClear();
 
 		window.scrollTo({
@@ -13929,8 +14658,6 @@ title="Show only this discussion">
 		positionFilterBannerForComment(null);
 
 		transitionCommentList(() => {
-			// activeCommentFilter is already null above, so this restores the full
-			// wording rather than needing to be told what was cleared.
 			syncLiveBookends();
 
 			for (const rendered of renderedComments) {
@@ -13954,13 +14681,14 @@ title="Show only this discussion">
 				);
 			}
 
-			// Last, with every comment back in the list and the banner gone, so the
-			// position it puts the reader at is the one they will actually see.
 			restoreReadingPosition(position);
 		}, options);
 	}
 
 	function clearArticleAnnotations() {
+		stopDocumentReindex?.();
+		stopDocumentReindex = null;
+
 		annotationController?.cleanup?.();
 		annotationController = null;
 
@@ -14036,10 +14764,6 @@ title="Show only this discussion">
 	// #endregion hnewhere-test-export
 
 	// #region hnewhere-test-export
-	// How much of a passage a cut has to save before it is worth making. A 251
-	// character quote trimmed to 220 lost its last four words to save an eighth of
-	// itself: the reader got a line barely shorter that no longer ended anywhere,
-	// and the words it dropped were sitting in full in the comment underneath.
 	const TRUNCATE_MIN_SAVING = 0.25;
 
 	function truncateText(text, maxLength = 120) {
@@ -14073,7 +14797,6 @@ title="Show only this discussion">
 			),
 		};
 	}
-	// #endregion hnewhere-test-export
 
 	function addUniqueText(target, seen, text, minNormalizedLength = 24) {
 		const value = String(text || "").replace(/\s+/g, " ").trim();
@@ -14183,7 +14906,6 @@ title="Show only this discussion">
 		return segments;
 	}
 
-	// #region hnewhere-test-export
 	const SEARCH_BLOCK_TAGS = new Set([
 		"ARTICLE",
 		"ASIDE",
@@ -14266,8 +14988,6 @@ title="Show only this discussion">
 		return pieces.join("");
 	}
 
-	// #endregion hnewhere-test-export
-
 	function buildQuoteSearchVariants(text) {
 		const cleaned = String(text || "").replace(/\s+/g, " ").trim();
 		const variants = [];
@@ -14331,6 +15051,39 @@ title="Show only this discussion">
 
 		const candidates = [];
 		const seen = new Set();
+
+		const addCandidate = (text, exact = false, context = null) => {
+			const value = String(text || "").replace(/\s+/g, " ").trim();
+
+			if (!value) {
+				return;
+			}
+
+			const normalized = normalizeSearchText(value).text;
+
+			if (normalized.length < 24 || seen.has(normalized)) {
+				return;
+			}
+
+			seen.add(normalized);
+			candidates.push({
+				text: value,
+				exact,
+				prefix: context?.prefix || "",
+				suffix: context?.suffix || "",
+			});
+		};
+
+		template.content
+			.querySelectorAll("blockquote[data-hnewhere-exact='1']")
+			.forEach((blockquote) => {
+				addCandidate(extractTextWithBreaks(blockquote), true, {
+					prefix: (blockquote.getAttribute("data-hnewhere-prefix") || "").trim(),
+					suffix: (blockquote.getAttribute("data-hnewhere-suffix") || "").trim(),
+				});
+				blockquote.remove();
+			});
+
 		const plainText = extractTextWithBreaks(template.content);
 		const lines = plainText
 			.split(/\n+/)
@@ -14343,7 +15096,7 @@ title="Show only this discussion">
 			if (!currentQuote.length) return;
 
 			for (const segment of expandStructuredQuoteSegments(currentQuote.join("\n"))) {
-				addUniqueText(candidates, seen, segment);
+				addCandidate(segment);
 			}
 
 			currentQuote = [];
@@ -14360,7 +15113,7 @@ title="Show only this discussion">
 			flushQuote();
 
 			if (line.length >= 40 && line.length <= 320) {
-				addUniqueText(candidates, seen, line);
+				addCandidate(line);
 			}
 		}
 
@@ -14370,22 +15123,27 @@ title="Show only this discussion">
 			for (const segment of expandStructuredQuoteSegments(
 				extractTextWithBreaks(blockquote),
 			)) {
-				addUniqueText(candidates, seen, segment);
+				addCandidate(segment);
 			}
 		});
 
 		for (const match of plainText.matchAll(/[“"]([^”"\n]{24,320})[”"]/g)) {
 			if (match[1]) {
 				for (const segment of expandSentenceLikeQuoteSegments(match[1])) {
-					addUniqueText(candidates, seen, segment);
+					addCandidate(segment);
 				}
 			}
 		}
 
-		return candidates.sort((a, b) => b.length - a.length);
+		return candidates.sort((a, b) => {
+			if (a.exact !== b.exact) {
+				return a.exact ? -1 : 1;
+			}
+
+			return b.text.length - a.text.length;
+		});
 	}
 
-	// #region hnewhere-test-export
 	function shouldSkipElementForIndex(element, options = {}) {
 		if (SEARCH_SKIP_TAGS.has(element.tagName)) {
 			return true;
@@ -14494,8 +15252,6 @@ title="Show only this discussion">
 		};
 	}
 
-	// #endregion hnewhere-test-export
-
 	function getArticleSearchRoot() {
 		const candidates = [
 			document.querySelector("main article"),
@@ -14534,16 +15290,309 @@ title="Show only this discussion">
 		return best;
 	}
 
-	function buildArticleTextIndex() {
-		return buildTextIndex(getArticleSearchRoot(), {
+	const HTML_DOCUMENT_SOURCE = {
+		id: "html",
+
+		buildIndex() {
+			return buildTextIndex(getArticleSearchRoot(), {
+				skipHidden: true,
+				excludeSelectors: [
+					"#hn-restore-button",
+					"#hn-collapse-button",
+					"[data-hnewhere-annotation-overlay]",
+					"[data-hnewhere-sidebar]",
+				],
+			});
+		},
+
+		hostFor() {
+			return document.body;
+		},
+
+		originFor() {
+			return { left: window.scrollX, top: window.scrollY };
+		},
+
+		heightFor() {
+			return Math.max(
+				document.body.scrollHeight,
+				document.documentElement.scrollHeight,
+			);
+		},
+
+		scrollIntoView(range) {
+			const rect = range.getBoundingClientRect();
+
+			window.scrollTo({
+				top: Math.max(0, rect.top + window.scrollY - window.innerHeight * 0.3),
+				behavior: prefersReducedMotion() ? "auto" : "smooth",
+			});
+		},
+
+		onReindex() {
+			return () => {};
+		},
+	};
+
+	function pdfConcatenatedText(pageTexts) {
+		const parts = [];
+		const pageStarts = [];
+		let at = 0;
+
+		for (const text of pageTexts || []) {
+			pageStarts.push(at);
+			parts.push(String(text ?? ""));
+			at += String(text ?? "").length + 1;
+		}
+
+		return { text: parts.join(" "), pageStarts };
+	}
+
+	function findPageByOffset(pageStarts, offset) {
+		if (!pageStarts?.length || !(offset >= 0)) {
+			return null;
+		}
+
+		let low = 0;
+		let high = pageStarts.length - 1;
+
+		while (low < high) {
+			const mid = Math.ceil((low + high) / 2);
+
+			if (pageStarts[mid] <= offset) {
+				low = mid;
+			} else {
+				high = mid - 1;
+			}
+		}
+
+		return { pageIndex: low, offsetInPage: offset - pageStarts[low] };
+	}
+
+	function pdfViewerApp() {
+		const scopes = [
+			typeof unsafeWindow !== "undefined" ? unsafeWindow : null,
+			typeof window !== "undefined" ? window : null,
+		];
+
+		for (const scope of scopes) {
+			const app = scope?.PDFViewerApplication;
+
+			if (app?.pdfDocument) {
+				return app;
+			}
+		}
+
+		return null;
+	}
+
+	function pdfViewerElement() {
+		return (
+			document.querySelector(".pdfViewer") ||
+			document.getElementById("viewerContainer") ||
+			null
+		);
+	}
+
+	function pdfPageIndex(pageIndex) {
+		const layer = document.querySelectorAll(".page")[pageIndex]?.querySelector(
+			".textLayer",
+		);
+
+		if (!layer) {
+			return null;
+		}
+
+		const index = buildTextIndex(layer, {
 			skipHidden: true,
 			excludeSelectors: [
-				"#hn-restore-button",
-				"#hn-collapse-button",
 				"[data-hnewhere-annotation-overlay]",
 				"[data-hnewhere-sidebar]",
 			],
 		});
+
+		return index.normalizedText ? index : null;
+	}
+
+	let pdfTexts = null;
+	let pdfTextsFor = null;
+	const pdfReindexWaiters = new Set();
+
+	function notifyPdfReindex() {
+		for (const waiter of [...pdfReindexWaiters]) {
+			try {
+				waiter();
+			} catch (e) {
+				console.error("Backchannel pdf reindex failed:", e);
+			}
+		}
+	}
+
+	function pdfDocumentTexts(app) {
+		if (pdfTextsFor === app.pdfDocument) {
+			return pdfTexts;
+		}
+
+		if (pdfTextsFor === "loading:" + app.pdfDocument.fingerprints?.[0]) {
+			return null;
+		}
+
+		pdfTextsFor = "loading:" + app.pdfDocument.fingerprints?.[0];
+
+		(async () => {
+			const document_ = app.pdfDocument;
+			const texts = [];
+
+			for (let number = 1; number <= document_.numPages; number += 1) {
+				const page = await document_.getPage(number);
+				const content = await page.getTextContent();
+
+				texts.push(content.items.map((item) => item.str).join(""));
+			}
+
+			if (app.pdfDocument !== document_) {
+				return;
+			}
+
+			pdfTexts = texts;
+			pdfTextsFor = document_;
+			notifyPdfReindex();
+		})().catch((e) => {
+			console.error("Backchannel could not read the PDF text:", e);
+			pdfTextsFor = null;
+		});
+
+		return null;
+	}
+
+	function pdfDocumentIndex(pageTexts) {
+		const joined = pdfConcatenatedText(pageTexts);
+		const normalized = normalizeSearchText(joined.text);
+
+		return {
+			normalizedText: normalized.text,
+			normalizedMap: normalized.map,
+			pageStarts: joined.pageStarts,
+
+			rangeAt(matchStart, matchLength) {
+				const rawStart = normalized.map[matchStart];
+				const at = findPageByOffset(joined.pageStarts, rawStart);
+				const pageIndex = at && pdfPageIndex(at.pageIndex);
+
+				if (!pageIndex) {
+					return null;
+				}
+
+				const needle = normalized.text.slice(
+					matchStart,
+					matchStart + matchLength,
+				);
+				const here = findNormalizedOccurrences(pageIndex.normalizedText, needle);
+
+				if (here.length !== 1) {
+					return null;
+				}
+
+				return createRangeFromMatch(pageIndex, here[0], needle.length);
+			},
+		};
+	}
+
+	const PDF_DOCUMENT_SOURCE = {
+		id: "pdf",
+
+		buildIndex() {
+			const app = pdfViewerApp();
+			const texts = app ? pdfDocumentTexts(app) : null;
+
+			if (!texts?.length) {
+				return HTML_DOCUMENT_SOURCE.buildIndex();
+			}
+
+			return pdfDocumentIndex(texts);
+		},
+
+		hostFor() {
+			return pdfViewerElement() || document.body;
+		},
+
+		originFor(host) {
+			if (!host || host === document.body) {
+				return HTML_DOCUMENT_SOURCE.originFor(host);
+			}
+
+			const rect = host.getBoundingClientRect();
+
+			return { left: -rect.left, top: -rect.top };
+		},
+
+		heightFor(host) {
+			return host === document.body
+				? HTML_DOCUMENT_SOURCE.heightFor(host)
+				: host.scrollHeight;
+		},
+
+		scrollIntoView(range) {
+			const container = document.getElementById("viewerContainer");
+
+			if (!container) {
+				HTML_DOCUMENT_SOURCE.scrollIntoView(range);
+				return;
+			}
+
+			const rect = range.getBoundingClientRect();
+			const box = container.getBoundingClientRect();
+
+			container.scrollTo({
+				top: Math.max(
+					0,
+					container.scrollTop + (rect.top - box.top) - container.clientHeight * 0.3,
+				),
+				behavior: prefersReducedMotion() ? "auto" : "smooth",
+			});
+		},
+
+		onReindex(callback) {
+			const bus = pdfViewerApp()?.eventBus;
+			const events = ["textlayerrendered", "pagesloaded", "scalechanging"];
+
+			pdfReindexWaiters.add(callback);
+
+			if (bus?.on) {
+				for (const name of events) {
+					bus.on(name, callback);
+				}
+			}
+
+			return () => {
+				pdfReindexWaiters.delete(callback);
+
+				if (bus?.off) {
+					for (const name of events) {
+						bus.off(name, callback);
+					}
+				}
+			};
+		},
+	};
+
+	function detectDocumentSource() {
+		if (pdfViewerApp() || document.querySelector(".pdfViewer .textLayer")) {
+			return PDF_DOCUMENT_SOURCE;
+		}
+
+		return HTML_DOCUMENT_SOURCE;
+	}
+
+	let activeDocumentSource = HTML_DOCUMENT_SOURCE;
+
+	function documentSource() {
+		return activeDocumentSource;
+	}
+	// #endregion hnewhere-test-export
+
+	function buildArticleTextIndex() {
+		return documentSource().buildIndex();
 	}
 
 	// #region hnewhere-test-export
@@ -14619,8 +15668,6 @@ title="Show only this discussion">
 		return null;
 	}
 
-	// Split out from createRangeFromMatch so a span can also be built from raw offsets
-	// that never came from one match -- the union of several overlapping ones.
 	function createRangeFromRawSpan(index, startRaw, endRaw) {
 		const start = resolveRawPoint(index, startRaw, "start");
 		const end = resolveRawPoint(index, endRaw, "end");
@@ -14639,6 +15686,12 @@ title="Show only this discussion">
 		}
 
 		return range.collapsed ? null : range;
+	}
+
+	function rangeFromIndexMatch(index, matchStart, matchLength) {
+		return typeof index?.rangeAt === "function"
+			? index.rangeAt(matchStart, matchLength)
+			: createRangeFromMatch(index, matchStart, matchLength);
 	}
 
 	function createRangeFromMatch(index, matchStart, matchLength) {
@@ -14668,10 +15721,109 @@ title="Show only this discussion">
 		return createRangeFromMatch(index, matches[0], normalizedNeedle.length)?.range || null;
 	}
 
-	// #endregion hnewhere-test-export
+	const QUOTE_CONTEXT_WINDOW = 32;
 
-	function findBestQuoteMatch(articleIndex, quoteText) {
+	function quoteContextAgreement(haystack, at, length, prefix, suffix) {
+		const wantBefore = prefix
+			? normalizeSearchText(prefix).text.slice(-QUOTE_CONTEXT_WINDOW)
+			: "";
+		const wantAfter = suffix
+			? normalizeSearchText(suffix).text.slice(0, QUOTE_CONTEXT_WINDOW)
+			: "";
+		const sides = [];
+
+		if (wantBefore) {
+			const before = haystack
+				.slice(Math.max(0, at - wantBefore.length - 8), at)
+				.trimEnd();
+
+			sides.push(["prefix", before.endsWith(wantBefore)]);
+		}
+
+		if (wantAfter) {
+			const after = haystack
+				.slice(at + length, at + length + wantAfter.length + 8)
+				.trimStart();
+
+			sides.push(["suffix", after.startsWith(wantAfter)]);
+		}
+
+		const agreed = sides.filter(([, ok]) => ok).map(([side]) => side);
+
+		return {
+			supplied: sides.length,
+			agreed: agreed.length,
+			matched: agreed.length === 2 ? "both" : agreed[0] || null,
+		};
+	}
+
+	function findBestQuoteMatch(articleIndex, candidate) {
+		const quoteText = typeof candidate === "string" ? candidate : candidate.text;
 		let best = null;
+
+		if (typeof candidate === "object" && candidate.exact) {
+			const normalized = normalizeSearchText(quoteText).text;
+			const matches = findNormalizedOccurrences(
+				articleIndex.normalizedText,
+				normalized,
+			);
+			let at = null;
+			let context = null;
+
+			if (matches.length === 1) {
+				at = matches[0];
+				context = quoteContextAgreement(
+					articleIndex.normalizedText,
+					at,
+					normalized.length,
+					candidate.prefix,
+					candidate.suffix,
+				);
+			} else if (matches.length > 1 && (candidate.prefix || candidate.suffix)) {
+				const ranked = matches
+					.map((offset) => ({
+						offset,
+						context: quoteContextAgreement(
+							articleIndex.normalizedText,
+							offset,
+							normalized.length,
+							candidate.prefix,
+							candidate.suffix,
+						),
+					}))
+					.sort((left, right) => right.context.agreed - left.context.agreed);
+
+				if (
+					ranked[0].context.agreed > 0 &&
+					ranked[0].context.agreed > (ranked[1]?.context.agreed ?? -1)
+				) {
+					at = ranked[0].offset;
+					context = ranked[0].context;
+				}
+			}
+
+			if (at !== null) {
+				const rangeMatch = rangeFromIndexMatch(
+					articleIndex,
+					at,
+					normalized.length,
+				);
+
+				if (rangeMatch && getPageRectsForRange(rangeMatch.range).length) {
+					return {
+						score: normalized.length * 10 + 10000,
+						key: `${rangeMatch.startRaw}:${rangeMatch.endRaw}`,
+						range: rangeMatch.range,
+						quoteText,
+						fullQuoteText: quoteText,
+						quoteNormalized: normalized,
+						startRaw: rangeMatch.startRaw,
+						endRaw: rangeMatch.endRaw,
+						contextMatched: context?.matched ?? null,
+					};
+				}
+			}
+		}
 
 		for (const [variantIndex, variant] of buildQuoteSearchVariants(quoteText).entries()) {
 			const matches = findNormalizedOccurrences(
@@ -14690,7 +15842,7 @@ title="Show only this discussion">
 				continue;
 			}
 
-			const rangeMatch = createRangeFromMatch(
+			const rangeMatch = rangeFromIndexMatch(
 				articleIndex,
 				matches[0],
 				variant.normalized.length,
@@ -14723,25 +15875,23 @@ title="Show only this discussion">
 		return best;
 	}
 
-	function getPageRectsForRange(range) {
+	function getPageRectsForRange(range, source = documentSource()) {
+		const origin = source.originFor(source.hostFor(range));
+
 		return [...range.getClientRects()]
 			.filter((rect) => rect.width > 0 && rect.height > 0)
 			.map((rect) => ({
-				left: rect.left + window.scrollX,
-				top: rect.top + window.scrollY,
+				left: rect.left + origin.left,
+				top: rect.top + origin.top,
 				width: rect.width,
 				height: rect.height,
-				right: rect.right + window.scrollX,
+				right: rect.right + origin.left,
 			}));
 	}
+	// #endregion hnewhere-test-export
 
 	function scrollRangeIntoView(range) {
-		const rect = range.getBoundingClientRect();
-
-		window.scrollTo({
-			top: Math.max(0, rect.top + window.scrollY - window.innerHeight * 0.3),
-			behavior: prefersReducedMotion() ? "auto" : "smooth",
-		});
+		documentSource().scrollIntoView(range);
 	}
 
 	function buildAnnotationGroups(comments, providedIndex = null) {
@@ -14761,8 +15911,8 @@ title="Show only this discussion">
 			const quoteCandidates = extractQuotedTextCandidates(rendered.textHTML);
 			const matchedQuoteKeys = new Set();
 
-			for (const quoteText of quoteCandidates) {
-				const match = findBestQuoteMatch(articleIndex, quoteText);
+			for (const candidate of quoteCandidates) {
+				const match = findBestQuoteMatch(articleIndex, candidate);
 
 				if (!match || matchedQuoteKeys.has(match.key)) {
 					continue;
@@ -14802,13 +15952,6 @@ title="Show only this discussion">
 	}
 
 	// #region hnewhere-test-export
-	// Two commenters quoting the same sentence rarely quote the same span of it: one
-	// takes a clause, another the whole thing. Keying a discussion on the exact
-	// characters matched made those two discussions about one passage, so a reader
-	// following either found half the conversation and no sign of the rest.
-	//
-	// Ranges that overlap are the same passage, so they become one discussion
-	// reaching as wide as everything that landed on it.
 	function mergeOverlappingGroups(groups, articleIndex) {
 		const sorted = [...groups].sort(
 			(a, b) => a.startRaw - b.startRaw || a.endRaw - b.endRaw,
@@ -14819,8 +15962,6 @@ title="Show only this discussion">
 		for (const group of sorted) {
 			const previous = merged[merged.length - 1];
 
-			// Sharing characters, not merely meeting: two sentences quoted separately
-			// sit end to end and stay two discussions, which is right -- they are two.
 			if (previous && group.startRaw <= previous.endRaw) {
 				previous.endRaw = Math.max(previous.endRaw, group.endRaw);
 				previous.comments.push(...group.comments);
@@ -14831,8 +15972,6 @@ title="Show only this discussion">
 		}
 
 		for (const group of merged) {
-			// One comment can quote two overlapping spans of a passage and land in
-			// both, which after merging would list it twice in its own discussion.
 			const seen = new Set();
 
 			group.comments = group.comments.filter((comment) => {
@@ -15275,11 +16414,6 @@ title="Show only this discussion">
 	}
 
 	// #region hnewhere-test-export
-	// Literal channels, not var(--accent-rgb): these paint into the page-side
-	// overlay, which cannot see the panel's variables. Keep them in step with
-	// ACCENT_RGB by hand -- there is no mechanism that can do it here.
-	// Built per paint rather than once at load, so a reader who sets their own
-	// accent gets it on the article too and not only in the panel.
 	function heatFill(dark) {
 		const channels = activeAccent(dark).accentRgb;
 		const alphas = dark
@@ -15442,8 +16576,6 @@ title="Show only this discussion">
 
 			onFiltered?.();
 			updateSubmissionVisibility(visibleCommentIds);
-			// Every way into a filter, not just the strip's own press: focusing a
-			// comment or a quoted passage changes what the pills should say too.
 			syncFilterAffordances();
 
 			if (sidebarUI?.filterBanner && sidebarUI?.filterBannerQuote) {
@@ -15505,8 +16637,6 @@ title="Show only this discussion">
 				rendered.discussionKey === discussionKey && rendered.parentId === null,
 		);
 
-		// Same bail-out as a missing quote group: a re-render between refreshes can
-		// leave a filter pointing at comments that are no longer in the list.
 		if (!roots.length) {
 			clearCommentFilter(options);
 			return;
@@ -15683,8 +16813,6 @@ title="Show only this discussion">
 		const baseLayer = document.createElement("div");
 		const activeLayer = document.createElement("div");
 
-		// The quote layers are where a highlight's strength lives, so that opaque
-		// rects inside them cannot compound where two comments quote the same words.
 		baseLayer.style.opacity = String(QUOTE_FILL_OPACITY);
 
 		activeLayer.style.cssText = `
@@ -15694,7 +16822,11 @@ title="Show only this discussion">
 		`;
 
 		overlay.append(heatLayer, baseLayer, activeLayer);
-		document.body.appendChild(overlay);
+
+		const source = documentSource();
+		const overlayHost = source.hostFor(groups[0]?.range || regions?.[0]?.range);
+
+		overlayHost.appendChild(overlay);
 
 		let heatRegions = regions || [];
 
@@ -15704,8 +16836,6 @@ title="Show only this discussion">
 		const rectsByGroup = new Map();
 		let activeGroupKey = null;
 
-		// Live rather than read once: a convertible laptop can gain and lose a mouse
-		// without reloading the page.
 		const hoverQuery =
 			typeof window.matchMedia === "function"
 				? window.matchMedia("(hover: hover)")
@@ -15746,9 +16876,7 @@ title="Show only this discussion">
 		};
 
 		const render = () => {
-			overlay.style.height =
-				Math.max(document.body.scrollHeight, document.documentElement.scrollHeight) +
-				"px";
+			overlay.style.height = source.heightFor(overlayHost) + "px";
 			baseLayer.replaceChildren();
 			heatLayer.replaceChildren();
 			rectsByGroup.clear();
@@ -15793,8 +16921,6 @@ title="Show only this discussion">
 						variant: "highlight",
 					});
 
-					// Pointer feedback only where there is a pointer. On a touch screen
-					// hover states either never fire or, worse, stick after a tap.
 					node.addEventListener("pointerenter", () => {
 						if (hoverQuery?.matches !== false) {
 							setActiveGroup(group.key);
@@ -15807,8 +16933,6 @@ title="Show only this discussion">
 						}
 					});
 
-					// Keyboard parity. :focus-visible keeps this off the click that
-					// precedes an activation, where the pointer has already said it.
 					node.addEventListener("focus", () => {
 						if (node.matches(":focus-visible")) {
 							setActiveGroup(group.key);
@@ -15828,8 +16952,6 @@ title="Show only this discussion">
 				rectsByGroup.set(group.key, groupRects);
 			}
 
-			// Rebuilt from the fresh geometry, so a resize under the pointer moves the
-			// lit quote with everything else rather than leaving it behind.
 			paintActiveLayer();
 		};
 
@@ -15877,8 +16999,6 @@ title="Show only this discussion">
 		};
 	}
 
-	// Safari only shipped requestIdleCallback in 16.4 and the Userscripts app
-	// targets Safari, so fall back to a macrotask.
 	function scheduleIdleTask(callback) {
 		if (typeof requestIdleCallback === "function") {
 			requestIdleCallback(callback, { timeout: 500 });
@@ -15888,8 +17008,6 @@ title="Show only this discussion">
 		setTimeout(callback, 0);
 	}
 
-	// Every surface this script puts on a page. Annotations go first: they unwrap
-	// quote links inside the sidebar's shadow root, so it has to still exist.
 	function teardownSurfaces() {
 		clearArticleAnnotations();
 
@@ -15907,8 +17025,6 @@ title="Show only this discussion">
 			}
 		}
 
-		// The popover is a separate host with its own shadow root, and the hide
-		// control lives in its header too, so it has to go the same way.
 		document
 			.querySelectorAll("[data-hnewhere-submit-popover]")
 			.forEach((host) => host.remove());
@@ -15935,7 +17051,6 @@ title="Show only this discussion">
 		await runPagePass();
 	}
 
-	// Rebuilds the thread inside the panel the reader is already looking at.
 	async function refreshDiscussionsInPlace(ui) {
 		const generation = ++sidebarGeneration;
 		const comments = ui.shadow?.querySelector("#comments");
@@ -15947,8 +17062,6 @@ title="Show only this discussion">
 			}
 
 			(async () => {
-				// Before the branching, because two of the three branches return early
-				// and the wordmark has to be told either way.
 				await refreshBrowseAffordances(ui.shadow);
 
 				if (!enabledSourceIds(settings, registeredSourceIds()).length) {
@@ -15959,7 +17072,7 @@ title="Show only this discussion">
 
 				setSidebarStage(ui, "discussion");
 
-				const discussions = await discoverAll(pageAddress(), settings);
+				const discussions = await discoverAll(pageAddresses(), settings);
 
 				if (generation !== sidebarGeneration) {
 					return;
@@ -15981,6 +17094,7 @@ title="Show only this discussion">
 				sidebarHasDiscussion = true;
 				setSidebarStage(ui, "comments");
 				await renderDiscussions(discussions, ui);
+				await refreshSubmitAffordance(ui.shadow);
 
 				if (generation === sidebarGeneration) {
 					await refreshArticleAnnotations();
@@ -16027,19 +17141,25 @@ title="Show only this discussion">
 			return;
 		}
 
+		activeDocumentSource = detectDocumentSource();
+
 		const articleIndex = buildArticleTextIndex();
-		// Must run before buildHeatRegions: it populates comment.matchedGroupKeys,
-		// which heat reads to skip comments already represented by a quote match.
 		const groups = buildAnnotationGroups(renderedComments, articleIndex);
 
-		// No early return on an empty group list: heat exists precisely to serve
-		// articles nobody quoted, so the overlay has to be created either way.
 		if (!groups.length) {
 			clearCommentFilter({ animate: false });
 		}
 
 		annotationController = createAnnotationOverlay(groups, [], settings);
 		decorateSidebarMatches(annotationController);
+
+		let queued = 0;
+		stopDocumentReindex = documentSource().onReindex(() => {
+			cancelAnimationFrame(queued);
+			queued = requestAnimationFrame(() => {
+				refreshArticleAnnotations().catch(console.error);
+			});
+		});
 
 		if (activeCommentFilter?.type === "quote") {
 			applyCommentFilter(activeCommentFilter.key, {
@@ -16061,8 +17181,6 @@ title="Show only this discussion">
 		const controller = annotationController;
 
 		scheduleIdleTask(() => {
-			// A newer refresh (or a teardown) may have replaced the controller
-			// while we were queued; drop the stale result rather than cancelling.
 			if (annotationController !== controller) {
 				return;
 			}
@@ -16075,8 +17193,6 @@ title="Show only this discussion">
 	// Soft navigation
 	// -------------------------
 
-	// The generation bump tells a render in flight to stop at its next checkpoint;
-	// awaiting openingRun is how we learn that it has.
 	async function teardownForNavigation() {
 		sidebarGeneration++;
 
@@ -16091,8 +17207,6 @@ title="Show only this discussion">
 		activeCommentFilter = null;
 	}
 
-	// Routers push more than once for one navigation, and the new article is
-	// usually not in the DOM yet when they do, so the pass waits for the burst.
 	const SOFT_NAV_SETTLE_MS = 250;
 	const SOFT_NAV_POLL_MS = 400;
 
@@ -16117,8 +17231,6 @@ title="Show only this discussion">
 
 			currentHref = location.href;
 
-			// Normalized, so a fragment or a tracking parameter findHN already
-			// discards is not treated as a new page.
 			const nextURL = normalizeURL(currentHref);
 
 			if (nextURL === currentURL) {
@@ -16127,15 +17239,11 @@ title="Show only this discussion">
 
 			currentURL = nextURL;
 
-			// This page was navigated to, not arrived at. The referrer still says HN
-			// and will keep saying so for the rest of the document's life.
 			forgetHNReferrer();
 
 			clearTimeout(timer);
 
 			timer = setTimeout(() => {
-				// Chained, so two navigations cannot have one's teardown run against
-				// the other's half-built surfaces.
 				queue = queue
 					.then(async () => {
 						await teardownForNavigation();
@@ -16161,7 +17269,6 @@ title="Show only this discussion">
 					return result;
 				};
 			} catch {
-				// Frozen or isolated by the manager. Polling still catches it.
 			}
 		}
 
@@ -16174,54 +17281,41 @@ title="Show only this discussion">
 	// -------------------------
 
 	async function init() {
-		// Before migrateStorage, which writes on its own first run and would make
-		// every fresh install look like an upgrade.
 		await seedSources();
 		await migrateStorage();
 		await migrateSourceKeys();
 		await migrateQueue();
 
-		// On HN, only record clicked stories, offer the queue, and service popup
-		// bridge actions.
-		if (location.hostname === "news.ycombinator.com") {
+		const bridge = writeBridgeForHost(writeBridges(), location.hostname);
+		const onHN = location.hostname === "news.ycombinator.com";
+
+		if (onHN) {
 			setupHNListener();
 
 			setupHNQueueLinks().catch(console.error);
+		}
 
-			if (reportItemActionAfterReload()) {
+		if (bridge) {
+			if (await resumeWriteBridge(bridge)) {
 				return;
 			}
 
-			if (reportSubmitResultAfterReload()) {
+			if (await reportWriteBridge(bridge)) {
 				return;
 			}
 
-			if (reportCommentResultAfterReload()) {
+			if (await dispatchWriteBridge(bridge)) {
 				return;
 			}
+		}
 
-			if (maybeHandleHNItemAction()) {
-				return;
-			}
-
-			// Both are async because the staged payload lives in GM storage rather than
-			// the URL fragment, so they cannot be tested with a plain if.
-			if (await maybeHandleHNSubmitBridge()) {
-				return;
-			}
-
-			await maybeHandleHNCommentBridge();
-
+		if (onHN) {
 			await markQueueArrival().catch(console.error);
 
-			// Last, so a bridge popup -- which returns above -- never grows a button
-			// on a window that exists to do one thing and close.
 			await offerQueueOnHN();
 			return;
 		}
 
-		// Never gated on what the pass decides: a page the script declines to touch
-		// is exactly the one a reader navigates away from.
 		watchSoftNavigation();
 
 		await runPagePass();
@@ -16232,7 +17326,6 @@ title="Show only this discussion">
 			return;
 		}
 
-		// Everything past here may call pageAddress, which reads the head.
 		await documentReady();
 
 		const [blocked, settings, siteState, storedLast] = await Promise.all([
@@ -16242,13 +17335,10 @@ title="Show only this discussion">
 			load(STORAGE.last, null),
 		]);
 
-		// Same guarantee as isHiddenSite above: no lookup, no button, no stored
-		// state. Nothing above this line writes, so reaching it early is safe.
 		if (blocked) {
 			return;
 		}
 
-		// A popup closed before it finished leaves its staged draft behind.
 		sweepBridgePayloads().catch(console.error);
 
 		markQueueArrival().catch(console.error);
@@ -16272,12 +17362,8 @@ title="Show only this discussion">
 
 		const pendingButton = hideButton ? null : await createCheckingButton();
 
-		// Vote memory is only read once something renders, so it no longer sits in
-		// front of the first paint -- but it must still land before it does.
 		await votesReady;
 
-		// Check if we arrived here by clicking
-		// a story from Hacker News.
 		let last = storedLast;
 
 		if (last && Date.now() - last.timestamp > 300000) {
@@ -16297,7 +17383,7 @@ title="Show only this discussion">
 			await save(STORAGE.last, null);
 		}
 
-		const found = await discoverAll(pageAddress(), settings);
+		const found = await discoverAll(pageAddresses(), settings);
 
 		const recoverable = arrivedFromClick && (!last.source || last.source === "hn");
 
@@ -16332,8 +17418,6 @@ title="Show only this discussion">
 			return;
 		}
 
-		// Offer to put it there, unless the reader has asked for the button to stay
-		// out of the way when there is nothing to read.
 		if (!hideButton) {
 			await createSubmitButton();
 		}
@@ -16341,12 +17425,8 @@ title="Show only this discussion">
 		stopButtonSpinner(pendingButton);
 	}
 
-	// The three ways a known discussion can be presented, in one place because init
-	// reaches this point by two different routes.
 	async function presentDiscussion(storyRefs, settings, siteState, fromHN = false) {
 		if (shouldAutoOpenSidebar(settings, siteState, fromHN)) {
-			// The sidebar itself is the answer here, so the placeholder goes rather
-			// than becoming a button that would sit on top of an open panel.
 			destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
 
 			await openSidebar(storyRefs, { remember: false });
@@ -16354,8 +17434,6 @@ title="Show only this discussion">
 		}
 
 		if (shouldPreloadHiddenSidebar(settings, siteState, fromHN)) {
-			// Kept: createRestoreButton adopts it, so the ring carries on spinning
-			// across the render and the annotation pass, which is the slow case.
 			await openSidebar(storyRefs, { startHidden: true });
 			return;
 		}

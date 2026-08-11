@@ -49,8 +49,13 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Lemmy | `lemmy.world` | the URL of each page you visit, with no account |
   | Mastodon (discovery) | `www.tootfinder.ch` | the **domain** of each page you visit — never the full address. An opt-in index of Mastodon posts, not Mastodon, and it holds only people who chose to be searchable |
   | Mastodon (front page) | `mastodon.social` | **nothing about you.** Asked only what that instance is currently linking to |
+  | Hypothes.is | `api.hypothes.is` | the URL of each page you visit, to find public annotations on it. No account, signed in or out |
   | *no source enabled* | none | nothing — the script performs no lookup at all |
 
+- **Reading a PDF means reading the viewer.** On a PDF the script asks the
+  browser's own viewer for the document's text, so a quoted passage can be found
+  on a page that is not on screen yet. That is a read of the file you already
+  have open; nothing about it is sent anywhere.
 - **`@connect` is a ceiling, not a statement of use.** The header is static, so
   it lists every host any source *could* contact, including sources you have
   switched off. A disabled source issues no requests; the entry is a permission
@@ -106,8 +111,10 @@ Worth stating plainly, because the permissions are broad by necessity:
 
 - **Sensitive sites are excluded** both in the userscript header and at runtime.
   `isHiddenSite()` blocks private and single-label hostnames, plus a list
-  covering webmail, banking, auth flows, cloud consoles, and PDFs. A blocked page
-  performs no lookup, renders nothing, and writes no stored state.
+  covering webmail, banking, auth flows, and cloud consoles. A blocked page
+  performs no lookup, renders nothing, and writes no stored state. PDFs were on
+  that list until 1.6.7; they are read like any other page now, and a PDF on an
+  excluded host stays excluded.
 - **Credentials never leave Hacker News.** Voting, submitting, and commenting are
   performed in a popup window on `news.ycombinator.com` using your existing
   session there. The script never handles your HN password, and never posts your

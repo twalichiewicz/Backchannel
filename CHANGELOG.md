@@ -8,6 +8,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.7] — 2026-08-10
+
+### Added
+
+- **Voting and replying on Reddit.** Signed in to Reddit, the arrows and the
+  reply box in the sidebar act on your account, through the session your browser
+  already holds. Nothing is submitted anywhere until you press something, and no
+  password or token is read, stored or moved.
+
+- What you are able to do is read off the page rather than assumed. A subreddit
+  with downvotes turned off, a locked thread, or a karma threshold on Hacker News
+  means the arrow is not offered — because the site did not offer it, not because
+  a table somewhere says the site supports voting.
+
+- Signing in finishes what you started. Pressing vote while signed out opens the
+  source's login page and says what it is holding; sign in and the vote is cast
+  from there, rather than being lost. "What each source supports" in settings
+  marks anything you would still have to sign in for.
+
+- Bluesky, Lemmy and Hypothes.is posters are called by the name they chose.
+  Those three keep a display name apart from the handle, and only the handle was
+  shown. The handle still resolves the profile link and sits on its title.
+
+- Adds Hypothes.is. The public annotations left on a page arrive as comments that
+  quote the passage they are about, so a note lands under the sentence it answers
+  rather than at the top of the page. Read-only, no account, one request per page.
+
+- Highlights a quoted passage inside a PDF. The viewer draws two pages of
+  fifteen and builds the rest as you scroll, so the whole document's text is read
+  from the file rather than from the page: a quote is found wherever it lives,
+  and lights up when you reach it.
+
+- Reading an article through an archive shows what is being said about the
+  article. archive.is, archive.today and the Wayback Machine are recognised, the
+  original address is recovered from the archive's own URL or from what the
+  archived page says about itself, and both addresses are looked up — an archive
+  link and the article it archives are often both submitted, and those are
+  discussions about the same thing.
+
+- Runs on PDFs, which were excluded outright until now. Scholarly annotation
+  happens on the PDF — the notes on a paper are attached to it, not to the
+  abstract page — so the exclusion hid the conversation and left the noise.
+  Whether a quoted passage can be highlighted there depends on the browser's PDF
+  viewer; the discussion itself does not.
+
+### Changed
+
+- A quote that arrives already anchored is searched for as written. Annotations
+  carry the exact words they were attached to, and those were being expanded into
+  every sub-phrase first, each one scanned against the whole page. On a page with
+  59 annotated passages that was 8,687 scans where 59 will do.
+
+- Pressing the wordmark to browse no longer hides where you came from.
+  `Backchannel / Discussion` reads as a toggle: the view you are on keeps the
+  text colour and the other dims, so the way back is on screen rather than
+  something to guess at.
+
+- Every collective names its own discussion — "Hypothes.is annotations",
+  "Wikipedia talk pages", "Mastodon posts", alongside the "Bluesky comments" that
+  already did. Only Bluesky used to, so the others fell back to the page title,
+  which is the same string for all of them and told a reader nothing about which
+  discussion was on screen.
+
+- The back arrow beside the wordmark is gone. It pointed at what the toggle now
+  says, and two things saying it was one too many.
+
+- A quoted passage that appears twice on a page is anchored to the right one. An
+  annotation carries the words either side of what it quotes, and those were being
+  thrown away — so a quote that was not unique was refused rather than placed. Of
+  the annotations sampled, every one carried that context and 8% quoted something
+  the page says more than once.
+
+- Submitting a page is offered when the page has no discussion, rather than when
+  you happen to be on the front-page tab. If any enabled source already has a
+  discussion you can join it, and which source it landed on is not your problem —
+  so the offer to post it somewhere else goes away.
+
+- The what-each-source-supports table lists favouriting and flagging. Every one
+  of these sites has both and this does none of them, which the table used to
+  say by omission — reading as though nobody did.
+
+- The live heading no longer cuts off the sources it names. "happening now in"
+  holds still and the names scroll gently when there are more of them than fit,
+  pausing at each end. They stay put, ellipsised, if you have asked for less
+  motion.
+
+- A horizontal rule inside a comment is drawn like every other line in the panel.
+  Sources can send one — Hypothes.is notes do — and it was falling through to the
+  browser's grey groove, heavier than anything the panel draws for itself.
+
+### Fixed
+
+- **Reddit discussions submitted through a publisher's share button are found.**
+  Reddit was asked for the article's exact address, and a share-to-Reddit button
+  appends `utm_source=reddit`, so a post made through one carried an address the
+  lookup could not see. On one Fortune article that hid the conversation: the
+  63-comment thread was found and the 725-comment one was not.
+
+- **A vote that did not go through says so.** The sidebar asked the popup to
+  vote and then looked only at the answer it wanted, so a vote that failed —
+  not signed in, no such arrow, rate limited, popup blocked — looked exactly
+  like one that worked: a window that opened and closed.
+
+- A Hypothes.is profile link no longer points at a display name. The annotator's
+  chosen name was taken as the author, and the author is what builds the profile
+  URL, so anyone who had set one got a link to nobody.
+
+- Favouriting and flagging are offered only where the source has them. Both were
+  shown for any source that could vote, which was true of Hacker News alone until
+  it wasn't.
+
+- Annotations made on a different copy of a document no longer appear. Asked
+  about an arXiv abstract, Hypothes.is answers with notes made on the PDF — and
+  on copies of that PDF hosted elsewhere — because it groups by document rather
+  than by address. Those quote text the abstract page does not contain, so they
+  would have arrived as comments highlighting nothing.
+
 ## [1.6.6] — 2026-08-10
 
 ### Fixed
