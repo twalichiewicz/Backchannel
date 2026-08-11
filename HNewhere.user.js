@@ -14914,6 +14914,51 @@ title="Show only this discussion">
 		},
 	};
 
+	// A PDF viewer renders two pages of fifteen and builds the rest as the reader
+	// scrolls, so the DOM is never the document. pdf.js will hand over the text of
+	// every page on request, which is what gets indexed instead -- a quote is then
+	// found whether or not its page has been drawn yet.
+	//
+	// One string, with the page boundaries recorded beside it. A single space joins
+	// pages so a quote cannot be matched across the seam between two of them.
+	function pdfConcatenatedText(pageTexts) {
+		const parts = [];
+		const pageStarts = [];
+		let at = 0;
+
+		for (const text of pageTexts || []) {
+			pageStarts.push(at);
+			parts.push(String(text ?? ""));
+			at += String(text ?? "").length + 1;
+		}
+
+		return { text: parts.join(" "), pageStarts };
+	}
+
+	// Which page an offset into that string belongs to. Binary search rather than a
+	// walk: this is asked once per candidate match, on a document that can run to
+	// hundreds of pages.
+	function findPageByOffset(pageStarts, offset) {
+		if (!pageStarts?.length || !(offset >= 0)) {
+			return null;
+		}
+
+		let low = 0;
+		let high = pageStarts.length - 1;
+
+		while (low < high) {
+			const mid = Math.ceil((low + high) / 2);
+
+			if (pageStarts[mid] <= offset) {
+				low = mid;
+			} else {
+				high = mid - 1;
+			}
+		}
+
+		return { pageIndex: low, offsetInPage: offset - pageStarts[low] };
+	}
+
 	let activeDocumentSource = HTML_DOCUMENT_SOURCE;
 
 	function documentSource() {
