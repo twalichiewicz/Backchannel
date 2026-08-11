@@ -3779,21 +3779,29 @@ ${
 		});
 	}
 
-	async function discoverAll(url, settings) {
+	// More than one address can name the same article -- an archive page and the
+	// article it archived. Every source is asked about each, in one pass, so the
+	// wait does not double even though the request count does.
+	async function discoverAll(urls, settings) {
+		const targets = [...new Set([].concat(urls).filter(Boolean))];
 		const results = await Promise.all(
-			enabledSources(settings).map((source) =>
-				discoverWithCeiling(
-					source.discover(url).catch((e) => {
-						console.error("Backchannel " + source.id + " discovery failed:", e);
-						return [];
-					}),
-					source.id,
+			enabledSources(settings).flatMap((source) =>
+				targets.map((target) =>
+					discoverWithCeiling(
+						source.discover(target).catch((e) => {
+							console.error("Backchannel " + source.id + " discovery failed:", e);
+							return [];
+						}),
+						source.id,
+					),
 				),
 			),
 		);
 
 		return disambiguateLabels(
-			results.flat().filter(Boolean).sort(compareStoriesByDiscussion),
+			dedupeDiscussions(results.flat().filter(Boolean)).sort(
+				compareStoriesByDiscussion,
+			),
 		);
 	}
 
@@ -4033,13 +4041,135 @@ ${
 
 		return out.href;
 	}
+
+	const ARCHIVE_HOSTS = new Set([
+		"archive.is",
+		"archive.today",
+		"archive.ph",
+		"archive.li",
+		"archive.vn",
+		"archive.md",
+		"archive.fo",
+		"web.archive.org",
+	]);
+
+	function isArchiveHost(hostname) {
+		return ARCHIVE_HOSTS.has(
+			String(hostname || "").toLowerCase().replace(/^www\./, ""),
+		);
+	}
+
+	function safeDecode(value) {
+		try {
+			return decodeURIComponent(value);
+		} catch {
+			return null;
+		}
+	}
+
+	// An archive is the one place where "this page is really a different page" is
+	// the truth rather than a spoof, so it is the one place canonicalPageURL's
+	// refusal to follow a hint across hosts is lifted -- and only for the hosts
+	// named above, because the refusal is what stops a site claiming someone
+	// else's discussion.
+	function archivedOriginalURL(href, hint) {
+		let here;
+
+		try {
+			here = new URL(href);
+		} catch {
+			return null;
+		}
+
+		if (!isArchiveHost(here.hostname)) {
+			return null;
+		}
+
+		const usable = (candidate) => {
+			let parsed;
+
+			try {
+				parsed = new URL(candidate);
+			} catch {
+				return null;
+			}
+
+			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+				return null;
+			}
+
+			// An archived archive names nothing worth asking about, and following it
+			// would recurse.
+			if (isArchiveHost(parsed.hostname)) {
+				return null;
+			}
+
+			// The exclusion list covers the page the reader is on. An archived bank
+			// would walk straight past it, so what comes out takes the same check.
+			return isHiddenSite(parsed.href) ? null : parsed.href;
+		};
+
+		// The path first, because it is structural where a canonical is a claim the
+		// archived document makes about itself. Any timestamp, flagged or not, or
+		// newest/oldest, then the address.
+		for (const path of [here.pathname, safeDecode(here.pathname)]) {
+			const found = path?.match(/\/(https?:\/{1,2}.+)$/i);
+
+			if (found) {
+				// Some archives collapse the scheme's double slash on the way in.
+				const repaired = found[1].replace(/^(https?:)\/(?!\/)/i, "$1//");
+
+				// The original's own query and fragment sit in the archive URL's search
+				// and hash rather than its path.
+				return usable(repaired + here.search + here.hash);
+			}
+		}
+
+		// Nothing in the path: a short code, like archive.is/901m5. What the
+		// archived document says about itself is the only thing left.
+		return hint ? usable(hint) : null;
+	}
+
+	// Both addresses can surface the same thread -- an archive link and the article
+	// it archives are often both submitted. Keyed on what already identifies a
+	// discussion uniquely per source.
+	function dedupeDiscussions(discussions) {
+		const seen = new Set();
+
+		return (discussions || []).filter((discussion) => {
+			if (!discussion || seen.has(discussion.key)) {
+				return false;
+			}
+
+			seen.add(discussion.key);
+
+			return true;
+		});
+	}
 	// #endregion hnewhere-test-export
 
-	function pageAddress() {
-		const link = document.querySelector('link[rel~="canonical" i]')?.href;
-		const og = document.querySelector('meta[property="og:url" i]')?.content;
+	function canonicalHint() {
+		return (
+			document.querySelector('link[rel~="canonical" i]')?.href ||
+			document.querySelector('meta[property="og:url" i]')?.content ||
+			""
+		);
+	}
 
-		return canonicalPageURL(location.href, link || og || "");
+	function pageAddress() {
+		return canonicalPageURL(location.href, canonicalHint());
+	}
+
+	// What to look the conversation up under. On an archive, the article it
+	// archived is asked about as well as the archive link -- both get submitted and
+	// discussed, and they are discussions about the same thing. pageAddress itself
+	// stays the address the reader is at, so submitting and the queue keep meaning
+	// what they mean.
+	function pageAddresses() {
+		const here = pageAddress();
+		const original = archivedOriginalURL(location.href, canonicalHint());
+
+		return original && !sameURL(original, here) ? [here, original] : [here];
 	}
 
 	// pageAddress reads the head, so it needs one. @run-at document-end is not
@@ -4119,7 +4249,6 @@ ${
 		/(^|\.)(duckduckgo|bing|baidu|yandex|ecosia|startpage|qwant)\.com$/,
 		/^search\./,
 	];
-	// #endregion hnewhere-test-export
 
 	const HIDDEN_PATH_PATTERNS = [
 		/^\/(login|log-in|signin|sign-in|signup|sign-up|register|logout|log-out|sign-out)(\/|$)/,
@@ -4175,7 +4304,6 @@ ${
 		return HIDDEN_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
 	}
 
-	// #region hnewhere-test-export
 	function sanitizeHTML(html) {
 		const template = document.createElement("template");
 		template.innerHTML = html || "";
@@ -16772,7 +16900,7 @@ title="Show only this discussion">
 
 				setSidebarStage(ui, "discussion");
 
-				const discussions = await discoverAll(pageAddress(), settings);
+				const discussions = await discoverAll(pageAddresses(), settings);
 
 				if (generation !== sidebarGeneration) {
 					return;
@@ -17126,7 +17254,7 @@ title="Show only this discussion">
 			await save(STORAGE.last, null);
 		}
 
-		const found = await discoverAll(pageAddress(), settings);
+		const found = await discoverAll(pageAddresses(), settings);
 
 		const recoverable = arrivedFromClick && (!last.source || last.source === "hn");
 

@@ -50,6 +50,9 @@ about you. No account, signed in or out.
 federation reaches across the wider network. No account, signed in or out.
 - Hypothes.is sends the pages you visit to its API, to find the public
 annotations people have left on them. No account, signed in or out.
+- On an archive page — archive.is, archive.today, the Wayback Machine — the
+article being archived is looked up as well as the archive link itself. Whatever
+sources you have enabled are asked about both addresses.
 
 Webmail, banking, auth flows, and cloud consoles are excluded outright.
 

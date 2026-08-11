@@ -21,6 +21,13 @@ use to detect updates, so every release bumps it.
   from the file rather than from the page: a quote is found wherever it lives,
   and lights up when you reach it.
 
+- Reading an article through an archive shows what is being said about the
+  article. archive.is, archive.today and the Wayback Machine are recognised, the
+  original address is recovered from the archive's own URL or from what the
+  archived page says about itself, and both addresses are looked up — an archive
+  link and the article it archives are often both submitted, and those are
+  discussions about the same thing.
+
 - Runs on PDFs, which were excluded outright until now. Scholarly annotation
   happens on the PDF — the notes on a paper are attached to it, not to the
   abstract page — so the exclusion hid the conversation and left the noise.
