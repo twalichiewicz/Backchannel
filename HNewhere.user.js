@@ -5365,6 +5365,8 @@ ${
 
 			if (Number.isFinite(entry.ts) && now - entry.ts > BRIDGE_PAYLOAD_TTL) {
 				await save(BRIDGE_PAYLOAD_PREFIX + entry.nonce, null);
+				// The answer to it, for a popup whose sidebar was gone before it came.
+				await save(BRIDGE_RESULT_PREFIX + entry.nonce, null);
 				continue;
 			}
 
@@ -5484,8 +5486,11 @@ ${
 
 		window.setTimeout(tick, BRIDGE_POLL_MS);
 
+		// Cleared on the way out, including on a timeout, so an answer nobody
+		// waited for does not sit in storage for good.
 		return () => {
 			stopped = true;
+			save(BRIDGE_RESULT_PREFIX + nonce, null).catch(() => {});
 		};
 	}
 
