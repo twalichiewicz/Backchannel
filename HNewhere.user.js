@@ -14202,6 +14202,256 @@ title="Show only this discussion">
 		},
 	});
 
+	// -------------------------
+	// Reddit side: write bridge
+	// -------------------------
+
+	const REDDIT_WRITE_ORIGIN = "https://old.reddit.com";
+
+	// #region hnewhere-test-export
+
+	const REDDIT_VOTE_DIR = { up: "1", down: "-1", un: "0" };
+
+	// A bare id from the sidebar; only the page can say whether it names a post or
+	// a comment.
+	function redditThing(root, itemId) {
+		if (!itemId) {
+			return null;
+		}
+
+		for (const prefix of ["t3_", "t1_"]) {
+			const thing = root.querySelector(
+				'.thing[data-fullname="' + prefix + itemId + '"]',
+			);
+
+			if (thing) {
+				return thing;
+			}
+		}
+
+		return null;
+	}
+
+	function redditVoteState(thing) {
+		const midcol = thing?.querySelector(".midcol");
+
+		if (!midcol) {
+			return null;
+		}
+
+		if (midcol.classList.contains("likes")) {
+			return "up";
+		}
+
+		if (midcol.classList.contains("dislikes")) {
+			return "down";
+		}
+
+		return "none";
+	}
+
+	// What the reader may actually do here, rather than what the site supports: a
+	// locked thread, an archived post or a subreddit with downvotes off simply has
+	// no such arrow.
+	function redditArrow(thing, action) {
+		const midcol = thing?.querySelector(".midcol");
+
+		if (!midcol) {
+			return null;
+		}
+
+		if (action === "un") {
+			return midcol.querySelector(".arrow.upmod, .arrow.downmod, .arrow");
+		}
+
+		return midcol.querySelector(
+			action === "up"
+				? ".arrow.up, .arrow.upmod"
+				: ".arrow.down, .arrow.downmod",
+		);
+	}
+
+	// Reddit answers with its own words; they are passed through rather than
+	// reinvented, so the reader reads what Reddit said.
+	function redditWriteError(errors) {
+		const [code, message] = errors?.[0] || [];
+
+		switch (String(code || "").toUpperCase()) {
+			case "RATELIMIT":
+				return { reason: "rate-limited", message };
+			case "USER_REQUIRED":
+			case "NOT_AUTHENTICATED":
+				return { reason: "not-logged-in" };
+			default:
+				return { reason: "rejected", message: message || undefined };
+		}
+	}
+
+	// #endregion hnewhere-test-export
+
+	function redditModhash(root) {
+		const field = root.querySelector('input[name="uh"]');
+
+		if (field?.value) {
+			return field.value;
+		}
+
+		const scopes = [
+			typeof unsafeWindow !== "undefined" ? unsafeWindow : null,
+			typeof window !== "undefined" ? window : null,
+		];
+
+		for (const scope of scopes) {
+			if (scope?.___r?.modhash) {
+				return scope.___r.modhash;
+			}
+		}
+
+		return null;
+	}
+
+	// Same-origin, with the session the browser was already sending. Nothing is
+	// read out or stored: the modhash comes off this page and is used on it.
+	async function redditPost(path, fields) {
+		const response = await fetch(REDDIT_WRITE_ORIGIN + path, {
+			method: "POST",
+			credentials: "same-origin",
+			headers: { "Content-Type": "application/x-www-form-urlencoded" },
+			body: new URLSearchParams({ ...fields, api_type: "json" }).toString(),
+		});
+
+		if (!response.ok) {
+			return { ok: false, errors: null };
+		}
+
+		const json = await response.json().catch(() => null);
+
+		return { ok: true, errors: json?.json?.errors || null };
+	}
+
+	function redditPermalink(storyID, itemId) {
+		return (
+			REDDIT_WRITE_ORIGIN +
+			"/comments/" +
+			encodeURIComponent(storyID) +
+			(itemId && itemId !== storyID ? "/_/" + encodeURIComponent(itemId) : "")
+		);
+	}
+
+	async function actRedditVote({ payload, root }) {
+		const uh = redditModhash(root);
+
+		if (!uh) {
+			return { ok: false, reason: "not-logged-in" };
+		}
+
+		const thing = redditThing(root, payload.item);
+
+		if (!thing) {
+			return { ok: false, reason: "item-missing" };
+		}
+
+		const before = redditVoteState(thing);
+
+		if (!redditArrow(thing, payload.action)) {
+			return {
+				ok: false,
+				reason: "action-unavailable",
+				voteInfo: cloneVoteInfo({ state: before, hasAuth: true }),
+			};
+		}
+
+		const sent = await redditPost("/api/vote", {
+			id: thing.getAttribute("data-fullname"),
+			dir: REDDIT_VOTE_DIR[payload.action],
+			uh,
+		});
+
+		if (!sent.ok || sent.errors?.length) {
+			return {
+				ok: false,
+				...(sent.errors?.length
+					? redditWriteError(sent.errors)
+					: { reason: "rejected" }),
+				voteInfo: cloneVoteInfo({ state: before, hasAuth: true }),
+			};
+		}
+
+		// The page cannot show this: the request was ours, not a click, so nothing
+		// on it moved. What was asked for is what Reddit accepted.
+		const state = payload.action === "un" ? "none" : payload.action;
+
+		return {
+			ok: true,
+			reason: state === before ? "unchanged" : "updated",
+			voteInfo: cloneVoteInfo({ state, hasAuth: true }),
+		};
+	}
+
+	async function actRedditReply({ payload, staged, root }) {
+		const uh = redditModhash(root);
+
+		if (!uh) {
+			return { ok: false, reason: "not-logged-in" };
+		}
+
+		const thing = redditThing(root, staged.parentId || payload.storyID);
+
+		if (!thing) {
+			return { ok: false, reason: "no-form" };
+		}
+
+		const sent = await redditPost("/api/comment", {
+			thing_id: thing.getAttribute("data-fullname"),
+			text: staged.text,
+			uh,
+		});
+
+		if (!sent.ok) {
+			return { ok: false, reason: "rejected" };
+		}
+
+		if (sent.errors?.length) {
+			return { ok: false, ...redditWriteError(sent.errors) };
+		}
+
+		return { ok: true, reason: "posted" };
+	}
+
+	registerWriteBridge({
+		id: "reddit",
+		origin: REDDIT_WRITE_ORIGIN,
+		// The one Reddit whose markup this reads. The popup goes where it is sent.
+		hosts: ["old.reddit.com"],
+		actions: {
+			vote: {
+				marker: "hnewhere-vote",
+				messageSource: ITEM_ACTION_BRIDGE_MESSAGE_SOURCE,
+				fields: ["item", "action", "voteURL"],
+				accepts: (payload) =>
+					Boolean(payload.storyID && payload.item) &&
+					ITEM_ACTIONS.includes(payload.action),
+				echo: (payload) => ({
+					storyID: payload.storyID,
+					itemId: payload.item,
+					action: payload.action,
+				}),
+				closeAfter: 80,
+				url: ({ storyID, itemId }) => redditPermalink(storyID, itemId),
+				descriptors: buttonVoteDescriptors,
+				act: actRedditVote,
+			},
+			reply: {
+				marker: "hnewhere-comment",
+				messageSource: COMMENT_BRIDGE_MESSAGE_SOURCE,
+				stagesDraft: true,
+				requiresDraft: true,
+				url: ({ storyID, parentId }) => redditPermalink(storyID, parentId),
+				act: actRedditReply,
+			},
+		},
+	});
+
 	function setupHNListener() {
 		document.addEventListener(
 			"click",
@@ -17389,15 +17639,18 @@ title="Show only this discussion">
 		await migrateSourceKeys();
 		await migrateQueue();
 
-		// On HN, only record clicked stories, offer the queue, and service popup
-		// bridge actions.
-		if (location.hostname === "news.ycombinator.com") {
+		const bridge = writeBridgeForHost(writeBridges(), location.hostname);
+		const onHN = location.hostname === "news.ycombinator.com";
+
+		// On HN, also record clicked stories and offer the queue.
+		if (onHN) {
 			setupHNListener();
 
 			setupHNQueueLinks().catch(console.error);
+		}
 
-			const bridge = writeBridgeForHost(writeBridges(), location.hostname);
-
+		// A popup this script opened, on the source's own page.
+		if (bridge) {
 			if (reportWriteBridge(bridge)) {
 				return;
 			}
@@ -17407,7 +17660,9 @@ title="Show only this discussion">
 			if (await dispatchWriteBridge(bridge)) {
 				return;
 			}
+		}
 
+		if (onHN) {
 			await markQueueArrival().catch(console.error);
 
 			// Last, so a bridge popup -- which returns above -- never grows a button
