@@ -1198,7 +1198,11 @@
 		id: { type: ["number", "string"] },
 		discussionKey: { type: "string" },
 		parentKey: { type: "string", nullable: true },
+		// What a profile link resolves, which on most sources is also what a
+		// reader sees.
 		author: { type: "string" },
+		// Where a source keeps the two apart, the one a reader would recognise.
+		authorName: { type: "string", optional: true },
 		bodyHTML: { type: "string" },
 		score: { type: "number", nullable: true },
 		createdAt: { type: "number" },
@@ -2624,6 +2628,7 @@
 			discussionKey: discussion?.key,
 			parentKey: parentKey || null,
 			author: post?.author?.handle || "",
+			authorName: post?.author?.displayName || "",
 			bodyHTML: bskyRichText(post?.record?.text, post?.record?.facets),
 			score: post?.likeCount ?? 0,
 			createdAt: bskyTime(post),
@@ -2745,12 +2750,27 @@
 		return getSource(sourceId)?.profileURL?.(author) || null;
 	}
 
-	function authorLinkHTML(sourceId, author) {
+	// #region hnewhere-test-export
+	// The link resolves the handle; the reader reads the name. Where a source
+	// keeps only one of the two they are the same string, and the handle is put
+	// on the title rather than dropped, because it is how you find someone.
+	function authorDisplay(author, authorName = "") {
+		const shown = authorName || author || "";
+
+		return {
+			shown,
+			title: shown && author && shown !== author ? author : "",
+		};
+	}
+	// #endregion hnewhere-test-export
+
+	function authorLinkHTML(sourceId, author, authorName = "") {
 		const href = authorProfileURL(sourceId, author);
+		const { shown, title } = authorDisplay(author, authorName);
 
 		return href
-			? `<a target="_blank" rel="noopener noreferrer" href="${escapeHTML(href)}">${escapeHTML(author)}</a>`
-			: escapeHTML(author);
+			? `<a target="_blank" rel="noopener noreferrer"${title ? ` title="${escapeHTML(title)}"` : ""} href="${escapeHTML(href)}">${escapeHTML(shown)}</a>`
+			: escapeHTML(shown);
 	}
 
 	function registeredSourceIds() {
@@ -13144,7 +13164,7 @@ ${settingsPanelHTML()}
       <div class="comment-main">
       <div class="meta">
 
-      ${authorLinkHTML(comment.source, comment.author)}
+      ${authorLinkHTML(comment.source, comment.author, comment.authorName)}
 
 		${comment.isOP ? `<span class="op-pill">OP</span>` : ""}
 
