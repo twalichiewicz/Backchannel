@@ -18,7 +18,7 @@ See what everyone's talking about.
 - **What the internet is saying, in one thread:** Every source you've switched on, merged into a single conversation, each comment quietly noting where it came from. Pick them with a checkbox.
 - **See what they're talking about:** Quotes in the comments get matched back to the article and lit as annotations in articles. Click a highlight to filter the thread to the people discussing that passage.
    - _Currently in beta. Enable Annotations in the settings menu to try it out!_ 
-- **Read, then join in:** Vote, reply, and even submit on supported sources. It uses the session you already have, in a popup on news.ycombinator.com. The script never sees your password.
+- **Read, then join in:** Vote, reply, and even submit on supported sources. It acts in a popup on the source's own site, using the session you already have there — Hacker News and Reddit today. If you're not signed in, the popup says so and finishes what you asked for once you are. The script never sees your password.
 - **New front page of the internet**: Blend together all of your added sources to create a custom front page to find new articles to read.
 - **Quality of life:** Indent guides, OP marking, and new comment highlighting.
 - **Yours to adjust:** Button shape and size, sidebar width, theme, which annotation layers show, and a per-site off switch. It's one file with no build step, so if the settings don't cover it, the source is right there.
@@ -32,7 +32,7 @@ telemetry. Which hosts it contacts depends on which sources you switch on.
 no persistent identifier attached.
 - Reddit sends the pages you visit to reddit.com, and if you're
 signed in to Reddit, those requests arrive as your account. Signed out, they carry a long-lived device identifier
-instead.
+instead. Voting and replying go through that same session, and only when you press something.
 - Bluesky sends the pages you visit to Constellation, an independent index of
 Bluesky links, not to Bluesky. Bluesky is asked only about the posts
 Constellation names. No account is needed and neither host sets a cookie.

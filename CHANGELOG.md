@@ -12,6 +12,25 @@ use to detect updates, so every release bumps it.
 
 ### Added
 
+- **Voting and replying on Reddit.** Signed in to Reddit, the arrows and the
+  reply box in the sidebar act on your account, through the session your browser
+  already holds. Nothing is submitted anywhere until you press something, and no
+  password or token is read, stored or moved.
+
+- What you are able to do is read off the page rather than assumed. A subreddit
+  with downvotes turned off, a locked thread, or a karma threshold on Hacker News
+  means the arrow is not offered — because the site did not offer it, not because
+  a table somewhere says the site supports voting.
+
+- Signing in finishes what you started. Pressing vote while signed out opens the
+  source's login page and says what it is holding; sign in and the vote is cast
+  from there, rather than being lost. "What each source supports" in settings
+  marks anything you would still have to sign in for.
+
+- Bluesky, Lemmy and Hypothes.is posters are called by the name they chose.
+  Those three keep a display name apart from the handle, and only the handle was
+  shown. The handle still resolves the profile link and sits on its title.
+
 - Adds Hypothes.is. The public annotations left on a page arrive as comments that
   quote the passage they are about, so a note lands under the sentence it answers
   rather than at the top of the page. Read-only, no account, one request per page.
@@ -80,6 +99,19 @@ use to detect updates, so every release bumps it.
   browser's grey groove, heavier than anything the panel draws for itself.
 
 ### Fixed
+
+- **A vote that did not go through says so.** The sidebar asked the popup to
+  vote and then looked only at the answer it wanted, so a vote that failed —
+  not signed in, no such arrow, rate limited, popup blocked — looked exactly
+  like one that worked: a window that opened and closed.
+
+- A Hypothes.is profile link no longer points at a display name. The annotator's
+  chosen name was taken as the author, and the author is what builds the profile
+  URL, so anyone who had set one got a link to nobody.
+
+- Favouriting and flagging are offered only where the source has them. Both were
+  shown for any source that could vote, which was true of Hacker News alone until
+  it wasn't.
 
 - Annotations made on a different copy of a document no longer appear. Asked
   about an arXiv abstract, Hypothes.is answers with notes made on the PDF — and
