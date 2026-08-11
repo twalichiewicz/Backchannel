@@ -2944,8 +2944,8 @@ ${
 		shortLabel: "Reddit",
 		beta: true,
 		caveat:
-			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds.",
-		capabilities: { vote: false, reply: false, submit: false },
+			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds. Vote and reply through your existing Reddit session.",
+		capabilities: { vote: true, reply: true, submit: false },
 
 		profileURL: (author) =>
 			"https://www.reddit.com/user/" + encodeURIComponent(author) + "/",
