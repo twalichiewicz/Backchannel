@@ -873,16 +873,17 @@
 		);
 	}
 
-	function itemActionLinksHTML(itemId) {
+	function itemActionLinksHTML(itemId, sourceID) {
 		const id = escapeHTML(String(itemId));
+		const source = escapeHTML(String(sourceID || ""));
 
 		return `
       |
       <button class="item-action-link" type="button"
-      data-item-action="flag" data-item-action-id="${id}">flag</button>
+      data-item-action="flag" data-item-action-source="${source}" data-item-action-id="${id}">flag</button>
       |
       <button class="item-action-link" type="button"
-      data-item-action="fave" data-item-action-id="${id}">favorite</button>`;
+      data-item-action="fave" data-item-action-source="${source}" data-item-action-id="${id}">favorite</button>`;
 	}
 
 	const ITEM_ACTION_FIELD = { fave: "favorite", flag: "flagged" };
@@ -944,7 +945,13 @@
 		try {
 			// No URL to pass: unlike a vote there is no client-injected link to hand
 			// over, so the popup finds the anchor on the page it lands on.
-			await openItemActionPopup(itemId, itemId, action, null);
+			await openItemActionPopup(
+				button.dataset.itemActionSource,
+				itemId,
+				itemId,
+				action,
+				null,
+			);
 		} finally {
 			button.disabled = false;
 			refreshItemActionControls(itemId);
@@ -5333,16 +5340,18 @@ ${
 		await save(BRIDGE_PAYLOAD_PREFIX + "index", next);
 	}
 
-	// Parses the fragment the sidebar attaches when it opens a bridge popup. Shared
-	// by the submit and comment bridges, which differ only in their marker key.
-	function parseBridgeHash(marker) {
-		const hash = location.hash.replace(/^#/, "");
+	// #region hnewhere-test-export
 
-		if (!hash) {
+	// The fragment the sidebar attaches when it opens a bridge popup. An action
+	// names any extra keys it carries there.
+	function parseBridgeHash(marker, fields = [], hash = location.hash) {
+		const raw = hash.replace(/^#/, "");
+
+		if (!raw) {
 			return null;
 		}
 
-		const params = new URLSearchParams(hash);
+		const params = new URLSearchParams(raw);
 
 		if (params.get(marker) !== "1") {
 			return null;
@@ -5354,12 +5363,36 @@ ${
 			return null;
 		}
 
-		return {
+		const payload = {
 			nonce,
 			origin: params.get("origin"),
 			storyID: params.get("story"),
 		};
+
+		for (const field of fields) {
+			payload[field] = params.get(field);
+		}
+
+		return payload;
 	}
+
+	function bridgeHash(action, nonce, values = {}, origin = location.origin) {
+		const hash = new URLSearchParams();
+
+		hash.set(action.marker, "1");
+		hash.set("nonce", nonce);
+		hash.set("origin", origin);
+
+		for (const [key, value] of Object.entries(values)) {
+			if (value !== null && value !== undefined && value !== "") {
+				hash.set(key, String(value));
+			}
+		}
+
+		return hash.toString();
+	}
+
+	// #endregion hnewhere-test-export
 
 	function postBridgeResult(source, payload, result) {
 		if (!window.opener) {
@@ -5481,6 +5514,10 @@ ${
 		return [...WRITE_BRIDGES.values()];
 	}
 
+	function isWriteBridgeOrigin(origin) {
+		return writeBridges().some((bridge) => bridge.origin === origin);
+	}
+
 	// #region hnewhere-test-export
 
 	// What an action returns when the answer arrives on a later page load rather
@@ -5501,6 +5538,12 @@ ${
 			console.error("HNewhere: could not stage bridge payload", error);
 			return false;
 		}
+	}
+
+	function clearBridgeReload(key) {
+		try {
+			window.sessionStorage.removeItem(key);
+		} catch {}
 	}
 
 	// Cleared before parsing, so a payload that cannot be read does not make every
@@ -5528,6 +5571,33 @@ ${
 		}
 	}
 
+	// Leaves a readable payload staged, for a write whose landing page is not the
+	// one it passes through first. Unreadable payloads are still dropped.
+	function peekBridgeReload(key) {
+		let stored = null;
+
+		try {
+			stored = window.sessionStorage.getItem(key);
+		} catch {
+			return null;
+		}
+
+		if (!stored) {
+			return null;
+		}
+
+		try {
+			const payload = JSON.parse(stored);
+
+			if (payload?.nonce) {
+				return payload;
+			}
+		} catch {}
+
+		clearBridgeReload(key);
+		return null;
+	}
+
 	// The seam. A refusal is a result the sidebar is told about, not a throw.
 	async function runWriteAction(action, { payload, staged, root }) {
 		if (action.requiresDraft && !staged?.text) {
@@ -5544,18 +5614,33 @@ ${
 
 	// #endregion hnewhere-test-export
 
-	async function dispatchWriteAction(action, root = document) {
-		const payload = parseBridgeHash(action.marker);
+	// Fields an action echoes back on every result, so the sidebar knows which
+	// control the answer belongs to.
+	function postWriteResult(action, payload, result) {
+		postBridgeResult(action.messageSource, payload, {
+			...action.echo?.(payload),
+			...result,
+		});
+	}
 
-		if (!payload) {
+	async function dispatchWriteAction(action, root = document) {
+		const payload = parseBridgeHash(action.marker, action.fields);
+
+		if (!payload || action.accepts?.(payload) === false) {
 			return false;
 		}
 
-		const staged = await readBridgePayload(payload.nonce);
+		const staged = action.stagesDraft
+			? await readBridgePayload(payload.nonce)
+			: null;
 		const result = await runWriteAction(action, { payload, staged, root });
 
 		if (result !== BRIDGE_NAVIGATED) {
-			postBridgeResult(action.messageSource, payload, result);
+			postWriteResult(action, payload, result);
+
+			if (action.closeAfter) {
+				window.setTimeout(() => window.close(), action.closeAfter);
+			}
 		}
 
 		return true;
@@ -5568,7 +5653,7 @@ ${
 			return false;
 		}
 
-		postBridgeResult(action.messageSource, reported.payload, reported.result);
+		postWriteResult(action, reported.payload, reported.result);
 		window.setTimeout(() => window.close(), 60);
 		return true;
 	}
@@ -6032,22 +6117,17 @@ ${
 		return descriptors;
 	}
 
-	function itemActionPageURL(storyID, itemId, action, voteURL, nonce) {
-		const url = new URL(commentURL(itemId));
-		const hash = new URLSearchParams();
-		hash.set("hnewhere-vote", "1");
-		hash.set("story", String(storyID));
-		hash.set("item", String(itemId));
-		hash.set("action", action);
-
-		if (voteURL) {
-			hash.set("voteURL", voteURL);
-		}
-
-		hash.set("origin", location.origin);
-		hash.set("nonce", nonce);
-		url.hash = hash.toString();
-		return url.href;
+	function itemActionPageURL(voteAction, { storyID, itemId, action, voteURL, nonce }) {
+		return (
+			voteAction.url({ storyID, itemId }) +
+			"#" +
+			bridgeHash(voteAction, nonce, {
+				story: storyID,
+				item: itemId,
+				action,
+				voteURL,
+			})
+		);
 	}
 
 	function setupItemActionListener() {
@@ -6057,7 +6137,8 @@ ${
 
 		window.__hnewhereItemActionListenerInstalled = true;
 		window.addEventListener("message", (event) => {
-			if (event.origin !== HN_ORIGIN) {
+			// Any source this script writes to, rather than one fixed site.
+			if (!isWriteBridgeOrigin(event.origin)) {
 				return;
 			}
 
@@ -6112,21 +6193,26 @@ ${
 		});
 	}
 
-	function openItemActionPopup(storyID, itemId, action, voteURL) {
+	function openItemActionPopup(sourceID, storyID, itemId, action, voteURL) {
+		const bridge = getWriteBridge(sourceID);
+		const voteAction = bridge?.actions?.vote;
+
+		if (!voteAction) {
+			return Promise.resolve({ ok: false, reason: "no-bridge" });
+		}
+
 		setupItemActionListener();
 
 		return new Promise((resolve) => {
-			const nonce =
-				String(Date.now()) + Math.random().toString(36).slice(2, 10);
-			const bridgeURL = itemActionPageURL(
-				storyID,
-				itemId,
-				action,
-				voteURL,
-				nonce,
-			);
+			const nonce = bridgeNonce();
 			const popup = window.open(
-				bridgeURL,
+				itemActionPageURL(voteAction, {
+					storyID,
+					itemId,
+					action,
+					voteURL,
+					nonce,
+				}),
 				"hnewhere_vote_bridge_" + nonce,
 				"width=420,height=320,resizable=yes,scrollbars=yes",
 			);
@@ -6145,11 +6231,12 @@ ${
 				resolve,
 				timeoutId,
 				popup,
+				origin: bridge.origin,
 			});
 		});
 	}
 
-	async function submitVote(storyID, itemId, descriptor, container) {
+	async function submitVote(sourceID, storyID, itemId, descriptor, container) {
 		if (!container || container.dataset.votePending === "1") {
 			return;
 		}
@@ -6162,6 +6249,7 @@ ${
 
 		try {
 			const result = await openItemActionPopup(
+				sourceID,
 				storyID,
 				itemId,
 				descriptor.action,
@@ -6185,6 +6273,10 @@ ${
 			return;
 		}
 
+		// Read off the container the markup carries, so the chain from render to
+		// popup never has to guess which source these controls belong to.
+		const sourceID = container.dataset.hnVoteSource;
+
 		container.replaceChildren();
 
 		const descriptors = getVoteDescriptors(voteInfo);
@@ -6195,6 +6287,7 @@ ${
 		// as something that looks clickable but does nothing.
 		updateVoteStatus(itemId, voteInfo?.unUrl ? state : null, () => {
 			submitVote(
+				sourceID,
 				storyID,
 				itemId,
 				{ action: "un", url: voteInfo.unUrl },
@@ -6241,7 +6334,7 @@ ${
 			button.onclick = async (event) => {
 				event.preventDefault();
 				event.stopPropagation();
-				await submitVote(storyID, itemId, descriptor, container);
+				await submitVote(sourceID, storyID, itemId, descriptor, container);
 			};
 
 			container.appendChild(button);
@@ -6615,7 +6708,7 @@ ${
 
 		const actions =
 			!story.source || getSource(story.source)?.capabilities?.vote
-				? itemActionLinksHTML(story.id)
+				? itemActionLinksHTML(story.id, story.source || "hn")
 				: "";
 
 		const meta = `${escapeHTML(pluralize(story.score, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}
@@ -7676,13 +7769,9 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 				});
 				await indexBridgePayload(nonce);
 
-				const hash = new URLSearchParams();
-
-				hash.set(action.marker, "1");
-				hash.set("nonce", nonce);
-				hash.set("origin", location.origin);
-
-				session.navigate(action.url({ url, title }) + "#" + hash.toString());
+				session.navigate(
+					action.url({ url, title }) + "#" + bridgeHash(action, nonce),
+				);
 
 				return await session.result;
 			} finally {
@@ -11616,6 +11705,7 @@ ${settingsPanelHTML()}
 		// Lifted out because it goes in one of two cells: beside the title when
 		// there is one, and beside the byline when there is not.
 		const voteControlsHTML = `<span class="story-vote-controls vote-controls hidden"
+	data-hn-vote-source="${escapeHTML(String(story.source || "hn"))}"
 	data-hn-vote-story-id="${escapeHTML(storyID)}"
 	data-hn-vote-item-id="${escapeHTML(storyID)}"></span>`;
 
@@ -11662,7 +11752,7 @@ ${settingsPanelHTML()}
 	}${
 		ageLabel ? escapeHTML(ageLabel) + " " : ""
 	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
-	${showActions ? itemActionLinksHTML(storyID) : ""}
+	${showActions ? itemActionLinksHTML(storyID, story.source || "hn") : ""}
 	${
 		// The separator belongs to the link, so a source with no page of its own
 		// renders neither rather than leaving a bare pipe pointing nowhere.
@@ -11952,15 +12042,10 @@ ${settingsPanelHTML()}
 				});
 				await indexBridgePayload(nonce);
 
-				const hash = new URLSearchParams();
-
-				hash.set(action.marker, "1");
-				hash.set("nonce", nonce);
-				hash.set("story", String(storyID));
-				hash.set("origin", location.origin);
-
 				session.navigate(
-					action.url({ storyID, parentId }) + "#" + hash.toString(),
+					action.url({ storyID, parentId }) +
+						"#" +
+						bridgeHash(action, nonce, { story: storyID }),
 				);
 
 				return await session.result;
@@ -12462,6 +12547,7 @@ ${settingsPanelHTML()}
       <div class="comment-layout">
       <span class="comment-vote-slot${threadCanVote ? "" : " comment-vote-slot-empty"}">
       <span class="comment-vote-controls vote-controls hidden"
+      data-hn-vote-source="${escapeHTML(String(comment.source || "hn"))}"
       data-hn-vote-story-id="${escapeHTML(String(storyID))}"
       data-hn-vote-item-id="${escapeHTML(commentID)}"></span>
       </span>
@@ -12500,7 +12586,7 @@ ${settingsPanelHTML()}
       <a class="focus-link" href="#">
       focus
       </a>
-		${capabilities.vote ? itemActionLinksHTML(commentID) : ""}
+		${capabilities.vote ? itemActionLinksHTML(commentID, comment.source || "hn") : ""}
 
       <span class="toggle">
       [–]
@@ -13575,43 +13661,6 @@ title="Show only this discussion">
 	// Hacker News click tracking / vote bridge
 	// -------------------------
 
-	function parseItemActionPayload() {
-		const hash = location.hash.replace(/^#/, "");
-
-		if (!hash) {
-			return null;
-		}
-
-		const params = new URLSearchParams(hash);
-
-		if (params.get("hnewhere-vote") !== "1") {
-			return null;
-		}
-
-		const storyID = params.get("story");
-		const itemId = params.get("item");
-		const action = params.get("action");
-		const origin = params.get("origin");
-		const nonce = params.get("nonce");
-
-		if (!storyID || !itemId || !nonce) {
-			return null;
-		}
-
-		if (!ITEM_ACTIONS.includes(action)) {
-			return null;
-		}
-
-		return {
-			storyID,
-			itemId,
-			action,
-			origin,
-			nonce,
-			voteURL: normalizeVoteURL(params.get("voteURL")),
-		};
-	}
-
 	// #region hnewhere-test-export
 
 	const ITEM_ACTION_PATHS = {
@@ -13652,76 +13701,35 @@ title="Show only this discussion">
 
 	// #endregion hnewhere-test-export
 
-	function postItemActionResult(payload, result) {
-		if (!window.opener) {
-			return;
-		}
-
-		try {
-			window.opener.postMessage(
-				{
-					source: ITEM_ACTION_BRIDGE_MESSAGE_SOURCE,
-					storyID: payload.storyID,
-					itemId: payload.itemId,
-					action: payload.action,
-					nonce: payload.nonce,
-					...result,
-				},
-				payload.origin || "*",
-			);
-		} catch (error) {
-			console.error("Failed posting vote bridge result:", error);
-		}
-	}
-
-	function currentVoteInfoFor(itemId) {
+	function currentVoteInfoFor(root, itemId) {
 		return cloneVoteInfo(
-			extractVoteLinksFromRoot(document).get(String(itemId)) || null,
+			extractVoteLinksFromRoot(root).get(String(itemId)) || null,
 		);
 	}
 
 	// Runs on the page HN redirects to after the vote is committed. The hash is
 	// gone by now, so the payload comes back out of sessionStorage.
-	function reportItemActionAfterReload() {
-		const forget = () => {
-			try {
-				window.sessionStorage.removeItem(ITEM_ACTION_BRIDGE_STORAGE_KEY);
-			} catch {}
-		};
+	function reportHNItemAction(root) {
+		const payload = peekBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY);
 
-		let stored = null;
-
-		try {
-			stored = window.sessionStorage.getItem(ITEM_ACTION_BRIDGE_STORAGE_KEY);
-		} catch {
-			return false;
+		if (!payload) {
+			return null;
 		}
 
-		if (!stored) {
-			return false;
-		}
-
-		let payload = null;
-
-		try {
-			payload = JSON.parse(stored);
-		} catch {
-			forget();
-			return false;
-		}
-
-		if (!payload?.itemId || !payload?.nonce) {
-			forget();
-			return false;
+		if (!payload.item) {
+			clearBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY);
+			return null;
 		}
 
 		const isFaveOrFlag = Boolean(ITEM_ACTION_PATHS[payload.action]);
 
+		// Left staged: a vote that has not reached the item page yet is still in
+		// flight, and this is a page it only passes through.
 		if (!isFaveOrFlag && location.pathname !== "/item") {
-			return false;
+			return null;
 		}
 
-		forget();
+		clearBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY);
 
 		if (isFaveOrFlag) {
 			const base = payload.action.startsWith("un")
@@ -13729,40 +13737,40 @@ title="Show only this discussion">
 				: payload.action;
 			const wanted = !payload.action.startsWith("un");
 
-			const onLink = findItemActionAnchor(document, "un" + base, payload.itemId);
-			const offLink = findItemActionAnchor(document, base, payload.itemId);
+			const onLink = findItemActionAnchor(root, "un" + base, payload.item);
+			const offLink = findItemActionAnchor(root, base, payload.item);
 
 			const applied = onLink ? true : offLink ? false : wanted;
 
-			postItemActionResult(payload, {
-				ok: applied === wanted,
-				reason: applied === wanted ? "updated" : "unchanged",
-				action: payload.action,
-				applied,
-			});
-
-			window.setTimeout(() => window.close(), 60);
-			return true;
+			return {
+				payload,
+				result: {
+					ok: applied === wanted,
+					reason: applied === wanted ? "updated" : "unchanged",
+					action: payload.action,
+					applied,
+				},
+			};
 		}
 
 		// Server-rendered state, so this is the vote HN actually holds.
-		const voteInfo = currentVoteInfoFor(payload.itemId);
+		const voteInfo = currentVoteInfoFor(root, payload.item);
 		const changed = voteInfo?.state !== payload.beforeState;
 
-		postItemActionResult(payload, {
-			ok: changed,
-			reason: changed ? "updated" : "unchanged",
-			voteInfo,
-			// HN's own tally, read off the page it just served.
-			score: extractScoreFromRoot(document, payload.itemId),
-		});
-
-		window.setTimeout(() => window.close(), 60);
-		return true;
+		return {
+			payload,
+			result: {
+				ok: changed,
+				reason: changed ? "updated" : "unchanged",
+				voteInfo,
+				// HN's own tally, read off the page it just served.
+				score: extractScoreFromRoot(root, payload.item),
+			},
+		};
 	}
 
-	function handleFaveFlagAction(payload) {
-		const anchor = findItemActionAnchor(document, payload.action, payload.itemId);
+	function actHNFaveFlag(payload, root) {
+		const anchor = findItemActionAnchor(root, payload.action, payload.item);
 
 		if (!anchor) {
 			const base = payload.action.startsWith("un")
@@ -13770,99 +13778,65 @@ title="Show only this discussion">
 				: payload.action;
 			const opposite = payload.action.startsWith("un") ? base : "un" + base;
 
-			const already = findItemActionAnchor(document, opposite, payload.itemId);
+			const already = findItemActionAnchor(root, opposite, payload.item);
 
-			postItemActionResult(payload, {
+			return {
 				ok: Boolean(already),
 				reason: already ? "already" : "action-unavailable",
 				action: payload.action,
 				...(already ? { applied: !payload.action.startsWith("un") } : {}),
-			});
-			window.setTimeout(() => window.close(), 80);
-			return true;
+			};
 		}
 
 		const target = new URL(anchor.getAttribute("href"), HN_ORIGIN + "/");
 
-		target.searchParams.set("goto", "item?id=" + payload.itemId);
+		target.searchParams.set("goto", "item?id=" + payload.item);
 
-		try {
-			window.sessionStorage.setItem(
-				ITEM_ACTION_BRIDGE_STORAGE_KEY,
-				JSON.stringify(payload),
-			);
-		} catch (error) {
-			console.error("HNewhere: could not stage item action payload", error);
-			postItemActionResult(payload, {
+		if (!stageBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY, payload)) {
+			return {
 				ok: false,
 				reason: "storage-unavailable",
 				action: payload.action,
-			});
-			window.setTimeout(() => window.close(), 80);
-			return true;
+			};
 		}
 
 		location.href = target.href;
-		return true;
+		return BRIDGE_NAVIGATED;
 	}
 
-	function maybeHandleHNItemAction() {
-		const payload = parseItemActionPayload();
-
-		if (!payload) {
-			return false;
-		}
-
+	function actHNItemAction({ payload, root }) {
 		if (ITEM_ACTION_PATHS[payload.action]) {
-			return handleFaveFlagAction(payload);
+			return actHNFaveFlag(payload, root);
 		}
 
-		const before = currentVoteInfoFor(payload.itemId);
+		const before = currentVoteInfoFor(root, payload.item);
 
-		const anchor = document.getElementById(
-			payload.action + "_" + payload.itemId,
-		);
+		const anchor = root.getElementById(payload.action + "_" + payload.item);
 		const voteURL =
 			(anchor instanceof HTMLAnchorElement
 				? normalizeVoteURL(anchor.getAttribute("href"))
 				: null) ||
 			(payload.action === "un" ? before?.unUrl : null) ||
-			payload.voteURL;
+			normalizeVoteURL(payload.voteURL);
 
 		if (!voteURL) {
-			postItemActionResult(payload, {
-				ok: false,
-				reason: "vote-url-missing",
-				voteInfo: before,
-			});
-			window.setTimeout(() => window.close(), 80);
-			return true;
+			return { ok: false, reason: "vote-url-missing", voteInfo: before };
 		}
 
 		const target = new URL(voteURL);
-		target.searchParams.set("goto", "item?id=" + payload.itemId);
+		target.searchParams.set("goto", "item?id=" + payload.item);
 
-		try {
-			window.sessionStorage.setItem(
-				ITEM_ACTION_BRIDGE_STORAGE_KEY,
-				JSON.stringify({
-					...payload,
-					beforeState: before?.state ?? "none",
-				}),
-			);
-		} catch (error) {
-			console.error("HNewhere: could not stage vote payload", error);
-			postItemActionResult(payload, {
-				ok: false,
-				reason: "storage-unavailable",
-				voteInfo: before,
-			});
-			window.setTimeout(() => window.close(), 80);
-			return true;
+		if (
+			!stageBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY, {
+				...payload,
+				beforeState: before?.state ?? "none",
+			})
+		) {
+			return { ok: false, reason: "storage-unavailable", voteInfo: before };
 		}
 
 		location.href = target.href;
-		return true;
+		return BRIDGE_NAVIGATED;
 	}
 
 	// -------------------------
@@ -14147,9 +14121,27 @@ title="Show only this discussion">
 		origin: HN_ORIGIN,
 		hosts: ["news.ycombinator.com"],
 		actions: {
+			vote: {
+				marker: "hnewhere-vote",
+				messageSource: ITEM_ACTION_BRIDGE_MESSAGE_SOURCE,
+				fields: ["item", "action", "voteURL"],
+				accepts: (payload) =>
+					Boolean(payload.storyID && payload.item) &&
+					ITEM_ACTIONS.includes(payload.action),
+				echo: (payload) => ({
+					storyID: payload.storyID,
+					itemId: payload.item,
+					action: payload.action,
+				}),
+				closeAfter: 80,
+				url: ({ itemId }) => commentURL(itemId),
+				act: actHNItemAction,
+				report: reportHNItemAction,
+			},
 			submit: {
 				marker: "hnewhere-submit",
 				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
+				stagesDraft: true,
 				url: ({ url, title }) => submitURL(url, title),
 				act: actHNSubmit,
 				report: reportHNSubmit,
@@ -14157,6 +14149,7 @@ title="Show only this discussion">
 			reply: {
 				marker: "hnewhere-comment",
 				messageSource: COMMENT_BRIDGE_MESSAGE_SOURCE,
+				stagesDraft: true,
 				requiresDraft: true,
 				// /reply carries its own goto back to the item page, so both land
 				// somewhere report can read the result from.
@@ -17356,19 +17349,11 @@ title="Show only this discussion">
 
 			const bridge = writeBridgeForHost(writeBridges(), location.hostname);
 
-			if (reportItemActionAfterReload()) {
-				return;
-			}
-
 			if (reportWriteBridge(bridge)) {
 				return;
 			}
 
-			if (maybeHandleHNItemAction()) {
-				return;
-			}
-
-			// Async because the staged payload lives in GM storage rather than the URL
+			// Async because a staged draft lives in GM storage rather than the URL
 			// fragment, so it cannot be tested with a plain if.
 			if (await dispatchWriteBridge(bridge)) {
 				return;
