@@ -399,12 +399,16 @@
 	const ITEM_ACTION_BRIDGE_STORAGE_KEY = "hnewhere-vote-bridge";
 	const SUBMIT_BRIDGE_STORAGE_KEY = "hnewhere-submit-bridge";
 	const COMMENT_BRIDGE_STORAGE_KEY = "hnewhere-comment-bridge";
+	const RESUME_BRIDGE_STORAGE_KEY = "hnewhere-resume-bridge";
 
 	const BRIDGE_PAYLOAD_PREFIX = "HNewhere:bridge_payload:";
 
 	// Long enough to survive a slow HN, short enough that an abandoned popup's
 	// payload does not sit in storage indefinitely.
 	const BRIDGE_PAYLOAD_TTL = 10 * 60 * 1000;
+
+	// Long enough for a person to find their password.
+	const SIGN_IN_TIMEOUT = 5 * 60 * 1000;
 	// #region hnewhere-test-export
 	const TRACKING_PARAMS = new Set([
 		"utm_source",
@@ -5449,6 +5453,18 @@ ${
 					return;
 				}
 
+				// Not an answer: leave the request open so the draft survives and
+				// nothing closes while the reader is signing in.
+				if (data.interim) {
+					request.onInterim?.(data);
+					clearTimeout(request.timeoutId);
+					request.timeoutId = window.setTimeout(() => {
+						pending.delete(data.nonce);
+						request.resolve({ ok: false, reason: "timeout" });
+					}, SIGN_IN_TIMEOUT);
+					return;
+				}
+
 				clearTimeout(request.timeoutId);
 				pending.delete(data.nonce);
 
@@ -5462,7 +5478,7 @@ ${
 
 		return function openBridge(
 			nonce,
-			{ origin = HN_ORIGIN, timeout = 60000, features } = {},
+			{ origin = HN_ORIGIN, timeout = 60000, features, onInterim } = {},
 		) {
 			install();
 
@@ -5486,7 +5502,13 @@ ${
 					resolve({ ok: false, reason: "timeout" });
 				}, timeout);
 
-				pending.set(nonce, { resolve, timeoutId, popup, origin });
+				pending.set(nonce, {
+					resolve,
+					timeoutId,
+					popup,
+					origin,
+					onInterim,
+				});
 			});
 
 			return {
@@ -5532,6 +5554,10 @@ ${
 	// What an action returns when the answer arrives on a later page load rather
 	// than from this one.
 	const BRIDGE_NAVIGATED = { navigated: true };
+
+	// Nobody is signed in. The action waits on the page rather than failing, and
+	// runs on the load that follows a sign-in.
+	const BRIDGE_AWAITING_SIGN_IN = { awaitingSignIn: true };
 
 	function writeBridgeForHost(bridges, hostname) {
 		return (
@@ -5642,15 +5668,70 @@ ${
 		const staged = action.stagesDraft
 			? await readBridgePayload(payload.nonce)
 			: null;
-		const result = await runWriteAction(action, { payload, staged, root });
 
-		if (result !== BRIDGE_NAVIGATED) {
-			postWriteResult(action, payload, result);
+		finishWriteAction(
+			action,
+			payload,
+			await runWriteAction(action, { payload, staged, root }),
+		);
 
-			if (action.closeAfter) {
-				window.setTimeout(() => window.close(), action.closeAfter);
-			}
+		return true;
+	}
+
+	// The popup stays open on an awaited sign-in, holding the action beside the
+	// login page the reader was sent to.
+	function finishWriteAction(action, payload, result) {
+		if (result === BRIDGE_NAVIGATED) {
+			return;
 		}
+
+		if (result === BRIDGE_AWAITING_SIGN_IN) {
+			stageBridgeReload(RESUME_BRIDGE_STORAGE_KEY, {
+				nonce: payload.nonce,
+				marker: action.marker,
+				payload,
+			});
+			postWriteResult(action, payload, {
+				ok: false,
+				reason: "awaiting-sign-in",
+				interim: true,
+			});
+			return;
+		}
+
+		postWriteResult(action, payload, result);
+
+		if (action.closeAfter) {
+			window.setTimeout(() => window.close(), action.closeAfter);
+		}
+	}
+
+	// The fragment does not survive a sign-in round trip; the tab's own storage
+	// does. Runs before the normal dispatch.
+	async function resumeWriteBridge(bridge, root = document) {
+		const stored = takeBridgeReload(RESUME_BRIDGE_STORAGE_KEY);
+
+		if (!stored?.marker || !stored?.payload?.nonce) {
+			return false;
+		}
+
+		const action = Object.values(bridge?.actions || {}).find(
+			(candidate) => candidate.marker === stored.marker,
+		);
+
+		if (!action) {
+			return false;
+		}
+
+		const staged = action.stagesDraft
+			? await readBridgePayload(stored.payload.nonce)
+			: null;
+
+		finishWriteAction(
+			action,
+			stored.payload,
+			await runWriteAction(action, { payload: stored.payload, staged, root }),
+		);
 
 		return true;
 	}
@@ -6299,6 +6380,17 @@ ${
 				return;
 			}
 
+			// Not an answer: the popup is waiting on a sign-in and stays open.
+			if (data.interim) {
+				pending.onInterim?.(data);
+				clearTimeout(pending.timeoutId);
+				pending.timeoutId = window.setTimeout(() => {
+					itemActionRequests.delete(data.nonce);
+					pending.resolve({ ok: false, reason: "timeout" });
+				}, SIGN_IN_TIMEOUT);
+				return;
+			}
+
 			clearTimeout(pending.timeoutId);
 			itemActionRequests.delete(data.nonce);
 
@@ -6310,7 +6402,14 @@ ${
 		});
 	}
 
-	function openItemActionPopup(sourceID, storyID, itemId, action, voteURL) {
+	function openItemActionPopup(
+		sourceID,
+		storyID,
+		itemId,
+		action,
+		voteURL,
+		onInterim,
+	) {
 		const bridge = getWriteBridge(sourceID);
 		const voteAction = bridge?.actions?.vote;
 
@@ -6349,6 +6448,7 @@ ${
 				timeoutId,
 				popup,
 				origin: bridge.origin,
+				onInterim,
 			});
 		});
 	}
@@ -6395,6 +6495,11 @@ ${
 				itemId,
 				descriptor.action,
 				descriptor.url,
+				() =>
+					showVoteMessage(
+						itemId,
+						`Waiting for sign-in on ${getSource(sourceID)?.label || "the source"}…`,
+					),
 			);
 
 			if (result?.storyID && result?.itemId && result?.voteInfo) {
@@ -12186,6 +12291,10 @@ ${settingsPanelHTML()}
 					storyID,
 					text,
 					parentId,
+					() =>
+						setStatus(
+							`Waiting for sign-in on ${getSource(source)?.label || "the source"}…`,
+						),
 				);
 
 				await rememberAuthFromResult(source, result);
@@ -12216,7 +12325,13 @@ ${settingsPanelHTML()}
 		return { focus: () => textarea.focus() };
 	}
 
-	function submitCommentThroughBridge(sourceID, storyID, text, parentId = null) {
+	function submitCommentThroughBridge(
+		sourceID,
+		storyID,
+		text,
+		parentId = null,
+		onInterim,
+	) {
 		const bridge = getWriteBridge(sourceID);
 		const action = bridge?.actions?.reply;
 
@@ -12225,7 +12340,10 @@ ${settingsPanelHTML()}
 		}
 
 		const nonce = bridgeNonce();
-		const session = openCommentBridgePopup(nonce, { origin: bridge.origin });
+		const session = openCommentBridgePopup(nonce, {
+			origin: bridge.origin,
+			onInterim,
+		});
 
 		if (session.blocked) {
 			return session.result;
@@ -14510,7 +14628,7 @@ title="Show only this discussion">
 		const uh = redditModhash(root);
 
 		if (!uh) {
-			return { ok: false, reason: "not-logged-in" };
+			return BRIDGE_AWAITING_SIGN_IN;
 		}
 
 		const thing = redditThing(root, payload.item);
@@ -14560,7 +14678,7 @@ title="Show only this discussion">
 		const uh = redditModhash(root);
 
 		if (!uh) {
-			return { ok: false, reason: "not-logged-in" };
+			return BRIDGE_AWAITING_SIGN_IN;
 		}
 
 		const thing = redditThing(root, staged.parentId || payload.storyID);
@@ -17819,6 +17937,12 @@ title="Show only this discussion">
 
 		// A popup this script opened, on the source's own page.
 		if (bridge) {
+			// First: this may be the load that follows a sign-in, still holding
+			// the action the reader asked for.
+			if (await resumeWriteBridge(bridge)) {
+				return;
+			}
+
 			if (reportWriteBridge(bridge)) {
 				return;
 			}
