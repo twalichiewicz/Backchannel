@@ -6056,26 +6056,46 @@ ${
 		}
 	}
 
-	function getVoteDescriptors(voteInfo) {
-		if (!voteInfo) {
+	function voteDescriptorsFor(sourceID, voteInfo) {
+		const action = getWriteBridge(sourceID)?.actions?.vote;
+
+		return action?.descriptors
+			? action.descriptors(voteInfo, getSource(sourceID)?.label || "the source")
+			: [];
+	}
+
+	// A source with nothing to scrape has only what the reader did last.
+	async function loadVoteState(sourceID, storyID) {
+		const action = getWriteBridge(sourceID)?.actions?.vote;
+
+		if (action?.voteLinks) {
+			return await action.voteLinks(storyID);
+		}
+
+		const map = new Map();
+
+		for (const [itemId, record] of Object.entries(rememberedVotes)) {
+			map.set(itemId, cloneVoteInfo(record));
+		}
+
+		return map;
+	}
+
+	// #region hnewhere-test-export
+
+	// HN hides the arrows entirely once you have voted; the unvote link in the
+	// byline becomes the only control.
+	function hnVoteDescriptors(voteInfo, label) {
+		if (!voteInfo || voteInfo.state === "up" || voteInfo.state === "down") {
 			return [];
 		}
 
 		const descriptors = [];
 
-		if (voteInfo.state === "up" && voteInfo.unUrl) {
+		if (voteInfo.upUrl) {
 			descriptors.push({
 				label: "▲",
-				title: "Remove upvote on Hacker News",
-				action: "un",
-				url: voteInfo.unUrl,
-				active: true,
-				variant: "up",
-			});
-		} else if (voteInfo.upUrl) {
-			descriptors.push({
-				label: "▲",
-				title: "Upvote on Hacker News",
+				title: "Upvote on " + label,
 				action: "up",
 				url: voteInfo.upUrl,
 				active: false,
@@ -6083,19 +6103,10 @@ ${
 			});
 		}
 
-		if (voteInfo.state === "down" && voteInfo.unUrl) {
+		if (voteInfo.downUrl) {
 			descriptors.push({
 				label: "▼",
-				title: "Remove downvote on Hacker News",
-				action: "un",
-				url: voteInfo.unUrl,
-				active: true,
-				variant: "down",
-			});
-		} else if (voteInfo.downUrl) {
-			descriptors.push({
-				label: "▼",
-				title: "Downvote on Hacker News",
+				title: "Downvote on " + label,
 				action: "down",
 				url: voteInfo.downUrl,
 				active: false,
@@ -6106,7 +6117,7 @@ ${
 		if (!descriptors.length && voteInfo.unUrl) {
 			descriptors.push({
 				label: "↺",
-				title: "Remove vote on Hacker News",
+				title: "Remove vote on " + label,
 				action: "un",
 				url: voteInfo.unUrl,
 				active: true,
@@ -6116,6 +6127,34 @@ ${
 
 		return descriptors;
 	}
+
+	// A three-state toggle with no link behind it: the arrows stay, the one that is
+	// active shows it, and pressing it again clears the vote.
+	function buttonVoteDescriptors(voteInfo, label) {
+		const state = voteInfo?.state || "none";
+
+		return [
+			{
+				label: "▲",
+				title: (state === "up" ? "Remove upvote on " : "Upvote on ") + label,
+				action: state === "up" ? "un" : "up",
+				url: null,
+				active: state === "up",
+				variant: "up",
+			},
+			{
+				label: "▼",
+				title:
+					(state === "down" ? "Remove downvote on " : "Downvote on ") + label,
+				action: state === "down" ? "un" : "down",
+				url: null,
+				active: state === "down",
+				variant: "down",
+			},
+		];
+	}
+
+	// #endregion hnewhere-test-export
 
 	function itemActionPageURL(voteAction, { storyID, itemId, action, voteURL, nonce }) {
 		return (
@@ -6279,9 +6318,8 @@ ${
 
 		container.replaceChildren();
 
-		const descriptors = getVoteDescriptors(voteInfo);
+		const descriptors = voteDescriptorsFor(sourceID, voteInfo);
 		const state = voteInfo?.state;
-		const hasVote = state === "up" || state === "down";
 
 		// Only offer the link when there is a URL behind it, so it never renders
 		// as something that looks clickable but does nothing.
@@ -6295,9 +6333,7 @@ ${
 			);
 		});
 
-		// HN hides the arrows entirely once you have voted; the unvote link in the
-		// byline becomes the only control.
-		if (!descriptors.length || hasVote) {
+		if (!descriptors.length) {
 			container.classList.add("hidden");
 			return;
 		}
@@ -13065,7 +13101,10 @@ ${settingsPanelHTML()}
 			}
 
 			setSidebarStage(ui, "votes");
-			hydrateVoteControlsForStory(story.id, await loadVoteLinks(story.id));
+			hydrateVoteControlsForStory(
+				story.id,
+				await loadVoteState(story.source, story.id),
+			);
 			hydrateDisplayAges(story.id);
 		}
 
@@ -14135,6 +14174,8 @@ title="Show only this discussion">
 				}),
 				closeAfter: 80,
 				url: ({ itemId }) => commentURL(itemId),
+				descriptors: hnVoteDescriptors,
+				voteLinks: loadVoteLinks,
 				act: actHNItemAction,
 				report: reportHNItemAction,
 			},
@@ -14370,16 +14411,24 @@ title="Show only this discussion">
 			return;
 		}
 
-		const storyIDs = [
-			...new Set(
-				[...sidebarUI.body.querySelectorAll("[data-hn-vote-story-id]")]
-					.map((element) => element.dataset.hnVoteStoryId)
-					.filter(Boolean),
-			),
+		const containers = [
+			...sidebarUI.body.querySelectorAll("[data-hn-vote-story-id]"),
 		];
+		const bySource = new Map();
 
-		for (const storyID of storyIDs) {
-			hydrateVoteControlsForStory(storyID, await loadVoteLinks(storyID));
+		for (const container of containers) {
+			const storyID = container.dataset.hnVoteStoryId;
+
+			if (storyID && !bySource.has(storyID)) {
+				bySource.set(storyID, container.dataset.hnVoteSource);
+			}
+		}
+
+		for (const [storyID, sourceID] of bySource) {
+			hydrateVoteControlsForStory(
+				storyID,
+				await loadVoteState(sourceID, storyID),
+			);
 			hydrateDisplayAges(storyID);
 		}
 	}
