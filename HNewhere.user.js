@@ -8689,10 +8689,59 @@ header button svg {
 }
 
 .live-bookend-text {
+	display:flex;
+	align-items:baseline;
+	gap:4px;
+	min-width:0;
+	overflow:hidden;
+	white-space:nowrap;
+}
+
+/* "happening now in" never moves. */
+.live-bookend-lead {
+	flex:0 0 auto;
+}
+
+/* The source names, in a box they can be wider than. Ellipsised while still, so
+   a reader who has turned motion off still sees where the run was cut. */
+.live-bookend-names {
 	min-width:0;
 	overflow:hidden;
 	text-overflow:ellipsis;
-	white-space:nowrap;
+}
+
+.live-bookend-scroll {
+	display:inline-block;
+}
+
+/* Ping-pong rather than a loop: a list that wraps around reads as a different
+   list every time it passes. It holds at each end long enough to be read. */
+.live-bookend-names.is-marquee {
+	text-overflow:clip;
+}
+
+.live-bookend-names.is-marquee .live-bookend-scroll {
+	animation:live-bookend-marquee var(--marquee-duration, 6s) ease-in-out infinite alternate;
+}
+
+@keyframes live-bookend-marquee {
+	0%, 18% {
+		transform:translateX(0);
+	}
+
+	82%, 100% {
+		transform:translateX(var(--marquee-shift, 0));
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.live-bookend-names.is-marquee .live-bookend-scroll {
+		animation:none;
+	}
+
+	.live-bookend-names.is-marquee {
+		text-overflow:ellipsis;
+	}
 }
 
 /* The closing rule leads instead of trailing, so the pair reads as a bracket
@@ -12859,7 +12908,15 @@ ${settingsPanelHTML()}
 		node.dataset.liveBookend = edge;
 
 		if (edge === "open") {
-			node.innerHTML = `<span class="live-bookend-mark">LIVE</span><span class="live-bookend-text"></span>`;
+			// The names are their own box so they can scroll inside it. Everything up
+			// to "in" holds still, because a heading that slides away entirely is
+			// harder to read than one that never moved.
+			node.innerHTML =
+				`<span class="live-bookend-mark">LIVE</span>` +
+				`<span class="live-bookend-text">` +
+				`<span class="live-bookend-lead"></span>` +
+				`<span class="live-bookend-names"><span class="live-bookend-scroll"></span></span>` +
+				`</span>`;
 		} else {
 			node.innerHTML = `<span class="live-bookend-text">end of the live discussion</span>`;
 		}
@@ -12877,16 +12934,56 @@ ${settingsPanelHTML()}
 		}
 
 		const labels = visibleLiveLabels();
-		const named = labels.length ? ` in ${labels.join(", ")}` : "";
 
 		for (const node of host.querySelectorAll("[data-live-bookend]")) {
 			node.classList.toggle("live-bookend-hidden", !labels.length);
 
 			if (node.dataset.liveBookend === "open") {
-				node.querySelector(".live-bookend-text").textContent =
-					`happening now${named}`;
+				setLiveBookendNames(node, labels);
 			}
 		}
+	}
+
+	// Enough of a run to read a name before it moves, and enough at the far end to
+	// finish the last one.
+	const MARQUEE_PIXELS_PER_SECOND = 26;
+
+	function setLiveBookendNames(node, labels) {
+		const lead = node.querySelector(".live-bookend-lead");
+		const names = node.querySelector(".live-bookend-names");
+		const scroll = node.querySelector(".live-bookend-scroll");
+
+		if (!lead || !names || !scroll) {
+			return;
+		}
+
+		lead.textContent = labels.length ? "happening now in" : "happening now";
+		scroll.textContent = labels.join(", ");
+
+		// Measured after a frame, or the box has not been laid out and every heading
+		// looks like it fits.
+		requestAnimationFrame(() => {
+			const overflow = scroll.scrollWidth - names.clientWidth;
+
+			// Reduced motion keeps the ellipsis: a name the reader cannot see is a
+			// smaller problem than one that will not hold still.
+			if (overflow <= 1 || prefersReducedMotion()) {
+				names.classList.remove("is-marquee");
+				scroll.style.removeProperty("--marquee-shift");
+				scroll.style.removeProperty("--marquee-duration");
+
+				return;
+			}
+
+			// Constant speed rather than constant duration, so a long list does not
+			// race and a short one does not crawl.
+			scroll.style.setProperty("--marquee-shift", `-${overflow}px`);
+			scroll.style.setProperty(
+				"--marquee-duration",
+				`${Math.max(3, overflow / MARQUEE_PIXELS_PER_SECOND).toFixed(1)}s`,
+			);
+			names.classList.add("is-marquee");
+		});
 	}
 
 	function renderPageHeader(stories, container, options = {}) {

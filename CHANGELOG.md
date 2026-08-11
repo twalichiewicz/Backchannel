@@ -66,6 +66,11 @@ use to detect updates, so every release bumps it.
   discussion you can join it, and which source it landed on is not your problem —
   so the offer to post it somewhere else goes away.
 
+- The live heading no longer cuts off the sources it names. "happening now in"
+  holds still and the names scroll gently when there are more of them than fit,
+  pausing at each end. They stay put, ellipsised, if you have asked for less
+  motion.
+
 - A horizontal rule inside a comment is drawn like every other line in the panel.
   Sources can send one — Hypothes.is notes do — and it was falling through to the
   browser's grey groove, heavier than anything the panel draws for itself.
