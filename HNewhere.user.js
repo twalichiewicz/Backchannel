@@ -5982,6 +5982,21 @@ ${
 	}
 
 	// #region hnewhere-test-export
+
+	// Things that went wrong between here and the source, rather than with the
+	// item that was pressed. They belong to the sidebar, not to one comment.
+	const SIDEBAR_LEVEL_REASONS = new Set([
+		"popup-blocked",
+		"timeout",
+		"rate-limited",
+		"no-bridge",
+		"bridge-failed",
+	]);
+
+	function isSidebarLevelReason(reason) {
+		return SIDEBAR_LEVEL_REASONS.has(reason);
+	}
+
 	function voteFailureMessage(result, sourceLabel = "the source") {
 		switch (result?.reason) {
 			case "popup-blocked":
@@ -6000,6 +6015,35 @@ ${
 		}
 	}
 	// #endregion hnewhere-test-export
+
+	let toastTimer = 0;
+
+	// Floats down from under the header. Persistent messages stay until something
+	// replaces them or clears them.
+	function showToast(message, { persist = false } = {}) {
+		const toast = sidebarUI?.shadow?.getElementById("toast");
+
+		if (!toast) {
+			return;
+		}
+
+		clearTimeout(toastTimer);
+
+		if (!message) {
+			toast.classList.remove("is-showing");
+			return;
+		}
+
+		toast.textContent = message;
+		toast.classList.add("is-showing");
+
+		if (!persist) {
+			toastTimer = window.setTimeout(
+				() => toast.classList.remove("is-showing"),
+				5200,
+			);
+		}
+	}
 
 	function voteStatusSlots(itemId) {
 		const escapedId = CSS.escape(String(itemId));
@@ -6509,6 +6553,8 @@ ${
 			button.disabled = true;
 		});
 
+		const label = getSource(sourceID)?.label || "the source";
+
 		try {
 			const result = await openItemActionPopup(
 				sourceID,
@@ -6516,22 +6562,19 @@ ${
 				itemId,
 				descriptor.action,
 				descriptor.url,
-				() =>
-					showVoteMessage(
-						itemId,
-						`Waiting for sign-in on ${getSource(sourceID)?.label || "the source"}…`,
-					),
+				() => showToast(`Waiting for sign-in on ${label}…`, { persist: true }),
 			);
 
 			if (result?.storyID && result?.itemId && result?.voteInfo) {
 				setVoteInfoForStoryItem(result.storyID, result.itemId, result.voteInfo);
 			}
 
-			if (!result?.ok) {
-				showVoteMessage(
-					itemId,
-					voteFailureMessage(result, getSource(sourceID)?.label || "the source"),
-				);
+			if (result?.ok) {
+				showToast(null);
+			} else if (isSidebarLevelReason(result?.reason)) {
+				showToast(voteFailureMessage(result, label));
+			} else {
+				showVoteMessage(itemId, voteFailureMessage(result, label));
 			}
 
 			await rememberAuthFromResult(sourceID, result);
@@ -11737,6 +11780,41 @@ blockquote.comment-quote-redundant {
 	color:var(--link);
 }
 
+/* Zero height, so the toast hangs from directly under the header without anyone
+   having to know how tall the header is. */
+.toast-layer {
+	position:relative;
+	height:0;
+	z-index:6;
+}
+
+.toast {
+	position:absolute;
+	top:8px;
+	left:50%;
+	transform:translate(-50%,-14px);
+	max-width:calc(100% - 24px);
+	padding:8px 12px;
+	border-radius:6px;
+	background:var(--surface);
+	color:var(--surface-text);
+	border:1px solid var(--surface-divider);
+	box-shadow:0 4px 14px rgba(0,0,0,.18);
+	font-size:12px;
+	line-height:1.4;
+	text-align:center;
+	opacity:0;
+	visibility:hidden;
+	pointer-events:none;
+	transition:opacity .18s ease, transform .18s ease, visibility .18s;
+}
+
+.toast.is-showing {
+	opacity:1;
+	visibility:visible;
+	transform:translate(-50%,0);
+}
+
 </style>
 
 <div id="panel">
@@ -11744,6 +11822,7 @@ blockquote.comment-quote-redundant {
 <div id="resize-handle" aria-hidden="true"></div>
 
 ${headerHTML({ subtitle: true, minimize: true, browse: true })}
+<div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div></div>
 ${settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
