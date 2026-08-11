@@ -409,7 +409,6 @@
 	// payload does not sit in storage indefinitely.
 	const BRIDGE_PAYLOAD_TTL = 10 * 60 * 1000;
 
-	// Long enough for a person to find their password.
 	const SIGN_IN_TIMEOUT = 5 * 60 * 1000;
 	// #region hnewhere-test-export
 	const TRACKING_PARAMS = new Set([
@@ -879,7 +878,6 @@
 		);
 	}
 
-	// Favourite and flag are Hacker News's, not every voting source's.
 	function sourceHasItemActions(sourceID) {
 		return Boolean(getWriteBridge(sourceID)?.actions?.vote?.itemActions);
 	}
@@ -1198,10 +1196,7 @@
 		id: { type: ["number", "string"] },
 		discussionKey: { type: "string" },
 		parentKey: { type: "string", nullable: true },
-		// What a profile link resolves, which on most sources is also what a
-		// reader sees.
 		author: { type: "string" },
-		// Where a source keeps the two apart, the one a reader would recognise.
 		authorName: { type: "string", optional: true },
 		bodyHTML: { type: "string" },
 		score: { type: "number", nullable: true },
@@ -1976,7 +1971,6 @@
 		return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : NaN;
 	}
 
-	// acct:name@instance reduced to name, which is what a profile link resolves.
 	function hypothesisAuthor(row) {
 		const account = String(row?.user || "");
 
@@ -2187,8 +2181,6 @@
 		return host && host !== "lemmy.world" ? name + "@" + host : name;
 	}
 
-	// Lemmy keeps both, and they are often the same string. Dropped when it adds
-	// nothing, so a byline does not read "inari (inari)".
 	function lemmyDisplayName(creator) {
 		const display = String(creator?.display_name || "").trim();
 
@@ -2760,9 +2752,6 @@
 	}
 
 	// #region hnewhere-test-export
-	// The link resolves the handle; the reader reads the name. Where a source
-	// keeps only one of the two they are the same string, and the handle is put
-	// on the title rather than dropped, because it is how you find someone.
 	function authorDisplay(author, authorName = "") {
 		const shown = authorName || author || "";
 
@@ -2971,10 +2960,6 @@ ${
 	const REDDIT_SELF_HOSTS = ["reddit.com", "redd.it"];
 
 	// #region hnewhere-test-export
-	// The exact lookup matches the submitted address character for character, so a
-	// submission carrying a tracking parameter is invisible to it -- and the share
-	// buttons publishers ship add one. Search finds those. It is not a substitute:
-	// measured over ten articles it found 75 where the exact lookup found 91.
 	function redditDiscoveryPaths(bare) {
 		const exact = (query) => [
 			"/api/info.json?url=" + encodeURIComponent(query),
@@ -5382,7 +5367,6 @@ ${
 
 			if (Number.isFinite(entry.ts) && now - entry.ts > BRIDGE_PAYLOAD_TTL) {
 				await save(BRIDGE_PAYLOAD_PREFIX + entry.nonce, null);
-				// The answer to it, for a popup whose sidebar was gone before it came.
 				await save(BRIDGE_RESULT_PREFIX + entry.nonce, null);
 				continue;
 			}
@@ -5405,8 +5389,6 @@ ${
 
 	// #region hnewhere-test-export
 
-	// The fragment the sidebar attaches when it opens a bridge popup. An action
-	// names any extra keys it carries there.
 	function parseBridgeHash(marker, fields = [], hash = location.hash) {
 		const raw = hash.replace(/^#/, "");
 
@@ -5457,10 +5439,6 @@ ${
 
 	// #endregion hnewhere-test-export
 
-	// window.opener does not survive every source -- Reddit's pages arrive with it
-	// already gone -- so a popup that only posted would report to nobody. The
-	// shared store is the channel that always gets through; the post is the fast
-	// path when it is there.
 	async function postBridgeResult(source, payload, result) {
 		const message = { source, nonce: payload.nonce, ...result };
 
@@ -5480,7 +5458,6 @@ ${
 		}
 	}
 
-	// Read by whichever tab is waiting, then cleared so it is delivered once.
 	function watchBridgeResult(nonce, deliver) {
 		let stopped = false;
 
@@ -5503,8 +5480,6 @@ ${
 
 		window.setTimeout(tick, BRIDGE_POLL_MS);
 
-		// Cleared on the way out, including on a timeout, so an answer nobody
-		// waited for does not sit in storage for good.
 		return () => {
 			stopped = true;
 			save(BRIDGE_RESULT_PREFIX + nonce, null).catch(() => {});
@@ -5535,7 +5510,6 @@ ${
 			request.resolve(data);
 		};
 
-		// Whichever channel gets here first wins; the other finds nothing pending.
 		const deliver = (data) => {
 			if (!data || data.source !== source || !data.nonce) {
 				return;
@@ -5547,8 +5521,6 @@ ${
 				return;
 			}
 
-			// Not an answer: leave the request open so the draft survives and
-			// nothing closes while the reader is signing in.
 			if (data.interim) {
 				request.onInterim?.(data);
 				clearTimeout(request.timeoutId);
@@ -5569,8 +5541,6 @@ ${
 
 			installed = true;
 			window.addEventListener("message", (event) => {
-				// Checked against the popup this nonce was opened for: each source
-				// answers from its own origin.
 				if (event.origin !== pending.get(event.data?.nonce)?.origin) {
 					return;
 				}
@@ -5655,17 +5625,10 @@ ${
 
 	// #region hnewhere-test-export
 
-	// What an action returns when the answer arrives on a later page load rather
-	// than from this one.
 	const BRIDGE_NAVIGATED = { navigated: true };
 
-	// Nobody is signed in. The action waits on the page rather than failing, and
-	// runs on the load that follows a sign-in.
 	const BRIDGE_AWAITING_SIGN_IN = { awaitingSignIn: true };
 
-	// Signing in passes through pages that are not the target -- an interstitial
-	// that offers a link onward, then the page itself. Neither a missing session
-	// nor a missing item is an answer on those, so the action stays staged.
 	function resumeShouldWait(result) {
 		return (
 			result === BRIDGE_AWAITING_SIGN_IN || result?.reason === "item-missing"
@@ -5698,8 +5661,6 @@ ${
 		} catch {}
 	}
 
-	// Cleared before parsing, so a payload that cannot be read does not make every
-	// later page load try to report again.
 	function takeBridgeReload(key) {
 		let stored = null;
 
@@ -5723,8 +5684,6 @@ ${
 		}
 	}
 
-	// Leaves a readable payload staged, for a write whose landing page is not the
-	// one it passes through first. Unreadable payloads are still dropped.
 	function peekBridgeReload(key) {
 		let stored = null;
 
@@ -5750,7 +5709,6 @@ ${
 		return null;
 	}
 
-	// The seam. A refusal is a result the sidebar is told about, not a throw.
 	async function runWriteAction(action, { payload, staged, root }) {
 		if (action.requiresDraft && !staged?.text) {
 			return { ok: false, reason: "draft-missing" };
@@ -5766,8 +5724,6 @@ ${
 
 	// #endregion hnewhere-test-export
 
-	// Fields an action echoes back on every result, so the sidebar knows which
-	// control the answer belongs to.
 	function postWriteResult(action, payload, result) {
 		return postBridgeResult(action.messageSource, payload, {
 			...action.echo?.(payload),
@@ -5797,8 +5753,6 @@ ${
 
 	const SIGN_IN_NOTE_ID = "hnewhere-sign-in-note";
 
-	// Otherwise the popup is just the source's login page, with nothing saying
-	// why it opened or that anything is waiting on it.
 	function showSignInNote(action) {
 		if (document.getElementById(SIGN_IN_NOTE_ID)) {
 			return;
@@ -5832,8 +5786,6 @@ ${
 		document.body?.appendChild(note);
 	}
 
-	// The popup stays open on an awaited sign-in, holding the action beside the
-	// login page the reader was sent to.
 	async function finishWriteAction(action, payload, result) {
 		if (result === BRIDGE_NAVIGATED) {
 			return;
@@ -5854,8 +5806,6 @@ ${
 			return;
 		}
 
-		// Awaited before the close is scheduled: a window that shuts while the
-		// answer is still being written takes the answer with it.
 		await postWriteResult(action, payload, result);
 
 		if (action.closeAfter) {
@@ -5863,11 +5813,7 @@ ${
 		}
 	}
 
-	// The fragment does not survive a sign-in round trip; the tab's own storage
-	// does. Runs before the normal dispatch.
 	async function resumeWriteBridge(bridge, root = document) {
-		// Peeked, not taken: signing in lands on a page or two before the target,
-		// and consuming the action on one of those would lose it.
 		const stored = peekBridgeReload(RESUME_BRIDGE_STORAGE_KEY);
 
 		if (!stored?.marker || !stored?.payload?.nonce) {
@@ -6132,8 +6078,6 @@ ${
 
 	// #region hnewhere-test-export
 
-	// Things that went wrong between here and the source, rather than with the
-	// item that was pressed. They belong to the sidebar, not to one comment.
 	const SIDEBAR_LEVEL_REASONS = new Set([
 		"popup-blocked",
 		"timeout",
@@ -6167,8 +6111,6 @@ ${
 
 	let toastTimer = 0;
 
-	// Floats down from under the header. Persistent messages stay until something
-	// replaces them or clears them.
 	function showToast(message, { persist = false } = {}) {
 		const toast = sidebarUI?.shadow?.getElementById("toast");
 
@@ -6205,8 +6147,6 @@ ${
 		);
 	}
 
-	// The slot the unvote link uses, so what went wrong lands beside the item it
-	// belongs to.
 	function showVoteMessage(itemId, message, action = null) {
 		voteStatusSlots(itemId).forEach((element) => {
 			element.replaceChildren();
@@ -6437,7 +6377,6 @@ ${
 			: [];
 	}
 
-	// A source with nothing to scrape has only what the reader did last.
 	async function loadVoteState(sourceID, storyID) {
 		const action = getWriteBridge(sourceID)?.actions?.vote;
 
@@ -6501,8 +6440,6 @@ ${
 		return descriptors;
 	}
 
-	// A three-state toggle with no link behind it: the arrows stay, the one that is
-	// active shows it, and pressing it again clears the vote.
 	function buttonVoteDescriptors(voteInfo, label) {
 		const state = voteInfo?.state || "none";
 
@@ -6560,8 +6497,6 @@ ${
 		pending.resolve(data);
 	}
 
-	// Fed by both channels: the post when the opener survived, the shared store
-	// when it did not.
 	function deliverItemAction(data) {
 			if (!data || data.source !== ITEM_ACTION_BRIDGE_MESSAGE_SOURCE || !data.nonce) {
 				return;
@@ -6601,7 +6536,6 @@ ${
 				return;
 			}
 
-			// Not an answer: the popup is waiting on a sign-in and stays open.
 			if (data.interim) {
 				pending.onInterim?.(data);
 				clearTimeout(pending.timeoutId);
@@ -6622,7 +6556,6 @@ ${
 
 		window.__hnewhereItemActionListenerInstalled = true;
 		window.addEventListener("message", (event) => {
-			// Any source this script writes to, rather than one fixed site.
 			if (!isWriteBridgeOrigin(event.origin)) {
 				return;
 			}
@@ -6663,9 +6596,6 @@ ${
 			);
 
 			if (!popup) {
-				// A browser that blocked this opens it once the reader allows
-				// popups, and it arrives carrying this nonce. Keep listening, or it
-				// is a window that acts and reports to nobody.
 				itemActionRequests.set(nonce, {
 					resolve: () => {},
 					timeoutId: window.setTimeout(
@@ -6709,8 +6639,6 @@ ${
 			return;
 		}
 
-		// force never consults the verdict, so a stale one costs a second press
-		// rather than stranding a reader who signed in elsewhere.
 		if (!force && shouldAskToSignIn(await readAuthVerdict(sourceID), Date.now())) {
 			showVoteMessage(
 				itemId,
@@ -6830,8 +6758,6 @@ ${
 			return;
 		}
 
-		// Read off the container the markup carries, so the chain from render to
-		// popup never has to guess which source these controls belong to.
 		const sourceID = container.dataset.hnVoteSource;
 
 		container.replaceChildren();
@@ -8292,8 +8218,6 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		return { setStatus };
 	}
 
-	// Not async, for the same reason as submitCommentThroughBridge: window.open has
-	// to happen before the first await or the browser blocks it.
 	function submitPageThroughBridge(sourceID, { title, url, text }) {
 		const bridge = getWriteBridge(sourceID);
 		const action = bridge?.actions?.submit;
@@ -10431,8 +10355,6 @@ ${[
 `;
 	}
 
-	// The table is built synchronously, so what a reader can actually do is
-	// layered on afterwards.
 	async function markCapabilityAuth(shadow) {
 		const now = Date.now();
 		const verdicts = new Map();
@@ -11959,8 +11881,6 @@ blockquote.comment-quote-redundant {
 	color:var(--link);
 }
 
-/* Zero height, so the toast hangs from directly under the header without anyone
-   having to know how tall the header is. */
 .toast-layer {
 	position:relative;
 	height:0;
@@ -14313,7 +14233,6 @@ title="Show only this discussion">
 		unflag: { path: "flag", params: { un: "t" } },
 	};
 
-	// The three every voting source has, and the two that are Hacker News's own.
 	const VOTE_ACTIONS = ["up", "down", "un"];
 
 	const ITEM_ACTIONS = [...VOTE_ACTIONS, ...Object.keys(ITEM_ACTION_PATHS)];
@@ -14369,8 +14288,6 @@ title="Show only this discussion">
 
 		const isFaveOrFlag = Boolean(ITEM_ACTION_PATHS[payload.action]);
 
-		// Left staged: a vote that has not reached the item page yet is still in
-		// flight, and this is a page it only passes through.
 		if (!isFaveOrFlag && location.pathname !== "/item") {
 			return null;
 		}
@@ -14803,8 +14720,6 @@ title="Show only this discussion">
 				noun: "comment",
 				stagesDraft: true,
 				requiresDraft: true,
-				// /reply carries its own goto back to the item page, so both land
-				// somewhere report can read the result from.
 				url: ({ storyID, parentId }) =>
 					parentId ? replyURL({ id: parentId }, storyID) : commentURL(storyID),
 				act: actHNComment,
@@ -14823,8 +14738,6 @@ title="Show only this discussion">
 
 	const REDDIT_VOTE_DIR = { up: "1", down: "-1", un: "0" };
 
-	// A bare id from the sidebar; only the page can say whether it names a post or
-	// a comment.
 	function redditThing(root, itemId) {
 		if (!itemId) {
 			return null;
@@ -14861,9 +14774,6 @@ title="Show only this discussion">
 		return "none";
 	}
 
-	// What the reader may actually do here, rather than what the site supports: a
-	// locked thread, an archived post or a subreddit with downvotes off simply has
-	// no such arrow.
 	function redditArrow(thing, action) {
 		const midcol = thing?.querySelector(".midcol");
 
@@ -14882,8 +14792,6 @@ title="Show only this discussion">
 		);
 	}
 
-	// Reddit answers with its own words; they are passed through rather than
-	// reinvented, so the reader reads what Reddit said.
 	function redditWriteError(errors) {
 		const [code, message] = errors?.[0] || [];
 
@@ -14921,8 +14829,6 @@ title="Show only this discussion">
 		return null;
 	}
 
-	// Same-origin, with the session the browser was already sending. Nothing is
-	// read out or stored: the modhash comes off this page and is used on it.
 	async function redditPost(path, fields) {
 		const response = await fetch(REDDIT_WRITE_ORIGIN + path, {
 			method: "POST",
@@ -14988,8 +14894,6 @@ title="Show only this discussion">
 			};
 		}
 
-		// Reddit accepted it, and the page this landed on cannot say otherwise: it
-		// may have been served from cache, still showing the vote before this one.
 		const state = payload.action === "un" ? "none" : payload.action;
 
 		return {
@@ -15032,7 +14936,6 @@ title="Show only this discussion">
 	registerWriteBridge({
 		id: "reddit",
 		origin: REDDIT_WRITE_ORIGIN,
-		// The one Reddit whose markup this reads. The popup goes where it is sent.
 		hosts: ["old.reddit.com"],
 		actions: {
 			vote: {
@@ -18255,17 +18158,13 @@ title="Show only this discussion">
 		const bridge = writeBridgeForHost(writeBridges(), location.hostname);
 		const onHN = location.hostname === "news.ycombinator.com";
 
-		// On HN, also record clicked stories and offer the queue.
 		if (onHN) {
 			setupHNListener();
 
 			setupHNQueueLinks().catch(console.error);
 		}
 
-		// A popup this script opened, on the source's own page.
 		if (bridge) {
-			// First: this may be the load that follows a sign-in, still holding
-			// the action the reader asked for.
 			if (await resumeWriteBridge(bridge)) {
 				return;
 			}
@@ -18274,8 +18173,6 @@ title="Show only this discussion">
 				return;
 			}
 
-			// Async because a staged draft lives in GM storage rather than the URL
-			// fragment, so it cannot be tested with a plain if.
 			if (await dispatchWriteBridge(bridge)) {
 				return;
 			}
