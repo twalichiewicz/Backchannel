@@ -52,6 +52,10 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Hypothes.is | `api.hypothes.is` | the URL of each page you visit, to find public annotations on it. No account, signed in or out |
   | *no source enabled* | none | nothing — the script performs no lookup at all |
 
+- **Reading a PDF means reading the viewer.** On a PDF the script asks the
+  browser's own viewer for the document's text, so a quoted passage can be found
+  on a page that is not on screen yet. That is a read of the file you already
+  have open; nothing about it is sent anywhere.
 - **`@connect` is a ceiling, not a statement of use.** The header is static, so
   it lists every host any source *could* contact, including sources you have
   switched off. A disabled source issues no requests; the entry is a permission

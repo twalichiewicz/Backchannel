@@ -42,6 +42,7 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
+// @grant        unsafeWindow
 // @connect      hacker-news.firebaseio.com
 // @connect      hn.algolia.com
 // @connect      news.ycombinator.com
@@ -440,6 +441,9 @@
 	const sidebarSourceKeys = new Set();
 	const liveDiscussions = new Map();
 	let annotationController = null;
+	// Unsubscribes the pass from "the document gained text" -- a PDF page being
+	// drawn, or its text arriving. Torn down with the annotations it belongs to.
+	let stopDocumentReindex = null;
 	let activeCommentFilter = null;
 
 	let preFilterPosition = null;
@@ -14252,6 +14256,9 @@ title="Show only this discussion">
 	}
 
 	function clearArticleAnnotations() {
+		stopDocumentReindex?.();
+		stopDocumentReindex = null;
+
 		annotationController?.cleanup?.();
 		annotationController = null;
 
@@ -14959,6 +14966,249 @@ title="Show only this discussion">
 		return { pageIndex: low, offsetInPage: offset - pageStarts[low] };
 	}
 
+	// The viewer is a page global. A userscript runs sandboxed, so it is reached
+	// through unsafeWindow where the manager provides one. Absent either, there is
+	// no viewer as far as this is concerned, and the fallbacks in pdfDocumentSource
+	// take over.
+	function pdfViewerApp() {
+		const scopes = [
+			typeof unsafeWindow !== "undefined" ? unsafeWindow : null,
+			typeof window !== "undefined" ? window : null,
+		];
+
+		for (const scope of scopes) {
+			const app = scope?.PDFViewerApplication;
+
+			if (app?.pdfDocument) {
+				return app;
+			}
+		}
+
+		return null;
+	}
+
+	function pdfViewerElement() {
+		return (
+			document.querySelector(".pdfViewer") ||
+			document.getElementById("viewerContainer") ||
+			null
+		);
+	}
+
+	// A page's text layer is an ordinary piece of DOM, so the ordinary index works
+	// on it -- and everything downstream of an index then works unchanged. Rebuilt
+	// rather than cached across renders, because pdf.js discards and recreates the
+	// layer as pages come and go.
+	function pdfPageIndex(pageIndex) {
+		const layer = document.querySelectorAll(".page")[pageIndex]?.querySelector(
+			".textLayer",
+		);
+
+		if (!layer) {
+			return null;
+		}
+
+		const index = buildTextIndex(layer, {
+			skipHidden: true,
+			excludeSelectors: [
+				"[data-hnewhere-annotation-overlay]",
+				"[data-hnewhere-sidebar]",
+			],
+		});
+
+		return index.normalizedText ? index : null;
+	}
+
+	// pdf.js hands over page text asynchronously, and buildIndex is synchronous
+	// because every other source can answer at once. So the text is fetched ahead
+	// and read from here: the first pass indexes what the DOM has, and the arrival
+	// of the real text is just another reason to measure again.
+	let pdfTexts = null;
+	let pdfTextsFor = null;
+	const pdfReindexWaiters = new Set();
+
+	function notifyPdfReindex() {
+		for (const waiter of [...pdfReindexWaiters]) {
+			try {
+				waiter();
+			} catch (e) {
+				console.error("Backchannel pdf reindex failed:", e);
+			}
+		}
+	}
+
+	function pdfDocumentTexts(app) {
+		if (pdfTextsFor === app.pdfDocument) {
+			return pdfTexts;
+		}
+
+		if (pdfTextsFor === "loading:" + app.pdfDocument.fingerprints?.[0]) {
+			return null;
+		}
+
+		pdfTextsFor = "loading:" + app.pdfDocument.fingerprints?.[0];
+
+		(async () => {
+			const document_ = app.pdfDocument;
+			const texts = [];
+
+			for (let number = 1; number <= document_.numPages; number += 1) {
+				const page = await document_.getPage(number);
+				const content = await page.getTextContent();
+
+				texts.push(content.items.map((item) => item.str).join(""));
+			}
+
+			// Checked after the await: the reader can have opened another file while
+			// this was running, and indexing the old one would be worse than nothing.
+			if (app.pdfDocument !== document_) {
+				return;
+			}
+
+			pdfTexts = texts;
+			pdfTextsFor = document_;
+			notifyPdfReindex();
+		})().catch((e) => {
+			console.error("Backchannel could not read the PDF text:", e);
+			pdfTextsFor = null;
+		});
+
+		return null;
+	}
+
+	// Two indexes, and they answer different questions. This one holds every page's
+	// text and answers "does this quote exist, and on which page". It cannot make a
+	// range: the text came from the file, not from nodes. rangeAt hands that job to
+	// the page's own index once pdf.js has drawn it.
+	function pdfDocumentIndex(pageTexts) {
+		const joined = pdfConcatenatedText(pageTexts);
+		const normalized = normalizeSearchText(joined.text);
+
+		return {
+			normalizedText: normalized.text,
+			normalizedMap: normalized.map,
+			pageStarts: joined.pageStarts,
+
+			rangeAt(matchStart, matchLength) {
+				const rawStart = normalized.map[matchStart];
+				const at = findPageByOffset(joined.pageStarts, rawStart);
+				const pageIndex = at && pdfPageIndex(at.pageIndex);
+
+				if (!pageIndex) {
+					// Found, but its page is not drawn. Absent is already an ordinary
+					// outcome, and it becomes anchored on the next reindex.
+					return null;
+				}
+
+				// By text, not by carrying the offset over: the extracted text and the
+				// text layer disagree about whitespace, so only the words are portable.
+				const needle = normalized.text.slice(
+					matchStart,
+					matchStart + matchLength,
+				);
+				const here = findNormalizedOccurrences(pageIndex.normalizedText, needle);
+
+				if (here.length !== 1) {
+					return null;
+				}
+
+				return createRangeFromMatch(pageIndex, here[0], needle.length);
+			},
+		};
+	}
+
+	const PDF_DOCUMENT_SOURCE = {
+		id: "pdf",
+
+		buildIndex() {
+			const app = pdfViewerApp();
+			const texts = app ? pdfDocumentTexts(app) : null;
+
+			// Degraded, not broken: with no reachable viewer the drawn pages are still
+			// ordinary DOM, so index those and reach less of the document.
+			if (!texts?.length) {
+				return HTML_DOCUMENT_SOURCE.buildIndex();
+			}
+
+			return pdfDocumentIndex(texts);
+		},
+
+		hostFor() {
+			return pdfViewerElement() || document.body;
+		},
+
+		originFor(host) {
+			if (!host || host === document.body) {
+				return HTML_DOCUMENT_SOURCE.originFor(host);
+			}
+
+			const rect = host.getBoundingClientRect();
+
+			return { left: -rect.left, top: -rect.top };
+		},
+
+		heightFor(host) {
+			return host === document.body
+				? HTML_DOCUMENT_SOURCE.heightFor(host)
+				: host.scrollHeight;
+		},
+
+		scrollIntoView(range) {
+			const container = document.getElementById("viewerContainer");
+
+			if (!container) {
+				HTML_DOCUMENT_SOURCE.scrollIntoView(range);
+				return;
+			}
+
+			const rect = range.getBoundingClientRect();
+			const box = container.getBoundingClientRect();
+
+			container.scrollTo({
+				top: Math.max(
+					0,
+					container.scrollTop + (rect.top - box.top) - container.clientHeight * 0.3,
+				),
+				behavior: prefersReducedMotion() ? "auto" : "smooth",
+			});
+		},
+
+		// A page gaining text turns absent matches into anchored ones; a scale change
+		// makes every rect stale. Both mean: measure again.
+		onReindex(callback) {
+			const bus = pdfViewerApp()?.eventBus;
+			const events = ["textlayerrendered", "pagesloaded", "scalechanging"];
+
+			pdfReindexWaiters.add(callback);
+
+			if (bus?.on) {
+				for (const name of events) {
+					bus.on(name, callback);
+				}
+			}
+
+			return () => {
+				pdfReindexWaiters.delete(callback);
+
+				if (bus?.off) {
+					for (const name of events) {
+						bus.off(name, callback);
+					}
+				}
+			};
+		},
+	};
+
+	// Chosen by what the page can do, never by its address or its browser. A viewer
+	// whose text is unreachable simply never matches here.
+	function detectDocumentSource() {
+		if (pdfViewerApp() || document.querySelector(".pdfViewer .textLayer")) {
+			return PDF_DOCUMENT_SOURCE;
+		}
+
+		return HTML_DOCUMENT_SOURCE;
+	}
+
 	let activeDocumentSource = HTML_DOCUMENT_SOURCE;
 
 	function documentSource() {
@@ -15063,6 +15313,17 @@ title="Show only this discussion">
 		}
 
 		return range.collapsed ? null : range;
+	}
+
+	// An index over a browser page can turn an offset straight into a range, because
+	// the text came from DOM nodes and it kept them. An index over a PDF cannot: its
+	// text came from the file, and the pages it names may not be drawn. So the index
+	// answers this rather than the caller assuming, and one that says nothing gets
+	// the behaviour it always had.
+	function rangeFromIndexMatch(index, matchStart, matchLength) {
+		return typeof index?.rangeAt === "function"
+			? index.rangeAt(matchStart, matchLength)
+			: createRangeFromMatch(index, matchStart, matchLength);
 	}
 
 	function createRangeFromMatch(index, matchStart, matchLength) {
@@ -15187,7 +15448,7 @@ title="Show only this discussion">
 			}
 
 			if (at !== null) {
-				const rangeMatch = createRangeFromMatch(
+				const rangeMatch = rangeFromIndexMatch(
 					articleIndex,
 					at,
 					normalized.length,
@@ -15226,7 +15487,7 @@ title="Show only this discussion">
 				continue;
 			}
 
-			const rangeMatch = createRangeFromMatch(
+			const rangeMatch = rangeFromIndexMatch(
 				articleIndex,
 				matches[0],
 				variant.normalized.length,
@@ -16564,6 +16825,10 @@ title="Show only this discussion">
 			return;
 		}
 
+		// Decided here rather than at load: a PDF viewer builds itself after the
+		// script has already run, so asking at startup would always answer "no".
+		activeDocumentSource = detectDocumentSource();
+
 		const articleIndex = buildArticleTextIndex();
 		// Must run before buildHeatRegions: it populates comment.matchedGroupKeys,
 		// which heat reads to skip comments already represented by a quote match.
@@ -16577,6 +16842,17 @@ title="Show only this discussion">
 
 		annotationController = createAnnotationOverlay(groups, [], settings);
 		decorateSidebarMatches(annotationController);
+
+		// A PDF hands over its pages as the reader reaches them, so a quote that had
+		// nowhere to anchor a moment ago may have somewhere now. Coalesced into the
+		// next frame: pdf.js fires per page, and a burst of them is one repaint.
+		let queued = 0;
+		stopDocumentReindex = documentSource().onReindex(() => {
+			cancelAnimationFrame(queued);
+			queued = requestAnimationFrame(() => {
+				refreshArticleAnnotations().catch(console.error);
+			});
+		});
 
 		if (activeCommentFilter?.type === "quote") {
 			applyCommentFilter(activeCommentFilter.key, {

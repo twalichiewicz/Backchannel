@@ -16,6 +16,11 @@ use to detect updates, so every release bumps it.
   quote the passage they are about, so a note lands under the sentence it answers
   rather than at the top of the page. Read-only, no account, one request per page.
 
+- Highlights a quoted passage inside a PDF. The viewer draws two pages of
+  fifteen and builds the rest as you scroll, so the whole document's text is read
+  from the file rather than from the page: a quote is found wherever it lives,
+  and lights up when you reach it.
+
 - Runs on PDFs, which were excluded outright until now. Scholarly annotation
   happens on the PDF — the notes on a paper are attached to it, not to the
   abstract page — so the exclusion hid the conversation and left the noise.
