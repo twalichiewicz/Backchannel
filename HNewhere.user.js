@@ -13091,24 +13091,45 @@ ${settingsPanelHTML()}
 		lead.textContent = labels.length ? "happening now in" : "happening now";
 		scroll.textContent = labels.join(", ");
 
-		requestAnimationFrame(() => {
-			const overflow = scroll.scrollWidth - names.clientWidth;
+		requestAnimationFrame(() => measureLiveBookendMarquee(names, scroll));
+		watchLiveBookendMarquee(names, scroll);
+	}
 
-			if (overflow <= 1 || prefersReducedMotion()) {
-				names.classList.remove("is-marquee");
-				scroll.style.removeProperty("--marquee-shift");
-				scroll.style.removeProperty("--marquee-duration");
+	function measureLiveBookendMarquee(names, scroll) {
+		const overflow = scroll.scrollWidth - names.clientWidth;
 
-				return;
-			}
+		if (overflow <= 1 || prefersReducedMotion()) {
+			names.classList.remove("is-marquee");
+			scroll.style.removeProperty("--marquee-shift");
+			scroll.style.removeProperty("--marquee-duration");
 
-			scroll.style.setProperty("--marquee-shift", `-${overflow}px`);
-			scroll.style.setProperty(
-				"--marquee-duration",
-				`${Math.max(3, overflow / MARQUEE_PIXELS_PER_SECOND).toFixed(1)}s`,
-			);
-			names.classList.add("is-marquee");
-		});
+			return;
+		}
+
+		scroll.style.setProperty("--marquee-shift", `-${overflow}px`);
+		scroll.style.setProperty(
+			"--marquee-duration",
+			`${Math.max(3, overflow / MARQUEE_PIXELS_PER_SECOND).toFixed(1)}s`,
+		);
+		names.classList.add("is-marquee");
+	}
+
+	const liveBookendObservers = new WeakMap();
+
+	function watchLiveBookendMarquee(names, scroll) {
+		if (
+			typeof ResizeObserver === "undefined" ||
+			liveBookendObservers.has(names)
+		) {
+			return;
+		}
+
+		const observer = new ResizeObserver(() =>
+			measureLiveBookendMarquee(names, scroll),
+		);
+
+		observer.observe(names);
+		liveBookendObservers.set(names, observer);
 	}
 
 	function renderPageHeader(stories, container, options = {}) {
