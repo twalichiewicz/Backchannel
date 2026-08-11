@@ -1163,6 +1163,9 @@
 		rootTimes: { type: "array" },
 		wikiPages: { type: "array", optional: true },
 		annotations: { type: "array", optional: true },
+		// Nobody submitted this one; it is every mention of a URL on one source,
+		// gathered. Its title names the discussion rather than the page.
+		collective: { type: "boolean", optional: true },
 		statuses: { type: "array", optional: true },
 		creatorId: { type: ["number", "string"], optional: true },
 	};
@@ -1559,6 +1562,7 @@
 			permalink: null,
 			articleURL: url,
 			label: "Mastodon",
+			collective: true,
 			bodyHTML: "",
 			rootKeys: statuses.map(
 				(status) => sourceKey("mastodon", status?.url || status?.uri || ""),
@@ -1932,6 +1936,7 @@
 			permalink: "https://en.wikipedia.org/wiki/Special:LinkSearch/" + pageURL,
 			articleURL: pageURL,
 			label: "Wikipedia",
+			collective: true,
 			bodyHTML: "",
 			rootKeys,
 			rootTimes,
@@ -2061,7 +2066,10 @@
 		};
 	}
 
-	function hypothesisCollective(target, rows) {
+	// articleURL is the address the reader is at, not the normalised key. The key
+	// carries no scheme, and everything that compares an articleURL to the address
+	// bar -- the page title among them -- reads a schemeless one as a different page.
+	function hypothesisCollective(target, rows, articleURL = target) {
 		const kept = hypothesisKeptRows(rows, target);
 
 		if (!kept.length) {
@@ -2102,8 +2110,9 @@
 			createdAt: newest,
 			permalink:
 				"https://hypothes.is/search?q=" + encodeURIComponent("url:" + target),
-			articleURL: target,
+			articleURL,
 			label: "Hypothes.is",
+			collective: true,
 			bodyHTML: "",
 			rootKeys,
 			rootTimes,
@@ -2503,6 +2512,7 @@
 			permalink: null,
 			articleURL: url,
 			label: "Bluesky",
+			collective: true,
 			bodyHTML: "",
 			rootKeys: admitted.map((post) => bskyKeyFromURI(post.uri)),
 			rootTimes: admitted.map((post) => bskyTime(post)),
@@ -3546,7 +3556,7 @@ ${
 			const found = await hypothesisJSON(
 				`${HYPOTHESIS_API}?url=${encodeURIComponent(target)}&limit=${HYPOTHESIS_LIMIT}`,
 			);
-			const collective = hypothesisCollective(target, found?.rows || []);
+			const collective = hypothesisCollective(target, found?.rows || [], url);
 
 			return collective ? [collective] : [];
 		},
@@ -12400,7 +12410,13 @@ ${settingsPanelHTML()}
 			return pageTitle();
 		}
 
-		return (stories || []).find((story) => story.title)?.title || pageTitle();
+		// A collective's title names a discussion -- "Hypothes.is annotations" -- and
+		// is not the title of anything anybody submitted. Borrowing it for the page
+		// heading puts the name of one source where the article's name belongs.
+		return (
+			(stories || []).find((story) => story.title && !story.collective)?.title ||
+			pageTitle()
+		);
 	}
 
 	async function renderDiscussions(stories, ui) {
