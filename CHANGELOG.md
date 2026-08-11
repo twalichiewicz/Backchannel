@@ -66,6 +66,10 @@ use to detect updates, so every release bumps it.
   discussion you can join it, and which source it landed on is not your problem —
   so the offer to post it somewhere else goes away.
 
+- The what-each-source-supports table lists favouriting and flagging. Every one
+  of these sites has both and this does none of them, which the table used to
+  say by omission — reading as though nobody did.
+
 - The live heading no longer cuts off the sources it names. "happening now in"
   holds still and the names scroll gently when there are more of them than fit,
   pausing at each end. They stay put, ellipsised, if you have asked for less

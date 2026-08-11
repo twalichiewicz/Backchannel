@@ -9609,6 +9609,11 @@ ${[
 	["Vote", (source) => Boolean(source.capabilities.vote)],
 	["Reply", (source) => Boolean(source.capabilities.reply)],
 	["Submit", (source) => Boolean(source.capabilities.submit)],
+	// Listed while nothing does them. Every one of these sites has both; leaving
+	// the rows out read as though nobody did, when what is true is that this does
+	// not. A row of dashes is the honest version of that.
+	["Favourite", (source) => Boolean(source.capabilities.favourite)],
+	["Flag", (source) => Boolean(source.capabilities.flag)],
 ]
 	.map(
 		([label, supported]) => `<tr><th>${escapeHTML(label)}</th>${[
