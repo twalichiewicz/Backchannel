@@ -6353,8 +6353,32 @@ ${
 		});
 	}
 
-	async function submitVote(sourceID, storyID, itemId, descriptor, container) {
+	async function submitVote(
+		sourceID,
+		storyID,
+		itemId,
+		descriptor,
+		container,
+		{ force = false } = {},
+	) {
 		if (!container || container.dataset.votePending === "1") {
+			return;
+		}
+
+		// force never consults the verdict, so a stale one costs a second press
+		// rather than stranding a reader who signed in elsewhere.
+		if (!force && shouldAskToSignIn(await readAuthVerdict(sourceID), Date.now())) {
+			showVoteMessage(
+				itemId,
+				`Sign in to ${getSource(sourceID)?.label || "the source"} to vote.`,
+				{
+					label: "sign in and vote",
+					onPress: () =>
+						submitVote(sourceID, storyID, itemId, descriptor, container, {
+							force: true,
+						}),
+				},
+			);
 			return;
 		}
 
