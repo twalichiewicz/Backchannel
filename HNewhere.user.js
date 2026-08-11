@@ -5568,6 +5568,10 @@ ${
 		);
 	}
 
+	function signInNoteText(sourceLabel, noun) {
+		return `Backchannel is holding your ${noun}. Sign in to ${sourceLabel} and it will be posted from here.`;
+	}
+
 	function writeBridgeForHost(bridges, hostname) {
 		return (
 			bridges.find((bridge) => bridge?.hosts?.includes(hostname)) || null
@@ -5687,6 +5691,43 @@ ${
 		return true;
 	}
 
+	const SIGN_IN_NOTE_ID = "hnewhere-sign-in-note";
+
+	// Otherwise the popup is just the source's login page, with nothing saying
+	// why it opened or that anything is waiting on it.
+	function showSignInNote(action) {
+		if (document.getElementById(SIGN_IN_NOTE_ID)) {
+			return;
+		}
+
+		const bridge = writeBridgeForHost(writeBridges(), location.hostname);
+		const note = document.createElement("div");
+
+		note.id = SIGN_IN_NOTE_ID;
+		note.textContent = signInNoteText(
+			getSource(bridge?.id)?.label || "this site",
+			action.noun || "action",
+		);
+		note.setAttribute(
+			"style",
+			[
+				"position:fixed",
+				"top:0",
+				"left:0",
+				"right:0",
+				"z-index:2147483647",
+				"margin:0",
+				"padding:10px 14px",
+				"background:#ff6600",
+				"color:#fff",
+				"font:600 13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+				"text-align:center",
+			].join(";"),
+		);
+
+		document.body?.appendChild(note);
+	}
+
 	// The popup stays open on an awaited sign-in, holding the action beside the
 	// login page the reader was sent to.
 	function finishWriteAction(action, payload, result) {
@@ -5700,6 +5741,7 @@ ${
 				marker: action.marker,
 				payload,
 			});
+			showSignInNote(action);
 			postWriteResult(action, payload, {
 				ok: false,
 				reason: "awaiting-sign-in",
@@ -5744,6 +5786,7 @@ ${
 		});
 
 		if (resumeShouldWait(result)) {
+			showSignInNote(action);
 			postWriteResult(action, stored.payload, {
 				ok: false,
 				reason: "awaiting-sign-in",
@@ -6499,6 +6542,19 @@ ${
 			);
 
 			if (!popup) {
+				// A browser that blocked this opens it once the reader allows
+				// popups, and it arrives carrying this nonce. Keep listening, or it
+				// is a window that acts and reports to nobody.
+				itemActionRequests.set(nonce, {
+					resolve: () => {},
+					timeoutId: window.setTimeout(
+						() => itemActionRequests.delete(nonce),
+						SIGN_IN_TIMEOUT,
+					),
+					popup: null,
+					origin: bridge.origin,
+					onInterim,
+				});
 				resolve({ ok: false, reason: "popup-blocked" });
 				return;
 			}
@@ -14592,6 +14648,7 @@ title="Show only this discussion">
 			vote: {
 				marker: "hnewhere-vote",
 				messageSource: ITEM_ACTION_BRIDGE_MESSAGE_SOURCE,
+				noun: "vote",
 				fields: ["item", "action", "voteURL"],
 				accepts: (payload) =>
 					Boolean(payload.storyID && payload.item) &&
@@ -14612,6 +14669,7 @@ title="Show only this discussion">
 			submit: {
 				marker: "hnewhere-submit",
 				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
+				noun: "submission",
 				stagesDraft: true,
 				url: ({ url, title }) => submitURL(url, title),
 				act: actHNSubmit,
@@ -14620,6 +14678,7 @@ title="Show only this discussion">
 			reply: {
 				marker: "hnewhere-comment",
 				messageSource: COMMENT_BRIDGE_MESSAGE_SOURCE,
+				noun: "comment",
 				stagesDraft: true,
 				requiresDraft: true,
 				// /reply carries its own goto back to the item page, so both land
@@ -14857,6 +14916,7 @@ title="Show only this discussion">
 			vote: {
 				marker: "hnewhere-vote",
 				messageSource: ITEM_ACTION_BRIDGE_MESSAGE_SOURCE,
+				noun: "vote",
 				fields: ["item", "action", "voteURL"],
 				accepts: (payload) =>
 					Boolean(payload.storyID && payload.item) &&
@@ -14874,6 +14934,7 @@ title="Show only this discussion">
 			reply: {
 				marker: "hnewhere-comment",
 				messageSource: COMMENT_BRIDGE_MESSAGE_SOURCE,
+				noun: "comment",
 				stagesDraft: true,
 				requiresDraft: true,
 				url: ({ storyID, parentId }) => redditPermalink(storyID, parentId),
