@@ -5393,10 +5393,6 @@ ${
 
 			installed = true;
 			window.addEventListener("message", (event) => {
-				if (event.origin !== HN_ORIGIN) {
-					return;
-				}
-
 				const data = event.data;
 
 				if (!data || data.source !== source || !data.nonce) {
@@ -5405,7 +5401,9 @@ ${
 
 				const request = pending.get(data.nonce);
 
-				if (!request) {
+				// Checked against the popup this nonce was opened for: each source
+				// answers from its own origin.
+				if (!request || event.origin !== request.origin) {
 					return;
 				}
 
@@ -5420,7 +5418,10 @@ ${
 			});
 		};
 
-		return function openBridge(nonce, { timeout = 60000, features } = {}) {
+		return function openBridge(
+			nonce,
+			{ origin = HN_ORIGIN, timeout = 60000, features } = {},
+		) {
 			install();
 
 			const popup = window.open(
@@ -5443,7 +5444,7 @@ ${
 					resolve({ ok: false, reason: "timeout" });
 				}, timeout);
 
-				pending.set(nonce, { resolve, timeoutId, popup });
+				pending.set(nonce, { resolve, timeoutId, popup, origin });
 			});
 
 			return {
@@ -5460,6 +5461,136 @@ ${
 				},
 			};
 		};
+	}
+
+	// -------------------------
+	// Write bridges
+	// -------------------------
+
+	const WRITE_BRIDGES = new Map();
+
+	function registerWriteBridge(bridge) {
+		WRITE_BRIDGES.set(bridge.id, bridge);
+	}
+
+	function getWriteBridge(id) {
+		return WRITE_BRIDGES.get(id) || null;
+	}
+
+	function writeBridges() {
+		return [...WRITE_BRIDGES.values()];
+	}
+
+	// #region hnewhere-test-export
+
+	// What an action returns when the answer arrives on a later page load rather
+	// than from this one.
+	const BRIDGE_NAVIGATED = { navigated: true };
+
+	function writeBridgeForHost(bridges, hostname) {
+		return (
+			bridges.find((bridge) => bridge?.hosts?.includes(hostname)) || null
+		);
+	}
+
+	function stageBridgeReload(key, payload) {
+		try {
+			window.sessionStorage.setItem(key, JSON.stringify(payload));
+			return true;
+		} catch (error) {
+			console.error("HNewhere: could not stage bridge payload", error);
+			return false;
+		}
+	}
+
+	// Cleared before parsing, so a payload that cannot be read does not make every
+	// later page load try to report again.
+	function takeBridgeReload(key) {
+		let stored = null;
+
+		try {
+			stored = window.sessionStorage.getItem(key);
+			window.sessionStorage.removeItem(key);
+		} catch {
+			return null;
+		}
+
+		if (!stored) {
+			return null;
+		}
+
+		try {
+			const payload = JSON.parse(stored);
+
+			return payload?.nonce ? payload : null;
+		} catch {
+			return null;
+		}
+	}
+
+	// The seam. A refusal is a result the sidebar is told about, not a throw.
+	async function runWriteAction(action, { payload, staged, root }) {
+		if (action.requiresDraft && !staged?.text) {
+			return { ok: false, reason: "draft-missing" };
+		}
+
+		try {
+			return await action.act({ payload, staged, root });
+		} catch (error) {
+			console.error("HNewhere: write bridge action failed", error);
+			return { ok: false, reason: "bridge-failed" };
+		}
+	}
+
+	// #endregion hnewhere-test-export
+
+	async function dispatchWriteAction(action, root = document) {
+		const payload = parseBridgeHash(action.marker);
+
+		if (!payload) {
+			return false;
+		}
+
+		const staged = await readBridgePayload(payload.nonce);
+		const result = await runWriteAction(action, { payload, staged, root });
+
+		if (result !== BRIDGE_NAVIGATED) {
+			postBridgeResult(action.messageSource, payload, result);
+		}
+
+		return true;
+	}
+
+	function reportWriteAction(action, root = document) {
+		const reported = action.report?.(root);
+
+		if (!reported) {
+			return false;
+		}
+
+		postBridgeResult(action.messageSource, reported.payload, reported.result);
+		window.setTimeout(() => window.close(), 60);
+		return true;
+	}
+
+	function reportWriteBridge(bridge, root = document) {
+		for (const action of Object.values(bridge?.actions || {})) {
+			if (reportWriteAction(action, root)) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	async function dispatchWriteBridge(bridge, root = document) {
+		for (const action of Object.values(bridge?.actions || {})) {
+			if (await dispatchWriteAction(action, root)) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	function normalizeVoteURL(href) {
@@ -6350,10 +6481,13 @@ ${
 				setBrowseMode(ui, true);
 			},
 			onSubmit: async (fields, form) => {
-				const result = await submitPageToHN(fields);
+				const result = await submitPageThroughBridge(submitTarget.id, fields);
 
 				if (!result?.ok) {
-					form.setStatus(submitFailureMessage(result), { error: true });
+					form.setStatus(
+						submitFailureMessage(result, submitTarget.label),
+						{ error: true },
+					);
 
 					return;
 				}
@@ -7511,11 +7645,18 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		return { setStatus };
 	}
 
-	// Not async, for the same reason as submitCommentToHN: window.open has to happen
-	// before the first await or the browser blocks it.
-	function submitPageToHN({ title, url, text }) {
+	// Not async, for the same reason as submitCommentThroughBridge: window.open has
+	// to happen before the first await or the browser blocks it.
+	function submitPageThroughBridge(sourceID, { title, url, text }) {
+		const bridge = getWriteBridge(sourceID);
+		const action = bridge?.actions?.submit;
+
+		if (!action) {
+			return Promise.resolve({ ok: false, reason: "no-bridge" });
+		}
+
 		const nonce = bridgeNonce();
-		const session = openSubmitBridgePopup(nonce);
+		const session = openSubmitBridgePopup(nonce, { origin: bridge.origin });
 
 		if (session.blocked) {
 			return session.result;
@@ -7537,11 +7678,11 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 
 				const hash = new URLSearchParams();
 
-				hash.set("hnewhere-submit", "1");
+				hash.set(action.marker, "1");
 				hash.set("nonce", nonce);
 				hash.set("origin", location.origin);
 
-				session.navigate(submitURL(url, title) + "#" + hash.toString());
+				session.navigate(action.url({ url, title }) + "#" + hash.toString());
 
 				return await session.result;
 			} finally {
@@ -7637,22 +7778,24 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		return button;
 	}
 
-	function submitFailureMessage(result) {
+	// #region hnewhere-test-export
+	function submitFailureMessage(result, sourceLabel = "Hacker News") {
 		switch (result?.reason) {
 			case "popup-blocked":
 				return "Your browser blocked the popup. Allow popups for this site and try again.";
 			case "timeout":
-				return "Hacker News did not respond in time. Check the popup window.";
+				return `${sourceLabel} did not respond in time. Check the popup window.`;
 			case "not-logged-in":
-				return "Log in to Hacker News in the popup, then try again.";
+				return `Log in to ${sourceLabel} in the popup, then try again.`;
 			case "dupe":
-				return "Hacker News already has this URL. Reload the page to see the discussion.";
+				return `${sourceLabel} already has this URL. Reload the page to see the discussion.`;
 			case "no-form":
-				return "Could not find the submission form on Hacker News.";
+				return `Could not find the submission form on ${sourceLabel}.`;
 			default:
 				return result?.message || "Submission did not go through.";
 		}
 	}
+	// #endregion hnewhere-test-export
 
 	// -------------------------
 	// Shared chrome
@@ -11564,6 +11707,7 @@ ${settingsPanelHTML()}
 		container.appendChild(storyElement);
 
 		wireComposer(storyElement.querySelector(".comment-composer"), {
+			source: story.source,
 			storyID,
 		});
 
@@ -11623,7 +11767,10 @@ ${settingsPanelHTML()}
 
 	// parentId set means this is a reply to that comment; absent means a top-level
 	// comment on the story. Everything else about the two is identical.
-	function wireComposer(composer, { storyID, parentId = null, onPosted } = {}) {
+	function wireComposer(
+		composer,
+		{ source = "hn", storyID, parentId = null, onPosted } = {},
+	) {
 		if (!composer) {
 			return null;
 		}
@@ -11746,10 +11893,18 @@ ${settingsPanelHTML()}
 			try {
 				// Called before any await in this handler, so window.open still counts as
 				// user-initiated. Do not introduce an await above this line.
-				const result = await submitCommentToHN(storyID, text, parentId);
+				const result = await submitCommentThroughBridge(
+					source,
+					storyID,
+					text,
+					parentId,
+				);
 
 				if (!result?.ok) {
-					setStatus(commentFailureMessage(result), { error: true });
+					setStatus(
+						commentFailureMessage(result, getSource(source)?.label || "the source"),
+						{ error: true },
+					);
 					return;
 				}
 
@@ -11771,9 +11926,16 @@ ${settingsPanelHTML()}
 		return { focus: () => textarea.focus() };
 	}
 
-	function submitCommentToHN(storyID, text, parentId = null) {
+	function submitCommentThroughBridge(sourceID, storyID, text, parentId = null) {
+		const bridge = getWriteBridge(sourceID);
+		const action = bridge?.actions?.reply;
+
+		if (!action) {
+			return Promise.resolve({ ok: false, reason: "no-bridge" });
+		}
+
 		const nonce = bridgeNonce();
-		const session = openCommentBridgePopup(nonce);
+		const session = openCommentBridgePopup(nonce, { origin: bridge.origin });
 
 		if (session.blocked) {
 			return session.result;
@@ -11792,18 +11954,14 @@ ${settingsPanelHTML()}
 
 				const hash = new URLSearchParams();
 
-				hash.set("hnewhere-comment", "1");
+				hash.set(action.marker, "1");
 				hash.set("nonce", nonce);
 				hash.set("story", String(storyID));
 				hash.set("origin", location.origin);
 
-				// /reply carries its own goto back to the item page, so both paths land
-				// somewhere reportCommentResultAfterReload can read the result from.
-				const target = parentId
-					? replyURL({ id: parentId }, storyID)
-					: commentURL(storyID);
-
-				session.navigate(target + "#" + hash.toString());
+				session.navigate(
+					action.url({ storyID, parentId }) + "#" + hash.toString(),
+				);
 
 				return await session.result;
 			} finally {
@@ -11812,24 +11970,26 @@ ${settingsPanelHTML()}
 		})();
 	}
 
-	function commentFailureMessage(result) {
+	// #region hnewhere-test-export
+	function commentFailureMessage(result, sourceLabel = "Hacker News") {
 		switch (result?.reason) {
 			case "popup-blocked":
 				return "Your browser blocked the popup. Allow popups for this site and try again.";
 			case "timeout":
-				return "Hacker News did not respond in time. Check the popup window — your draft is saved.";
+				return `${sourceLabel} did not respond in time. Check the popup window — your draft is saved.`;
 			case "not-logged-in":
-				return "Log in to Hacker News in the popup, then submit again.";
+				return `Log in to ${sourceLabel} in the popup, then submit again.`;
 			case "rate-limited":
-				return "Hacker News is rate limiting comments. Wait a moment and try again.";
+				return `${sourceLabel} is rate limiting comments. Wait a moment and try again.`;
 			case "no-form":
-				return "Could not find the comment box on Hacker News. The thread may be locked.";
+				return `Could not find the comment box on ${sourceLabel}. The thread may be locked.`;
 			case "unconfirmed":
-				return "Submitted, but Hacker News did not show the comment back. Check the thread before reposting.";
+				return `Submitted, but ${sourceLabel} did not show the comment back. Check the thread before reposting.`;
 			default:
 				return result?.message || "Comment did not go through — your draft is saved.";
 		}
 	}
+	// #endregion hnewhere-test-export
 
 	function reloadDiscussion(storyID) {
 		itemCache.clear();
@@ -12461,6 +12621,7 @@ ${settingsPanelHTML()}
 				composerAPI ||= wireComposer(
 					replyComposer.querySelector(".comment-composer"),
 					{
+						source: comment.source,
 						storyID,
 						parentId: comment.id,
 					},
@@ -13710,8 +13871,8 @@ title="Show only this discussion">
 
 	// HN's submit form posts to /r. Login pages have no such form, which is how being
 	// logged out is detected.
-	function findSubmitForm() {
-		for (const form of document.querySelectorAll("form")) {
+	function findSubmitForm(root) {
+		for (const form of root.querySelectorAll("form")) {
 			if (
 				form.querySelector('input[name="title"]') &&
 				form.querySelector('input[name="url"]')
@@ -13725,8 +13886,8 @@ title="Show only this discussion">
 
 	// Scrapes whatever HN said went wrong. Its error pages are bare text, so this
 	// looks for the phrases rather than a structure that does not exist.
-	function readSubmitError() {
-		const text = (document.body?.textContent || "").toLowerCase();
+	function readSubmitError(root) {
+		const text = (root.body?.textContent || "").toLowerCase();
 
 		if (text.includes("that link has already been submitted")) {
 			return { reason: "dupe" };
@@ -13746,69 +13907,56 @@ title="Show only this discussion">
 		return null;
 	}
 
-	function reportSubmitResultAfterReload() {
-		let stored = null;
+	function reportHNSubmit(root) {
+		const payload = takeBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY);
 
-		try {
-			stored = window.sessionStorage.getItem(SUBMIT_BRIDGE_STORAGE_KEY);
-			// Cleared first: if anything below throws, a stale payload must not make the
-			// next HN page load try to report again.
-			window.sessionStorage.removeItem(SUBMIT_BRIDGE_STORAGE_KEY);
-		} catch {
-			return false;
+		if (!payload) {
+			return null;
 		}
-
-		if (!stored) {
-			return false;
-		}
-
-		let payload = null;
-
-		try {
-			payload = JSON.parse(stored);
-		} catch {
-			return false;
-		}
-
-		if (!payload?.nonce) {
-			return false;
-		}
-
-		const finish = (result) => {
-			postBridgeResult(SUBMIT_BRIDGE_MESSAGE_SOURCE, payload, result);
-			window.setTimeout(() => window.close(), 60);
-		};
 
 		// Already submitted by someone: HN redirects straight to the existing item.
 		if (location.pathname === "/item") {
 			const id = new URLSearchParams(location.search).get("id");
 
-			finish({ ok: Boolean(id), storyID: id, reason: id ? "existing" : "dupe" });
-			return true;
+			return {
+				payload,
+				result: {
+					ok: Boolean(id),
+					storyID: id,
+					reason: id ? "existing" : "dupe",
+				},
+			};
 		}
 
 		// The success case. HN drops you on /newest, so the new story has to be found
 		// by matching the URL that was just submitted.
 		if (location.pathname === "/newest") {
-			finish({
-				ok: true,
-				storyID: findSubmittedStoryID(payload.normalized),
-				reason: "submitted",
-			});
-			return true;
+			return {
+				payload,
+				result: {
+					ok: true,
+					storyID: findSubmittedStoryID(root, payload.normalized),
+					reason: "submitted",
+				},
+			};
 		}
 
 		// Still on a form or an error page: the submission did not go through.
-		finish({ ok: false, ...(readSubmitError() || { reason: "unknown" }) });
-		return true;
+		return {
+			payload,
+			result: {
+				ok: false,
+				...(readSubmitError(root) || { reason: "unknown" }),
+			},
+		};
 	}
 
-	function findSubmittedStoryID(normalized) {
+	function findSubmittedStoryID(root, normalized) {
 		if (!normalized) {
 			return null;
 		}
 
-		for (const link of document.querySelectorAll(".titleline > a")) {
+		for (const link of root.querySelectorAll(".titleline > a")) {
 			if (normalizeURL(link.href) !== normalized) {
 				continue;
 			}
@@ -13823,22 +13971,11 @@ title="Show only this discussion">
 		return null;
 	}
 
-	async function maybeHandleHNSubmitBridge() {
-		const payload = parseBridgeHash("hnewhere-submit");
-
-		if (!payload) {
-			return false;
-		}
-
-		const staged = await readBridgePayload(payload.nonce);
-		const form = findSubmitForm();
+	function actHNSubmit({ payload, staged, root }) {
+		const form = findSubmitForm(root);
 
 		if (!form) {
-			postBridgeResult(SUBMIT_BRIDGE_MESSAGE_SOURCE, payload, {
-				ok: false,
-				reason: "not-logged-in",
-			});
-			return true;
+			return { ok: false, reason: "not-logged-in" };
 		}
 
 		const titleInput = form.querySelector('input[name="title"]');
@@ -13859,27 +13996,19 @@ title="Show only this discussion">
 			textInput.value = staged?.text || "";
 		}
 
-		try {
-			window.sessionStorage.setItem(
-				SUBMIT_BRIDGE_STORAGE_KEY,
-				JSON.stringify({
-					...payload,
-					normalized: staged?.normalized || null,
-				}),
-			);
-		} catch (error) {
-			console.error("HNewhere: could not stage submit payload", error);
-			postBridgeResult(SUBMIT_BRIDGE_MESSAGE_SOURCE, payload, {
-				ok: false,
-				reason: "storage-unavailable",
-			});
-			return true;
+		if (
+			!stageBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY, {
+				...payload,
+				normalized: staged?.normalized || null,
+			})
+		) {
+			return { ok: false, reason: "storage-unavailable" };
 		}
 
 		// Same reasoning as the vote bridge: submit the form as a navigation rather
 		// than clicking, so closing the popup cannot abort an in-flight request.
 		form.submit();
-		return true;
+		return BRIDGE_NAVIGATED;
 	}
 
 	// -------------------------
@@ -13888,8 +14017,8 @@ title="Show only this discussion">
 
 	// The top-level comment form on an item page. A locked thread or a logged-out
 	// reader gets no such form, which is how both are detected.
-	function findCommentForm() {
-		for (const form of document.querySelectorAll("form")) {
+	function findHNCommentForm(root) {
+		for (const form of root.querySelectorAll("form")) {
 			const textarea = form.querySelector('textarea[name="text"]');
 
 			if (textarea) {
@@ -13900,8 +14029,8 @@ title="Show only this discussion">
 		return null;
 	}
 
-	function readCommentError() {
-		const text = (document.body?.textContent || "").toLowerCase();
+	function readHNCommentError(root) {
+		const text = (root.body?.textContent || "").toLowerCase();
 
 		if (text.includes("you're posting too fast") || text.includes("posting too fast")) {
 			return { reason: "rate-limited" };
@@ -13947,119 +14076,97 @@ title="Show only this discussion">
 	}
 	// #endregion hnewhere-test-export
 
-	function reportCommentResultAfterReload() {
-		let stored = null;
+	function reportHNComment(root) {
+		const payload = takeBridgeReload(COMMENT_BRIDGE_STORAGE_KEY);
 
-		try {
-			stored = window.sessionStorage.getItem(COMMENT_BRIDGE_STORAGE_KEY);
-			window.sessionStorage.removeItem(COMMENT_BRIDGE_STORAGE_KEY);
-		} catch {
-			return false;
+		if (!payload) {
+			return null;
 		}
 
-		if (!stored) {
-			return false;
-		}
-
-		let payload = null;
-
-		try {
-			payload = JSON.parse(stored);
-		} catch {
-			return false;
-		}
-
-		if (!payload?.nonce) {
-			return false;
-		}
-
-		const finish = (result) => {
-			postBridgeResult(COMMENT_BRIDGE_MESSAGE_SOURCE, payload, result);
-			window.setTimeout(() => window.close(), 60);
-		};
-
-		const error = readCommentError();
+		const error = readHNCommentError(root);
 
 		if (error) {
-			finish({ ok: false, ...error });
-			return true;
+			return { payload, result: { ok: false, ...error } };
 		}
 
 		// Server-rendered proof: HN redirected back to the item page, so if the comment
 		// landed it is on this page.
-		const needle = payload.matchKey;
-		let found = false;
-
-		if (needle) {
-			for (const node of document.querySelectorAll(".commtext")) {
-				if (commentMatchKey(commentNodeText(node)).startsWith(needle.slice(0, 60))) {
-					found = true;
-					break;
-				}
-			}
-		}
-
-		finish(
-			found
+		return {
+			payload,
+			result: hnCommentEchoed(root, payload.matchKey)
 				? { ok: true, reason: "posted" }
 				: { ok: false, reason: "unconfirmed" },
-		);
-		return true;
+		};
 	}
 
-	async function maybeHandleHNCommentBridge() {
-		const payload = parseBridgeHash("hnewhere-comment");
-
-		if (!payload) {
+	function hnCommentEchoed(root, needle) {
+		if (!needle) {
 			return false;
 		}
 
-		const staged = await readBridgePayload(payload.nonce);
-
-		if (!staged?.text) {
-			postBridgeResult(COMMENT_BRIDGE_MESSAGE_SOURCE, payload, {
-				ok: false,
-				reason: "draft-missing",
-			});
-			return true;
+		for (const node of root.querySelectorAll(".commtext")) {
+			if (commentMatchKey(commentNodeText(node)).startsWith(needle.slice(0, 60))) {
+				return true;
+			}
 		}
 
-		const target = findCommentForm();
+		return false;
+	}
+
+	function actHNComment({ payload, staged, root }) {
+		const target = findHNCommentForm(root);
 
 		if (!target) {
-			postBridgeResult(COMMENT_BRIDGE_MESSAGE_SOURCE, payload, {
+			return {
 				ok: false,
-				...(readCommentError() || { reason: "no-form" }),
-			});
-			return true;
+				...(readHNCommentError(root) || { reason: "no-form" }),
+			};
 		}
 
 		// Assigned verbatim. HN's formatter is the only thing that should interpret
 		// this text, so nothing here trims, collapses or re-wraps it.
 		target.textarea.value = staged.text;
 
-		try {
-			window.sessionStorage.setItem(
-				COMMENT_BRIDGE_STORAGE_KEY,
-				JSON.stringify({
-					...payload,
-					matchKey: commentMatchKey(staged.text),
-				}),
-			);
-		} catch (error) {
-			console.error("HNewhere: could not stage comment payload", error);
-			postBridgeResult(COMMENT_BRIDGE_MESSAGE_SOURCE, payload, {
-				ok: false,
-				reason: "storage-unavailable",
-			});
-			return true;
+		if (
+			!stageBridgeReload(COMMENT_BRIDGE_STORAGE_KEY, {
+				...payload,
+				matchKey: commentMatchKey(staged.text),
+			})
+		) {
+			return { ok: false, reason: "storage-unavailable" };
 		}
 
 		// Navigation rather than a click, for the same reason as the vote bridge: a
 		// backgrounded request dies with the popup, a form navigation does not.
 		target.form.submit();
-		return true;
+		return BRIDGE_NAVIGATED;
 	}
+
+	registerWriteBridge({
+		id: "hn",
+		origin: HN_ORIGIN,
+		hosts: ["news.ycombinator.com"],
+		actions: {
+			submit: {
+				marker: "hnewhere-submit",
+				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
+				url: ({ url, title }) => submitURL(url, title),
+				act: actHNSubmit,
+				report: reportHNSubmit,
+			},
+			reply: {
+				marker: "hnewhere-comment",
+				messageSource: COMMENT_BRIDGE_MESSAGE_SOURCE,
+				requiresDraft: true,
+				// /reply carries its own goto back to the item page, so both land
+				// somewhere report can read the result from.
+				url: ({ storyID, parentId }) =>
+					parentId ? replyURL({ id: parentId }, storyID) : commentURL(storyID),
+				act: actHNComment,
+				report: reportHNComment,
+			},
+		},
+	});
 
 	function setupHNListener() {
 		document.addEventListener(
@@ -17247,15 +17354,13 @@ title="Show only this discussion">
 
 			setupHNQueueLinks().catch(console.error);
 
+			const bridge = writeBridgeForHost(writeBridges(), location.hostname);
+
 			if (reportItemActionAfterReload()) {
 				return;
 			}
 
-			if (reportSubmitResultAfterReload()) {
-				return;
-			}
-
-			if (reportCommentResultAfterReload()) {
+			if (reportWriteBridge(bridge)) {
 				return;
 			}
 
@@ -17263,13 +17368,11 @@ title="Show only this discussion">
 				return;
 			}
 
-			// Both are async because the staged payload lives in GM storage rather than
-			// the URL fragment, so they cannot be tested with a plain if.
-			if (await maybeHandleHNSubmitBridge()) {
+			// Async because the staged payload lives in GM storage rather than the URL
+			// fragment, so it cannot be tested with a plain if.
+			if (await dispatchWriteBridge(bridge)) {
 				return;
 			}
-
-			await maybeHandleHNCommentBridge();
 
 			await markQueueArrival().catch(console.error);
 
