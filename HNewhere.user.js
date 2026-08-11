@@ -5879,6 +5879,75 @@ ${
 		return null;
 	}
 
+	// #region hnewhere-test-export
+	function voteFailureMessage(result, sourceLabel = "the source") {
+		switch (result?.reason) {
+			case "popup-blocked":
+				return "Your browser blocked the popup. Allow popups for this site and try again.";
+			case "timeout":
+				return `${sourceLabel} did not respond in time.`;
+			case "not-logged-in":
+			case "awaiting-sign-in":
+				return `Sign in to ${sourceLabel} to vote.`;
+			case "action-unavailable":
+				return `${sourceLabel} is not offering that vote here.`;
+			case "rate-limited":
+				return `${sourceLabel} is rate limiting votes. Wait a moment and try again.`;
+			default:
+				return result?.message || "That vote did not go through.";
+		}
+	}
+	// #endregion hnewhere-test-export
+
+	function voteStatusSlots(itemId) {
+		const escapedId = CSS.escape(String(itemId));
+
+		return (
+			sidebarUI?.body?.querySelectorAll(
+				`.story-vote-status[data-vote-status-id="${escapedId}"],` +
+					`.comment-vote-status[data-vote-status-id="${escapedId}"]`,
+			) || []
+		);
+	}
+
+	// The slot the unvote link uses, so what went wrong lands beside the item it
+	// belongs to.
+	function showVoteMessage(itemId, message, action = null) {
+		voteStatusSlots(itemId).forEach((element) => {
+			element.replaceChildren();
+
+			if (!message) {
+				return;
+			}
+
+			element.appendChild(document.createTextNode(" | "));
+
+			const note = document.createElement("span");
+
+			note.className = "vote-note";
+			note.textContent = message;
+			element.appendChild(note);
+
+			if (!action) {
+				return;
+			}
+
+			const button = document.createElement("button");
+
+			button.type = "button";
+			button.className = "vote-unvote-link";
+			button.textContent = action.label;
+			button.onclick = (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				action.onPress();
+			};
+
+			element.appendChild(document.createTextNode(" "));
+			element.appendChild(button);
+		});
+	}
+
 	function updateVoteStatus(itemId, state, onUnvote) {
 		const label =
 			state === "up" ? "unvote" : state === "down" ? "undown" : null;
@@ -6306,6 +6375,13 @@ ${
 
 			if (result?.storyID && result?.itemId && result?.voteInfo) {
 				setVoteInfoForStoryItem(result.storyID, result.itemId, result.voteInfo);
+			}
+
+			if (!result?.ok) {
+				showVoteMessage(
+					itemId,
+					voteFailureMessage(result, getSource(sourceID)?.label || "the source"),
+				);
 			}
 		} finally {
 			delete container.dataset.votePending;
