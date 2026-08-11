@@ -9834,7 +9834,7 @@ ${[
 	["Vote", (source) => Boolean(source.capabilities.vote)],
 	["Reply", (source) => Boolean(source.capabilities.reply)],
 	["Submit", (source) => Boolean(source.capabilities.submit)],
-	["Favourite", (source) => Boolean(source.capabilities.favourite)],
+	["Favorite", (source) => Boolean(source.capabilities.favorite)],
 	["Flag", (source) => Boolean(source.capabilities.flag)],
 ]
 	.map(
