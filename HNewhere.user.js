@@ -6383,12 +6383,65 @@ ${
 					voteFailureMessage(result, getSource(sourceID)?.label || "the source"),
 				);
 			}
+
+			await rememberAuthFromResult(sourceID, result);
 		} finally {
 			delete container.dataset.votePending;
 			container.classList.remove("vote-controls-pending");
 			container.querySelectorAll(".vote-button").forEach((button) => {
 				button.disabled = false;
 			});
+		}
+	}
+
+	// -------------------------
+	// Whether a reader can act
+	// -------------------------
+
+	const AUTH_PREFIX = "HNewhere:auth:";
+
+	// #region hnewhere-test-export
+
+	const AUTH_TTL = { out: 3 * 60 * 1000, in: 12 * 60 * 60 * 1000 };
+
+	function verdictFromResult(result) {
+		if (result?.ok) {
+			return "in";
+		}
+
+		if (
+			result?.reason === "not-logged-in" ||
+			result?.reason === "awaiting-sign-in"
+		) {
+			return "out";
+		}
+
+		return null;
+	}
+
+	function authVerdictUsable(verdict, now) {
+		if (!verdict?.state || !Number.isFinite(verdict.at)) {
+			return false;
+		}
+
+		return now - verdict.at < (AUTH_TTL[verdict.state] ?? 0);
+	}
+
+	function shouldAskToSignIn(verdict, now) {
+		return verdict?.state === "out" && authVerdictUsable(verdict, now);
+	}
+
+	// #endregion hnewhere-test-export
+
+	function readAuthVerdict(sourceID) {
+		return load(AUTH_PREFIX + sourceID, null);
+	}
+
+	async function rememberAuthFromResult(sourceID, result) {
+		const state = verdictFromResult(result);
+
+		if (state) {
+			await save(AUTH_PREFIX + sourceID, { state, at: Date.now() });
 		}
 	}
 
@@ -12110,6 +12163,8 @@ ${settingsPanelHTML()}
 					text,
 					parentId,
 				);
+
+				await rememberAuthFromResult(source, result);
 
 				if (!result?.ok) {
 					setStatus(
