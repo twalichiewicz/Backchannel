@@ -6560,6 +6560,14 @@ ${
 		return verdict?.state === "out" && authVerdictUsable(verdict, now);
 	}
 
+	function capabilityMark(supported, verdict, now) {
+		if (!supported) {
+			return "no";
+		}
+
+		return shouldAskToSignIn(verdict, now) ? "signin" : "yes";
+	}
+
 	// #endregion hnewhere-test-export
 
 	function readAuthVerdict(sourceID) {
@@ -9568,6 +9576,10 @@ header button svg {
 	color:var(--muted);
 }
 
+.source-matrix .signin {
+	color:var(--muted);
+}
+
 /* Separates the source checkboxes from the support table below them. */
 .sources-divider {
 	border:none;
@@ -10156,7 +10168,7 @@ ${[
 		]
 			.map((source) => {
 				const yes = Boolean(supported(source));
-				return `<td class="${yes ? "yes" : "no"}" aria-label="${yes ? "yes" : "no"}">${yes ? "&check;" : "&ndash;"}</td>`;
+				return `<td class="${yes ? "yes" : "no"}" data-capability-source="${escapeHTML(source.id)}" aria-label="${yes ? "yes" : "no"}">${yes ? "&check;" : "&ndash;"}</td>`;
 			})
 			.join("")}</tr>`,
 	)
@@ -10176,7 +10188,39 @@ ${[
 `;
 	}
 
+	// The table is built synchronously, so what a reader can actually do is
+	// layered on afterwards.
+	async function markCapabilityAuth(shadow) {
+		const now = Date.now();
+		const verdicts = new Map();
+
+		for (const cell of shadow.querySelectorAll("[data-capability-source]")) {
+			const sourceID = cell.dataset.capabilitySource;
+
+			if (!verdicts.has(sourceID)) {
+				verdicts.set(sourceID, await readAuthVerdict(sourceID));
+			}
+
+			const mark = capabilityMark(
+				cell.classList.contains("yes"),
+				verdicts.get(sourceID),
+				now,
+			);
+
+			if (mark !== "signin") {
+				continue;
+			}
+
+			cell.classList.remove("yes");
+			cell.classList.add("signin");
+			cell.textContent = "○";
+			cell.setAttribute("aria-label", "sign in required");
+			cell.title = `Sign in to ${getSource(sourceID)?.label || "this source"}`;
+		}
+	}
+
 	async function wireSettingsPanel(shadow, { onAnnotationChange } = {}) {
+		markCapabilityAuth(shadow).catch(console.error);
 		const settingsPanel = shadow.querySelector("#settings-panel");
 		const settingsToggle = shadow.querySelector("#settings-toggle");
 
