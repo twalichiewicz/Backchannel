@@ -873,7 +873,16 @@
 		);
 	}
 
+	// Favourite and flag are Hacker News's, not every voting source's.
+	function sourceHasItemActions(sourceID) {
+		return Boolean(getWriteBridge(sourceID)?.actions?.vote?.itemActions);
+	}
+
 	function itemActionLinksHTML(itemId, sourceID) {
+		if (!sourceHasItemActions(sourceID)) {
+			return "";
+		}
+
 		const id = escapeHTML(String(itemId));
 		const source = escapeHTML(String(sourceID || ""));
 
@@ -13709,7 +13718,10 @@ title="Show only this discussion">
 		unflag: { path: "flag", params: { un: "t" } },
 	};
 
-	const ITEM_ACTIONS = ["up", "down", "un", ...Object.keys(ITEM_ACTION_PATHS)];
+	// The three every voting source has, and the two that are Hacker News's own.
+	const VOTE_ACTIONS = ["up", "down", "un"];
+
+	const ITEM_ACTIONS = [...VOTE_ACTIONS, ...Object.keys(ITEM_ACTION_PATHS)];
 
 	function findItemActionAnchor(root, action, itemId) {
 		const shape = ITEM_ACTION_PATHS[action];
@@ -14176,6 +14188,7 @@ title="Show only this discussion">
 				url: ({ itemId }) => commentURL(itemId),
 				descriptors: hnVoteDescriptors,
 				voteLinks: loadVoteLinks,
+				itemActions: true,
 				act: actHNItemAction,
 				report: reportHNItemAction,
 			},
@@ -14430,7 +14443,7 @@ title="Show only this discussion">
 				fields: ["item", "action", "voteURL"],
 				accepts: (payload) =>
 					Boolean(payload.storyID && payload.item) &&
-					ITEM_ACTIONS.includes(payload.action),
+					VOTE_ACTIONS.includes(payload.action),
 				echo: (payload) => ({
 					storyID: payload.storyID,
 					itemId: payload.item,
