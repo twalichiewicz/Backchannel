@@ -5559,6 +5559,15 @@ ${
 	// runs on the load that follows a sign-in.
 	const BRIDGE_AWAITING_SIGN_IN = { awaitingSignIn: true };
 
+	// Signing in passes through pages that are not the target -- an interstitial
+	// that offers a link onward, then the page itself. Neither a missing session
+	// nor a missing item is an answer on those, so the action stays staged.
+	function resumeShouldWait(result) {
+		return (
+			result === BRIDGE_AWAITING_SIGN_IN || result?.reason === "item-missing"
+		);
+	}
+
 	function writeBridgeForHost(bridges, hostname) {
 		return (
 			bridges.find((bridge) => bridge?.hosts?.includes(hostname)) || null
@@ -5709,7 +5718,9 @@ ${
 	// The fragment does not survive a sign-in round trip; the tab's own storage
 	// does. Runs before the normal dispatch.
 	async function resumeWriteBridge(bridge, root = document) {
-		const stored = takeBridgeReload(RESUME_BRIDGE_STORAGE_KEY);
+		// Peeked, not taken: signing in lands on a page or two before the target,
+		// and consuming the action on one of those would lose it.
+		const stored = peekBridgeReload(RESUME_BRIDGE_STORAGE_KEY);
 
 		if (!stored?.marker || !stored?.payload?.nonce) {
 			return false;
@@ -5726,13 +5737,23 @@ ${
 		const staged = action.stagesDraft
 			? await readBridgePayload(stored.payload.nonce)
 			: null;
+		const result = await runWriteAction(action, {
+			payload: stored.payload,
+			staged,
+			root,
+		});
 
-		finishWriteAction(
-			action,
-			stored.payload,
-			await runWriteAction(action, { payload: stored.payload, staged, root }),
-		);
+		if (resumeShouldWait(result)) {
+			postWriteResult(action, stored.payload, {
+				ok: false,
+				reason: "awaiting-sign-in",
+				interim: true,
+			});
+			return true;
+		}
 
+		clearBridgeReload(RESUME_BRIDGE_STORAGE_KEY);
+		finishWriteAction(action, stored.payload, result);
 		return true;
 	}
 
