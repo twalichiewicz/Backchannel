@@ -1976,16 +1976,15 @@
 		return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : NaN;
 	}
 
+	// acct:name@instance reduced to name, which is what a profile link resolves.
 	function hypothesisAuthor(row) {
-		const display = String(row?.user_info?.display_name || "").trim();
-
-		if (display) {
-			return display;
-		}
-
 		const account = String(row?.user || "");
 
 		return account.match(/^acct:([^@]+)@/)?.[1] || account;
+	}
+
+	function hypothesisAuthorName(row) {
+		return String(row?.user_info?.display_name || "").trim();
 	}
 
 	// A TextQuoteSelector carries prefix and suffix beside the exact text, and they
@@ -2082,6 +2081,7 @@
 					? sourceKey("hypothesis", parentId)
 					: null,
 			author: hypothesisAuthor(row),
+			authorName: hypothesisAuthorName(row),
 			bodyHTML: hypothesisBodyHTML(row),
 			// Hypothes.is has no votes, and a displayed 0 would claim it scored nothing.
 			score: null,
@@ -2187,6 +2187,14 @@
 		return host && host !== "lemmy.world" ? name + "@" + host : name;
 	}
 
+	// Lemmy keeps both, and they are often the same string. Dropped when it adds
+	// nothing, so a byline does not read "inari (inari)".
+	function lemmyDisplayName(creator) {
+		const display = String(creator?.display_name || "").trim();
+
+		return display && display !== creator?.name ? display : "";
+	}
+
 	function lemmyDiscussion(postView) {
 		const post = postView.post || {};
 		const community = postView.community || {};
@@ -2230,6 +2238,7 @@
 			discussionKey: discussion.key,
 			parentKey: parentId ? sourceKey("lemmy", parentId) : null,
 			author: lemmyHandle(commentView.creator),
+			authorName: lemmyDisplayName(commentView.creator),
 			bodyHTML: removed ? "" : escapeHTML(comment.content || ""),
 			score: commentView.counts?.score ?? null,
 			createdAt: Math.floor(Date.parse(comment.published) / 1000) || 0,
