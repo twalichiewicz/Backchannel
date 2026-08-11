@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.6
+// @version      1.6.7
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -39,7 +39,6 @@
 // @exclude      https://*.netflix.com/*
 // @exclude      https://web.whatsapp.com/*
 // @exclude      https://*.instagram.com/*
-// @exclude      *://*/*.pdf
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
@@ -55,6 +54,7 @@
 // @connect      lemmy.world
 // @connect      mastodon.social
 // @connect      www.tootfinder.ch
+// @connect      api.hypothes.is
 // @run-at       document-end
 // @noframes
 // ==/UserScript==
@@ -1158,6 +1158,7 @@
 		rootKeys: { type: "array" },
 		rootTimes: { type: "array" },
 		wikiPages: { type: "array", optional: true },
+		annotations: { type: "array", optional: true },
 		statuses: { type: "array", optional: true },
 		creatorId: { type: ["number", "string"], optional: true },
 	};
@@ -1544,7 +1545,7 @@
 			source: "mastodon",
 			key: sourceKey("mastodon", "links:" + url),
 			id: "links:" + url,
-			title: "",
+			title: "Mastodon posts",
 			author: "",
 			score: null,
 			commentCount: statuses.length,
@@ -1916,7 +1917,10 @@
 			source: "wikipedia",
 			key: sourceKey("wikipedia", "linksearch:" + pageURL),
 			id: "linksearch:" + pageURL,
-			title: "",
+			// Every collective names itself, so a reader with several on screen can
+			// tell which one they are looking at. Empty fell back to the page title,
+			// which is the same for all of them.
+			title: "Wikipedia talk pages",
 			author: "",
 			score: null,
 			commentCount: pages.length,
@@ -1929,6 +1933,202 @@
 			rootTimes,
 			wikiPages,
 		};
+	}
+
+	function hypothesisTime(stamp) {
+		const parsed = Date.parse(stamp || "");
+
+		return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : NaN;
+	}
+
+	function hypothesisAuthor(row) {
+		const display = String(row?.user_info?.display_name || "").trim();
+
+		if (display) {
+			return display;
+		}
+
+		const account = String(row?.user || "");
+
+		return account.match(/^acct:([^@]+)@/)?.[1] || account;
+	}
+
+	// A TextQuoteSelector carries prefix and suffix beside the exact text, and they
+	// exist to tell repeats apart. Kept whole here; findBestQuoteMatch decides what
+	// to do with them.
+	function hypothesisSelector(row) {
+		for (const target of row?.target || []) {
+			for (const selector of target?.selector || []) {
+				if (
+					selector?.type === "TextQuoteSelector" &&
+					String(selector.exact || "").trim()
+				) {
+					return {
+						exact: String(selector.exact),
+						prefix: String(selector.prefix || ""),
+						suffix: String(selector.suffix || ""),
+					};
+				}
+			}
+		}
+
+		return null;
+	}
+
+	function hypothesisQuote(row) {
+		return hypothesisSelector(row)?.exact || "";
+	}
+
+	// A note is user-authored, and 70% of the ones the API returns already carry
+	// markup -- curation accounts post HTML. Those go through as HTML the way a
+	// Mastodon status does, and sanitizeHTML cleans them at render. A note that is
+	// plain text is escaped here, so a stray angle bracket in prose survives.
+	function hypothesisNoteHTML(note) {
+		if (/<[a-z][^>]*>/i.test(note)) {
+			return note;
+		}
+
+		return note
+			.split(/\n{2,}/)
+			.map((part) => part.trim())
+			.filter(Boolean)
+			.map((part) => `<p>${escapeHTML(part).replace(/\n/g, "<br>")}</p>`)
+			.join("");
+	}
+
+	// data-hnewhere-exact marks a quote that came out of a TextQuoteSelector, which
+	// is verbatim page text. findBestQuoteMatch reads it and skips variant search.
+	function hypothesisBodyHTML(row) {
+		const selector = hypothesisSelector(row);
+		const context = selector
+			? (selector.prefix
+					? ` data-hnewhere-prefix="${escapeHTML(selector.prefix)}"`
+					: "") +
+				(selector.suffix
+					? ` data-hnewhere-suffix="${escapeHTML(selector.suffix)}"`
+					: "")
+			: "";
+
+		return (
+			(selector
+				? `<blockquote data-hnewhere-exact="1"${context}>${escapeHTML(selector.exact)}</blockquote>`
+				: "") + hypothesisNoteHTML(String(row?.text || "").trim())
+		);
+	}
+
+	// The API answers `url=` with document equivalents rather than with the URL that
+	// was asked, so an arxiv.org/abs query returns annotations made on the PDF and on
+	// copies of it hosted elsewhere. Those quote a document the reader does not have
+	// open, and this is the same check every other source applies to its own results.
+	function hypothesisKeptRows(rows, target) {
+		return (rows || []).filter(
+			(row) =>
+				row?.id &&
+				row.hidden !== true &&
+				String(row.text || "").trim() &&
+				normalizeURL(row.uri) === target &&
+				Number.isFinite(hypothesisTime(row.created)),
+		);
+	}
+
+	function hypothesisComment(row, discussion, keptIds) {
+		const references = row?.references || [];
+		const parentId = references.length ? references[references.length - 1] : null;
+
+		return {
+			source: "hypothesis",
+			key: sourceKey("hypothesis", row.id),
+			id: row.id,
+			discussionKey: discussion?.key,
+			// A reply whose parent was filtered out is a root, not an orphan pointing
+			// at a key the index will never hold.
+			parentKey:
+				parentId && keptIds.has(parentId)
+					? sourceKey("hypothesis", parentId)
+					: null,
+			author: hypothesisAuthor(row),
+			bodyHTML: hypothesisBodyHTML(row),
+			// Hypothes.is has no votes, and a displayed 0 would claim it scored nothing.
+			score: null,
+			createdAt: hypothesisTime(row.created),
+			isOP: false,
+			deleted: false,
+			replyKeys: [],
+		};
+	}
+
+	function hypothesisCollective(target, rows) {
+		const kept = hypothesisKeptRows(rows, target);
+
+		if (!kept.length) {
+			return null;
+		}
+
+		const keptIds = new Set(kept.map((row) => row.id));
+		const rootKeys = [];
+		const rootTimes = [];
+		let newest = 0;
+
+		for (const row of kept) {
+			const references = row.references || [];
+			const parentId = references.length ? references[references.length - 1] : null;
+			const time = hypothesisTime(row.updated) || hypothesisTime(row.created);
+
+			if (!parentId || !keptIds.has(parentId)) {
+				rootKeys.push(sourceKey("hypothesis", row.id));
+				rootTimes.push(hypothesisTime(row.created));
+			}
+
+			if (time > newest) {
+				newest = time;
+			}
+		}
+
+		return {
+			source: "hypothesis",
+			key: sourceKey("hypothesis", "annotations:" + target),
+			id: "annotations:" + target,
+			// Names itself the way the Bluesky collective does, and in its own words:
+			// these are annotations, not comments. Left empty it fell back to the page
+			// title, which says nothing about which discussion is on screen.
+			title: "Hypothes.is annotations",
+			author: "",
+			score: null,
+			commentCount: kept.length,
+			createdAt: newest,
+			permalink:
+				"https://hypothes.is/search?q=" + encodeURIComponent("url:" + target),
+			articleURL: target,
+			label: "Hypothes.is",
+			bodyHTML: "",
+			rootKeys,
+			rootTimes,
+			annotations: kept,
+		};
+	}
+
+	function hypothesisThreadIndex(rows, discussion) {
+		const keptIds = new Set((rows || []).map((row) => row.id));
+		const byKey = new Map();
+		const rootKeys = [];
+
+		for (const row of rows || []) {
+			const comment = hypothesisComment(row, discussion, keptIds);
+
+			byKey.set(comment.key, comment);
+		}
+
+		for (const comment of byKey.values()) {
+			const parent = comment.parentKey ? byKey.get(comment.parentKey) : null;
+
+			if (parent) {
+				parent.replyKeys.push(comment.key);
+			} else {
+				rootKeys.push(comment.key);
+			}
+		}
+
+		return { byKey, rootKeys };
 	}
 
 	function lemmyHost(actorId) {
@@ -3300,6 +3500,74 @@ ${
 		},
 	});
 
+	const HYPOTHESIS_API = "https://api.hypothes.is/api/search";
+	const HYPOTHESIS_LIMIT = 200;
+
+	async function hypothesisJSON(url) {
+		const result = await requestWithMeta(url);
+
+		return result.ok ? result.json : null;
+	}
+
+	registerSource({
+		id: "hypothesis",
+		origins: ["hypothes.is", "web.hypothes.is"],
+		label: "Hypothes.is",
+		shortLabel: "Hypothes.is",
+		beta: true,
+		// The annotations were never posted as a thread; this is when one was last
+		// written, so the panel does not read "Last comment".
+		ageLabel: "Last annotation",
+		// /api/search returns the note text, so the rows ride on the discussion and
+		// loadThread makes no second request.
+		threadArrivesWhole: true,
+		caveat:
+			"Will send each page you visit to the Hypothes.is API to find public annotations on it. No account, signed in or out.",
+		capabilities: { vote: false, reply: false, submit: false },
+
+		profileURL: (author) =>
+			"https://hypothes.is/users/" + encodeURIComponent(author),
+
+		async discover(url) {
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return [];
+			}
+
+			// The normalized target carries no scheme, which the API accepts and
+			// answers for both http and https copies of the page. It answers for
+			// other documents it considers equivalent too; hypothesisKeptRows is
+			// what narrows that back to the page in front of the reader.
+			const found = await hypothesisJSON(
+				`${HYPOTHESIS_API}?url=${encodeURIComponent(target)}&limit=${HYPOTHESIS_LIMIT}`,
+			);
+			const collective = hypothesisCollective(target, found?.rows || []);
+
+			return collective ? [collective] : [];
+		},
+
+		async loadThread(discussion) {
+			const index = hypothesisThreadIndex(
+				discussion.annotations || [],
+				discussion,
+			);
+			const rootTimes = new Map();
+
+			for (const key of index.rootKeys) {
+				rootTimes.set(key, index.byKey.get(key)?.createdAt || 0);
+			}
+
+			return {
+				rootKeys: index.rootKeys,
+				rootTimes,
+				async getComment(key) {
+					return index.byKey.get(key) || null;
+				},
+			};
+		},
+	});
+
 	const MASTODON_INSTANCE = "https://mastodon.social";
 	const TOOTFINDER = "https://www.tootfinder.ch";
 
@@ -3893,6 +4161,7 @@ ${
 		return HIDDEN_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
 	}
 
+	// #region hnewhere-test-export
 	function sanitizeHTML(html) {
 		const template = document.createElement("template");
 		template.innerHTML = html || "";
@@ -3972,7 +4241,6 @@ ${
 		return template.innerHTML;
 	}
 
-	// #region hnewhere-test-export
 	function escapeHTML(value) {
 		return String(value || "")
 			.replace(/&/g, "&amp;")
@@ -6161,11 +6429,15 @@ ${
 		return frontPageAvailable ? "front pages and your queue" : "Your queue";
 	}
 
+	// Submitting is for a page nobody has posted yet. Once any enabled source has a
+	// discussion the reader can already join it, and which source it landed on is
+	// not their problem -- so the offer to post it somewhere else goes away.
 	async function refreshSubmitAffordance(root) {
 		const button = root?.querySelector?.("#header-submit");
 
 		if (button) {
-			button.hidden = !submitTargetFor(await loadSettings());
+			button.hidden =
+				!submitTargetFor(await loadSettings()) || sidebarHasDiscussion;
 		}
 	}
 
@@ -6382,7 +6654,8 @@ ${
 		);
 	}
 
-	function setWordmarkLocation(ui, label) {
+	// #region hnewhere-test-export
+	function setWordmarkLocation(ui, label, { elsewhere = false } = {}) {
 		const tail = ui?.shadow?.querySelector(".wordmark-tail");
 		const sep = tail?.querySelector(".wordmark-sep");
 		const where = tail?.querySelector(".wordmark-where");
@@ -6395,7 +6668,13 @@ ${
 			where.textContent = label;
 		};
 
-		ui?.shadow?.querySelector("#panel")?.classList.toggle("has-trail", Boolean(label));
+		const panel = ui?.shadow?.querySelector("#panel");
+
+		panel?.classList.toggle("has-trail", Boolean(label));
+		// Which half of the toggle is lit. Set before the early return below, because
+		// the label can stay the same while its state changes -- "Discussion" goes
+		// from where the reader is to where they can go back to.
+		panel?.classList.toggle("trail-elsewhere", Boolean(label) && elsewhere);
 
 		// Nothing to announce if it already says this, and animating it anyway would
 		// blink the trail every time the same tab is re-rendered.
@@ -6425,6 +6704,7 @@ ${
 			})
 			.catch(() => swap());
 	}
+	// #endregion hnewhere-test-export
 
 	async function offerQueueOnHN() {
 		if (document.getElementById("hn-queue-button")) {
@@ -6664,7 +6944,15 @@ ${
 			tab.setAttribute("aria-selected", String(isCurrent));
 		}
 
-		setWordmarkLocation(ui, browseTab === "queue" ? "Queue" : "");
+		// The page's own discussion is still one press away -- the wordmark is that
+		// press -- but nothing said so, and the trail emptied on the way in. It keeps
+		// naming the discussion instead, dimmed, because it is not what is on screen.
+		// Which browse tab is current is already shown by the tab strip.
+		if (sidebarHasDiscussion) {
+			setWordmarkLocation(ui, "Discussion", { elsewhere: true });
+		} else {
+			setWordmarkLocation(ui, browseTab === "queue" ? "Queue" : "");
+		}
 
 		await refreshSubmitAffordance(ui.shadow);
 
@@ -7448,33 +7736,16 @@ header {
 	text-align:left;
 }
 
-.wordmark-chevron {
-	flex:0 0 auto;
-	width:0;
-	margin-right:0;
-	overflow:hidden;
-	opacity:0;
-	color:var(--subtitle-stage);
-	transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
-}
-
-#panel.has-trail .wordmark-chevron {
-	width:9px;
-	margin-right:5px;
-	opacity:1;
-}
-
 .wordmark-root {
 	transition:color .2s ease;
 	flex:0 0 auto;
 }
 
-#panel.browsing .wordmark-root {
+/* The wordmark and its trail are a toggle, and exactly one side is lit: whichever
+   view is on screen keeps the text colour, the other dims to read as a way back.
+   Both dimming at once says nothing about where the reader is. */
+#panel.has-trail:not(.trail-elsewhere) .wordmark-root {
 	color:var(--subtitle-stage);
-}
-
-#panel.queue-only .wordmark-chevron {
-	display:none;
 }
 
 #panel.queue-only .header-wordmark {
@@ -7517,6 +7788,7 @@ header {
 	overflow:hidden;
 	text-overflow:ellipsis;
 	white-space:nowrap;
+	transition:color .2s ease;
 }
 
 #panel.has-trail .wordmark-tail {
@@ -7529,6 +7801,12 @@ header {
 	font-weight:400;
 	color:var(--subtitle-stage);
 	flex:0 0 auto;
+}
+
+/* The other half of the toggle: the trail names somewhere the reader is not, so
+   it dims and the wordmark lights instead. */
+#panel.trail-elsewhere .wordmark-where {
+	color:var(--subtitle-stage);
 }
 
 .header-wordmark:focus-visible {
@@ -7674,7 +7952,8 @@ header {
 	display:none;
 }
 
-#panel:not(.browsing) #header-submit,
+/* Which view is on screen no longer decides this -- whether the page already has
+   a discussion does, and that is read in refreshSubmitAffordance. */
 #panel.submitting #header-submit {
 	display:none;
 }
@@ -8955,7 +9234,7 @@ header button svg {
 ${
 	browse
 		? `<button id="browse-toggle" class="header-wordmark" type="button"
-title="${escapeHTML(browseLabel())}"><span class="wordmark-chevron" aria-hidden="true">&lsaquo;</span><span
+title="${escapeHTML(browseLabel())}"><span
 class="wordmark-root"><b>Back</b>channel</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
 class="wordmark-tail"><span class="wordmark-sep">/</span><span
 class="wordmark-where">Discussion</span></span></button>`
@@ -10154,6 +10433,17 @@ ${SUBMIT_FORM_CSS}
 .story-text ul,
 .story-text ol {
 	padding-left:22px;
+}
+
+/* A source can send a rule inside a comment body -- Hypothes.is notes carry one.
+   Left alone it draws the browser's grey inset groove, which is heavier than any
+   line the panel draws for itself. Matches .sources-divider, on the paragraph
+   rhythm rather than the settings one. */
+.text hr,
+.story-text hr {
+	border:none;
+	border-top:1px solid var(--surface-divider);
+	margin:8px 0;
 }
 
 .text a {
@@ -12851,6 +13141,7 @@ title="Show only this discussion">
 			const settings = await loadSettings();
 
 			await renderDiscussions(loaded, ui);
+			await refreshSubmitAffordance(ui.shadow);
 
 			if (generation === sidebarGeneration) {
 				// Announced only when the pass will actually run, so the sidebar never
@@ -14073,7 +14364,6 @@ title="Show only this discussion">
 			),
 		};
 	}
-	// #endregion hnewhere-test-export
 
 	function addUniqueText(target, seen, text, minNormalizedLength = 24) {
 		const value = String(text || "").replace(/\s+/g, " ").trim();
@@ -14183,7 +14473,6 @@ title="Show only this discussion">
 		return segments;
 	}
 
-	// #region hnewhere-test-export
 	const SEARCH_BLOCK_TAGS = new Set([
 		"ARTICLE",
 		"ASIDE",
@@ -14266,8 +14555,6 @@ title="Show only this discussion">
 		return pieces.join("");
 	}
 
-	// #endregion hnewhere-test-export
-
 	function buildQuoteSearchVariants(text) {
 		const cleaned = String(text || "").replace(/\s+/g, " ").trim();
 		const variants = [];
@@ -14331,6 +14618,43 @@ title="Show only this discussion">
 
 		const candidates = [];
 		const seen = new Set();
+
+		// The rule addUniqueText applies, carrying the exact flag alongside the text.
+		const addCandidate = (text, exact = false, context = null) => {
+			const value = String(text || "").replace(/\s+/g, " ").trim();
+
+			if (!value) {
+				return;
+			}
+
+			const normalized = normalizeSearchText(value).text;
+
+			if (normalized.length < 24 || seen.has(normalized)) {
+				return;
+			}
+
+			seen.add(normalized);
+			candidates.push({
+				text: value,
+				exact,
+				prefix: context?.prefix || "",
+				suffix: context?.suffix || "",
+			});
+		};
+
+		// A blockquote marked exact came from a source that anchors -- a Hypothes.is
+		// TextQuoteSelector -- so it is verbatim page text and goes through whole.
+		// Removed here so the passes below do not expand it again.
+		template.content
+			.querySelectorAll("blockquote[data-hnewhere-exact='1']")
+			.forEach((blockquote) => {
+				addCandidate(extractTextWithBreaks(blockquote), true, {
+					prefix: (blockquote.getAttribute("data-hnewhere-prefix") || "").trim(),
+					suffix: (blockquote.getAttribute("data-hnewhere-suffix") || "").trim(),
+				});
+				blockquote.remove();
+			});
+
 		const plainText = extractTextWithBreaks(template.content);
 		const lines = plainText
 			.split(/\n+/)
@@ -14343,7 +14667,7 @@ title="Show only this discussion">
 			if (!currentQuote.length) return;
 
 			for (const segment of expandStructuredQuoteSegments(currentQuote.join("\n"))) {
-				addUniqueText(candidates, seen, segment);
+				addCandidate(segment);
 			}
 
 			currentQuote = [];
@@ -14360,7 +14684,7 @@ title="Show only this discussion">
 			flushQuote();
 
 			if (line.length >= 40 && line.length <= 320) {
-				addUniqueText(candidates, seen, line);
+				addCandidate(line);
 			}
 		}
 
@@ -14370,22 +14694,27 @@ title="Show only this discussion">
 			for (const segment of expandStructuredQuoteSegments(
 				extractTextWithBreaks(blockquote),
 			)) {
-				addUniqueText(candidates, seen, segment);
+				addCandidate(segment);
 			}
 		});
 
 		for (const match of plainText.matchAll(/[“"]([^”"\n]{24,320})[”"]/g)) {
 			if (match[1]) {
 				for (const segment of expandSentenceLikeQuoteSegments(match[1])) {
-					addUniqueText(candidates, seen, segment);
+					addCandidate(segment);
 				}
 			}
 		}
 
-		return candidates.sort((a, b) => b.length - a.length);
+		return candidates.sort((a, b) => {
+			if (a.exact !== b.exact) {
+				return a.exact ? -1 : 1;
+			}
+
+			return b.text.length - a.text.length;
+		});
 	}
 
-	// #region hnewhere-test-export
 	function shouldSkipElementForIndex(element, options = {}) {
 		if (SEARCH_SKIP_TAGS.has(element.tagName)) {
 			return true;
@@ -14668,10 +14997,122 @@ title="Show only this discussion">
 		return createRangeFromMatch(index, matches[0], normalizedNeedle.length)?.range || null;
 	}
 
-	// #endregion hnewhere-test-export
+	// How much of a selector's context is compared. The W3C selectors carry about
+	// this much, and more would only be more ways for an edit to break the match.
+	const QUOTE_CONTEXT_WINDOW = 32;
 
-	function findBestQuoteMatch(articleIndex, quoteText) {
+	// Does the page read the way the selector says it should on either side of a
+	// candidate occurrence? Counted rather than required, because a prefix cut off
+	// at a block boundary is a normal miss and should not veto a good suffix.
+	function quoteContextAgreement(haystack, at, length, prefix, suffix) {
+		const wantBefore = prefix
+			? normalizeSearchText(prefix).text.slice(-QUOTE_CONTEXT_WINDOW)
+			: "";
+		const wantAfter = suffix
+			? normalizeSearchText(suffix).text.slice(0, QUOTE_CONTEXT_WINDOW)
+			: "";
+		const sides = [];
+
+		if (wantBefore) {
+			// Trimmed, because the normalised prefix has no trailing separator while
+			// the page has one between it and the quote.
+			const before = haystack
+				.slice(Math.max(0, at - wantBefore.length - 8), at)
+				.trimEnd();
+
+			sides.push(["prefix", before.endsWith(wantBefore)]);
+		}
+
+		if (wantAfter) {
+			const after = haystack
+				.slice(at + length, at + length + wantAfter.length + 8)
+				.trimStart();
+
+			sides.push(["suffix", after.startsWith(wantAfter)]);
+		}
+
+		const agreed = sides.filter(([, ok]) => ok).map(([side]) => side);
+
+		return {
+			supplied: sides.length,
+			agreed: agreed.length,
+			matched: agreed.length === 2 ? "both" : agreed[0] || null,
+		};
+	}
+
+	function findBestQuoteMatch(articleIndex, candidate) {
+		const quoteText = typeof candidate === "string" ? candidate : candidate.text;
 		let best = null;
+
+		// A quote that arrived pre-anchored is verbatim page text. Searching for it
+		// as written costs one scan; expanding it first costs one scan per variant
+		// and cannot find anything the original would miss.
+		if (typeof candidate === "object" && candidate.exact) {
+			const normalized = normalizeSearchText(quoteText).text;
+			const matches = findNormalizedOccurrences(
+				articleIndex.normalizedText,
+				normalized,
+			);
+			let at = null;
+			let context = null;
+
+			if (matches.length === 1) {
+				at = matches[0];
+				context = quoteContextAgreement(
+					articleIndex.normalizedText,
+					at,
+					normalized.length,
+					candidate.prefix,
+					candidate.suffix,
+				);
+			} else if (matches.length > 1 && (candidate.prefix || candidate.suffix)) {
+				// Repeats are what the context is for. Rank by how many sides agree and
+				// take the winner only if it is alone at the top -- a tie means the
+				// context did not actually decide anything.
+				const ranked = matches
+					.map((offset) => ({
+						offset,
+						context: quoteContextAgreement(
+							articleIndex.normalizedText,
+							offset,
+							normalized.length,
+							candidate.prefix,
+							candidate.suffix,
+						),
+					}))
+					.sort((left, right) => right.context.agreed - left.context.agreed);
+
+				if (
+					ranked[0].context.agreed > 0 &&
+					ranked[0].context.agreed > (ranked[1]?.context.agreed ?? -1)
+				) {
+					at = ranked[0].offset;
+					context = ranked[0].context;
+				}
+			}
+
+			if (at !== null) {
+				const rangeMatch = createRangeFromMatch(
+					articleIndex,
+					at,
+					normalized.length,
+				);
+
+				if (rangeMatch && getPageRectsForRange(rangeMatch.range).length) {
+					return {
+						score: normalized.length * 10 + 10000,
+						key: `${rangeMatch.startRaw}:${rangeMatch.endRaw}`,
+						range: rangeMatch.range,
+						quoteText,
+						fullQuoteText: quoteText,
+						quoteNormalized: normalized,
+						startRaw: rangeMatch.startRaw,
+						endRaw: rangeMatch.endRaw,
+						contextMatched: context?.matched ?? null,
+					};
+				}
+			}
+		}
 
 		for (const [variantIndex, variant] of buildQuoteSearchVariants(quoteText).entries()) {
 			const matches = findNormalizedOccurrences(
@@ -14734,6 +15175,7 @@ title="Show only this discussion">
 				right: rect.right + window.scrollX,
 			}));
 	}
+	// #endregion hnewhere-test-export
 
 	function scrollRangeIntoView(range) {
 		const rect = range.getBoundingClientRect();
@@ -14761,8 +15203,8 @@ title="Show only this discussion">
 			const quoteCandidates = extractQuotedTextCandidates(rendered.textHTML);
 			const matchedQuoteKeys = new Set();
 
-			for (const quoteText of quoteCandidates) {
-				const match = findBestQuoteMatch(articleIndex, quoteText);
+			for (const candidate of quoteCandidates) {
+				const match = findBestQuoteMatch(articleIndex, candidate);
 
 				if (!match || matchedQuoteKeys.has(match.key)) {
 					continue;
@@ -15981,6 +16423,7 @@ title="Show only this discussion">
 				sidebarHasDiscussion = true;
 				setSidebarStage(ui, "comments");
 				await renderDiscussions(discussions, ui);
+				await refreshSubmitAffordance(ui.shadow);
 
 				if (generation === sidebarGeneration) {
 					await refreshArticleAnnotations();

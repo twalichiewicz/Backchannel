@@ -8,6 +8,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.7] — 2026-08-10
+
+### Added
+
+- Adds Hypothes.is. The public annotations left on a page arrive as comments that
+  quote the passage they are about, so a note lands under the sentence it answers
+  rather than at the top of the page. Read-only, no account, one request per page.
+
+- Runs on PDFs, which were excluded outright until now. Scholarly annotation
+  happens on the PDF — the notes on a paper are attached to it, not to the
+  abstract page — so the exclusion hid the conversation and left the noise.
+  Whether a quoted passage can be highlighted there depends on the browser's PDF
+  viewer; the discussion itself does not.
+
+### Changed
+
+- A quote that arrives already anchored is searched for as written. Annotations
+  carry the exact words they were attached to, and those were being expanded into
+  every sub-phrase first, each one scanned against the whole page. On a page with
+  59 annotated passages that was 8,687 scans where 59 will do.
+
+- Pressing the wordmark to browse no longer hides where you came from.
+  `Backchannel / Discussion` reads as a toggle: the view you are on keeps the
+  text colour and the other dims, so the way back is on screen rather than
+  something to guess at.
+
+- Every collective names its own discussion — "Hypothes.is annotations",
+  "Wikipedia talk pages", "Mastodon posts", alongside the "Bluesky comments" that
+  already did. Only Bluesky used to, so the others fell back to the page title,
+  which is the same string for all of them and told a reader nothing about which
+  discussion was on screen.
+
+- The back arrow beside the wordmark is gone. It pointed at what the toggle now
+  says, and two things saying it was one too many.
+
+- A quoted passage that appears twice on a page is anchored to the right one. An
+  annotation carries the words either side of what it quotes, and those were being
+  thrown away — so a quote that was not unique was refused rather than placed. Of
+  the annotations sampled, every one carried that context and 8% quoted something
+  the page says more than once.
+
+- Submitting a page is offered when the page has no discussion, rather than when
+  you happen to be on the front-page tab. If any enabled source already has a
+  discussion you can join it, and which source it landed on is not your problem —
+  so the offer to post it somewhere else goes away.
+
+- A horizontal rule inside a comment is drawn like every other line in the panel.
+  Sources can send one — Hypothes.is notes do — and it was falling through to the
+  browser's grey groove, heavier than anything the panel draws for itself.
+
+### Fixed
+
+- Annotations made on a different copy of a document no longer appear. Asked
+  about an arXiv abstract, Hypothes.is answers with notes made on the PDF — and
+  on copies of that PDF hosted elsewhere — because it groups by document rather
+  than by address. Those quote text the abstract page does not contain, so they
+  would have arrived as comments highlighting nothing.
+
 ## [1.6.6] — 2026-08-10
 
 ### Fixed

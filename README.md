@@ -48,6 +48,8 @@ page asks mastodon.social what it's currently linking to, which tells it nothing
 about you. No account, signed in or out.
 - Lemmy sends the pages you visit to lemmy.world, a large instance whose
 federation reaches across the wider network. No account, signed in or out.
+- Hypothes.is sends the pages you visit to its API, to find the public
+annotations people have left on them. No account, signed in or out.
 
 Webmail, banking, auth flows, and cloud consoles are excluded outright.
 
