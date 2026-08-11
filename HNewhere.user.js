@@ -521,37 +521,10 @@
 		"gclid",
 	]);
 
-	// Families rather than names, for the ones whose suffix is per-link and which
-	// therefore no literal entry could ever match.
-	//
-	// This list exists because a page's own canonical is not always the answer.
-	// canonicalPageURL reads what the publisher says the address is, and it is the
-	// better mechanism where it works -- sixteen of twenty sampled front-page URLs
-	// published a usable hint. But ft.com serves two different renders: the
-	// paywalled one names the bare address, and the subscriber one names the
-	// reader's address back with the syndication parameter still on it. Asked what
-	// the page is, the article page answers with the tracking tag included, so
-	// canonicalPageURL correctly strips nothing and #82 survived its own fix.
-	//
-	// This catches what a canonical lies about, and the two are complementary
-	// rather than alternatives: one fails on publishers that echo, the other on
-	// publishers that publish nothing.
-	//
-	// Deliberately short and deliberately not clever. Stripping a parameter that is
-	// part of a page's identity shows the discussion of a different page, which is
-	// a far worse failure than the missed match it is here to fix -- so `ref`,
-	// `source`, `id`, `v` and `p` are all absent and belong absent.
-	const TRACKING_PATTERNS = [
-		// utm_id, utm_source_platform, utm_creative_format and the rest of the
-		// family beyond the five spelled out above.
-		/^utm_/,
-		// ft.com syndication: ?syn-25a6b1a6=1, where the suffix is per link.
-		/^syn-/,
-	];
+	// Families, for the names whose suffix is per link. Kept narrow: stripping a
+	// parameter that identifies a page shows the wrong discussion.
+	const TRACKING_PATTERNS = [/^utm_/, /^syn-/];
 
-	// One question asked in two places -- normalizeURL, which decides whether two
-	// addresses are the same page, and bskyTarget, which asks Constellation about
-	// one. They must not be able to disagree.
 	function isTrackingParam(key) {
 		const name = String(key || "").toLowerCase();
 
@@ -867,14 +840,6 @@
 	// findHN uses to decide two addresses are the same submission -- so a tracking
 	// parameter added on the way in, or a fragment, does not stop the queue
 	// recognising where you have got to.
-	//
-	// That was the intent and normalizeURL only got part of the way to it: it knows
-	// seven parameter names, and the one ft.com adds is not among them and could
-	// not be, since its suffix is per-link. Queueing an article from a front page
-	// stores the submitted address; arriving from a newsletter puts you on the same
-	// article under a different one; and the entry stayed unread on a page the
-	// reader had just finished. pageAddress asks the page which of the two it is,
-	// which is the same question discovery asks a line above this in the page pass.
 	//
 	// Writes only when something actually changed. A page pass runs on every load
 	// and on every soft navigation, and storing an identical list each time would
@@ -4922,34 +4887,9 @@ ${
 		}
 	}
 
-	// What a page says its own address is, for the case where the address bar and
-	// the page disagree about which parts of it are the page.
-	//
-	// A reader arriving from a newsletter, an app or a syndication partner carries
-	// parameters the submitter's copy did not. ft.com hands out
-	// ?syn-25a6b1a6=1; the same article on Hacker News is the bare URL; and the
-	// equality every discover() gates on -- normalizeURL(hit) === target -- threw
-	// away a 128-comment thread the reader could see two rows down the front page.
-	// That is #82.
-	//
-	// TRACKING_PARAMS cannot answer this and should not be asked to. It is a list,
-	// the suffix on ft.com's parameter is per-link so no literal entry would match,
-	// and the next publisher's name for the same idea is the next bug report. The
-	// page already states the answer, and states it for search engines that have
-	// exactly this problem.
-	//
-	// Allowed to do one thing: drop query parameters. It may not move the host or
-	// the path, and it may not introduce or change a parameter of its own. Measured
-	// across twenty live Hacker News front-page URLs fetched with tracking
-	// parameters appended, sixteen published a hint, none broke that rule, and
-	// three published none at all and are left exactly as they are today. The rule
-	// earns its keep on the two ends of the range: arxiv.org's og:url names
-	// /abs/2401.00001v1 to a reader standing on /abs/2401.00001 and is refused,
-	// while news.ycombinator.com's own canonical keeps ?id=49243880 and so strips
-	// nothing. A hint that oversteps is discarded whole rather than trusted in
-	// part, because what it would otherwise cause -- the discussion of a different
-	// page, shown as though it were this one -- is worse than the miss it is here
-	// to fix.
+	// A page's own statement of its address, allowed to do one thing: drop query
+	// parameters. A hint that moves the host or the path, or introduces or changes
+	// a parameter, is refused whole.
 	function canonicalPageURL(href, hint) {
 		if (!hint) {
 			return href;
@@ -4960,7 +4900,6 @@ ${
 
 		try {
 			page = new URL(href);
-			// Against the page, because a canonical may be written relative.
 			named = new URL(hint, href);
 		} catch {
 			return href;
@@ -4975,21 +4914,14 @@ ${
 			return href;
 		}
 
-		// Every parameter it keeps has to be one the reader already carries, at the
-		// same value. A hint that adds or changes one is describing some other
-		// address, whatever its path claims.
 		for (const [key, value] of named.searchParams) {
 			if (page.searchParams.get(key) !== value) {
 				return href;
 			}
 		}
 
-		// The reader's own address with the dropped parameters removed, rather than
-		// the hint itself. Rebuilt from the hint this would also adopt its scheme and
-		// its trailing slash, and the slash is not a detail: the Bluesky spike
-		// measured the address bar's own form finding the maximum on 22 of 22 URLs
-		// where the variants found one. Only the query is in question here, so only
-		// the query moves.
+		// The reader's address minus what the hint dropped, not the hint itself:
+		// rebuilding would adopt its scheme and trailing slash too.
 		const out = new URL(href);
 
 		for (const key of [...out.searchParams.keys()]) {
@@ -5002,12 +4934,6 @@ ${
 	}
 	// #endregion hnewhere-test-export
 
-	// The link element first: it is the element for this, and a page carrying one
-	// has said so deliberately. og:url is what is left on a page that has not --
-	// ft.com serves no canonical to a logged-out reader, and does carry an og:url
-	// naming the address Hacker News holds, which is the whole of #82. Both go
-	// through the same constraint, so the weaker source cannot do more damage than
-	// the stronger one.
 	function pageAddress() {
 		const link = document.querySelector('link[rel~="canonical" i]')?.href;
 		const og = document.querySelector('meta[property="og:url" i]')?.content;
@@ -5015,17 +4941,8 @@ ${
 		return canonicalPageURL(location.href, link || og || "");
 	}
 
-	// pageAddress reads the head, and until it existed nothing about a page's
-	// identity did -- location.href is valid from the first instruction, a meta tag
-	// is not. The script declares @run-at document-end and every manager honoured
-	// that until one did not; asked before the head is parsed, querySelector finds
-	// no meta at all. Measured in WebKit: metas=0 and og:url absent at
-	// document-start, both present at DOMContentLoaded. The fallback in that case
-	// is the address bar, which is the one address the reader may not be findable
-	// by -- so the lookup silently answers about the wrong page.
-	//
-	// Resolved rather than awaited when the DOM is already parsed, so on a manager
-	// that keeps its promise this is a spent microtask and nothing else.
+	// pageAddress reads the head, so it needs one. @run-at document-end is not
+	// honoured by every manager.
 	function documentReady() {
 		if (document.readyState !== "loading") {
 			return Promise.resolve();
@@ -7377,9 +7294,8 @@ ${
 		);
 	}
 
-	// Submitting is layered on top of browsing rather than replacing it -- the panel
-	// wears both classes while the form is up -- so isBrowsing alone cannot tell the
-	// front page from the form standing on it.
+	// The panel wears both classes while the form is up, so isBrowsing alone cannot
+	// tell the front page from the form standing on it.
 	function isSubmitting(ui) {
 		return Boolean(
 			ui?.shadow?.querySelector("#panel")?.classList.contains("submitting"),
@@ -8100,10 +8016,6 @@ ${
 	function setWordmarkLocation(ui, label) {
 		const tail = ui?.shadow?.querySelector(".wordmark-tail");
 		const sep = tail?.querySelector(".wordmark-sep");
-		// The label lives in a box of its own rather than as a bare text node, so a
-		// narrow header can cut it with an ellipsis. Written into rather than
-		// replaced, which keeps the separator and the ellipsis box in place across a
-		// swap instead of rebuilding the trail on every render.
 		const where = tail?.querySelector(".wordmark-where");
 
 		if (!tail || !sep || !where) {
@@ -8856,13 +8768,8 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		// Same two values HN's own bookmarklet passes to /submitlink, both editable
 		// here because the bookmarklet's weakness is that they are not.
 		//
-		// The page's own address rather than the address bar's, because Hacker News
-		// tells a resubmission from a new story by comparing the URL it is given. A
-		// campaign or syndication parameter the reader happened to arrive with walks
-		// straight past that check, and what it produces is not a failed submission
-		// but a successful one: a second story for an article that already had a
-		// thread, posted from here. Editable, and visibly so -- a reader who meant
-		// to submit the address exactly as they have it can put it back.
+		// The page's own address: HN detects a resubmission by comparing the URL it
+		// is given, and a tracking parameter walks straight past that check.
 		titleInput.value = suggestedSubmissionTitle();
 		urlInput.value = pageAddress();
 
@@ -9339,11 +9246,6 @@ header {
 	display:flex;
 	align-items:center;
 	gap:0;
-    /* The buttons are a fixed cost -- three 36px squares, four on a front page --
-       and what gives when the header runs out of room is the text beside them,
-       never the targets. Without this they are shrinkable flex items and close up
-       towards their 15px glyphs, which on a phone is where the tapping goes wrong.
-       #78. */
 	flex-shrink:0;
 }
 
@@ -9358,19 +9260,8 @@ header {
 	align-self:flex-start;
 	display:flex;
 	align-items:baseline;
-    /* .header-title has min-width:0 and shrinks; this did not, so the button stood
-       out of a parent narrower than itself and painted over the icons to its right
-       -- at the panel's 280px floor, "Backchannel / Discussion" ran 40px into the
-       eye and the gear. Nothing clipped it: no box was overflowing anything with
-       overflow to hide, the header row had simply run out of width and drew its two
-       halves on top of each other. #78.
-
-       max-width rather than min-width, which is the part worth remembering.
-       .header-title is a *column* flex container, so its main axis is vertical and
-       min-width:0 there relaxes nothing horizontal. The wordmark's width comes from
-       align-self:flex-start sizing it to its content on the cross axis, and a cross
-       axis does not shrink an item to fit -- it lets it overflow. A cap is what a
-       cap has to be. */
+    /* max-width, not min-width: .header-title is a column flex container, so its
+       main axis is vertical and min-width relaxes nothing horizontal. */
 	max-width:100%;
 	border:0;
 	padding:0;
@@ -9417,10 +9308,6 @@ header {
    rather than the panel's grey, because this sits on the header's own bar. */
 .wordmark-root {
 	transition:color .2s ease;
-    /* The root never gives. It is one unbreakable word, so it could not shrink far
-       anyway, but saying so is what decides where the shortfall lands when the
-       header is squeezed: on the trail, which can lose its end and still be read,
-       not on the brand, where "Backch..." reads as a rendering fault. */
 	flex:0 0 auto;
 }
 
@@ -9482,20 +9369,11 @@ header {
 	transform:translateX(-4px);
 	pointer-events:none;
 	transition:opacity .2s ease, transform .2s ease;
-    /* Where the shortfall lands. Everything else across the header holds its size,
-       so this is the one item that can absorb a narrow panel. */
 	min-width:0;
 }
 
-/* The location, in a box of its own so it can be cut. The separator stays whole
-   beside it -- an ellipsis after a bare "/" would read as a path with something
-   missing rather than as a word that ran out of room -- and the cut end is the
-   least load-bearing text in the header: the chevron already says there is
-   somewhere behind this, and the view underneath says what you are looking at.
-
-   text-overflow needs inline content in a block box. A flex item is blockified,
-   so this works where the same pair on .wordmark-tail would not: its children are
-   flex items, and an ellipsis has no inline run to end. */
+/* The location, in a box of its own so it can be cut. text-overflow needs inline
+   content in a block box, which .wordmark-tail is not. */
 .wordmark-where {
 	min-width:0;
 	overflow:hidden;
@@ -9512,7 +9390,6 @@ header {
 .wordmark-sep {
 	font-weight:400;
 	color:var(--subtitle-stage);
-    /* Beside a label that may be cut, so it must not be the thing that gives. */
 	flex:0 0 auto;
 }
 
@@ -12203,46 +12080,12 @@ ${[
 <style>
 
 #panel {
-    /* Shadow DOM encapsulates selectors, not inheritance. Every inherited property
-       flows in from the host unless the shadow tree sets its own, so a page that
-       centres its body -- victoriametrics.com does -- centres the entire panel,
-       comments and all, and one that puts a glow on its root text puts the same
-       glow on every comment in here. That is #79.
-
-       This was a list of the properties known to have done damage, and the list was
-       the bug. It named eight; the page in #79 was measured pushing thirty-two more
-       through -- word-break, user-select, cursor, list-style, hyphens,
-       text-size-adjust, caret-color, writing-mode, visibility, pointer-events and
-       the rest. Two of them, text-wrap-style and text-spacing-trim, are recent
-       enough additions to CSS that no list assembled from bug reports could have
-       named them, which is the whole problem with assembling one: it is finished
-       only by whoever trips over the next.
-
-       The all property is the set rather than a sample of it, and stays right as
-       the set grows. It has to be the first declaration in this block -- everything
-       below overrides it, which is the point, and anything above would be erased.
-
-       Pinned on #panel rather than on :host, because a rule in the page that
-       happens to match the host element outranks a :host rule from inside. Nothing
-       in the page can reach this one, and #panel is the only element in the shadow
-       root, so its subtree is the entire panel.
-
-       What it exempts is what should be exempt: direction, which says something
-       real about a reader's language and is not ours to overrule, and custom
-       properties, which is where the palette lives. Three more are restored by hand
-       below. */
+    /* Shadow DOM encapsulates selectors, not inheritance: every inherited property
+       flows in from the host unless the shadow tree sets its own. Must stay the
+       first declaration -- everything below deliberately overrides it. */
 	all:initial;
-    /* The panel has never set a line-height -- the components that care carry their
-       own -- so pinning one here would restyle every site rather than fix one.
-       Inheriting explicitly reads it off the host, which is where it arrived from
-       before. */
 	line-height:inherit;
-    /* Set on :host for both themes, and what the browser draws form controls and
-       scrollbars from. Resetting it would land on normal, which is the light one. */
 	color-scheme:inherit;
-    /* Neither inherited from the page nor left to the browser. iOS inflates text in
-       a narrow column on its own, and a panel that sizes its own type to the pixel
-       has nothing to gain from being second-guessed. */
 	-webkit-text-size-adjust:100%;
 	text-size-adjust:100%;
 	position:fixed;
@@ -13579,17 +13422,7 @@ ${settingsPanelHTML()}
 
 		if (browseToggle) {
 			browseToggle.onclick = () => {
-				// The trail says what pressing the root means: from "Backchannel /
-				// Submit", back to Backchannel. The form is a third place standing on
-				// the front page rather than a second state of it, so a plain toggle
-				// read the press as "leave the front page" and left through the wrong
-				// door -- onto the discussion of a page that, since the reader was
-				// submitting it, almost never has one. What they got for pressing the
-				// wordmark was "No discussion found for this page yet."
-				//
-				// Where Cancel goes, for the same reason Cancel goes there: the form is
-				// only reachable from the front page, so leaving it undoes the one step
-				// taken rather than two.
+				// Pressing the root goes to the root, which is where Cancel goes.
 				if (isSubmitting(ui)) {
 					setBrowseMode(ui, true);
 					return;
@@ -14970,13 +14803,8 @@ ${settingsPanelHTML()}
 	function discussionsPageTitle(stories) {
 		const article = (stories || []).find((story) => story.articleURL)?.articleURL;
 
-		// pageAddress, because both sides of this comparison are already speaking it.
-		// A source's articleURL is either the address it was submitted under -- the
-		// bare one, on a reader carrying a campaign tag -- or, for the collectives
-		// that were never submitted at all, the address discovery was given, which is
-		// this. Measured against the address bar instead, a tagged arrival made every
-		// discussion look like it was about somewhere else, and the panel titled
-		// itself with a story's title while sitting on the page that story is about.
+		// pageAddress, because articleURL is either the address a story was submitted
+		// under or the one discovery was given -- never the address bar's.
 		if (!article || sameURL(article, pageAddress())) {
 			return pageTitle();
 		}
@@ -19530,9 +19358,6 @@ title="Show only this discussion">
 
 				setSidebarStage(ui, "discussion");
 
-				// pageAddress rather than location.href: what is being looked up is
-				// which submissions are of this page, and a parameter the page itself
-				// says is not part of it must not decide that.
 				const discussions = await discoverAll(pageAddress(), settings);
 
 				if (generation !== sidebarGeneration) {
@@ -19843,10 +19668,7 @@ title="Show only this discussion">
 			return;
 		}
 
-		// Everything past this line may ask what page it is on, and pageAddress
-		// answers that from the head. Placed after the suppression check rather than
-		// before it, so a page we are about to leave alone is left alone without
-		// waiting for anything.
+		// Everything past here may call pageAddress, which reads the head.
 		await documentReady();
 
 		// Four independent reads, run together rather than one after another in front
@@ -19930,19 +19752,8 @@ title="Show only this discussion">
 		// the lookup means an article resubmitted this morning opens on a thread from
 		// 2024 or one from today depending on which link was clicked, with no sign the
 		// rest exist.
-		// pageAddress on this side, because the two sides were recorded at different
-		// moments and only one of them has been touched since. What was written down
-		// is the address the source holds -- a row's story.url, a queue entry's, or
-		// the href of the link on Hacker News -- and what the reader has now is
-		// whatever the site handed back, which is where a campaign or syndication
-		// parameter gets added. Compared against the address bar, a site that
-		// appends one on the way in made every arrival look like a page nobody had
-		// clicked towards: the panel did not open itself, and a comment count
-		// pressed to read what was said about a story landed on it silently.
-		//
-		// Only the query can differ this way. pageAddress cannot move the host or
-		// the path, so nothing here can start matching a page the reader never
-		// asked for.
+		// The record holds the address its source has; the reader has whatever the
+		// site handed back. Only the query can differ, so this cannot widen further.
 		const arrivedFromClick = Boolean(
 			last &&
 				sameURL(last.url, pageAddress()) &&
@@ -19963,9 +19774,8 @@ title="Show only this discussion">
 		// exists", which is only answerable before it is drawn. Each source caches per
 		// URL for an hour, so this is one request per source per new page rather than
 		// one per visit.
-		// Same address the panel will look up when it opens. Deciding the button's
-		// colour from one URL and filling the panel from another would light a
-		// button that opens onto nothing, or leave a grey one over a live thread.
+		// Same address the panel looks up when it opens, or the button's colour and
+		// its contents could disagree.
 		const found = await discoverAll(pageAddress(), settings);
 
 		// The recorded ids stand in only when the lookup comes back with nothing.
