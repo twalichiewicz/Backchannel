@@ -10840,7 +10840,7 @@ When off, pages with no discussion get a greyed-out button that offers to submit
 <div class="settings-group">
 <label class="settings-option">
 <input id="setting-annotations" data-setting="annotations" type="checkbox">
-<span>Enable article annotations <span class="op-pill">BETA</span></span>
+<span>Enable annotations <span class="op-pill">BETA</span></span>
 </label>
 <div class="settings-option-hint">
 Highlights the passages commenters quote, so you can jump between the article and what was said about it.
