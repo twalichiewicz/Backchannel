@@ -3851,14 +3851,24 @@ button {
 		save.className = "note-editor-save";
 		save.textContent = "save";
 
-		const commit = () => {
+		const commit = (dropHighlight = false) => {
 			if (String(field.value || "").trim()) {
-				onSave(field.value);
+				onSave(field.value, dropHighlight);
 			}
 		};
 
 		cancel.onclick = onClose;
-		save.onclick = commit;
+		save.onclick = () => commit();
+
+		if (note?.exact) {
+			const drop = document.createElement("button");
+
+			drop.type = "button";
+			drop.className = "note-editor-drop";
+			drop.textContent = "remove highlight";
+			drop.onclick = () => commit(true);
+			row.appendChild(drop);
+		}
 		field.onkeydown = (event) => {
 			if (event.key === "Escape") {
 				onClose();
@@ -3883,22 +3893,32 @@ button {
 			return;
 		}
 
+		const written = [...text.children].filter(
+			(child) => child.tagName !== "BLOCKQUOTE",
+		);
+
+		for (const child of written) {
+			child.hidden = true;
+		}
+
 		const held = inlineNoteEditor(note, {
-			onSave: (value) => {
-				updateNote(note.id, value).catch(console.error);
+			onSave: (value, dropHighlight) => {
+				updateNote(note.id, value, dropHighlight).catch(console.error);
 			},
 			onClose: () => {
 				held.editor.remove();
-				text.hidden = false;
+
+				for (const child of written) {
+					child.hidden = false;
+				}
 			},
 		});
 
-		text.hidden = true;
-		text.after(held.editor);
+		text.appendChild(held.editor);
 		held.field.focus();
 	}
 
-	async function updateNote(id, text) {
+	async function updateNote(id, text, dropHighlight = false) {
 		const written = String(text || "").trim();
 
 		if (!written) {
@@ -3909,7 +3929,16 @@ button {
 
 		await saveNotes(
 			notes.map((note) =>
-				note.id === id ? { ...note, text: written, edited: Date.now() } : note,
+				note.id === id
+					? {
+							...note,
+							text: written,
+							edited: Date.now(),
+							...(dropHighlight
+								? { exact: "", prefix: "", suffix: "", page: null }
+								: {}),
+						}
+					: note,
 			),
 		);
 		await reopenForNotes();
@@ -11432,8 +11461,25 @@ ${SUBMIT_FORM_CSS}
 	background:var(--hover-tint);
 }
 
-.notepad-toggle {
+.notepad-add {
 	margin-left:auto;
+	padding:0;
+	border:0;
+	background:none;
+	color:var(--muted);
+	font:inherit;
+	font-size:11px;
+	text-decoration:underline;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.notepad-add:hover {
+		color:var(--surface-text);
+	}
+}
+
+.notepad-toggle {
 	padding:0;
 	border:0;
 	background:none;
@@ -11496,6 +11542,10 @@ ${SUBMIT_FORM_CSS}
 
 .note-editor-save {
 	font-weight:600;
+}
+
+.note-editor-drop {
+	margin-right:auto;
 }
 
 @media (hover: hover) {
@@ -13231,7 +13281,10 @@ ${settingsPanelHTML()}
 		${comment.isOP ? `<span class="op-pill">OP</span>` : ""}
 
 		${
-				parentKey === null && discussion.label && sidebarSourceKeys.size > 1
+				parentKey === null &&
+					!isLocalSource &&
+					discussion.label &&
+					sidebarSourceKeys.size > 1
 					? `<span class="comment-source">${escapeHTML(
 							liveDiscussions.has(discussion.key)
 								? discussion.baseLabel || discussion.label
@@ -13396,10 +13449,12 @@ ${settingsPanelHTML()}
 			};
 		}
 
-		focusButton.onclick = function (event) {
-			event.preventDefault();
-			applyCommentFocus(comment.key);
-		};
+		if (focusButton) {
+			focusButton.onclick = function (event) {
+				event.preventDefault();
+				applyCommentFocus(comment.key);
+			};
+		}
 
 		if (replies.length) {
 			await renderChildren(
@@ -13642,8 +13697,26 @@ ${settingsPanelHTML()}
 			),
 		);
 
-		if (localStories.length) {
-			const held = notesSection();
+		const notesOn = enabledSourceIds(settings, registeredSourceIds()).includes(
+			"notes",
+		);
+
+		if (localStories.length || notesOn) {
+			const held = notesSection({
+				onAdd: (button) => {
+					const rect = button.getBoundingClientRect();
+
+					openNoteComposer({
+						exact: "",
+						prefix: "",
+						suffix: "",
+						page: null,
+						anchorable: false,
+						left: Math.max(8, rect.left - 300),
+						top: rect.bottom,
+					}).catch(console.error);
+				},
+			});
 
 			ui.body.insertBefore(held.section, ui.body.querySelector(".page-sort"));
 
@@ -13865,12 +13938,13 @@ ${settingsPanelHTML()}
 	}
 
 	// #region hnewhere-test-export
-	function notesSection() {
+	function notesSection({ onAdd } = {}) {
 		const section = document.createElement("div");
 		const head = document.createElement("div");
 		const body = document.createElement("div");
 		const foot = document.createElement("div");
 		const toggle = document.createElement("button");
+		const add = document.createElement("button");
 
 		section.className = "notepad-section";
 		section.dataset.notesSection = "1";
@@ -13895,7 +13969,12 @@ ${settingsPanelHTML()}
 			toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
 		};
 
-		head.appendChild(toggle);
+		add.type = "button";
+		add.className = "notepad-add";
+		add.textContent = "add a note";
+		add.onclick = () => onAdd?.(add);
+
+		head.append(add, toggle);
 		body.className = "notepad-body";
 		foot.className = "notepad-rule notepad-rule-close";
 		section.append(head, body, foot);
