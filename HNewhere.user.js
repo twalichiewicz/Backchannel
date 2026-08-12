@@ -3761,14 +3761,22 @@ button {
 </div>
 </div>`;
 
-		shadow.querySelector("blockquote").textContent = chosen.exact;
+		const quote = shadow.querySelector("blockquote");
 
-		if (!chosen.anchorable) {
+		quote.textContent = chosen.exact || "";
+		quote.hidden = !chosen.exact;
+
+		if (chosen.exact && !chosen.anchorable) {
 			shadow.querySelector(".why").textContent =
 				"Too short to highlight — it will be kept as a note on the page.";
 		}
 
 		const field = shadow.querySelector("textarea");
+
+		field.value = chosen.text || "";
+		shadow.querySelector(".save").textContent = chosen.id
+			? "Save changes"
+			: "Save note";
 
 		shadow.querySelector(".cancel").onclick = () => closeNoteComposer();
 		shadow.querySelector(".save").onclick = () => {
@@ -3801,24 +3809,58 @@ button {
 		}
 
 		const notes = await loadNotes();
+		const written = String(text).trim();
 
-		await saveNotes([
-			...notes,
-			{
-				id: "n" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36),
-				created: Date.now(),
-				text: String(text).trim(),
-				exact: chosen.anchorable ? chosen.exact : "",
-				prefix: chosen.prefix,
-				suffix: chosen.suffix,
-				page: chosen.page,
-				url: location.href,
-			},
-		]);
+		if (chosen.id) {
+			await saveNotes(
+				notes.map((note) =>
+					note.id === chosen.id
+						? { ...note, text: written, edited: Date.now() }
+						: note,
+				),
+			);
+		} else {
+			await saveNotes([
+				...notes,
+				{
+					id:
+						"n" +
+						Date.now().toString(36) +
+						Math.floor(Math.random() * 1e6).toString(36),
+					created: Date.now(),
+					text: written,
+					exact: chosen.anchorable ? chosen.exact : "",
+					prefix: chosen.prefix,
+					suffix: chosen.suffix,
+					page: chosen.page,
+					url: location.href,
+				},
+			]);
+		}
 
 		closeNoteComposer();
 		window.getSelection()?.removeAllRanges();
 		await reopenForNotes();
+	}
+
+	async function editNote(note, anchor) {
+		if (!note?.id) {
+			return;
+		}
+
+		const rect = anchor?.getBoundingClientRect();
+
+		await openNoteComposer({
+			id: note.id,
+			text: note.text || "",
+			exact: note.exact || "",
+			prefix: note.prefix || "",
+			suffix: note.suffix || "",
+			page: note.page ?? null,
+			anchorable: Boolean(note.exact),
+			left: rect ? rect.left : 24,
+			top: rect ? rect.top : 24,
+		});
 	}
 
 	async function deleteNote(id) {
@@ -4710,9 +4752,11 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
+	// #region hnewhere-test-export
 	function pluralize(value, singular, plural = singular + "s") {
 		return value + " " + (value === 1 ? singular : plural);
 	}
+	// #endregion hnewhere-test-export
 
 	function joinWithAnd(items) {
 		if (items.length < 3) {
@@ -11300,6 +11344,38 @@ ${SUBMIT_FORM_CSS}
 	padding-left:6px;
 }
 
+.notes-section {
+	margin:0 0 6px;
+}
+
+.notes-bookend {
+	display:flex;
+	align-items:center;
+	gap:8px;
+}
+
+.notes-toggle {
+	margin-left:auto;
+	padding:0;
+	border:0;
+	background:none;
+	color:var(--muted);
+	font:inherit;
+	font-size:11px;
+	text-decoration:underline;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.notes-toggle:hover {
+		color:var(--surface-text);
+	}
+}
+
+.notes-section.is-collapsed .notes-body {
+	display:none;
+}
+
 .comment.new-comment {
 	border-left-color:rgba(var(--accent-rgb),.95);
 	transition:border-left-color .9s ease;
@@ -13052,7 +13128,7 @@ ${settingsPanelHTML()}
       <a class="focus-link" href="#">
       focus
       </a>
-		${comment.source === "notes" ? ` | <a class="delete-note-link" href="#">delete</a>` : ""}
+		${comment.source === "notes" ? ` | <a class="edit-note-link" href="#">edit</a> | <a class="delete-note-link" href="#">delete</a>` : ""}
 		${capabilities.vote ? itemActionLinksHTML(commentID, comment.source || "hn") : ""}
 
       <span class="toggle">
@@ -13138,6 +13214,15 @@ ${settingsPanelHTML()}
 		};
 
 		const replyButton = div.querySelector(".reply-link");
+		const editNoteButton = div.querySelector(".edit-note-link");
+
+		if (editNoteButton) {
+			editNoteButton.onclick = (event) => {
+				event.preventDefault();
+				editNote(comment.note, div).catch(console.error);
+			};
+		}
+
 		const deleteNoteButton = div.querySelector(".delete-note-link");
 
 		if (deleteNoteButton) {
@@ -13368,11 +13453,22 @@ ${settingsPanelHTML()}
 
 		const page = discussionsPageTitle(stories);
 
-		const headerElement = renderPageHeader(stories, ui.body, {
-			page,
-			sort: settings.commentSort,
-			onSortChange: () => renderDiscussions(stories, ui),
-		});
+		const localStories = stories.filter(
+			(story) => getSource(story.source)?.local,
+		);
+		const sharedStories = stories.filter(
+			(story) => !getSource(story.source)?.local,
+		);
+
+		const headerElement = renderPageHeader(
+			sharedStories.length ? sharedStories : stories,
+			ui.body,
+			{
+				page,
+				sort: settings.commentSort,
+				onSortChange: () => renderDiscussions(stories, ui),
+			},
+		);
 
 		mountFilterBanner(headerElement, ui);
 
@@ -13419,6 +13515,37 @@ ${settingsPanelHTML()}
 			),
 		);
 
+		if (localStories.length) {
+			const held = notesSection(
+				localStories.reduce(
+					(sum, story) => sum + (story.commentCount || 0),
+					0,
+				),
+			);
+
+			ui.body.insertBefore(held.section, ui.body.querySelector(".page-sort"));
+
+			for (const story of localStories) {
+				const thread = threads[stories.indexOf(story)];
+
+				for (const key of thread.rootKeys) {
+					if (generation !== sidebarGeneration) {
+						return;
+					}
+
+					await renderComment(
+						key,
+						thread,
+						held.body,
+						story,
+						0,
+						collapsedKeys,
+						generation,
+					);
+				}
+			}
+		}
+
 		const context = new Map(
 			stories.map((story, index) => [
 				story.key,
@@ -13427,11 +13554,11 @@ ${settingsPanelHTML()}
 		);
 
 		const entries = blendRoots(
-			stories.map((story, index) => ({
+			sharedStories.map((story) => ({
 				discussionKey: story.key,
-				rootKeys: threads[index].rootKeys,
+				rootKeys: threads[stories.indexOf(story)].rootKeys,
 				story,
-				thread: threads[index],
+				thread: threads[stories.indexOf(story)],
 			})),
 			{
 				sort: settings.commentSort,
@@ -13612,6 +13739,44 @@ ${settingsPanelHTML()}
 
 		return liveDiscussions.has(filter.key) ? [label].filter(Boolean) : [];
 	}
+
+	// #region hnewhere-test-export
+	function notesSection(count) {
+		const section = document.createElement("div");
+		const head = document.createElement("div");
+		const body = document.createElement("div");
+		const toggle = document.createElement("button");
+
+		section.className = "notes-section";
+		section.dataset.notesSection = "1";
+
+		head.className = "live-bookend live-bookend-open notes-bookend";
+		head.innerHTML =
+			`<span class="live-bookend-mark">NOTES</span>` +
+			`<span class="live-bookend-text"><span class="notes-bookend-count"></span></span>`;
+		head.querySelector(".notes-bookend-count").textContent = pluralize(
+			count,
+			"note",
+		);
+
+		toggle.type = "button";
+		toggle.className = "notes-toggle";
+		toggle.textContent = "hide";
+		toggle.setAttribute("aria-expanded", "true");
+		toggle.onclick = () => {
+			const collapsed = section.classList.toggle("is-collapsed");
+
+			toggle.textContent = collapsed ? "show" : "hide";
+			toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+		};
+
+		head.appendChild(toggle);
+		body.className = "notes-body";
+		section.append(head, body);
+
+		return { section, body };
+	}
+	// #endregion hnewhere-test-export
 
 	function liveBookend(edge) {
 		const node = document.createElement("div");
