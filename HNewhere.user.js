@@ -44,8 +44,8 @@
 // @grant        GM.xmlHttpRequest
 // @grant        GM.getResourceText
 // @grant        unsafeWindow
-// @resource     pdfjsCore   https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.min.mjs
-// @resource     pdfjsWorker https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs
+// @resource     pdfjsCore   https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/legacy/build/pdf.min.mjs
+// @resource     pdfjsWorker https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/legacy/build/pdf.worker.min.mjs
 // @connect      hacker-news.firebaseio.com
 // @connect      hn.algolia.com
 // @connect      news.ycombinator.com
@@ -8164,6 +8164,15 @@ header {
 	display:none;
 }
 
+.hide-menu-rule {
+	margin:4px 2px;
+	border-top:1px solid var(--surface-border);
+}
+
+.hide-menu-rule[hidden] {
+	display:none;
+}
+
 .hide-menu button {
 	padding:5px 8px;
 	border:0;
@@ -9719,6 +9728,8 @@ ${
 	`<div id="hide-menu" class="hide-menu" role="menu" hidden>
 <button type="button" role="menuitem" data-hide-scope="page">Hide on this page only</button>
 <button type="button" role="menuitem" data-hide-scope="site">Hide on all ${escapeHTML(siteKey())} pages</button>
+<div class="hide-menu-rule" data-pdf-reader-only hidden></div>
+<button id="close-pdf-reader" type="button" role="menuitem" data-pdf-reader-only hidden>Close the PDF reader</button>
 </div>`
 }
 
@@ -9779,12 +9790,12 @@ Highlights the passages commenters quote, so you can jump between the article an
 </label>
 <label class="settings-option sub-option">
 <input id="setting-pdf-reader" data-setting="pdfReader" type="checkbox">
-<span>Read PDFs here, so passages can be highlighted</span>
+<span>Enhanced PDF support</span>
 </label>
 <div class="settings-option-hint">
-Chrome and Safari keep a PDF's text out of the page, so nothing can be
-highlighted in one. With this on, a PDF offers to open in a reader that can —
-and closing it puts your browser's viewer back.
+The default PDF reader will be replaced with
+<a href="https://mozilla.github.io/pdf.js/" target="_blank" rel="noreferrer noopener">pdf.js</a>,
+allowing highlighting and annotation directly onto the PDF.
 </div>
 </div>
 </div>
@@ -10125,6 +10136,10 @@ ${[
 				return;
 			}
 
+			for (const node of hideMenu.querySelectorAll("[data-pdf-reader-only]")) {
+				node.hidden = !ownPdfReader;
+			}
+
 			hideMenu.hidden = !open;
 			hideSiteButton.classList.toggle("is-open", open);
 			hideSiteButton.setAttribute("aria-expanded", open ? "true" : "false");
@@ -10151,6 +10166,18 @@ ${[
 					event.preventDefault();
 					event.stopPropagation();
 					hideCurrentSite(choice.dataset.hideScope).catch(console.error);
+				};
+			}
+
+			const closeReader = shadow.querySelector("#close-pdf-reader");
+
+			if (closeReader) {
+				closeReader.onclick = (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					setHideMenuOpen(false);
+					closePdfReader();
+					refreshArticleAnnotations().catch(console.error);
 				};
 			}
 
@@ -14461,13 +14488,19 @@ title="Show only this discussion">
 		return Boolean(sidebar && sidebar.style.display !== "none");
 	}
 
-	function shouldShowArticleAnnotations(settings) {
+	// #region hnewhere-test-export
+	function shouldShowArticleAnnotations(settings, sidebarVisible = isSidebarVisible()) {
 		if (!settings.annotations) {
 			return false;
 		}
 
-		return isSidebarVisible() || Boolean(settings.annotationsWhenSidebarClosed);
+		return (
+			sidebarVisible ||
+			Boolean(settings.annotationsWhenSidebarClosed) ||
+			Boolean(ownPdfReader)
+		);
 	}
+	// #endregion hnewhere-test-export
 
 	async function ensureVoteControlsLoaded() {
 		if (!isSidebarVisible() || !sidebarUI?.body) {
@@ -15337,6 +15370,10 @@ title="Show only this discussion">
 			);
 		},
 
+		backdropFor(range) {
+			return nearestElement(range?.commonAncestorContainer);
+		},
+
 		scrollIntoView(range) {
 			const rect = range.getBoundingClientRect();
 
@@ -15391,11 +15428,11 @@ title="Show only this discussion">
 	// -------------------------
 
 	const PDFJS_VERSION = "6.2.108";
-	const PDFJS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/`;
+	const PDFJS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/legacy/build/`;
 
 	const PDF_READER_CSS = `
 .hnewhere-pdf-viewer { --scale-factor: 1; --total-scale-factor: 1; --scale-round-x: 1px; --scale-round-y: 1px; }
-.hnewhere-pdf-viewer .page { position: relative; margin: 0 auto 12px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+.hnewhere-pdf-viewer .page { position: relative; margin: 12px auto; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
 .hnewhere-pdf-viewer .canvasWrapper { position: absolute; inset: 0; overflow: hidden; }
 .hnewhere-pdf-viewer .canvasWrapper canvas { display: block; }
 .hnewhere-pdf-viewer .textLayer {
@@ -15410,6 +15447,7 @@ title="Show only this discussion">
 .hnewhere-pdf-viewer .textLayer :is(span, br) {
 	color: transparent; position: absolute; white-space: pre; cursor: text;
 	transform-origin: 0% 0%;
+	-webkit-user-select: text; user-select: text;
 }
 .hnewhere-pdf-viewer .textLayer > :not(.markedContent),
 .hnewhere-pdf-viewer .textLayer .markedContent span:not(.markedContent) {
@@ -15421,6 +15459,12 @@ title="Show only this discussion">
 	transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
 }
 .hnewhere-pdf-viewer .textLayer .markedContent { display: contents; }
+.hnewhere-pdf-viewer .textLayer .endOfContent {
+	display: block; position: absolute; inset: 100% 0 0; z-index: 0;
+	cursor: default; transform: none; font-size: inherit;
+	-webkit-user-select: none; user-select: none;
+}
+.hnewhere-pdf-viewer .textLayer.selecting .endOfContent { top: 0; }
 `;
 
 	let pdfjsModule = null;
@@ -15447,6 +15491,65 @@ title="Show only this discussion">
 		return (await fetch(url, { cache: "force-cache" })).text();
 	}
 
+	function importModuleViaPage(url) {
+		const scope = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+		const key = "__hnewherePdfjsModule";
+
+		return new Promise((resolve, reject) => {
+			const script = document.createElement("script");
+			const timer = setTimeout(
+				() => reject(new Error("timed out loading pdf.js in the page")),
+				20000,
+			);
+			const finish = (value, error) => {
+				clearTimeout(timer);
+				script.remove();
+
+				try {
+					delete scope[key];
+				} catch {
+					/* empty */
+				}
+
+				error ? reject(error) : resolve(value);
+			};
+
+			document.addEventListener(
+				key,
+				() => {
+					const module_ = scope[key];
+
+					finish(
+						module_,
+						module_ ? null : new Error("pdf.js loaded but exported nothing"),
+					);
+				},
+				{ once: true },
+			);
+
+			script.type = "module";
+			script.textContent =
+				`import * as m from ${JSON.stringify(url)};` +
+				`window[${JSON.stringify(key)}] = m;` +
+				`document.dispatchEvent(new CustomEvent(${JSON.stringify(key)}));`;
+			script.addEventListener("error", () =>
+				finish(null, new Error("a module script is not allowed on this page")),
+			);
+
+			(document.head || document.documentElement).appendChild(script);
+		});
+	}
+
+	async function importModuleText(text) {
+		const url = URL.createObjectURL(new Blob([text], { type: "text/javascript" }));
+
+		try {
+			return await import(url);
+		} catch {
+			return await importModuleViaPage(url);
+		}
+	}
+
 	async function loadPdfjs() {
 		if (pdfjsModule) {
 			return pdfjsModule;
@@ -15457,11 +15560,11 @@ title="Show only this discussion">
 			pdfjsResourceText("pdfjsWorker", PDFJS_BASE + "pdf.worker.min.mjs"),
 		]);
 
-		const asURL = (text) =>
-			URL.createObjectURL(new Blob([text], { type: "text/javascript" }));
-		const module_ = await import(asURL(core));
+		const module_ = await importModuleText(core);
 
-		module_.GlobalWorkerOptions.workerSrc = asURL(worker);
+		module_.GlobalWorkerOptions.workerSrc = URL.createObjectURL(
+			new Blob([worker], { type: "text/javascript" }),
+		);
 		pdfjsModule = module_;
 
 		return module_;
@@ -15519,10 +15622,18 @@ title="Show only this discussion">
 		return button;
 	}
 
+	function pdfReaderFitScale(host, base) {
+		const byWidth = (host.clientWidth - 32) / base.width;
+		const byHeight = (host.clientHeight - 24) / base.height;
+
+		return Math.max(0.2, Math.min(3, Math.min(byWidth, byHeight) || 1));
+	}
+
 	function buildPdfReaderChrome() {
 		const host = document.createElement("div");
 
 		host.setAttribute("data-hnewhere-pdf-reader", "1");
+		host.tabIndex = -1;
 		host.style.cssText = `
 			position:fixed;
 			inset:0;
@@ -15530,6 +15641,7 @@ title="Show only this discussion">
 			background:#3a3a3a;
 			overflow:auto;
 			overscroll-behavior:contain;
+			outline:none;
 		`;
 
 		const style = document.createElement("style");
@@ -15537,68 +15649,11 @@ title="Show only this discussion">
 
 		const viewer = document.createElement("div");
 		viewer.className = "hnewhere-pdf-viewer pdfViewer";
-		viewer.style.cssText = "position:relative;padding:12px 0;";
+		viewer.style.cssText = "position:relative;";
 
-		const bar = document.createElement("div");
-		bar.style.cssText = `
-			position:fixed;
-			right:16px;
-			bottom:16px;
-			z-index:1;
-			display:flex;
-			gap:8px;
-			align-items:center;
-		`;
-
-		const counter = document.createElement("span");
-		counter.setAttribute("data-hnewhere-pdf-counter", "1");
-		counter.style.cssText = `
-			padding:8px 12px;
-			border-radius:8px;
-			background:rgba(0,0,0,.55);
-			color:#fff;
-			font:600 13px/1 system-ui, -apple-system, sans-serif;
-			white-space:nowrap;
-		`;
-
-		bar.append(
-			counter,
-			pdfReaderButton("−", () => {
-				setPdfReaderScale((ownPdfReader?.scale || 1) / 1.25).catch(console.error);
-			}),
-			pdfReaderButton("+", () => {
-				setPdfReaderScale((ownPdfReader?.scale || 1) * 1.25).catch(console.error);
-			}),
-			pdfReaderButton("Close reader", () => {
-				closePdfReader();
-				refreshArticleAnnotations().catch(console.error);
-			}),
-		);
-
-		host.append(style, viewer, bar);
+		host.append(style, viewer);
 
 		return host;
-	}
-
-	function syncPdfReaderCounter() {
-		const reader = ownPdfReader;
-		const counter = reader?.host.querySelector("[data-hnewhere-pdf-counter]");
-
-		if (!counter) {
-			return;
-		}
-
-		const top = reader.host.getBoundingClientRect().top;
-		let current = 1;
-
-		for (const box of reader.pages) {
-			if (box.getBoundingClientRect().bottom > top + 8) {
-				current = Number(box.dataset.pageNumber);
-				break;
-			}
-		}
-
-		counter.textContent = `${current} / ${reader.pages.length}`;
 	}
 
 	async function drawPdfReaderVisiblePages() {
@@ -15653,49 +15708,88 @@ title="Show only this discussion">
 		reader.bus.dispatch("scalechanging", { scale: next, source: reader.app });
 
 		await drawPdfReaderVisiblePages();
-		syncPdfReaderCounter();
 	}
 
-	function removePdfReaderOffer() {
-		document.querySelector("[data-hnewhere-pdf-offer]")?.remove();
+	function reportPdfReaderFailure(error) {
+		document.querySelector("[data-hnewhere-pdf-failed]")?.remove();
+
+		const notice = document.createElement("div");
+
+		notice.setAttribute("data-hnewhere-pdf-failed", "1");
+		notice.style.cssText = `
+			position:fixed;
+			left:50%;
+			bottom:24px;
+			transform:translateX(-50%);
+			z-index:2147483643;
+			max-width:min(90vw,520px);
+			padding:10px 14px;
+			border-radius:8px;
+			background:rgba(0,0,0,.82);
+			color:#fff;
+			font:400 13px/1.45 system-ui, -apple-system, sans-serif;
+		`;
+		notice.textContent =
+			"Backchannel could not read this PDF here: " +
+			String(error?.message || error);
+
+		notice.appendChild(
+			pdfReaderButton("Dismiss", () => notice.remove()),
+		);
+
+		document.documentElement.appendChild(notice);
 	}
 
-	function syncPdfReaderOffer(settings) {
-		removePdfReaderOffer();
+	function canPaintOverDocumentViewer() {
+		const probe = document.createElement("div");
 
+		probe.setAttribute("data-hnewhere-paint-probe", "1");
+		probe.style.cssText =
+			"position:fixed;inset:0;z-index:2147483644;background:transparent;";
+		document.documentElement.appendChild(probe);
+
+		const at = document.elementFromPoint(
+			Math.floor(window.innerWidth / 2),
+			Math.floor(window.innerHeight / 2),
+		);
+
+		probe.remove();
+
+		return (
+			at === probe ||
+			at === null ||
+			at === document.documentElement ||
+			at === document.body
+		);
+	}
+
+	async function ensurePdfReader(settings) {
 		if (
+			ownPdfReader ||
 			!settings?.annotations ||
 			!settings.pdfReader ||
-			ownPdfReader ||
 			!looksLikePdfDocument() ||
 			document.querySelector(".pdfViewer .textLayer")
 		) {
 			return;
 		}
 
-		const offer = document.createElement("div");
+		if (!canPaintOverDocumentViewer()) {
+			reportPdfReaderFailure(
+				new Error(
+					"this browser draws its PDF viewer above the page, so a reader cannot be put in front of it",
+				),
+			);
+			return;
+		}
 
-		offer.setAttribute("data-hnewhere-pdf-offer", "1");
-		offer.style.cssText = `
-			position:fixed;
-			left:50%;
-			bottom:24px;
-			transform:translateX(-50%);
-			z-index:2147483643;
-		`;
-		offer.appendChild(
-			pdfReaderButton("Open this PDF where passages can be highlighted", () => {
-				removePdfReaderOffer();
-				openPdfReader()
-					.then(() => refreshArticleAnnotations())
-					.catch((e) => {
-						console.error("Backchannel could not open the PDF reader:", e);
-						closePdfReader();
-					});
-			}),
-		);
-
-		document.documentElement.appendChild(offer);
+		try {
+			await openPdfReader();
+		} catch (error) {
+			console.error("Backchannel could not open the PDF reader:", error);
+			closePdfReader();
+			reportPdfReaderFailure(error);
+		}
 	}
 
 	async function drawPdfReaderPage(number) {
@@ -15748,6 +15842,20 @@ title="Show only this discussion">
 			return;
 		}
 
+		const endOfContent = document.createElement("div");
+		endOfContent.className = "endOfContent";
+		layer.appendChild(endOfContent);
+
+		layer.addEventListener("pointerdown", () => {
+			layer.classList.add("selecting");
+
+			document.addEventListener(
+				"pointerup",
+				() => layer.classList.remove("selecting"),
+				{ once: true },
+			);
+		});
+
 		reader.bus.dispatch("textlayerrendered", {
 			pageNumber: number,
 			source: reader.app,
@@ -15779,6 +15887,67 @@ title="Show only this discussion">
 		}
 	}
 
+	const PDF_ZOOM_IN_KEYS = new Set(["=", "+"]);
+	const PDF_ZOOM_OUT_KEYS = new Set(["-", "_"]);
+
+	function installPdfReaderZoom() {
+		const reader = ownPdfReader;
+
+		if (!reader) {
+			return;
+		}
+
+		const onKeyDown = (event) => {
+			if (!ownPdfReader || !(event.metaKey || event.ctrlKey) || event.altKey) {
+				return;
+			}
+
+			const step = PDF_ZOOM_IN_KEYS.has(event.key)
+				? reader.scale * 1.2
+				: PDF_ZOOM_OUT_KEYS.has(event.key)
+					? reader.scale / 1.2
+					: event.key === "0"
+						? reader.fitScale
+						: null;
+
+			if (step === null) {
+				return;
+			}
+
+			event.preventDefault();
+			setPdfReaderScale(step).catch(console.error);
+		};
+
+		const onWheel = (event) => {
+			if (!ownPdfReader || !event.ctrlKey) {
+				return;
+			}
+
+			event.preventDefault();
+			setPdfReaderScale(reader.scale * (event.deltaY < 0 ? 1.05 : 0.95)).catch(
+				console.error,
+			);
+		};
+
+		const takeFocus = () => {
+			if (ownPdfReader === reader && !reader.host.contains(document.activeElement)) {
+				reader.host.focus({ preventScroll: true });
+			}
+		};
+
+		window.addEventListener("keydown", onKeyDown, { capture: true });
+		reader.host.addEventListener("wheel", onWheel, { passive: false });
+		reader.host.addEventListener("pointerdown", takeFocus);
+
+		takeFocus();
+
+		reader.stopZoom = () => {
+			window.removeEventListener("keydown", onKeyDown, { capture: true });
+			reader.host.removeEventListener("wheel", onWheel);
+			reader.host.removeEventListener("pointerdown", takeFocus);
+		};
+	}
+
 	async function openPdfReader() {
 		if (ownPdfReader) {
 			return ownPdfReader;
@@ -15794,10 +15963,7 @@ title="Show only this discussion">
 		document.documentElement.appendChild(host);
 
 		const base = (await pdfDocument.getPage(1)).getViewport({ scale: 1 });
-		const scale = Math.max(
-			0.2,
-			Math.min(3, (host.clientWidth - 32) / base.width || 1),
-		);
+		const scale = pdfReaderFitScale(host, base);
 		const sized = (await pdfDocument.getPage(1)).getViewport({ scale });
 		const pages = [];
 
@@ -15825,28 +15991,27 @@ title="Show only this discussion">
 			pages,
 			pdfjs,
 			scale,
+			fitScale: scale,
 			drawn: new Set(),
 			observer: null,
+			stopZoom: null,
 		};
 
 		observePdfReaderPages();
-		syncPdfReaderCounter();
-
-		host.addEventListener("scroll", syncPdfReaderCounter, { passive: true });
+		installPdfReaderZoom();
 		bus.dispatch("pagesloaded", { source: ownPdfReader.app });
 
 		return ownPdfReader;
 	}
 
 	function closePdfReader() {
-		const reader = ownPdfReader;
+		ownPdfReader?.stopZoom?.();
+		ownPdfReader?.observer?.disconnect();
 
-		if (!reader) {
-			return;
+		for (const host of document.querySelectorAll("[data-hnewhere-pdf-reader]")) {
+			host.remove();
 		}
 
-		reader.observer?.disconnect();
-		reader.host.remove();
 		ownPdfReader = null;
 		pdfTexts = null;
 		pdfTextsFor = null;
@@ -15920,6 +16085,23 @@ title="Show only this discussion">
 		}
 	}
 
+	async function pdfPageTextItems(page) {
+		const reader = page.streamTextContent().getReader();
+		const items = [];
+
+		for (;;) {
+			const chunk = await reader.read();
+
+			if (chunk.done) {
+				return items;
+			}
+
+			for (const item of chunk.value?.items || []) {
+				items.push(item);
+			}
+		}
+	}
+
 	function pdfDocumentTexts(app) {
 		if (pdfTextsFor === app.pdfDocument) {
 			return pdfTexts;
@@ -15937,9 +16119,9 @@ title="Show only this discussion">
 
 			for (let number = 1; number <= document_.numPages; number += 1) {
 				const page = await document_.getPage(number);
-				const content = await page.getTextContent();
+				const items = await pdfPageTextItems(page);
 
-				texts.push(content.items.map((item) => item.str).join(""));
+				texts.push(items.map((item) => item.str).join(""));
 			}
 
 			if (app.pdfDocument !== document_) {
@@ -16043,6 +16225,12 @@ title="Show only this discussion">
 			return host === document.body
 				? HTML_DOCUMENT_SOURCE.heightFor(host)
 				: host.scrollHeight;
+		},
+
+		backdropFor(range) {
+			const element = nearestElement(range?.commonAncestorContainer);
+
+			return element?.closest(".page") || ownPdfReader?.pages[0] || element;
 		},
 
 		scrollIntoView(range) {
@@ -17443,8 +17631,8 @@ title="Show only this discussion">
 			rectsByGroup.clear();
 
 			const backdrop =
-				nearestElement(groups[0]?.range?.commonAncestorContainer) ||
-				nearestElement(heatRegions[0]?.range?.commonAncestorContainer) ||
+				source.backdropFor(groups[0]?.range) ||
+				source.backdropFor(heatRegions[0]?.range) ||
 				document.body;
 			const dark = isDarkBackdrop(backdrop);
 
@@ -17686,7 +17874,6 @@ title="Show only this discussion">
 
 	async function refreshArticleAnnotations() {
 		clearArticleAnnotations();
-		syncPdfReaderOffer(await loadSettings());
 
 		if (!sidebar || !renderedComments.length) {
 			return;
@@ -17904,6 +18091,8 @@ title="Show only this discussion">
 		sweepBridgePayloads().catch(console.error);
 
 		markQueueArrival().catch(console.error);
+
+		await ensurePdfReader(settings);
 
 		const votesReady = Promise.all([
 			loadRememberedVotes(),
