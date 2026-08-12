@@ -3572,14 +3572,14 @@ ${
 			source: "notes",
 			key: sourceKey("notes", "notes"),
 			id: "notes",
-			title: "Your notes",
+			title: "Backchannel local notes",
 			author: "",
 			score: null,
 			commentCount: notes.length,
 			createdAt: Math.max(...notes.map((note) => note.created || 0)),
 			permalink: null,
 			articleURL,
-			label: "Your notes",
+			label: "Backchannel local notes",
 			collective: true,
 			bodyHTML: "",
 			rootKeys: notes.map((note) => sourceKey("notes", note.id)),
@@ -3648,6 +3648,37 @@ button {
 	}
 
 	// #region hnewhere-test-export
+	function rangeTextWelded(range) {
+		const walker = document.createTreeWalker(
+			range.commonAncestorContainer,
+			NodeFilter.SHOW_TEXT,
+		);
+		let text = "";
+		let node = walker.nextNode();
+
+		for (; node; node = walker.nextNode()) {
+			if (!range.intersectsNode(node)) {
+				continue;
+			}
+
+			const value = node.nodeValue || "";
+			const from = node === range.startContainer ? range.startOffset : 0;
+			const to = node === range.endContainer ? range.endOffset : value.length;
+
+			text += value.slice(from, to);
+		}
+
+		return text;
+	}
+
+	function selectedQuoteText(range, selection) {
+		const element = nearestElement(range.commonAncestorContainer);
+
+		return element?.closest(".textLayer")
+			? rangeTextWelded(range).replace(/\s+/g, " ").trim()
+			: String(selection).replace(/\s+/g, " ").trim();
+	}
+
 	function noteSelectionContext(range) {
 		const container =
 			nearestElement(range.commonAncestorContainer)?.closest(
@@ -3684,7 +3715,7 @@ button {
 			return null;
 		}
 
-		const exact = selection.toString().replace(/\s+/g, " ").trim();
+		const exact = selectedQuoteText(range, selection);
 
 		if (!exact) {
 			return null;
@@ -3906,7 +3937,7 @@ button {
 	registerSource({
 		id: "notes",
 		origins: [],
-		label: "Your notes",
+		label: "Backchannel local notes",
 		shortLabel: "Notes",
 		local: true,
 		defaultOn: true,
@@ -12969,7 +13000,7 @@ ${settingsPanelHTML()}
 		div.dataset.commentId = comment.key;
 		div.dataset.storyId = String(storyID);
 
-		if (isNewComment(comment, seenTime)) {
+		if (!getSource(comment.source)?.local && isNewComment(comment, seenTime)) {
 			div.classList.add("new-comment");
 		}
 
@@ -13021,7 +13052,7 @@ ${settingsPanelHTML()}
       <a class="focus-link" href="#">
       focus
       </a>
-		${comment.source === "notes" ? `|<a class="delete-note-link" href="#">delete</a>` : ""}
+		${comment.source === "notes" ? ` | <a class="delete-note-link" href="#">delete</a>` : ""}
 		${capabilities.vote ? itemActionLinksHTML(commentID, comment.source || "hn") : ""}
 
       <span class="toggle">
@@ -13327,7 +13358,10 @@ ${settingsPanelHTML()}
 		const liveNow = Math.floor(Date.now() / 1000);
 
 		stories.forEach((story, index) => {
-			if (isDiscussionLive(threads[index], liveNow)) {
+			if (
+				!getSource(story.source)?.local &&
+				isDiscussionLive(threads[index], liveNow)
+			) {
 				liveDiscussions.set(story.key, story.baseLabel || story.label || "");
 			}
 		});
