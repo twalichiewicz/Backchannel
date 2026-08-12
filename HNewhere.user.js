@@ -4387,6 +4387,92 @@ button {
 		await save(NOTES_INDEX_KEY, entries);
 	}
 
+	// #region hnewhere-test-export
+	function notedDocuments(index) {
+		return (Array.isArray(index) ? index : []).filter(
+			(entry) => entry?.kind && entry?.id,
+		);
+	}
+
+	function notesExportName(now) {
+		const pad = (value) => String(value).padStart(2, "0");
+
+		return (
+			"backchannel-notes-" +
+			now.getFullYear() +
+			"-" +
+			pad(now.getMonth() + 1) +
+			"-" +
+			pad(now.getDate()) +
+			".json"
+		);
+	}
+
+	function notesExportPayload(documents, exported) {
+		const kept = documents.filter((entry) => entry.notes.length);
+
+		return {
+			application: "Backchannel",
+			version: 1,
+			exported,
+			documentCount: kept.length,
+			noteCount: kept.reduce((total, entry) => total + entry.notes.length, 0),
+			documents: kept,
+		};
+	}
+	// #endregion hnewhere-test-export
+
+	async function collectNotes() {
+		const index = notedDocuments(await load(NOTES_INDEX_KEY, []));
+		const documents = [];
+
+		for (const entry of index) {
+			const ref = { kind: entry.kind, id: entry.id };
+
+			documents.push({
+				kind: ref.kind,
+				id: ref.id,
+				url: entry.url || null,
+				title: entry.title || null,
+				updated: entry.updated || null,
+				notes: keptNotes(await load(entry.key || noteStorageKey(ref), null)),
+			});
+		}
+
+		return documents;
+	}
+
+	function downloadJSON(payload, name) {
+		const href = URL.createObjectURL(
+			new Blob([JSON.stringify(payload, null, 2)], {
+				type: "application/json",
+			}),
+		);
+		const link = document.createElement("a");
+
+		link.href = href;
+		link.download = name;
+		link.style.display = "none";
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+
+		window.setTimeout(() => URL.revokeObjectURL(href), 10000);
+	}
+
+	async function exportNotes() {
+		const now = new Date();
+		const payload = notesExportPayload(await collectNotes(), now.toISOString());
+
+		if (!payload.noteCount) {
+			return payload;
+		}
+
+		downloadJSON(payload, notesExportName(now));
+
+		return payload;
+	}
+
 	const MASTODON_INSTANCE = "https://mastodon.social";
 	const TOOTFINDER = "https://www.tootfinder.ch";
 
@@ -9684,12 +9770,53 @@ header button svg {
 	margin-top:8px;
 }
 
-.settings-suboptions + .settings-option {
+.settings-suboptions + .settings-option,
+.settings-suboptions + .settings-option-row {
 	margin-top:8px;
 }
 
-.settings-option-hint + .settings-option {
+.settings-option-hint + .settings-option,
+.settings-option-hint + .settings-option-row {
 	margin-top:8px;
+}
+
+.settings-option-row {
+	display:flex;
+	align-items:flex-start;
+	gap:8px;
+}
+
+.settings-option-row > .settings-option {
+	flex:1 1 auto;
+}
+
+.settings-inline-action {
+	flex:0 0 auto;
+	max-width:0;
+	padding:0;
+	border:0;
+	overflow:hidden;
+	background:none;
+	color:var(--muted);
+	font:inherit;
+	font-size:11px;
+	line-height:1.35;
+	white-space:nowrap;
+	text-decoration:none;
+	opacity:0;
+	cursor:pointer;
+	transition:max-width .25s ease, opacity .2s ease;
+}
+
+.settings-option-row.is-checked .settings-inline-action {
+	max-width:120px;
+	opacity:1;
+}
+
+@media (hover: hover) {
+	.settings-inline-action:hover {
+		text-decoration:underline;
+	}
 }
 
 .settings-credits {
@@ -10715,13 +10842,16 @@ The default PDF reader will be replaced with
 allowing highlighting and annotation directly onto the PDF.
 </div>
 </div>
+<div class="settings-option-row">
 <label class="settings-option">
 <input id="setting-notepad" data-setting="notepad" type="checkbox">
 <span>Enable notepad</span>
 </label>
+<button id="settings-notes-export" class="settings-inline-action" type="button">export</button>
+</div>
 <div class="settings-option-hint">
-Write your own notes on any article or PDF, with support for annotating a
-passage you select. Stored locally.
+Write your own notes on any article or PDF, with support for annotation.
+All stored locally.
 </div>
 </div>
 
@@ -11114,6 +11244,35 @@ ${[
 
 				setHideMenuOpen(false);
 			});
+		}
+
+		const notesExport = shadow.querySelector("#settings-notes-export");
+
+		if (notesExport) {
+			notesExport.onclick = (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+
+				const restore = notesExport.textContent;
+
+				notesExport
+					.animate?.(
+						[{ opacity: 1 }, { opacity: 0.35 }, { opacity: 1 }],
+						{ duration: 420 },
+					);
+
+				exportNotes()
+					.then((payload) => {
+						notesExport.textContent = payload.noteCount
+							? "exported"
+							: "no notes yet";
+
+						window.setTimeout(() => {
+							notesExport.textContent = restore;
+						}, 1800);
+					})
+					.catch(console.error);
+			};
 		}
 
 		settingsPanel.addEventListener("click", (event) => {
