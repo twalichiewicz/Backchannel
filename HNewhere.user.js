@@ -13719,6 +13719,7 @@ ${settingsPanelHTML()}
 			const hidden = content.classList.toggle("hidden");
 
 			toggle.textContent = hidden ? "[+]" : "[–]";
+			settleNotepad(div);
 
 			await toggleCollapsed(comment.key, hidden);
 		};
@@ -15924,6 +15925,7 @@ title="Show only this discussion">
 					rendered.contentElement.classList.add("hidden");
 					rendered.toggleElement.textContent = "[+]";
 					delete rendered.element.dataset.filterExpanded;
+					settleNotepad(rendered.element);
 				}
 			}
 
@@ -18607,6 +18609,7 @@ title="Show only this discussion">
 					rendered.contentElement.classList.remove("hidden");
 					rendered.toggleElement.textContent = "[–]";
 					rendered.element.dataset.filterExpanded = "1";
+					settleNotepad(rendered.element);
 				}
 			}
 
