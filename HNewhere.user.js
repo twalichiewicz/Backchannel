@@ -2822,6 +2822,26 @@ ${
 		option?.classList.toggle("settings-option-on", Boolean(input?.checked));
 	}
 
+	// #region hnewhere-test-export
+	const HINTED_SETTINGS = new Set(["annotations", "pdfReader", "notepad"]);
+
+	function syncOptionHint(input) {
+		const anchor =
+			input?.closest?.(".settings-option-row") ||
+			input?.closest?.(".settings-option");
+		const hint = anchor?.nextElementSibling;
+		const checked = Boolean(input?.checked);
+
+		anchor?.classList.toggle("is-checked", checked);
+
+		if (hint?.classList?.contains("settings-option-hint")) {
+			hint.classList.toggle("is-acknowledged", checked);
+		}
+
+		return checked;
+	}
+	// #endregion hnewhere-test-export
+
 	function enabledSources(settings) {
 		return enabledSourceIds(settings, registeredSourceIds()).map((id) =>
 			SOURCES.get(id),
@@ -10150,9 +10170,6 @@ header button svg {
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
-	   Stated in px for the same reason the hide menu is: rem here would be
-	   measured against the page's root font-size, and a site using the 62.5%
-	   reset would put this ceiling back below the caveats it has to clear. */
 	max-height:384px;
 	overflow:hidden;
 	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
@@ -11037,9 +11054,14 @@ ${[
 					: ".settings-pane-primary",
 			);
 
-			if (active) {
+			if (active?.scrollHeight) {
 				panes.style.height = `${active.scrollHeight}px`;
 			}
+		};
+
+		const settlePanesHeight = () => {
+			syncPanesHeight();
+			window.setTimeout(syncPanesHeight, 300);
 		};
 
 		if (panes && typeof ResizeObserver === "function") {
@@ -11121,6 +11143,10 @@ ${[
 			for (const [key, input] of Object.entries(settingsInputs)) {
 				if (input) {
 					input.checked = Boolean(settings[key]);
+
+					if (HINTED_SETTINGS.has(key)) {
+						syncOptionHint(input);
+					}
 				}
 			}
 
@@ -11322,6 +11348,7 @@ ${[
 			});
 
 			applySettingsPanelState(settings);
+			settlePanesHeight();
 
 			const setting = input.dataset.setting;
 
