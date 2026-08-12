@@ -9577,7 +9577,8 @@ header {
 
 .next-up {
 	display:block;
-	margin:18px -12px 24px;
+	margin:auto -12px 24px;
+	padding-top:18px;
 	font-family:Verdana, Geneva, sans-serif;
 	font-size:11px;
 	color:var(--meta);
@@ -11780,11 +11781,17 @@ ${SUBMIT_FORM_CSS}
 #comments {
 			flex:1 1 auto;
 			min-height:0;
+	display:flex;
+	flex-direction:column;
 	overflow:auto;
 	overflow-x:hidden;
 			overscroll-behavior:contain;
 	padding:12px 12px calc(32px + env(safe-area-inset-bottom, 0px));
 	word-wrap:break-word;
+}
+
+#comments > * {
+	flex:0 0 auto;
 }
 
 .top-level-comments {
