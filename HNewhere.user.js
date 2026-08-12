@@ -3773,10 +3773,7 @@ button {
 
 		const field = shadow.querySelector("textarea");
 
-		field.value = chosen.text || "";
-		shadow.querySelector(".save").textContent = chosen.id
-			? "Save changes"
-			: "Save note";
+
 
 		shadow.querySelector(".cancel").onclick = () => closeNoteComposer();
 		shadow.querySelector(".save").onclick = () => {
@@ -3811,56 +3808,111 @@ button {
 		const notes = await loadNotes();
 		const written = String(text).trim();
 
-		if (chosen.id) {
-			await saveNotes(
-				notes.map((note) =>
-					note.id === chosen.id
-						? { ...note, text: written, edited: Date.now() }
-						: note,
-				),
-			);
-		} else {
-			await saveNotes([
-				...notes,
-				{
-					id:
-						"n" +
-						Date.now().toString(36) +
-						Math.floor(Math.random() * 1e6).toString(36),
-					created: Date.now(),
-					text: written,
-					exact: chosen.anchorable ? chosen.exact : "",
-					prefix: chosen.prefix,
-					suffix: chosen.suffix,
-					page: chosen.page,
-					url: location.href,
-				},
-			]);
-		}
+		await saveNotes([
+			...notes,
+			{
+				id:
+					"n" +
+					Date.now().toString(36) +
+					Math.floor(Math.random() * 1e6).toString(36),
+				created: Date.now(),
+				text: written,
+				exact: chosen.anchorable ? chosen.exact : "",
+				prefix: chosen.prefix,
+				suffix: chosen.suffix,
+				page: chosen.page,
+				url: location.href,
+			},
+		]);
 
 		closeNoteComposer();
 		window.getSelection()?.removeAllRanges();
 		await reopenForNotes();
 	}
 
-	async function editNote(note, anchor) {
-		if (!note?.id) {
+	// #region hnewhere-test-export
+	function inlineNoteEditor(note, { onSave, onClose }) {
+		const editor = document.createElement("div");
+		const field = document.createElement("textarea");
+		const row = document.createElement("div");
+		const save = document.createElement("button");
+		const cancel = document.createElement("button");
+
+		editor.className = "note-editor";
+		field.className = "note-editor-field";
+		field.value = note?.text || "";
+		field.setAttribute("aria-label", "Edit your note");
+
+		row.className = "note-editor-row";
+		cancel.type = "button";
+		cancel.className = "note-editor-cancel";
+		cancel.textContent = "cancel";
+		save.type = "button";
+		save.className = "note-editor-save";
+		save.textContent = "save";
+
+		const commit = () => {
+			if (String(field.value || "").trim()) {
+				onSave(field.value);
+			}
+		};
+
+		cancel.onclick = onClose;
+		save.onclick = commit;
+		field.onkeydown = (event) => {
+			if (event.key === "Escape") {
+				onClose();
+			}
+
+			if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+				commit();
+			}
+		};
+
+		row.append(cancel, save);
+		editor.append(field, row);
+
+		return { editor, field };
+	}
+	// #endregion hnewhere-test-export
+
+	function startInlineNoteEdit(div, note) {
+		const text = div.querySelector(".text");
+
+		if (!text || div.querySelector(".note-editor")) {
 			return;
 		}
 
-		const rect = anchor?.getBoundingClientRect();
-
-		await openNoteComposer({
-			id: note.id,
-			text: note.text || "",
-			exact: note.exact || "",
-			prefix: note.prefix || "",
-			suffix: note.suffix || "",
-			page: note.page ?? null,
-			anchorable: Boolean(note.exact),
-			left: rect ? rect.left : 24,
-			top: rect ? rect.top : 24,
+		const held = inlineNoteEditor(note, {
+			onSave: (value) => {
+				updateNote(note.id, value).catch(console.error);
+			},
+			onClose: () => {
+				held.editor.remove();
+				text.hidden = false;
+			},
 		});
+
+		text.hidden = true;
+		text.after(held.editor);
+		held.field.focus();
+	}
+
+	async function updateNote(id, text) {
+		const written = String(text || "").trim();
+
+		if (!written) {
+			return;
+		}
+
+		const notes = await loadNotes();
+
+		await saveNotes(
+			notes.map((note) =>
+				note.id === id ? { ...note, text: written, edited: Date.now() } : note,
+			),
+		);
+		await reopenForNotes();
 	}
 
 	async function deleteNote(id) {
@@ -11344,17 +11396,43 @@ ${SUBMIT_FORM_CSS}
 	padding-left:6px;
 }
 
-.notes-section {
+.notepad-section {
 	margin:0 0 6px;
 }
 
-.notes-bookend {
+.notepad-rule {
 	display:flex;
 	align-items:center;
-	gap:8px;
+	gap:6px;
+	margin:0 -12px;
+	padding:10px 12px 0;
+	font-size:11px;
+	color:var(--meta);
+	line-height:13px;
 }
 
-.notes-toggle {
+.notepad-rule::after {
+	content:"";
+	flex:1 0 24px;
+	height:1px;
+	background:var(--surface-border);
+}
+
+.notepad-rule-close {
+	padding-top:8px;
+}
+
+.notepad-mark {
+	padding:0 4px;
+	border-radius:3px;
+	font-size:10px;
+	font-weight:600;
+	letter-spacing:.04em;
+	color:var(--surface-text);
+	background:var(--hover-tint);
+}
+
+.notepad-toggle {
 	margin-left:auto;
 	padding:0;
 	border:0;
@@ -11367,13 +11445,63 @@ ${SUBMIT_FORM_CSS}
 }
 
 @media (hover: hover) {
-	.notes-toggle:hover {
+	.notepad-toggle:hover {
 		color:var(--surface-text);
 	}
 }
 
-.notes-section.is-collapsed .notes-body {
-	display:none;
+.notepad-body {
+	overflow:hidden;
+	transition:max-height .22s ease, opacity .18s ease;
+}
+
+.notepad-section.is-collapsed .notepad-body {
+	opacity:0;
+}
+
+.note-editor {
+	margin:4px 0 0;
+}
+
+.note-editor-field {
+	width:100%;
+	min-height:56px;
+	box-sizing:border-box;
+	padding:6px 7px;
+	border:1px solid var(--surface-border);
+	border-radius:6px;
+	background:var(--surface);
+	color:var(--surface-text);
+	font:inherit;
+	resize:vertical;
+}
+
+.note-editor-row {
+	display:flex;
+	gap:8px;
+	justify-content:flex-end;
+	margin-top:5px;
+}
+
+.note-editor-row button {
+	padding:0;
+	border:0;
+	background:none;
+	color:var(--muted);
+	font:inherit;
+	font-size:11px;
+	text-decoration:underline;
+	cursor:pointer;
+}
+
+.note-editor-save {
+	font-weight:600;
+}
+
+@media (hover: hover) {
+	.note-editor-row button:hover {
+		color:var(--surface-text);
+	}
 }
 
 .comment.new-comment {
@@ -13083,6 +13211,7 @@ ${settingsPanelHTML()}
 		const replies = comment.replyKeys;
 		const commentID = String(comment.id);
 		const capabilities = getSource(comment.source)?.capabilities || {};
+		const isLocalSource = Boolean(getSource(comment.source)?.local);
 		const threadCanVote = renderedSourcesCanVote();
 
 		div.innerHTML = `
@@ -13123,12 +13252,10 @@ ${settingsPanelHTML()}
 					: ""
 			}
 
-      |
+      ${isLocalSource ? "" : "|"}
 
-      <a class="focus-link" href="#">
-      focus
-      </a>
-		${comment.source === "notes" ? ` | <a class="edit-note-link" href="#">edit</a> | <a class="delete-note-link" href="#">delete</a>` : ""}
+      ${isLocalSource ? "" : `<a class="focus-link" href="#">focus</a>`}
+		${isLocalSource ? `<a class="edit-note-link" href="#">edit</a> | <a class="delete-note-link" href="#">delete</a>` : ""}
 		${capabilities.vote ? itemActionLinksHTML(commentID, comment.source || "hn") : ""}
 
       <span class="toggle">
@@ -13219,7 +13346,7 @@ ${settingsPanelHTML()}
 		if (editNoteButton) {
 			editNoteButton.onclick = (event) => {
 				event.preventDefault();
-				editNote(comment.note, div).catch(console.error);
+				startInlineNoteEdit(div, comment.note);
 			};
 		}
 
@@ -13485,7 +13612,7 @@ ${settingsPanelHTML()}
 
 		const disambiguating = stories.length > 1;
 
-		for (const story of stories) {
+		for (const story of sharedStories) {
 			const canVote = Boolean(getSource(story.source)?.capabilities.vote);
 			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
 			const resolved = storyTitle(story, page, disambiguating);
@@ -13516,12 +13643,7 @@ ${settingsPanelHTML()}
 		);
 
 		if (localStories.length) {
-			const held = notesSection(
-				localStories.reduce(
-					(sum, story) => sum + (story.commentCount || 0),
-					0,
-				),
-			);
+			const held = notesSection();
 
 			ui.body.insertBefore(held.section, ui.body.querySelector(".page-sort"));
 
@@ -13544,6 +13666,8 @@ ${settingsPanelHTML()}
 					);
 				}
 			}
+
+			held.settle();
 		}
 
 		const context = new Map(
@@ -13741,40 +13865,53 @@ ${settingsPanelHTML()}
 	}
 
 	// #region hnewhere-test-export
-	function notesSection(count) {
+	function notesSection() {
 		const section = document.createElement("div");
 		const head = document.createElement("div");
 		const body = document.createElement("div");
+		const foot = document.createElement("div");
 		const toggle = document.createElement("button");
 
-		section.className = "notes-section";
+		section.className = "notepad-section";
 		section.dataset.notesSection = "1";
 
-		head.className = "live-bookend live-bookend-open notes-bookend";
-		head.innerHTML =
-			`<span class="live-bookend-mark">NOTES</span>` +
-			`<span class="live-bookend-text"><span class="notes-bookend-count"></span></span>`;
-		head.querySelector(".notes-bookend-count").textContent = pluralize(
-			count,
-			"note",
-		);
+		head.className = "notepad-rule";
+		head.innerHTML = `<span class="notepad-mark">NOTEPAD</span>`;
 
 		toggle.type = "button";
-		toggle.className = "notes-toggle";
+		toggle.className = "notepad-toggle";
 		toggle.textContent = "hide";
 		toggle.setAttribute("aria-expanded", "true");
 		toggle.onclick = () => {
-			const collapsed = section.classList.toggle("is-collapsed");
+			const collapsed = !section.classList.contains("is-collapsed");
 
+			section.classList.toggle("is-collapsed", collapsed);
+			body.style.maxHeight = collapsed
+				? "0px"
+				: body.scrollHeight
+					? `${body.scrollHeight}px`
+					: "";
 			toggle.textContent = collapsed ? "show" : "hide";
 			toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
 		};
 
 		head.appendChild(toggle);
-		body.className = "notes-body";
-		section.append(head, body);
+		body.className = "notepad-body";
+		foot.className = "notepad-rule notepad-rule-close";
+		section.append(head, body, foot);
 
-		return { section, body };
+		return {
+			section,
+			body,
+
+			settle() {
+				if (!section.classList.contains("is-collapsed")) {
+					body.style.maxHeight = body.scrollHeight
+						? `${body.scrollHeight}px`
+						: "";
+				}
+			},
+		};
 	}
 	// #endregion hnewhere-test-export
 
