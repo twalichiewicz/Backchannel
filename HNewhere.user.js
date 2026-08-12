@@ -2105,11 +2105,149 @@
 			permalink: "https://lemmy.world/post/" + post.id,
 			articleURL: post.url || "",
 			label: "!" + (community.name || "") + (host ? "@" + host : ""),
-			bodyHTML: escapeHTML(post.body || ""),
+			bodyHTML: markdownToHTML(post.body || ""),
 			rootKeys: [],
 			rootTimes: [],
 			creatorId: post.creator_id,
 		};
+	}
+
+	function markdownAnchor(url, label) {
+		return /^https?:\/\//i.test(url) ? `<a href="${url}">${label}</a>` : label;
+	}
+
+	function markdownInline(escaped) {
+		const held = [];
+		const hold = (html) => `\u0000${held.push(html) - 1}\u0000`;
+
+		let out = escaped.replace(/`([^`\n]+)`/g, (m, body) =>
+			hold(`<code>${body}</code>`),
+		);
+
+		out = out.replace(/!\[([^\]\n]*)\]\(([^)\s]+)[^)]*\)/g, (m, alt, url) =>
+			hold(markdownAnchor(url, alt.trim() || "image")),
+		);
+
+		out = out.replace(/\[([^\]\n]*)\]\(([^)\s]+)[^)]*\)/g, (m, label, url) =>
+			hold(markdownAnchor(url, label.trim() || url)),
+		);
+
+		out = out.replace(
+			/(^|[\s(])(https?:\/\/[^\s<]*[^\s<.,;:!?)\]])/g,
+			(m, lead, url) => lead + hold(markdownAnchor(url, url)),
+		);
+
+		out = out
+			.replace(/\*\*(\S(?:[^*\n]*\S)?)\*\*/g, "<strong>$1</strong>")
+			.replace(/(^|[^*\w])\*(\S(?:[^*\n]*\S)?)\*(?!\*)/g, "$1<em>$2</em>")
+			.replace(/(^|[^_\w])_(\S(?:[^_\n]*\S)?)_(?!\w)/g, "$1<em>$2</em>");
+
+		return out.replace(/\u0000(\d+)\u0000/g, (m, index) => held[Number(index)]);
+	}
+
+	function markdownToHTML(text) {
+		const lines = String(text || "")
+			.replace(/\u0000/g, "")
+			.split("\n");
+		const out = [];
+		const paragraph = [];
+		let index = 0;
+
+		const flush = () => {
+			if (!paragraph.length) {
+				return;
+			}
+
+			out.push(
+				`<p>${markdownInline(escapeHTML(paragraph.join("\n"))).replace(/\n/g, "<br>")}</p>`,
+			);
+			paragraph.length = 0;
+		};
+
+		const items = (pattern, tag) => {
+			const collected = [];
+
+			while (index < lines.length && pattern.test(lines[index])) {
+				collected.push(lines[index].replace(pattern, ""));
+				index += 1;
+			}
+
+			out.push(
+				`<${tag}>` +
+					collected
+						.map((item) => `<li>${markdownInline(escapeHTML(item))}</li>`)
+						.join("") +
+					`</${tag}>`,
+			);
+		};
+
+		while (index < lines.length) {
+			const line = lines[index];
+
+			if (/^\s*```/.test(line)) {
+				flush();
+				index += 1;
+
+				const body = [];
+
+				while (index < lines.length && !/^\s*```/.test(lines[index])) {
+					body.push(lines[index]);
+					index += 1;
+				}
+
+				index += 1;
+				out.push(`<pre><code>${escapeHTML(body.join("\n"))}</code></pre>`);
+				continue;
+			}
+
+			if (/^\s*>\s?/.test(line)) {
+				flush();
+
+				const body = [];
+
+				while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
+					body.push(lines[index].replace(/^\s*>\s?/, ""));
+					index += 1;
+				}
+
+				out.push(`<blockquote>${markdownToHTML(body.join("\n"))}</blockquote>`);
+				continue;
+			}
+
+			if (/^\s*[-*+]\s+\S/.test(line)) {
+				flush();
+				items(/^\s*[-*+]\s+/, "ul");
+				continue;
+			}
+
+			if (/^\s*\d+\.\s+\S/.test(line)) {
+				flush();
+				items(/^\s*\d+\.\s+/, "ol");
+				continue;
+			}
+
+			const heading = line.match(/^\s*#{1,6}\s+(.*)$/);
+
+			if (heading) {
+				flush();
+				out.push(`<p><strong>${markdownInline(escapeHTML(heading[1]))}</strong></p>`);
+				index += 1;
+				continue;
+			}
+
+			if (!line.trim()) {
+				flush();
+				index += 1;
+				continue;
+			}
+
+			paragraph.push(line);
+			index += 1;
+		}
+
+		flush();
+
+		return out.join("");
 	}
 
 	function lemmyComment(commentView, discussion) {
@@ -2126,7 +2264,7 @@
 			parentKey: parentId ? sourceKey("lemmy", parentId) : null,
 			author: lemmyHandle(commentView.creator),
 			authorName: lemmyDisplayName(commentView.creator),
-			bodyHTML: removed ? "" : escapeHTML(comment.content || ""),
+			bodyHTML: removed ? "" : markdownToHTML(comment.content || ""),
 			score: commentView.counts?.score ?? null,
 			createdAt: Math.floor(Date.parse(comment.published) / 1000) || 0,
 			isOP:
