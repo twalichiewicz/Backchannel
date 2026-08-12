@@ -4962,6 +4962,7 @@ ${
 	// #region hnewhere-test-export
 	function pageTitle(doc = document) {
 		const candidates = [
+			doc === document ? pdfTitle : null,
 			doc.querySelector('meta[property="og:title"]')?.content,
 			doc.querySelector('meta[name="twitter:title"]')?.content,
 			doc.title,
@@ -16015,6 +16016,8 @@ title="Show only this discussion">
 		ownPdfReader = null;
 		pdfTexts = null;
 		pdfTextsFor = null;
+		pdfTitle = null;
+		pdfTitleFor = null;
 	}
 
 	function pdfViewerApp() {
@@ -16082,6 +16085,76 @@ title="Show only this discussion">
 			} catch (e) {
 				console.error("Backchannel pdf reindex failed:", e);
 			}
+		}
+	}
+
+	let pdfTitle = null;
+	let pdfTitleFor = null;
+
+	function plausiblePdfTitle(value) {
+		const title = String(value || "")
+			.replace(/\s+/g, " ")
+			.replace(/^Microsoft Word\s*-\s*/i, "")
+			.trim();
+
+		if (title.length < 4 || title.length > 200) {
+			return null;
+		}
+
+		if (/^untitled/i.test(title) || /\.(pdf|tex|dvi|docx?|indd|qxd)$/i.test(title)) {
+			return null;
+		}
+
+		return title;
+	}
+
+	async function pdfHeadingTitle(document_) {
+		const upright = (await pdfPageTextItems(await document_.getPage(1))).filter(
+			(item) => {
+				const transform = item.transform || [1, 0, 0, 1, 0, 0];
+
+				return (
+					item.str.trim() &&
+					Math.abs(transform[1]) < 0.01 &&
+					Math.abs(transform[2]) < 0.01
+				);
+			},
+		);
+
+		if (!upright.length) {
+			return null;
+		}
+
+		const tallest = Math.max(
+			...upright.map((item) => Math.round(item.height * 10)),
+		);
+
+		return plausiblePdfTitle(
+			upright
+				.filter((item) => Math.round(item.height * 10) === tallest)
+				.map((item) => item.str)
+				.join(""),
+		);
+	}
+
+	async function loadPdfTitle(app) {
+		const document_ = app?.pdfDocument;
+
+		if (!document_ || pdfTitleFor === document_) {
+			return;
+		}
+
+		pdfTitleFor = document_;
+
+		try {
+			const meta = await document_.getMetadata();
+
+			pdfTitle =
+				plausiblePdfTitle(meta?.info?.Title) ||
+				plausiblePdfTitle(meta?.metadata?.get?.("dc:title")) ||
+				(await pdfHeadingTitle(document_));
+		} catch (error) {
+			console.error("Backchannel could not read the PDF title:", error);
 		}
 	}
 
@@ -18093,6 +18166,7 @@ title="Show only this discussion">
 		markQueueArrival().catch(console.error);
 
 		await ensurePdfReader(settings);
+		await loadPdfTitle(pdfViewerApp());
 
 		const votesReady = Promise.all([
 			loadRememberedVotes(),
