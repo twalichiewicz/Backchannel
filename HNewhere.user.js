@@ -240,7 +240,7 @@
 		return migrated;
 	}
 
-	function normalizeSourceSettings(stored, registeredIds, defaults = {}) {
+	function normalizeSourceSettings(stored, registeredIds) {
 		const source =
 			stored && typeof stored === "object" && !Array.isArray(stored)
 				? stored
@@ -248,31 +248,14 @@
 		const normalized = {};
 
 		for (const id of registeredIds) {
-			normalized[id] =
-				id in source ? Boolean(source[id]) : Boolean(defaults[id]);
+			normalized[id] = Boolean(source[id]);
 		}
 
 		return normalized;
 	}
 
-	function sourceDefaults() {
-		const defaults = {};
-
-		for (const source of SOURCES.values()) {
-			if (source.defaultOn) {
-				defaults[source.id] = true;
-			}
-		}
-
-		return defaults;
-	}
-
 	function enabledSourceIds(settings, registeredIds) {
-		const normalized = normalizeSourceSettings(
-			settings?.sources,
-			registeredIds,
-			sourceDefaults(),
-		);
+		const normalized = normalizeSourceSettings(settings?.sources, registeredIds);
 
 		return registeredIds.filter((id) => normalized[id]);
 	}
@@ -363,6 +346,7 @@
 	const DEFAULT_SETTINGS = {
 		annotations: false,
 		annotationsWhenSidebarClosed: false,
+		notepad: true,
 		pdfReader: false,
 		autoOpenSidebar: false,
 		autoOpenSidebarOnlyFromHN: false,
@@ -2714,10 +2698,6 @@ ${
 		return typeof source?.frontPage === "function";
 	}
 
-	function matrixSources() {
-		return [...SOURCES.values()].filter((source) => !source.local);
-	}
-
 	registerSource({
 		id: "hn",
 		origins: ["news.ycombinator.com"],
@@ -3515,11 +3495,22 @@ ${
 		return NOTES_PREFIX + ref.kind + ":" + ref.id;
 	}
 
+	function noteSeconds(value) {
+		const number = Number(value) || 0;
+
+		return number > 1e11 ? Math.floor(number / 1000) : number;
+	}
+
 	function keptNotes(stored) {
 		const notes = Array.isArray(stored?.notes) ? stored.notes : [];
 
 		return notes
 			.filter((note) => note?.id && String(note.text ?? "").trim())
+			.map((note) => ({
+				...note,
+				created: noteSeconds(note.created),
+				edited: note.edited ? noteSeconds(note.edited) : note.edited,
+			}))
 			.sort((a, b) => (a.created || 0) - (b.created || 0));
 	}
 
@@ -3547,6 +3538,7 @@ ${
 	function noteComment(note, discussion) {
 		return {
 			source: "notes",
+			local: true,
 			key: sourceKey("notes", note.id),
 			id: note.id,
 			discussionKey: discussion?.key,
@@ -3570,16 +3562,17 @@ ${
 
 		return {
 			source: "notes",
+			local: true,
 			key: sourceKey("notes", "notes"),
 			id: "notes",
-			title: "Backchannel local notes",
+			title: "Notepad",
 			author: "",
 			score: null,
 			commentCount: notes.length,
 			createdAt: Math.max(...notes.map((note) => note.created || 0)),
 			permalink: null,
 			articleURL,
-			label: "Backchannel local notes",
+			label: "Notepad",
 			collective: true,
 			bodyHTML: "",
 			rootKeys: notes.map((note) => sourceKey("notes", note.id)),
@@ -3896,7 +3889,7 @@ button {
 			...(changed ? reanchoredNote(note, parsed) : note),
 			text: parsed.text,
 			exact: parsed.exact,
-			edited: Date.now(),
+			edited: Math.floor(Date.now() / 1000),
 		};
 	}
 
@@ -3972,7 +3965,7 @@ button {
 			}
 		};
 
-		row.append(why, cancel, save);
+		row.append(save, cancel, why);
 		editor.append(field, row);
 
 		return { editor, field };
@@ -4034,12 +4027,15 @@ button {
 	}
 
 	function startNotepadDraft(section, body) {
-		openNotepad(section);
+		const add = section.querySelector(".notepad-add");
+		const open = body.querySelector(".note-editor-draft");
 
-		if (body.querySelector(".note-editor")) {
-			body.querySelector(".note-editor-field")?.focus();
+		if (open) {
+			closeNotepadDraft(section, body);
 			return;
 		}
+
+		openNotepad(section);
 
 		const held = inlineNoteEditor(null, {
 			canAnchor: (exact) => Boolean(anchorNoteQuote(exact)),
@@ -4047,16 +4043,40 @@ button {
 			onSave: (parsed) => {
 				writeNote(parsed).catch(console.error);
 			},
-			onClose: () => {
-				held.editor.remove();
-				settleNotepad(body.firstElementChild || body);
-			},
+			onClose: () => closeNotepadDraft(section, body),
 		});
 
 		held.editor.classList.add("note-editor-draft");
 		body.prepend(held.editor);
-		held.field.focus();
-		settleNotepad(held.editor);
+		add?.classList.add("is-open");
+		add?.setAttribute("aria-expanded", "true");
+
+		requestAnimationFrame(() => {
+			held.editor.classList.add("is-open");
+			held.editor.style.maxHeight = `${held.editor.scrollHeight}px`;
+			settleNotepad(held.editor);
+			held.field.focus();
+		});
+	}
+
+	function closeNotepadDraft(section, body) {
+		const add = section.querySelector(".notepad-add");
+		const draft = body.querySelector(".note-editor-draft");
+
+		add?.classList.remove("is-open");
+		add?.setAttribute("aria-expanded", "false");
+
+		if (!draft) {
+			return;
+		}
+
+		draft.style.maxHeight = "0px";
+		draft.classList.remove("is-open");
+
+		window.setTimeout(() => {
+			draft.remove();
+			settleNotepad(body.firstElementChild || body);
+		}, 220);
 	}
 
 	async function writeNote(parsed) {
@@ -4074,7 +4094,7 @@ button {
 						"n" +
 						Date.now().toString(36) +
 						Math.floor(Math.random() * 1e6).toString(36),
-					created: Date.now(),
+					created: Math.floor(Date.now() / 1000),
 					url: location.href,
 				},
 				parsed,
@@ -4110,15 +4130,7 @@ button {
 			return;
 		}
 
-		const found = (await getSource("notes")?.discover(pageAddress())) || [];
-		const others = renderedDiscussions.filter((story) => story.source !== "notes");
-		const next = [...others, ...found];
-
-		if (!next.length) {
-			return;
-		}
-
-		await renderDiscussions(next, sidebarUI);
+		await renderDiscussions(renderedDiscussions, sidebarUI);
 		await refreshArticleAnnotations();
 	}
 
@@ -4173,6 +4185,25 @@ button {
 		});
 	}
 
+	// #region hnewhere-test-export
+	function notesThread(discussion) {
+		const byKey = new Map(
+			(discussion.notes || []).map((note) => [
+				sourceKey("notes", note.id),
+				noteComment(note, discussion),
+			]),
+		);
+
+		return {
+			rootKeys: [...byKey.keys()],
+
+			async getComment(key) {
+				return byKey.get(key) || null;
+			},
+		};
+	}
+	// #endregion hnewhere-test-export
+
 	function noteDocumentRefForPage() {
 		return noteDocumentRef(pdfViewerApp()?.pdfDocument?.fingerprints?.[0]);
 	}
@@ -4210,51 +4241,6 @@ button {
 
 		await save(NOTES_INDEX_KEY, entries);
 	}
-
-	registerSource({
-		id: "notes",
-		origins: [],
-		label: "Backchannel local notes",
-		shortLabel: "Notes",
-		local: true,
-		defaultOn: true,
-		ageLabel: "Last note",
-		threadArrivesWhole: true,
-		caveat:
-			"Stays on this device. Nothing is sent anywhere, and no host is contacted.",
-		capabilities: { vote: false, reply: false, submit: false },
-
-		profileURL: () => null,
-
-		async discover(url) {
-			const collective = notesCollective(await loadNotes(), url);
-
-			return collective ? [collective] : [];
-		},
-
-		async loadThread(discussion) {
-			const byKey = new Map(
-				(discussion.notes || []).map((note) => [
-					sourceKey("notes", note.id),
-					noteComment(note, discussion),
-				]),
-			);
-			const rootTimes = new Map();
-
-			for (const [key, comment] of byKey) {
-				rootTimes.set(key, comment.createdAt);
-			}
-
-			return {
-				rootKeys: [...byKey.keys()],
-				rootTimes,
-
-				async getComment(key) {
-					return byKey.get(key) || null;
-				},
-			};
-		},
-	});
 
 	const MASTODON_INSTANCE = "https://mastodon.social";
 	const TOOTFINDER = "https://www.tootfinder.ch";
@@ -10587,6 +10573,17 @@ allowing highlighting and annotation directly onto the PDF.
 </div>
 
 <div class="settings-group">
+<label class="settings-option">
+<input id="setting-notepad" data-setting="notepad" type="checkbox">
+<span>Enable notepad</span>
+</label>
+<div class="settings-option-hint">
+Write your own notes on any page or PDF, on a passage you select or on the page
+as a whole. They stay on this device and are never sent anywhere.
+</div>
+</div>
+
+<div class="settings-group">
 <div class="settings-field">
 <div class="settings-field-label">Theme</div>
 <div class="segmented">
@@ -10650,7 +10647,7 @@ ${sourceListHTML({ idPrefix: "setting-source-" })}
 <div class="source-matrix-caption">What each source supports</div>
 <div class="source-matrix-scroll">
 <table class="source-matrix">
-<thead><tr><th></th>${matrixSources().map((source) => `<th>${escapeHTML(source.shortLabel || source.label)}</th>`).join("")}</tr></thead>
+<thead><tr><th></th>${[...SOURCES.values()].map((source) => `<th>${escapeHTML(source.shortLabel || source.label)}</th>`).join("")}</tr></thead>
 <tbody>
 ${[
 	["Read", () => true],
@@ -10662,7 +10659,9 @@ ${[
 	["Flag", (source) => Boolean(source.capabilities.flag)],
 ]
 	.map(
-		([label, supported]) => `<tr><th>${escapeHTML(label)}</th>${matrixSources()
+		([label, supported]) => `<tr><th>${escapeHTML(label)}</th>${[
+			...SOURCES.values(),
+		]
 			.map((source) => {
 				const yes = Boolean(supported(source));
 				return `<td class="${yes ? "yes" : "no"}" data-capability-source="${escapeHTML(source.id)}" aria-label="${yes ? "yes" : "no"}">${yes ? "&check;" : "&ndash;"}</td>`;
@@ -10734,6 +10733,7 @@ ${[
 				"#setting-annotations-closed",
 			),
 			pdfReader: shadow.querySelector("#setting-pdf-reader"),
+			notepad: shadow.querySelector("#setting-notepad"),
 			autoOpenSidebarOnlyFromHN: shadow.querySelector(
 				"#setting-auto-open-only-from-hn",
 			),
@@ -11650,6 +11650,21 @@ ${SUBMIT_FORM_CSS}
 	transition:max-height .22s ease, opacity .18s ease;
 }
 
+.notepad-add.is-open {
+	text-decoration:underline;
+}
+
+.note-editor-draft {
+	overflow:hidden;
+	max-height:0;
+	opacity:0;
+	transition:max-height .22s ease, opacity .18s ease;
+}
+
+.note-editor-draft.is-open {
+	opacity:1;
+}
+
 .notepad-section.is-collapsed .notepad-body {
 	opacity:0;
 }
@@ -11659,7 +11674,7 @@ ${SUBMIT_FORM_CSS}
 }
 
 .note-editor {
-	margin:4px 0 0;
+	margin:8px 0 2px;
 }
 
 .note-editor-field {
@@ -11677,40 +11692,49 @@ ${SUBMIT_FORM_CSS}
 
 .note-editor-row {
 	display:flex;
-	gap:8px;
-	align-items:baseline;
-	justify-content:flex-end;
-	margin-top:5px;
+	gap:10px;
+	align-items:center;
+	justify-content:flex-start;
+	margin-top:6px;
 }
 
 .note-editor-why {
-	margin-right:auto;
 	color:var(--meta);
 	font-size:11px;
 }
 
-.note-editor-row button {
+.note-editor-cancel {
 	padding:0;
 	border:0;
 	background:none;
-	color:var(--muted);
+	color:var(--meta);
 	font:inherit;
 	font-size:11px;
-	text-decoration:underline;
+	text-decoration:none;
 	cursor:pointer;
 }
 
 .note-editor-save {
+	padding:3px 10px;
+	border:0;
+	border-radius:5px;
+	background:rgba(var(--accent-rgb),.95);
+	color:var(--header-text);
+	font:inherit;
+	font-size:11px;
 	font-weight:600;
+	cursor:pointer;
 }
-
-
 
 @media (hover: hover) {
-	.note-editor-row button:hover {
-		color:var(--surface-text);
+	.note-editor-cancel:hover {
+		text-decoration:underline;
 	}
 }
+
+
+
+
 
 .comment.new-comment {
 	border-left-color:rgba(var(--accent-rgb),.95);
@@ -13412,19 +13436,19 @@ ${settingsPanelHTML()}
 		div.dataset.commentId = comment.key;
 		div.dataset.storyId = String(storyID);
 
-		if (!getSource(comment.source)?.local && isNewComment(comment, seenTime)) {
+		if (!comment.local && isNewComment(comment, seenTime)) {
 			div.classList.add("new-comment");
 		}
 
 		const replies = comment.replyKeys;
 		const commentID = String(comment.id);
 		const capabilities = getSource(comment.source)?.capabilities || {};
-		const isLocalSource = Boolean(getSource(comment.source)?.local);
+		const isLocalSource = Boolean(comment.local);
 		const threadCanVote = renderedSourcesCanVote();
 
 		div.innerHTML = `
       <div class="comment-layout">
-      <span class="comment-vote-slot${threadCanVote ? "" : " comment-vote-slot-empty"}">
+      <span class="comment-vote-slot${threadCanVote && !isLocalSource ? "" : " comment-vote-slot-empty"}">
       <span class="comment-vote-controls vote-controls hidden"
       data-hn-vote-source="${escapeHTML(String(comment.source || "hn"))}"
       data-hn-vote-story-id="${escapeHTML(String(storyID))}"
@@ -13783,32 +13807,18 @@ ${settingsPanelHTML()}
 		const liveNow = Math.floor(Date.now() / 1000);
 
 		stories.forEach((story, index) => {
-			if (
-				!getSource(story.source)?.local &&
-				isDiscussionLive(threads[index], liveNow)
-			) {
+			if (!story.local && isDiscussionLive(threads[index], liveNow)) {
 				liveDiscussions.set(story.key, story.baseLabel || story.label || "");
 			}
 		});
 
 		const page = discussionsPageTitle(stories);
 
-		const localStories = stories.filter(
-			(story) => getSource(story.source)?.local,
-		);
-		const sharedStories = stories.filter(
-			(story) => !getSource(story.source)?.local,
-		);
-
-		const headerElement = renderPageHeader(
-			sharedStories.length ? sharedStories : stories,
-			ui.body,
-			{
-				page,
-				sort: settings.commentSort,
-				onSortChange: () => renderDiscussions(stories, ui),
-			},
-		);
+		const headerElement = renderPageHeader(stories, ui.body, {
+			page,
+			sort: settings.commentSort,
+			onSortChange: () => renderDiscussions(stories, ui),
+		});
 
 		mountFilterBanner(headerElement, ui);
 
@@ -13825,7 +13835,7 @@ ${settingsPanelHTML()}
 
 		const disambiguating = stories.length > 1;
 
-		for (const story of sharedStories) {
+		for (const story of stories) {
 			const canVote = Boolean(getSource(story.source)?.capabilities.vote);
 			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
 			const resolved = storyTitle(story, page, disambiguating);
@@ -13855,19 +13865,18 @@ ${settingsPanelHTML()}
 			),
 		);
 
-		const notesOn = enabledSourceIds(settings, registeredSourceIds()).includes(
-			"notes",
-		);
+		const notes = settings.notepad ? await loadNotes() : [];
+		const notesDiscussion = notesCollective(notes, pageAddress());
 
-		if (localStories.length || notesOn) {
+		if (settings.notepad) {
 			const held = notesSection({
 				onAdd: () => startNotepadDraft(held.section, held.body),
 			});
 
 			ui.body.insertBefore(held.section, ui.body.querySelector(".page-sort"));
 
-			for (const story of localStories) {
-				const thread = threads[stories.indexOf(story)];
+			if (notesDiscussion) {
+				const thread = notesThread(notesDiscussion);
 
 				for (const key of thread.rootKeys) {
 					if (generation !== sidebarGeneration) {
@@ -13878,7 +13887,7 @@ ${settingsPanelHTML()}
 						key,
 						thread,
 						held.body,
-						story,
+						notesDiscussion,
 						0,
 						collapsedKeys,
 						generation,
@@ -13897,11 +13906,11 @@ ${settingsPanelHTML()}
 		);
 
 		const entries = blendRoots(
-			sharedStories.map((story) => ({
+			stories.map((story, index) => ({
 				discussionKey: story.key,
-				rootKeys: threads[stories.indexOf(story)].rootKeys,
+				rootKeys: threads[index].rootKeys,
 				story,
-				thread: threads[stories.indexOf(story)],
+				thread: threads[index],
 			})),
 			{
 				sort: settings.commentSort,
@@ -17780,7 +17789,7 @@ title="Show only this discussion">
 
 				group.comments.push({
 					commentId: rendered.id,
-					source: rendered.source,
+					local: rendered.local,
 					element: rendered.element,
 					textElement: rendered.textElement,
 					author: rendered.author,
@@ -18616,7 +18625,7 @@ title="Show only this discussion">
 	function decorateSidebarMatches(controller) {
 		for (const group of controller.groups) {
 			for (const comment of group.comments) {
-				if (getSource(comment.source)?.local) {
+				if (comment.local) {
 					continue;
 				}
 
