@@ -3838,15 +3838,65 @@ button {
 		return quote ? `> ${quote}\n\n${written}` : written;
 	}
 
-	function editedNote(note, parsed) {
-		const changed = parsed.exact !== String(note.exact || "").trim();
+	function anchorNoteQuote(exact) {
+		const wanted = normalizeSearchText(exact || "").text;
+
+		if (!wanted) {
+			return null;
+		}
+
+		const index = detectDocumentSource().buildIndex();
+
+		if (!index?.normalizedText) {
+			return null;
+		}
+
+		const found = findNormalizedOccurrences(
+			index.normalizedText,
+			wanted,
+			index.welded,
+		);
+
+		if (found.length !== 1) {
+			return null;
+		}
+
+		const at = found[0];
+		const ends = at + wanted.length;
+		const raw = index.normalizedMap?.[at];
+		const on =
+			index.pageStarts && raw != null
+				? findPageByOffset(index.pageStarts, raw)
+				: null;
+
+		return {
+			prefix: index.normalizedText.slice(Math.max(0, at - NOTE_CONTEXT_CHARS), at),
+			suffix: index.normalizedText.slice(ends, ends + NOTE_CONTEXT_CHARS),
+			page: on ? on.pageIndex + 1 : null,
+		};
+	}
+
+	function reanchoredNote(note, parsed) {
+		const anchor = parsed.exact ? anchorNoteQuote(parsed.exact) : null;
 
 		return {
 			...note,
 			text: parsed.text,
 			exact: parsed.exact,
+			prefix: anchor?.prefix || "",
+			suffix: anchor?.suffix || "",
+			page: anchor?.page ?? null,
+		};
+	}
+
+	function editedNote(note, parsed) {
+		const changed = parsed.exact !== String(note.exact || "").trim();
+
+		return {
+			...(changed ? reanchoredNote(note, parsed) : note),
+			text: parsed.text,
+			exact: parsed.exact,
 			edited: Date.now(),
-			...(changed ? { prefix: "", suffix: "", page: parsed.exact ? note.page : null } : {}),
 		};
 	}
 
@@ -3864,10 +3914,11 @@ button {
 		};
 	}
 
-	function inlineNoteEditor(note, { onSave, onClose }) {
+	function inlineNoteEditor(note, { onSave, onClose, canAnchor }) {
 		const editor = document.createElement("div");
 		const field = document.createElement("textarea");
 		const row = document.createElement("div");
+		const why = document.createElement("span");
 		const save = document.createElement("button");
 		const cancel = document.createElement("button");
 
@@ -3877,6 +3928,7 @@ button {
 		field.setAttribute("aria-label", "Edit your note");
 
 		row.className = "note-editor-row";
+		why.className = "note-editor-why";
 		cancel.type = "button";
 		cancel.className = "note-editor-cancel";
 		cancel.textContent = "cancel";
@@ -3884,12 +3936,28 @@ button {
 		save.className = "note-editor-save";
 		save.textContent = "save";
 
+		let warnedFor = null;
+
 		const commit = () => {
 			const parsed = noteFromText(field.value);
 
-			if (parsed.text || parsed.exact) {
-				onSave(parsed);
+			if (!parsed.text && !parsed.exact) {
+				return;
 			}
+
+			if (
+				parsed.exact &&
+				canAnchor &&
+				warnedFor !== parsed.exact &&
+				!canAnchor(parsed.exact)
+			) {
+				warnedFor = parsed.exact;
+				why.textContent =
+					"That passage is not in this document. Save again to keep it without a highlight.";
+				return;
+			}
+
+			onSave(parsed);
 		};
 
 		cancel.onclick = onClose;
@@ -3904,7 +3972,7 @@ button {
 			}
 		};
 
-		row.append(cancel, save);
+		row.append(why, cancel, save);
 		editor.append(field, row);
 
 		return { editor, field };
@@ -3947,6 +4015,8 @@ button {
 		}
 
 		const held = inlineNoteEditor(note, {
+			canAnchor: (exact) => Boolean(anchorNoteQuote(exact)),
+
 			onSave: (parsed) => {
 				updateNote(note.id, parsed).catch(console.error);
 			},
@@ -3972,6 +4042,8 @@ button {
 		}
 
 		const held = inlineNoteEditor(null, {
+			canAnchor: (exact) => Boolean(anchorNoteQuote(exact)),
+
 			onSave: (parsed) => {
 				writeNote(parsed).catch(console.error);
 			},
@@ -3996,19 +4068,17 @@ button {
 
 		await saveNotes([
 			...notes,
-			{
-				id:
-					"n" +
-					Date.now().toString(36) +
-					Math.floor(Math.random() * 1e6).toString(36),
-				created: Date.now(),
-				text: parsed.text,
-				exact: parsed.exact,
-				prefix: "",
-				suffix: "",
-				page: null,
-				url: location.href,
-			},
+			reanchoredNote(
+				{
+					id:
+						"n" +
+						Date.now().toString(36) +
+						Math.floor(Math.random() * 1e6).toString(36),
+					created: Date.now(),
+					url: location.href,
+				},
+				parsed,
+			),
 		]);
 		await reopenForNotes();
 	}
@@ -11608,8 +11678,15 @@ ${SUBMIT_FORM_CSS}
 .note-editor-row {
 	display:flex;
 	gap:8px;
+	align-items:baseline;
 	justify-content:flex-end;
 	margin-top:5px;
+}
+
+.note-editor-why {
+	margin-right:auto;
+	color:var(--meta);
+	font-size:11px;
 }
 
 .note-editor-row button {
@@ -17336,9 +17413,11 @@ title="Show only this discussion">
 	}
 	// #endregion hnewhere-test-export
 
+	// #region hnewhere-test-export
 	function buildArticleTextIndex() {
 		return documentSource().buildIndex();
 	}
+	// #endregion hnewhere-test-export
 
 	// #region hnewhere-test-export
 	function findNormalizedOccurrences(haystack, needle, welded = false) {
