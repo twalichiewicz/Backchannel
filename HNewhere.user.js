@@ -11177,6 +11177,11 @@ ${[
 				return;
 			}
 
+			if (setting === "notepad") {
+				await reopenForNotes();
+				return;
+			}
+
 			if (["annotations", "annotationsWhenSidebarClosed"].includes(setting)) {
 				await onAnnotationChange?.();
 			}
