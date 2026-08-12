@@ -11716,7 +11716,8 @@ ${SUBMIT_FORM_CSS}
 	overflow-wrap:anywhere;
 }
 
-.top-level-comments > .comment {
+.top-level-comments > .comment,
+.notepad-body > .comment {
 	margin-left:0;
 }
 
