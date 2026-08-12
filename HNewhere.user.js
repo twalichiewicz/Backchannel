@@ -434,6 +434,7 @@
 
 	let sidebar = null;
 	let sidebarUI = null;
+	let renderedDiscussions = [];
 	let opening = false;
 	let openingRun = null;
 	let sidebarGeneration = 0;
@@ -3587,6 +3588,282 @@ ${
 		};
 	}
 	// #endregion hnewhere-test-export
+
+	const NOTE_COMPOSER_CSS = `
+:host { all: initial; }
+.box {
+	width: 320px;
+	max-width: 82vw;
+	padding: 10px;
+	border-radius: 10px;
+	background: var(--surface, #fff);
+	color: var(--surface-text, #111);
+	box-shadow: 0 8px 28px rgba(0,0,0,.28);
+	font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+blockquote {
+	margin: 0 0 8px;
+	padding: 0 0 0 8px;
+	border-left: 2px solid #237140;
+	color: #666;
+	font-style: italic;
+	max-height: 4.5em;
+	overflow: hidden;
+}
+textarea {
+	width: 100%;
+	min-height: 68px;
+	box-sizing: border-box;
+	padding: 6px 7px;
+	border: 1px solid rgba(0,0,0,.2);
+	border-radius: 6px;
+	font: inherit;
+	resize: vertical;
+}
+.row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; align-items: center; }
+.why { margin-right: auto; color: #a33; font-size: 12px; }
+button {
+	padding: 6px 11px;
+	border: 0;
+	border-radius: 6px;
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+}
+.save { background: #237140; color: #fff; }
+.cancel { background: rgba(0,0,0,.07); color: inherit; }
+@media (prefers-color-scheme: dark) {
+	.box { background: #23262b; color: #e8e8e8; }
+	blockquote { color: #aaa; }
+	textarea { background: #1a1c20; color: #e8e8e8; border-color: rgba(255,255,255,.18); }
+	.cancel { background: rgba(255,255,255,.12); }
+}
+`;
+
+	let noteComposer = null;
+
+	function closeNoteComposer() {
+		noteComposer?.host.remove();
+		noteComposer = null;
+	}
+
+	// #region hnewhere-test-export
+	function noteSelectionContext(range) {
+		const container =
+			nearestElement(range.commonAncestorContainer)?.closest(
+				".textLayer, article, main, body",
+			) || document.body;
+		const before = document.createRange();
+		const after = document.createRange();
+
+		before.setStart(container, 0);
+		before.setEnd(range.startContainer, range.startOffset);
+		after.setStart(range.endContainer, range.endOffset);
+		after.setEnd(container, container.childNodes.length);
+
+		return {
+			prefix: before.toString().replace(/\s+/g, " ").slice(-NOTE_CONTEXT_CHARS),
+			suffix: after.toString().replace(/\s+/g, " ").slice(0, NOTE_CONTEXT_CHARS),
+		};
+	}
+
+	function noteSelection() {
+		const selection = window.getSelection();
+
+		if (!selection || selection.isCollapsed || !selection.rangeCount) {
+			return null;
+		}
+
+		const range = selection.getRangeAt(0);
+		const element = nearestElement(range.commonAncestorContainer);
+
+		if (
+			!element ||
+			element.closest("[data-hnewhere-sidebar], [data-hnewhere-note-composer]")
+		) {
+			return null;
+		}
+
+		const exact = selection.toString().replace(/\s+/g, " ").trim();
+
+		if (!exact) {
+			return null;
+		}
+
+		const rect = [...range.getClientRects()].pop() || range.getBoundingClientRect();
+
+		return {
+			exact,
+			...noteSelectionContext(range),
+			anchorable: normalizeSearchText(exact).text.length >= QUOTE_MIN_CHARS,
+			page: Number(element.closest(".page")?.dataset.pageNumber) || null,
+			left: rect.right,
+			top: rect.bottom,
+		};
+	}
+	// #endregion hnewhere-test-export
+
+	async function openNoteComposer(chosen) {
+		closeNoteComposer();
+
+		const host = document.createElement("div");
+
+		host.setAttribute("data-hnewhere-note-composer", "1");
+		host.style.cssText = `
+			position:absolute;
+			left:${Math.max(8, Math.min(chosen.left + window.scrollX, window.scrollX + window.innerWidth - 340))}px;
+			top:${chosen.top + window.scrollY + 8}px;
+			z-index:2147483646;
+		`;
+
+		const shadow = host.attachShadow({ mode: "open" });
+
+		shadow.innerHTML = `
+<style>${NOTE_COMPOSER_CSS}</style>
+<div class="box">
+<blockquote></blockquote>
+<textarea placeholder="Your note" aria-label="Your note"></textarea>
+<div class="row">
+<span class="why"></span>
+<button type="button" class="cancel">Cancel</button>
+<button type="button" class="save">Save note</button>
+</div>
+</div>`;
+
+		shadow.querySelector("blockquote").textContent = chosen.exact;
+
+		if (!chosen.anchorable) {
+			shadow.querySelector(".why").textContent =
+				"Too short to highlight — it will be kept as a note on the page.";
+		}
+
+		const field = shadow.querySelector("textarea");
+
+		shadow.querySelector(".cancel").onclick = () => closeNoteComposer();
+		shadow.querySelector(".save").onclick = () => {
+			saveNoteFromComposer(chosen, field.value).catch(console.error);
+		};
+		field.onkeydown = (event) => {
+			if (event.key === "Escape") {
+				closeNoteComposer();
+			}
+
+			if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+				saveNoteFromComposer(chosen, field.value).catch(console.error);
+			}
+		};
+
+		document.documentElement.appendChild(host);
+		noteComposer = { host, shadow };
+		field.focus();
+	}
+
+	async function saveNoteFromComposer(chosen, text) {
+		const why = noteComposer?.shadow.querySelector(".why");
+
+		if (!String(text || "").trim()) {
+			if (why) {
+				why.textContent = "A note needs something written in it.";
+			}
+
+			return;
+		}
+
+		const notes = await loadNotes();
+
+		await saveNotes([
+			...notes,
+			{
+				id: "n" + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36),
+				created: Date.now(),
+				text: String(text).trim(),
+				exact: chosen.anchorable ? chosen.exact : "",
+				prefix: chosen.prefix,
+				suffix: chosen.suffix,
+				page: chosen.page,
+				url: location.href,
+			},
+		]);
+
+		closeNoteComposer();
+		window.getSelection()?.removeAllRanges();
+		await reopenForNotes();
+	}
+
+	async function deleteNote(id) {
+		const notes = await loadNotes();
+
+		await saveNotes(notes.filter((note) => note.id !== id));
+		await reopenForNotes();
+	}
+
+	async function reopenForNotes() {
+		if (!sidebarUI) {
+			return;
+		}
+
+		const found = (await getSource("notes")?.discover(pageAddress())) || [];
+		const others = renderedDiscussions.filter((story) => story.source !== "notes");
+		const next = [...others, ...found];
+
+		if (!next.length) {
+			return;
+		}
+
+		await renderDiscussions(next, sidebarUI);
+		await refreshArticleAnnotations();
+	}
+
+	function removeNoteAffordance() {
+		document.querySelector("[data-hnewhere-note-add]")?.remove();
+	}
+
+	function syncNoteAffordance() {
+		if (noteComposer) {
+			return;
+		}
+
+		removeNoteAffordance();
+
+		const chosen = noteSelection();
+
+		if (!chosen) {
+			return;
+		}
+
+		const wrapper = document.createElement("div");
+
+		wrapper.setAttribute("data-hnewhere-note-add", "1");
+		wrapper.style.cssText = `
+			position:absolute;
+			left:${chosen.left + window.scrollX}px;
+			top:${chosen.top + window.scrollY + 6}px;
+			z-index:2147483646;
+		`;
+		wrapper.appendChild(
+			pdfReaderButton("Add note", () => {
+				removeNoteAffordance();
+				openNoteComposer(chosen).catch(console.error);
+			}),
+		);
+
+		document.documentElement.appendChild(wrapper);
+	}
+
+	function watchNoteSelection(settings) {
+		if (!enabledSourceIds(settings, registeredSourceIds()).includes("notes")) {
+			return;
+		}
+
+		const later = () => window.setTimeout(syncNoteAffordance, 0);
+
+		document.addEventListener("pointerup", later);
+		document.addEventListener("keyup", (event) => {
+			if (event.key === "Shift" || String(event.key).startsWith("Arrow")) {
+				later();
+			}
+		});
+	}
 
 	function noteDocumentRefForPage() {
 		return noteDocumentRef(pdfViewerApp()?.pdfDocument?.fingerprints?.[0]);
@@ -12744,6 +13021,7 @@ ${settingsPanelHTML()}
       <a class="focus-link" href="#">
       focus
       </a>
+		${comment.source === "notes" ? `|<a class="delete-note-link" href="#">delete</a>` : ""}
 		${capabilities.vote ? itemActionLinksHTML(commentID, comment.source || "hn") : ""}
 
       <span class="toggle">
@@ -12829,6 +13107,15 @@ ${settingsPanelHTML()}
 		};
 
 		const replyButton = div.querySelector(".reply-link");
+		const deleteNoteButton = div.querySelector(".delete-note-link");
+
+		if (deleteNoteButton) {
+			deleteNoteButton.onclick = (event) => {
+				event.preventDefault();
+				deleteNote(comment.id).catch(console.error);
+			};
+		}
+
 		const focusButton = div.querySelector(".focus-link");
 		const replyComposer = div.querySelector(".reply-composer");
 
@@ -12987,6 +13274,7 @@ ${settingsPanelHTML()}
 	}
 
 	async function renderDiscussions(stories, ui) {
+		renderedDiscussions = stories;
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
 		setWordmarkLocation(ui, "Discussion");
@@ -15289,6 +15577,8 @@ title="Show only this discussion">
 		return variants.sort((a, b) => b.normalized.length - a.normalized.length);
 	}
 
+	const QUOTE_MIN_CHARS = 24;
+
 	function extractQuotedTextCandidates(commentHTML) {
 		const template = document.createElement("template");
 		template.innerHTML = commentHTML || "";
@@ -15305,7 +15595,7 @@ title="Show only this discussion">
 
 			const normalized = normalizeSearchText(value).text;
 
-			if (normalized.length < 24 || seen.has(normalized)) {
+			if (normalized.length < QUOTE_MIN_CHARS || seen.has(normalized)) {
 				return;
 			}
 
@@ -18363,6 +18653,7 @@ title="Show only this discussion">
 
 		await ensurePdfReader(settings);
 		await loadPdfTitle(pdfViewerApp());
+		watchNoteSelection(settings);
 
 		const votesReady = Promise.all([
 			loadRememberedVotes(),
