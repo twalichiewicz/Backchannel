@@ -3577,7 +3577,7 @@ ${
 			bodyHTML: "",
 			rootKeys: notes.map((note) => sourceKey("notes", note.id)),
 			rootTimes: notes.map((note) => note.created || 0),
-			notes,
+			notes: [...notes].sort((a, b) => (b.created || 0) - (a.created || 0)),
 		};
 	}
 	// #endregion hnewhere-test-export
@@ -3972,6 +3972,7 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
+	// #region hnewhere-test-export
 	function settleNotepad(node) {
 		const body = node?.closest?.(".notepad-body");
 		const section = body?.closest(".notepad-section");
@@ -3980,8 +3981,14 @@ button {
 			return;
 		}
 
+		if (body.querySelector(".note-editor")) {
+			body.style.maxHeight = "";
+			return;
+		}
+
 		body.style.maxHeight = body.scrollHeight ? `${body.scrollHeight}px` : "";
 	}
+	// #endregion hnewhere-test-export
 
 	function openNotepad(section) {
 		const body = section?.querySelector(".notepad-body");
@@ -10570,16 +10577,13 @@ The default PDF reader will be replaced with
 allowing highlighting and annotation directly onto the PDF.
 </div>
 </div>
-</div>
-
-<div class="settings-group">
 <label class="settings-option">
 <input id="setting-notepad" data-setting="notepad" type="checkbox">
 <span>Enable notepad</span>
 </label>
 <div class="settings-option-hint">
-Write your own notes on any page or PDF, on a passage you select or on the page
-as a whole. They stay on this device and are never sent anywhere.
+Write your own notes on any article or PDF, with support for annotating a
+passage you select. Stored locally.
 </div>
 </div>
 
@@ -13870,6 +13874,7 @@ ${settingsPanelHTML()}
 
 		if (settings.notepad) {
 			const held = notesSection({
+				empty: !notes.length,
 				onAdd: () => startNotepadDraft(held.section, held.body),
 			});
 
@@ -14093,7 +14098,7 @@ ${settingsPanelHTML()}
 	}
 
 	// #region hnewhere-test-export
-	function notesSection({ onAdd } = {}) {
+	function notesSection({ onAdd, empty = false } = {}) {
 		const section = document.createElement("div");
 		const head = document.createElement("div");
 		const body = document.createElement("div");
@@ -14109,8 +14114,14 @@ ${settingsPanelHTML()}
 
 		toggle.type = "button";
 		toggle.className = "notepad-toggle";
-		toggle.textContent = "hide";
-		toggle.setAttribute("aria-expanded", "true");
+		toggle.textContent = empty ? "show" : "hide";
+		toggle.hidden = empty;
+		toggle.setAttribute("aria-expanded", empty ? "false" : "true");
+
+		if (empty) {
+			section.classList.add("is-collapsed");
+			body.style.maxHeight = "0px";
+		}
 		toggle.onclick = () => {
 			const collapsed = !section.classList.contains("is-collapsed");
 
