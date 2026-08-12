@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.7
+// @version      1.6.8
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -42,7 +42,10 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
+// @grant        GM.getResourceText
 // @grant        unsafeWindow
+// @resource     pdfjsCore   https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.min.mjs
+// @resource     pdfjsWorker https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/build/pdf.worker.min.mjs
 // @connect      hacker-news.firebaseio.com
 // @connect      hn.algolia.com
 // @connect      news.ycombinator.com
@@ -343,6 +346,7 @@
 	const DEFAULT_SETTINGS = {
 		annotations: false,
 		annotationsWhenSidebarClosed: false,
+		pdfReader: false,
 		autoOpenSidebar: false,
 		autoOpenSidebarOnlyFromHN: false,
 		hideWithoutDiscussion: false,
@@ -9773,6 +9777,15 @@ Highlights the passages commenters quote, so you can jump between the article an
 <input id="setting-annotations-closed" data-setting="annotationsWhenSidebarClosed" type="checkbox">
 <span>Show when sidebar closed</span>
 </label>
+<label class="settings-option sub-option">
+<input id="setting-pdf-reader" data-setting="pdfReader" type="checkbox">
+<span>Read PDFs here, so passages can be highlighted</span>
+</label>
+<div class="settings-option-hint">
+Chrome and Safari keep a PDF's text out of the page, so nothing can be
+highlighted in one. With this on, a PDF offers to open in a reader that can —
+and closing it puts your browser's viewer back.
+</div>
 </div>
 </div>
 
@@ -9925,6 +9938,7 @@ ${[
 			annotationsWhenSidebarClosed: shadow.querySelector(
 				"#setting-annotations-closed",
 			),
+			pdfReader: shadow.querySelector("#setting-pdf-reader"),
 			autoOpenSidebarOnlyFromHN: shadow.querySelector(
 				"#setting-auto-open-only-from-hn",
 			),
@@ -15215,7 +15229,10 @@ title="Show only this discussion">
 			}
 
 			if (node.tagName === "BR") {
-				pushSeparator("\n");
+				if (!options.weldBreaks) {
+					pushSeparator("\n");
+				}
+
 				return;
 			}
 
@@ -15369,7 +15386,477 @@ title="Show only this discussion">
 		return { pageIndex: low, offsetInPage: offset - pageStarts[low] };
 	}
 
+	// -------------------------
+	// Our own PDF reader
+	// -------------------------
+
+	const PDFJS_VERSION = "6.2.108";
+	const PDFJS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/`;
+
+	const PDF_READER_CSS = `
+.hnewhere-pdf-viewer { --scale-factor: 1; --total-scale-factor: 1; --scale-round-x: 1px; --scale-round-y: 1px; }
+.hnewhere-pdf-viewer .page { position: relative; margin: 0 auto 12px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+.hnewhere-pdf-viewer .canvasWrapper { position: absolute; inset: 0; overflow: hidden; }
+.hnewhere-pdf-viewer .canvasWrapper canvas { display: block; }
+.hnewhere-pdf-viewer .textLayer {
+	position: absolute; text-align: initial; inset: 0; overflow: clip; opacity: 1;
+	line-height: 1; letter-spacing: normal; word-spacing: normal;
+	-webkit-text-size-adjust: none; text-size-adjust: none;
+	forced-color-adjust: none; transform-origin: 0 0; z-index: 0;
+	--min-font-size: 1;
+	--text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+	--min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.hnewhere-pdf-viewer .textLayer :is(span, br) {
+	color: transparent; position: absolute; white-space: pre; cursor: text;
+	transform-origin: 0% 0%;
+}
+.hnewhere-pdf-viewer .textLayer > :not(.markedContent),
+.hnewhere-pdf-viewer .textLayer .markedContent span:not(.markedContent) {
+	z-index: 1;
+	--font-height: 0;
+	font-size: calc(var(--text-scale-factor) * var(--font-height));
+	--scale-x: 1;
+	--rotate: 0deg;
+	transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.hnewhere-pdf-viewer .textLayer .markedContent { display: contents; }
+`;
+
+	let pdfjsModule = null;
+	let ownPdfReader = null;
+
+	function looksLikePdfDocument() {
+		return (
+			document.contentType === "application/pdf" ||
+			/\.pdf(?:[?#]|$)/i.test(location.pathname + location.search)
+		);
+	}
+
+	async function pdfjsResourceText(name, url) {
+		try {
+			const text = await GM?.getResourceText?.(name);
+
+			if (text) {
+				return text;
+			}
+		} catch {
+			/* empty */
+		}
+
+		return (await fetch(url, { cache: "force-cache" })).text();
+	}
+
+	async function loadPdfjs() {
+		if (pdfjsModule) {
+			return pdfjsModule;
+		}
+
+		const [core, worker] = await Promise.all([
+			pdfjsResourceText("pdfjsCore", PDFJS_BASE + "pdf.min.mjs"),
+			pdfjsResourceText("pdfjsWorker", PDFJS_BASE + "pdf.worker.min.mjs"),
+		]);
+
+		const asURL = (text) =>
+			URL.createObjectURL(new Blob([text], { type: "text/javascript" }));
+		const module_ = await import(asURL(core));
+
+		module_.GlobalWorkerOptions.workerSrc = asURL(worker);
+		pdfjsModule = module_;
+
+		return module_;
+	}
+
+	function pdfReaderBus() {
+		const listeners = new Map();
+
+		return {
+			on(name, callback) {
+				if (!listeners.has(name)) {
+					listeners.set(name, new Set());
+				}
+
+				listeners.get(name).add(callback);
+			},
+
+			off(name, callback) {
+				listeners.get(name)?.delete(callback);
+			},
+
+			dispatch(name, payload) {
+				for (const callback of [...(listeners.get(name) || [])]) {
+					try {
+						callback(payload);
+					} catch (e) {
+						console.error("Backchannel pdf reader listener failed:", e);
+					}
+				}
+			},
+		};
+	}
+
+	function pdfReaderButton(label, onClick) {
+		const button = document.createElement("button");
+
+		button.type = "button";
+		button.textContent = label;
+		pinButtonStyle(button, {
+			...BUTTON_STYLE_RESET,
+			display: "inline-block",
+			padding: "8px 14px",
+			borderRadius: "8px",
+			background: "#237140",
+			color: "#fff",
+			fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
+			fontSize: "13px",
+			fontWeight: "600",
+			cursor: "pointer",
+			boxShadow: "0 2px 8px rgba(0,0,0,.35)",
+			pointerEvents: "auto",
+		});
+		button.addEventListener("click", onClick);
+
+		return button;
+	}
+
+	function buildPdfReaderChrome() {
+		const host = document.createElement("div");
+
+		host.setAttribute("data-hnewhere-pdf-reader", "1");
+		host.style.cssText = `
+			position:fixed;
+			inset:0;
+			z-index:2147483644;
+			background:#3a3a3a;
+			overflow:auto;
+			overscroll-behavior:contain;
+		`;
+
+		const style = document.createElement("style");
+		style.textContent = PDF_READER_CSS;
+
+		const viewer = document.createElement("div");
+		viewer.className = "hnewhere-pdf-viewer pdfViewer";
+		viewer.style.cssText = "position:relative;padding:12px 0;";
+
+		const bar = document.createElement("div");
+		bar.style.cssText = `
+			position:fixed;
+			right:16px;
+			bottom:16px;
+			z-index:1;
+			display:flex;
+			gap:8px;
+			align-items:center;
+		`;
+
+		const counter = document.createElement("span");
+		counter.setAttribute("data-hnewhere-pdf-counter", "1");
+		counter.style.cssText = `
+			padding:8px 12px;
+			border-radius:8px;
+			background:rgba(0,0,0,.55);
+			color:#fff;
+			font:600 13px/1 system-ui, -apple-system, sans-serif;
+			white-space:nowrap;
+		`;
+
+		bar.append(
+			counter,
+			pdfReaderButton("−", () => {
+				setPdfReaderScale((ownPdfReader?.scale || 1) / 1.25).catch(console.error);
+			}),
+			pdfReaderButton("+", () => {
+				setPdfReaderScale((ownPdfReader?.scale || 1) * 1.25).catch(console.error);
+			}),
+			pdfReaderButton("Close reader", () => {
+				closePdfReader();
+				refreshArticleAnnotations().catch(console.error);
+			}),
+		);
+
+		host.append(style, viewer, bar);
+
+		return host;
+	}
+
+	function syncPdfReaderCounter() {
+		const reader = ownPdfReader;
+		const counter = reader?.host.querySelector("[data-hnewhere-pdf-counter]");
+
+		if (!counter) {
+			return;
+		}
+
+		const top = reader.host.getBoundingClientRect().top;
+		let current = 1;
+
+		for (const box of reader.pages) {
+			if (box.getBoundingClientRect().bottom > top + 8) {
+				current = Number(box.dataset.pageNumber);
+				break;
+			}
+		}
+
+		counter.textContent = `${current} / ${reader.pages.length}`;
+	}
+
+	async function drawPdfReaderVisiblePages() {
+		const reader = ownPdfReader;
+
+		if (!reader) {
+			return;
+		}
+
+		const view = reader.host.getBoundingClientRect();
+
+		for (const box of reader.pages) {
+			const rect = box.getBoundingClientRect();
+
+			if (rect.bottom > view.top - 400 && rect.top < view.bottom + 400) {
+				await drawPdfReaderPage(Number(box.dataset.pageNumber));
+			}
+		}
+	}
+
+	async function setPdfReaderScale(scale) {
+		const reader = ownPdfReader;
+		const next = Math.max(0.25, Math.min(4, scale));
+
+		if (!reader || Math.abs(next - reader.scale) < 0.001) {
+			return;
+		}
+
+		const held = reader.viewer.scrollHeight
+			? reader.host.scrollTop / reader.viewer.scrollHeight
+			: 0;
+		const sized = (await reader.app.pdfDocument.getPage(1)).getViewport({
+			scale: next,
+		});
+
+		if (ownPdfReader !== reader) {
+			return;
+		}
+
+		reader.scale = next;
+		reader.viewer.style.setProperty("--scale-factor", String(next));
+		reader.viewer.style.setProperty("--total-scale-factor", String(next));
+		reader.drawn.clear();
+
+		for (const box of reader.pages) {
+			box.textContent = "";
+			box.style.width = Math.floor(sized.width) + "px";
+			box.style.height = Math.floor(sized.height) + "px";
+		}
+
+		reader.host.scrollTop = held * reader.viewer.scrollHeight;
+		reader.bus.dispatch("scalechanging", { scale: next, source: reader.app });
+
+		await drawPdfReaderVisiblePages();
+		syncPdfReaderCounter();
+	}
+
+	function removePdfReaderOffer() {
+		document.querySelector("[data-hnewhere-pdf-offer]")?.remove();
+	}
+
+	function syncPdfReaderOffer(settings) {
+		removePdfReaderOffer();
+
+		if (
+			!settings?.annotations ||
+			!settings.pdfReader ||
+			ownPdfReader ||
+			!looksLikePdfDocument() ||
+			document.querySelector(".pdfViewer .textLayer")
+		) {
+			return;
+		}
+
+		const offer = document.createElement("div");
+
+		offer.setAttribute("data-hnewhere-pdf-offer", "1");
+		offer.style.cssText = `
+			position:fixed;
+			left:50%;
+			bottom:24px;
+			transform:translateX(-50%);
+			z-index:2147483643;
+		`;
+		offer.appendChild(
+			pdfReaderButton("Open this PDF where passages can be highlighted", () => {
+				removePdfReaderOffer();
+				openPdfReader()
+					.then(() => refreshArticleAnnotations())
+					.catch((e) => {
+						console.error("Backchannel could not open the PDF reader:", e);
+						closePdfReader();
+					});
+			}),
+		);
+
+		document.documentElement.appendChild(offer);
+	}
+
+	async function drawPdfReaderPage(number) {
+		const reader = ownPdfReader;
+
+		if (!reader || reader.drawn.has(number)) {
+			return;
+		}
+
+		reader.drawn.add(number);
+
+		const box = reader.pages[number - 1];
+		const page = await reader.app.pdfDocument.getPage(number);
+
+		if (ownPdfReader !== reader || !box) {
+			return;
+		}
+
+		const viewport = page.getViewport({ scale: reader.scale });
+
+		box.style.width = Math.floor(viewport.width) + "px";
+		box.style.height = Math.floor(viewport.height) + "px";
+
+		const canvas = document.createElement("canvas");
+		canvas.width = Math.floor(viewport.width);
+		canvas.height = Math.floor(viewport.height);
+
+		const wrapper = document.createElement("div");
+		wrapper.className = "canvasWrapper";
+		wrapper.appendChild(canvas);
+		box.appendChild(wrapper);
+
+		await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+
+		if (ownPdfReader !== reader) {
+			return;
+		}
+
+		const layer = document.createElement("div");
+		layer.className = "textLayer";
+		box.appendChild(layer);
+
+		await new reader.pdfjs.TextLayer({
+			textContentSource: page.streamTextContent(),
+			container: layer,
+			viewport,
+		}).render();
+
+		if (ownPdfReader !== reader) {
+			return;
+		}
+
+		reader.bus.dispatch("textlayerrendered", {
+			pageNumber: number,
+			source: reader.app,
+		});
+	}
+
+	function observePdfReaderPages() {
+		const reader = ownPdfReader;
+
+		if (!reader) {
+			return;
+		}
+
+		reader.observer = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					if (entry.isIntersecting) {
+						drawPdfReaderPage(Number(entry.target.dataset.pageNumber)).catch(
+							console.error,
+						);
+					}
+				}
+			},
+			{ root: reader.host, rootMargin: "400px 0px" },
+		);
+
+		for (const box of reader.pages) {
+			reader.observer.observe(box);
+		}
+	}
+
+	async function openPdfReader() {
+		if (ownPdfReader) {
+			return ownPdfReader;
+		}
+
+		const pdfjs = await loadPdfjs();
+		const response = await fetch(location.href, { cache: "force-cache" });
+		const bytes = new Uint8Array(await response.arrayBuffer());
+		const pdfDocument = await pdfjs.getDocument({ data: bytes }).promise;
+		const host = buildPdfReaderChrome();
+		const viewer = host.querySelector(".pdfViewer");
+
+		document.documentElement.appendChild(host);
+
+		const base = (await pdfDocument.getPage(1)).getViewport({ scale: 1 });
+		const scale = Math.max(
+			0.2,
+			Math.min(3, (host.clientWidth - 32) / base.width || 1),
+		);
+		const sized = (await pdfDocument.getPage(1)).getViewport({ scale });
+		const pages = [];
+
+		for (let number = 1; number <= pdfDocument.numPages; number += 1) {
+			const box = document.createElement("div");
+
+			box.className = "page";
+			box.dataset.pageNumber = String(number);
+			box.style.width = Math.floor(sized.width) + "px";
+			box.style.height = Math.floor(sized.height) + "px";
+			viewer.appendChild(box);
+			pages.push(box);
+		}
+
+		viewer.style.setProperty("--scale-factor", String(scale));
+		viewer.style.setProperty("--total-scale-factor", String(scale));
+
+		const bus = pdfReaderBus();
+
+		ownPdfReader = {
+			app: { pdfDocument, eventBus: bus },
+			bus,
+			host,
+			viewer,
+			pages,
+			pdfjs,
+			scale,
+			drawn: new Set(),
+			observer: null,
+		};
+
+		observePdfReaderPages();
+		syncPdfReaderCounter();
+
+		host.addEventListener("scroll", syncPdfReaderCounter, { passive: true });
+		bus.dispatch("pagesloaded", { source: ownPdfReader.app });
+
+		return ownPdfReader;
+	}
+
+	function closePdfReader() {
+		const reader = ownPdfReader;
+
+		if (!reader) {
+			return;
+		}
+
+		reader.observer?.disconnect();
+		reader.host.remove();
+		ownPdfReader = null;
+		pdfTexts = null;
+		pdfTextsFor = null;
+	}
+
 	function pdfViewerApp() {
+		if (ownPdfReader?.app?.pdfDocument) {
+			return ownPdfReader.app;
+		}
+
 		const scopes = [
 			typeof unsafeWindow !== "undefined" ? unsafeWindow : null,
 			typeof window !== "undefined" ? window : null,
@@ -15405,6 +15892,7 @@ title="Show only this discussion">
 
 		const index = buildTextIndex(layer, {
 			skipHidden: true,
+			weldBreaks: true,
 			excludeSelectors: [
 				"[data-hnewhere-annotation-overlay]",
 				"[data-hnewhere-sidebar]",
@@ -15480,6 +15968,10 @@ title="Show only this discussion">
 				const pageIndex = at && pdfPageIndex(at.pageIndex);
 
 				if (!pageIndex) {
+					if (at && ownPdfReader) {
+						drawPdfReaderPage(at.pageIndex + 1).catch(console.error);
+					}
+
 					return null;
 				}
 
@@ -15533,7 +16025,8 @@ title="Show only this discussion">
 		},
 
 		scrollIntoView(range) {
-			const container = document.getElementById("viewerContainer");
+			const container =
+				ownPdfReader?.host || document.getElementById("viewerContainer");
 
 			if (!container) {
 				HTML_DOCUMENT_SOURCE.scrollIntoView(range);
@@ -15757,18 +16250,28 @@ title="Show only this discussion">
 		};
 	}
 
-	function findBestQuoteMatch(articleIndex, candidate) {
-		const quoteText = typeof candidate === "string" ? candidate : candidate.text;
-		let best = null;
+	function exactSearchTexts(text) {
+		const whole = String(text || "");
+		const withoutNumber = whole.replace(/^\s*\d+\.\s*/, "");
 
-		if (typeof candidate === "object" && candidate.exact) {
-			const normalized = normalizeSearchText(quoteText).text;
-			const matches = findNormalizedOccurrences(
-				articleIndex.normalizedText,
-				normalized,
-			);
-			let at = null;
-			let context = null;
+		return withoutNumber && withoutNumber !== whole
+			? [whole, withoutNumber]
+			: [whole];
+	}
+
+	function matchExactQuote(articleIndex, candidate, text, quoteText) {
+		const normalized = normalizeSearchText(text).text;
+
+		if (!normalized) {
+			return null;
+		}
+
+		const matches = findNormalizedOccurrences(
+			articleIndex.normalizedText,
+			normalized,
+		);
+		let at = null;
+		let context = null;
 
 			if (matches.length === 1) {
 				at = matches[0];
@@ -15802,25 +16305,39 @@ title="Show only this discussion">
 				}
 			}
 
-			if (at !== null) {
-				const rangeMatch = rangeFromIndexMatch(
-					articleIndex,
-					at,
-					normalized.length,
-				);
+		if (at === null) {
+			return null;
+		}
 
-				if (rangeMatch && getPageRectsForRange(rangeMatch.range).length) {
-					return {
-						score: normalized.length * 10 + 10000,
-						key: `${rangeMatch.startRaw}:${rangeMatch.endRaw}`,
-						range: rangeMatch.range,
-						quoteText,
-						fullQuoteText: quoteText,
-						quoteNormalized: normalized,
-						startRaw: rangeMatch.startRaw,
-						endRaw: rangeMatch.endRaw,
-						contextMatched: context?.matched ?? null,
-					};
+		const rangeMatch = rangeFromIndexMatch(articleIndex, at, normalized.length);
+
+		if (!rangeMatch || !getPageRectsForRange(rangeMatch.range).length) {
+			return null;
+		}
+
+		return {
+			score: normalized.length * 10 + 10000,
+			key: `${rangeMatch.startRaw}:${rangeMatch.endRaw}`,
+			range: rangeMatch.range,
+			quoteText,
+			fullQuoteText: quoteText,
+			quoteNormalized: normalized,
+			startRaw: rangeMatch.startRaw,
+			endRaw: rangeMatch.endRaw,
+			contextMatched: context?.matched ?? null,
+		};
+	}
+
+	function findBestQuoteMatch(articleIndex, candidate) {
+		const quoteText = typeof candidate === "string" ? candidate : candidate.text;
+		let best = null;
+
+		if (typeof candidate === "object" && candidate.exact) {
+			for (const text of exactSearchTexts(quoteText)) {
+				const match = matchExactQuote(articleIndex, candidate, text, quoteText);
+
+				if (match) {
+					return match;
 				}
 			}
 		}
@@ -17125,6 +17642,7 @@ title="Show only this discussion">
 
 	async function refreshArticleAnnotations() {
 		clearArticleAnnotations();
+		syncPdfReaderOffer(await loadSettings());
 
 		if (!sidebar || !renderedComments.length) {
 			return;
