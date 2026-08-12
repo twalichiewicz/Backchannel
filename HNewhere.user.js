@@ -3831,6 +3831,39 @@ button {
 	}
 
 	// #region hnewhere-test-export
+	function noteAsText(note) {
+		const quote = String(note?.exact || "").trim();
+		const written = String(note?.text || "").trim();
+
+		return quote ? `> ${quote}\n\n${written}` : written;
+	}
+
+	function editedNote(note, parsed) {
+		const changed = parsed.exact !== String(note.exact || "").trim();
+
+		return {
+			...note,
+			text: parsed.text,
+			exact: parsed.exact,
+			edited: Date.now(),
+			...(changed ? { prefix: "", suffix: "", page: parsed.exact ? note.page : null } : {}),
+		};
+	}
+
+	function noteFromText(value) {
+		const lines = String(value || "").split("\n");
+		const quoted = [];
+
+		while (lines.length && /^\s*>/.test(lines[0])) {
+			quoted.push(lines.shift().replace(/^\s*>\s?/, ""));
+		}
+
+		return {
+			exact: quoted.join(" ").replace(/\s+/g, " ").trim(),
+			text: lines.join("\n").trim(),
+		};
+	}
+
 	function inlineNoteEditor(note, { onSave, onClose }) {
 		const editor = document.createElement("div");
 		const field = document.createElement("textarea");
@@ -3840,7 +3873,7 @@ button {
 
 		editor.className = "note-editor";
 		field.className = "note-editor-field";
-		field.value = note?.text || "";
+		field.value = noteAsText(note);
 		field.setAttribute("aria-label", "Edit your note");
 
 		row.className = "note-editor-row";
@@ -3851,24 +3884,16 @@ button {
 		save.className = "note-editor-save";
 		save.textContent = "save";
 
-		const commit = (dropHighlight = false) => {
-			if (String(field.value || "").trim()) {
-				onSave(field.value, dropHighlight);
+		const commit = () => {
+			const parsed = noteFromText(field.value);
+
+			if (parsed.text || parsed.exact) {
+				onSave(parsed);
 			}
 		};
 
 		cancel.onclick = onClose;
-		save.onclick = () => commit();
-
-		if (note?.exact) {
-			const drop = document.createElement("button");
-
-			drop.type = "button";
-			drop.className = "note-editor-drop";
-			drop.textContent = "remove highlight";
-			drop.onclick = () => commit(true);
-			row.appendChild(drop);
-		}
+		save.onclick = commit;
 		field.onkeydown = (event) => {
 			if (event.key === "Escape") {
 				onClose();
@@ -3886,6 +3911,34 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
+	function settleNotepad(node) {
+		const body = node?.closest?.(".notepad-body");
+		const section = body?.closest(".notepad-section");
+
+		if (!body || section?.classList.contains("is-collapsed")) {
+			return;
+		}
+
+		body.style.maxHeight = body.scrollHeight ? `${body.scrollHeight}px` : "";
+	}
+
+	function openNotepad(section) {
+		const body = section?.querySelector(".notepad-body");
+		const toggle = section?.querySelector(".notepad-toggle");
+
+		if (!section?.classList.contains("is-collapsed")) {
+			return;
+		}
+
+		section.classList.remove("is-collapsed");
+		toggle.textContent = "hide";
+		toggle.setAttribute("aria-expanded", "true");
+
+		if (body) {
+			body.style.maxHeight = body.scrollHeight ? `${body.scrollHeight}px` : "";
+		}
+	}
+
 	function startInlineNoteEdit(div, note) {
 		const text = div.querySelector(".text");
 
@@ -3893,35 +3946,75 @@ button {
 			return;
 		}
 
-		const written = [...text.children].filter(
-			(child) => child.tagName !== "BLOCKQUOTE",
-		);
-
-		for (const child of written) {
-			child.hidden = true;
-		}
-
 		const held = inlineNoteEditor(note, {
-			onSave: (value, dropHighlight) => {
-				updateNote(note.id, value, dropHighlight).catch(console.error);
+			onSave: (parsed) => {
+				updateNote(note.id, parsed).catch(console.error);
 			},
 			onClose: () => {
 				held.editor.remove();
-
-				for (const child of written) {
-					child.hidden = false;
-				}
+				text.hidden = false;
+				settleNotepad(div);
 			},
 		});
 
-		text.appendChild(held.editor);
+		text.hidden = true;
+		text.after(held.editor);
 		held.field.focus();
+		settleNotepad(div);
 	}
 
-	async function updateNote(id, text, dropHighlight = false) {
-		const written = String(text || "").trim();
+	function startNotepadDraft(section, body) {
+		openNotepad(section);
 
-		if (!written) {
+		if (body.querySelector(".note-editor")) {
+			body.querySelector(".note-editor-field")?.focus();
+			return;
+		}
+
+		const held = inlineNoteEditor(null, {
+			onSave: (parsed) => {
+				writeNote(parsed).catch(console.error);
+			},
+			onClose: () => {
+				held.editor.remove();
+				settleNotepad(body.firstElementChild || body);
+			},
+		});
+
+		held.editor.classList.add("note-editor-draft");
+		body.prepend(held.editor);
+		held.field.focus();
+		settleNotepad(held.editor);
+	}
+
+	async function writeNote(parsed) {
+		if (!parsed?.text && !parsed?.exact) {
+			return;
+		}
+
+		const notes = await loadNotes();
+
+		await saveNotes([
+			...notes,
+			{
+				id:
+					"n" +
+					Date.now().toString(36) +
+					Math.floor(Math.random() * 1e6).toString(36),
+				created: Date.now(),
+				text: parsed.text,
+				exact: parsed.exact,
+				prefix: "",
+				suffix: "",
+				page: null,
+				url: location.href,
+			},
+		]);
+		await reopenForNotes();
+	}
+
+	async function updateNote(id, parsed) {
+		if (!parsed?.text && !parsed?.exact) {
 			return;
 		}
 
@@ -3929,16 +4022,7 @@ button {
 
 		await saveNotes(
 			notes.map((note) =>
-				note.id === id
-					? {
-							...note,
-							text: written,
-							edited: Date.now(),
-							...(dropHighlight
-								? { exact: "", prefix: "", suffix: "", page: null }
-								: {}),
-						}
-					: note,
+				note.id === id ? editedNote(note, parsed) : note,
 			),
 		);
 		await reopenForNotes();
@@ -11466,16 +11550,17 @@ ${SUBMIT_FORM_CSS}
 	padding:0;
 	border:0;
 	background:none;
-	color:var(--muted);
+	color:var(--meta);
 	font:inherit;
 	font-size:11px;
-	text-decoration:underline;
+	text-decoration:none;
 	cursor:pointer;
 }
 
 @media (hover: hover) {
-	.notepad-add:hover {
-		color:var(--surface-text);
+	.notepad-add:hover,
+	.notepad-toggle:hover {
+		text-decoration:underline;
 	}
 }
 
@@ -11483,17 +11568,11 @@ ${SUBMIT_FORM_CSS}
 	padding:0;
 	border:0;
 	background:none;
-	color:var(--muted);
+	color:var(--meta);
 	font:inherit;
 	font-size:11px;
-	text-decoration:underline;
+	text-decoration:none;
 	cursor:pointer;
-}
-
-@media (hover: hover) {
-	.notepad-toggle:hover {
-		color:var(--surface-text);
-	}
 }
 
 .notepad-body {
@@ -11505,13 +11584,17 @@ ${SUBMIT_FORM_CSS}
 	opacity:0;
 }
 
+.notepad-section.is-collapsed .notepad-rule-close {
+	display:none;
+}
+
 .note-editor {
 	margin:4px 0 0;
 }
 
 .note-editor-field {
 	width:100%;
-	min-height:56px;
+	min-height:76px;
 	box-sizing:border-box;
 	padding:6px 7px;
 	border:1px solid var(--surface-border);
@@ -11544,9 +11627,7 @@ ${SUBMIT_FORM_CSS}
 	font-weight:600;
 }
 
-.note-editor-drop {
-	margin-right:auto;
-}
+
 
 @media (hover: hover) {
 	.note-editor-row button:hover {
@@ -13703,19 +13784,7 @@ ${settingsPanelHTML()}
 
 		if (localStories.length || notesOn) {
 			const held = notesSection({
-				onAdd: (button) => {
-					const rect = button.getBoundingClientRect();
-
-					openNoteComposer({
-						exact: "",
-						prefix: "",
-						suffix: "",
-						page: null,
-						anchorable: false,
-						left: Math.max(8, rect.left - 300),
-						top: rect.bottom,
-					}).catch(console.error);
-				},
+				onAdd: () => startNotepadDraft(held.section, held.body),
 			});
 
 			ui.body.insertBefore(held.section, ui.body.querySelector(".page-sort"));
@@ -17632,6 +17701,7 @@ title="Show only this discussion">
 
 				group.comments.push({
 					commentId: rendered.id,
+					source: rendered.source,
 					element: rendered.element,
 					textElement: rendered.textElement,
 					author: rendered.author,
@@ -18467,6 +18537,10 @@ title="Show only this discussion">
 	function decorateSidebarMatches(controller) {
 		for (const group of controller.groups) {
 			for (const comment of group.comments) {
+				if (getSource(comment.source)?.local) {
+					continue;
+				}
+
 				const onActivate = () => {
 					applyCommentFilter(group.key, {
 						commentId: comment.commentId,
