@@ -15899,6 +15899,10 @@ title="Show only this discussion">
 			],
 		});
 
+		if (index.normalizedText) {
+			index.welded = true;
+		}
+
 		return index.normalizedText ? index : null;
 	}
 
@@ -15961,6 +15965,7 @@ title="Show only this discussion">
 			normalizedText: normalized.text,
 			normalizedMap: normalized.map,
 			pageStarts: joined.pageStarts,
+			welded: true,
 
 			rangeAt(matchStart, matchLength) {
 				const rawStart = normalized.map[matchStart];
@@ -15979,13 +15984,29 @@ title="Show only this discussion">
 					matchStart,
 					matchStart + matchLength,
 				);
-				const here = findNormalizedOccurrences(pageIndex.normalizedText, needle);
+				const here = findNormalizedOccurrences(
+					pageIndex.normalizedText,
+					needle,
+					true,
+				);
 
 				if (here.length !== 1) {
 					return null;
 				}
 
-				return createRangeFromMatch(pageIndex, here[0], needle.length);
+				const span = createRangeFromMatch(pageIndex, here[0], needle.length);
+
+				if (!span) {
+					return null;
+				}
+
+				const base = joined.pageStarts[at.pageIndex];
+
+				return {
+					startRaw: base + span.startRaw,
+					endRaw: base + span.endRaw,
+					range: span.range,
+				};
 			},
 		};
 	}
@@ -16089,7 +16110,7 @@ title="Show only this discussion">
 	}
 
 	// #region hnewhere-test-export
-	function findNormalizedOccurrences(haystack, needle) {
+	function findNormalizedOccurrences(haystack, needle, welded = false) {
 		const matches = [];
 
 		if (!haystack || !needle) {
@@ -16110,7 +16131,7 @@ title="Show only this discussion">
 				index + needle.length === haystack.length ||
 				haystack[index + needle.length] === " ";
 
-			if (before && after) {
+			if (welded || (before && after)) {
 				matches.push(index);
 			}
 
@@ -16121,7 +16142,7 @@ title="Show only this discussion">
 	}
 
 	function resolveRawPoint(index, rawOffset, bias) {
-		if (!index.rawPoints.length) {
+		if (!index.rawPoints?.length) {
 			return null;
 		}
 
@@ -16269,6 +16290,7 @@ title="Show only this discussion">
 		const matches = findNormalizedOccurrences(
 			articleIndex.normalizedText,
 			normalized,
+			articleIndex.welded,
 		);
 		let at = null;
 		let context = null;
@@ -16346,6 +16368,7 @@ title="Show only this discussion">
 			const matches = findNormalizedOccurrences(
 				articleIndex.normalizedText,
 				variant.normalized,
+				articleIndex.welded,
 			);
 
 			if (!matches.length) {
@@ -16469,7 +16492,28 @@ title="Show only this discussion">
 	}
 
 	// #region hnewhere-test-export
+	function dedupeGroupComments(groups) {
+		for (const group of groups) {
+			const seen = new Set();
+
+			group.comments = group.comments.filter((comment) => {
+				if (seen.has(comment.commentId)) {
+					return false;
+				}
+
+				seen.add(comment.commentId);
+				return true;
+			});
+		}
+
+		return groups;
+	}
+
 	function mergeOverlappingGroups(groups, articleIndex) {
+		if (!articleIndex.rawPoints) {
+			return dedupeGroupComments([...groups]);
+		}
+
 		const sorted = [...groups].sort(
 			(a, b) => a.startRaw - b.startRaw || a.endRaw - b.endRaw,
 		);
