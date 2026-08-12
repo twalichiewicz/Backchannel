@@ -8,8 +8,8 @@ fix ships as a new version that existing installs pick up automatically.
 
 | Version | Supported |
 | ------- | --------- |
-| 1.6.1   | Yes       |
-| < 1.6.1 | No        |
+| 1.6.8   | Yes       |
+| < 1.6.8 | No        |
 
 Your installed version is shown at the bottom of the settings panel.
 
@@ -52,10 +52,29 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Hypothes.is | `api.hypothes.is` | the URL of each page you visit, to find public annotations on it. No account, signed in or out |
   | *no source enabled* | none | nothing — the script performs no lookup at all |
 
-- **Reading a PDF means reading the viewer.** On a PDF the script asks the
-  browser's own viewer for the document's text, so a quoted passage can be found
-  on a page that is not on screen yet. That is a read of the file you already
-  have open; nothing about it is sent anywhere.
+  Two hosts sit outside that table because they are not lookups:
+
+  | Host | When | What it is told |
+  | --- | --- | --- |
+  | `old.reddit.com` | only when you press vote or reply | the comment you are acting on, in a popup window you can see. Nothing at page load |
+  | `cdn.jsdelivr.net` | when your manager fetches the script's declared resources, and again from the page itself if it did not | nothing about you — it is a file download of a fixed, versioned URL |
+
+- **Enhanced PDF support downloads a copy of pdf.js.** The reader is
+  [pdf.js](https://mozilla.github.io/pdf.js/), declared as two `@resource` files
+  on `cdn.jsdelivr.net` — 0.49 MiB for the viewer and 1.25 MiB for its worker,
+  1.74 MiB in all, pinned to one version rather than tracking latest. Your
+  userscript manager fetches declared resources for you; if it hands back
+  nothing, the script fetches the same two URLs itself when the reader opens.
+  Either way it is a file download from a CDN, it carries nothing about you, and
+  the code is only loaded into a page when the setting is on and you are on a
+  PDF. This is the one thing in the script that is not self-contained, which is
+  why the setting is off until you turn it on.
+- **Reading a PDF means reading the file you already have open.** With the
+  setting off, the script asks the browser's own viewer for the document's text.
+  With it on, the script's own reader parses the bytes instead — the same bytes
+  your browser downloaded to show you. Either way a quoted passage can be found
+  on a page that is not on screen yet, and either way nothing about the document
+  is sent anywhere.
 - **`@connect` is a ceiling, not a statement of use.** The header is static, so
   it lists every host any source *could* contact, including sources you have
   switched off. A disabled source issues no requests; the entry is a permission
@@ -78,8 +97,12 @@ Worth stating plainly, because the permissions are broad by necessity:
   next to the checkbox rather than only here. Enabling *Never contact Reddit
   directly* uses only the archive mirror, which receives no identifier and no
   session.
-- **Reddit is read-only.** No voting, no replying, no submitting. Nothing is ever
-  posted to Reddit on your behalf.
+- **Reddit can vote and reply, and only when you press something.** This changed
+  in 1.6.7; before that it was read-only. Both act the same way Hacker News does:
+  a popup window opens on `old.reddit.com`, uses the session your browser already
+  holds there, and closes. The script never handles your Reddit password and
+  never moves your session cookie anywhere. It cannot submit — there is no
+  posting a new link or a new thread to Reddit.
 - **Bluesky is off by default, read-only, and needs no account.** The trade is a
   different shape from Reddit's, and better in one specific way: the page you are
   reading is disclosed to *Constellation*, not to Bluesky. Bluesky's own API is
@@ -102,27 +125,41 @@ Worth stating plainly, because the permissions are broad by necessity:
   tried: it has no authenticated mode to leak into. Two independent reasons,
   either of which would be sufficient.
 - **It stores data locally** through `GM.getValue` / `GM.setValue` — settings,
-  per-site sidebar widths, collapsed threads, seen-comment timestamps, and
-  remembered votes. Nothing is sent anywhere except the hosts above.
+  per-site sidebar widths, button position, collapsed threads, seen-comment
+  timestamps, remembered votes and favourites, your reading queue, the sites you
+  have hidden, and anything you write in the notepad. Nothing is sent anywhere
+  except the hosts above.
+- **The notepad stays on the machine you wrote it on.** Notes live in your
+  userscript manager's storage, keyed by page address or, on a PDF, by the
+  document's fingerprint. Nothing is uploaded and no source is told they exist.
+  That cuts the other way too: they do not sync between browsers, and clearing
+  your manager's data takes them with it, which is why the setting offers an
+  export.
 - **There is no backend, no analytics, and no telemetry.** Nobody but you and the
   sources you have enabled sees which pages you look up.
 
 ## Design decisions that limit the blast radius
 
 - **Sensitive sites are excluded** both in the userscript header and at runtime.
-  `isHiddenSite()` blocks private and single-label hostnames, plus a list
-  covering webmail, banking, auth flows, and cloud consoles. A blocked page
+  `isHiddenSite()` blocks anything that is not `http` or `https`, private and
+  single-label hostnames, and a list covering webmail, banking, auth flows and
+  cloud consoles — matched on the hostname and on the path, so a sign-in page
+  is caught on a host that is otherwise fine. A blocked page
   performs no lookup, renders nothing, and writes no stored state. PDFs were on
   that list until 1.6.7; they are read like any other page now, and a PDF on an
   excluded host stays excluded.
-- **Credentials never leave Hacker News.** Voting, submitting, and commenting are
-  performed in a popup window on `news.ycombinator.com` using your existing
-  session there. The script never handles your HN password, and never posts your
-  session cookie anywhere. No other source has write access at all.
+- **Credentials never leave the site they belong to.** Everything that writes —
+  voting, replying, and submitting on Hacker News; voting and replying on Reddit
+  — happens in a popup window on that site's own domain, using the session your
+  browser already has there. The script never handles either password and never
+  posts a session cookie anywhere. Those two are the only sources with write
+  access; the rest are read-only.
 - **Comment HTML is sanitized** before being inserted, through an allowlist of
-  tags and attributes — applied to every source, including Reddit's rendered
-  markdown, which arrives HTML-escaped and is unescaped only to be handed to the
-  same sanitizer.
+  tags and attributes — applied to every source. Reddit's rendered markdown
+  arrives HTML-escaped and is unescaped only to be handed to the same sanitizer.
+  Lemmy hands over Markdown rather than HTML, which is escaped first and only
+  then turned into links and quotes, so the only markup in a Lemmy comment is
+  markup this script wrote.
 - **The UI renders inside shadow roots**, so page styles and page scripts do not
   reach into it by accident, and its styles do not leak onto the page.
 - **`@noframes`** keeps it out of iframes.
