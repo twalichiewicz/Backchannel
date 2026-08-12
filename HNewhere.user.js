@@ -240,7 +240,7 @@
 		return migrated;
 	}
 
-	function normalizeSourceSettings(stored, registeredIds) {
+	function normalizeSourceSettings(stored, registeredIds, defaults = {}) {
 		const source =
 			stored && typeof stored === "object" && !Array.isArray(stored)
 				? stored
@@ -248,14 +248,31 @@
 		const normalized = {};
 
 		for (const id of registeredIds) {
-			normalized[id] = Boolean(source[id]);
+			normalized[id] =
+				id in source ? Boolean(source[id]) : Boolean(defaults[id]);
 		}
 
 		return normalized;
 	}
 
+	function sourceDefaults() {
+		const defaults = {};
+
+		for (const source of SOURCES.values()) {
+			if (source.defaultOn) {
+				defaults[source.id] = true;
+			}
+		}
+
+		return defaults;
+	}
+
 	function enabledSourceIds(settings, registeredIds) {
-		const normalized = normalizeSourceSettings(settings?.sources, registeredIds);
+		const normalized = normalizeSourceSettings(
+			settings?.sources,
+			registeredIds,
+			sourceDefaults(),
+		);
 
 		return registeredIds.filter((id) => normalized[id]);
 	}
@@ -2696,6 +2713,10 @@ ${
 		return typeof source?.frontPage === "function";
 	}
 
+	function matrixSources() {
+		return [...SOURCES.values()].filter((source) => !source.local);
+	}
+
 	registerSource({
 		id: "hn",
 		origins: ["news.ycombinator.com"],
@@ -3468,6 +3489,183 @@ ${
 				rootTimes,
 				async getComment(key) {
 					return index.byKey.get(key) || null;
+				},
+			};
+		},
+	});
+
+	// -------------------------
+	// Notes you make yourself
+	// -------------------------
+
+	// #region hnewhere-test-export
+	const NOTES_PREFIX = "HNewhere:notes:";
+	const NOTES_INDEX_KEY = "HNewhere:notes_index";
+	const NOTE_CONTEXT_CHARS = 32;
+	const NOTES_PER_DOCUMENT = 200;
+
+	function noteDocumentRef(fingerprint = null) {
+		return fingerprint
+			? { kind: "pdf", id: String(fingerprint) }
+			: { kind: "url", id: normalizeURL(location.href) || location.href };
+	}
+
+	function noteStorageKey(ref) {
+		return NOTES_PREFIX + ref.kind + ":" + ref.id;
+	}
+
+	function keptNotes(stored) {
+		const notes = Array.isArray(stored?.notes) ? stored.notes : [];
+
+		return notes
+			.filter((note) => note?.id && String(note.text ?? "").trim())
+			.sort((a, b) => (a.created || 0) - (b.created || 0));
+	}
+
+	function noteTextHTML(text) {
+		return String(text || "")
+			.split(/\n{2,}/)
+			.map((part) => part.trim())
+			.filter(Boolean)
+			.map((part) => `<p>${escapeHTML(part).replace(/\n/g, "<br>")}</p>`)
+			.join("");
+	}
+
+	function noteBodyHTML(note) {
+		const context =
+			(note.prefix ? ` data-hnewhere-prefix="${escapeHTML(note.prefix)}"` : "") +
+			(note.suffix ? ` data-hnewhere-suffix="${escapeHTML(note.suffix)}"` : "");
+
+		return (
+			(note.exact
+				? `<blockquote data-hnewhere-exact="1"${context}>${escapeHTML(note.exact)}</blockquote>`
+				: "") + noteTextHTML(note.text)
+		);
+	}
+
+	function noteComment(note, discussion) {
+		return {
+			source: "notes",
+			key: sourceKey("notes", note.id),
+			id: note.id,
+			discussionKey: discussion?.key,
+			parentKey: null,
+			author: "you",
+			authorName: "You",
+			bodyHTML: noteBodyHTML(note),
+			score: null,
+			createdAt: note.created || 0,
+			isOP: false,
+			deleted: false,
+			replyKeys: [],
+			note,
+		};
+	}
+
+	function notesCollective(notes, articleURL) {
+		if (!notes.length) {
+			return null;
+		}
+
+		return {
+			source: "notes",
+			key: sourceKey("notes", "notes"),
+			id: "notes",
+			title: "Your notes",
+			author: "",
+			score: null,
+			commentCount: notes.length,
+			createdAt: Math.max(...notes.map((note) => note.created || 0)),
+			permalink: null,
+			articleURL,
+			label: "Your notes",
+			collective: true,
+			bodyHTML: "",
+			rootKeys: notes.map((note) => sourceKey("notes", note.id)),
+			rootTimes: notes.map((note) => note.created || 0),
+			notes,
+		};
+	}
+	// #endregion hnewhere-test-export
+
+	function noteDocumentRefForPage() {
+		return noteDocumentRef(pdfViewerApp()?.pdfDocument?.fingerprints?.[0]);
+	}
+
+	async function loadNotes(ref = noteDocumentRefForPage()) {
+		return keptNotes(await load(noteStorageKey(ref), null));
+	}
+
+	async function saveNotes(notes, ref = noteDocumentRefForPage()) {
+		const kept = notes.slice(-NOTES_PER_DOCUMENT);
+
+		await save(noteStorageKey(ref), { version: 1, notes: kept });
+		await rememberNotedDocument(ref, kept.length);
+
+		return kept;
+	}
+
+	async function rememberNotedDocument(ref, count) {
+		const stored = await load(NOTES_INDEX_KEY, []);
+		const entries = (Array.isArray(stored) ? stored : []).filter(
+			(entry) => entry?.key !== noteStorageKey(ref),
+		);
+
+		if (count > 0) {
+			entries.push({
+				key: noteStorageKey(ref),
+				kind: ref.kind,
+				id: ref.id,
+				url: location.href,
+				title: pageTitle(),
+				count,
+				updated: Date.now(),
+			});
+		}
+
+		await save(NOTES_INDEX_KEY, entries);
+	}
+
+	registerSource({
+		id: "notes",
+		origins: [],
+		label: "Your notes",
+		shortLabel: "Notes",
+		local: true,
+		defaultOn: true,
+		ageLabel: "Last note",
+		threadArrivesWhole: true,
+		caveat:
+			"Stays on this device. Nothing is sent anywhere, and no host is contacted.",
+		capabilities: { vote: false, reply: false, submit: false },
+
+		profileURL: () => null,
+
+		async discover(url) {
+			const collective = notesCollective(await loadNotes(), url);
+
+			return collective ? [collective] : [];
+		},
+
+		async loadThread(discussion) {
+			const byKey = new Map(
+				(discussion.notes || []).map((note) => [
+					sourceKey("notes", note.id),
+					noteComment(note, discussion),
+				]),
+			);
+			const rootTimes = new Map();
+
+			for (const [key, comment] of byKey) {
+				rootTimes.set(key, comment.createdAt);
+			}
+
+			return {
+				rootKeys: [...byKey.keys()],
+				rootTimes,
+
+				async getComment(key) {
+					return byKey.get(key) || null;
 				},
 			};
 		},
@@ -9865,7 +10063,7 @@ ${sourceListHTML({ idPrefix: "setting-source-" })}
 <div class="source-matrix-caption">What each source supports</div>
 <div class="source-matrix-scroll">
 <table class="source-matrix">
-<thead><tr><th></th>${[...SOURCES.values()].map((source) => `<th>${escapeHTML(source.shortLabel || source.label)}</th>`).join("")}</tr></thead>
+<thead><tr><th></th>${matrixSources().map((source) => `<th>${escapeHTML(source.shortLabel || source.label)}</th>`).join("")}</tr></thead>
 <tbody>
 ${[
 	["Read", () => true],
@@ -9877,9 +10075,7 @@ ${[
 	["Flag", (source) => Boolean(source.capabilities.flag)],
 ]
 	.map(
-		([label, supported]) => `<tr><th>${escapeHTML(label)}</th>${[
-			...SOURCES.values(),
-		]
+		([label, supported]) => `<tr><th>${escapeHTML(label)}</th>${matrixSources()
 			.map((source) => {
 				const yes = Boolean(supported(source));
 				return `<td class="${yes ? "yes" : "no"}" data-capability-source="${escapeHTML(source.id)}" aria-label="${yes ? "yes" : "no"}">${yes ? "&check;" : "&ndash;"}</td>`;
