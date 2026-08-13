@@ -7885,10 +7885,10 @@ button {
 			(sum, each) => sum + (each.descendants || 0),
 			0,
 		);
-		const totalText = escapeHTML(pluralize(totalComments, "comment"));
+		const totalWord = totalComments === 1 ? "comment" : "comments";
 
 		const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
-	title="Go to the page and read what was said about it">${totalText}<span class="browse-comments-floor" aria-hidden="true">+</span></a>`;
+	title="Go to the page and read what was said about it">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalWord}</a>`;
 
 		const actions =
 			!story.source || getSource(story.source)?.capabilities?.vote
