@@ -75,6 +75,11 @@ Worth stating plainly, because the permissions are broad by necessity:
   your browser downloaded to show you. Either way a quoted passage can be found
   on a page that is not on screen yet, and either way nothing about the document
   is sent anywhere.
+- **None of this happens in Firefox.** Firefox reserves its built-in PDF viewer
+  and lets no extension run there, userscript managers included, so on a PDF the
+  script never starts: nothing is read, no host is contacted, and no button or
+  sidebar appears. This is a limit of the browser rather than a setting, and it
+  applies whatever Enhanced PDF support is set to.
 - **`@connect` is a ceiling, not a statement of use.** The header is static, so
   it lists every host any source *could* contact, including sources you have
   switched off. A disabled source issues no requests; the entry is a permission

@@ -18,7 +18,7 @@ See what everyone's talking about.
 - **What the internet is saying, in one thread:** Every source you've switched on, merged into a single conversation, each comment quietly noting where it came from. Pick them with a checkbox.
 - **See what they're talking about:** Quotes in the comments get matched back to the article and lit as annotations in articles. Click a highlight to filter the thread to the people discussing that passage.
    - _Currently in beta. **Enable Annotations** in the settings menu to try it out!_ 
-   - **NEW:** Enable **Enhanced PDF support** to get highlighting directly on PDF documents.
+   - **NEW:** Enable **Enhanced PDF support** to get highlighting directly on PDF documents. (Not supported on Firefox)
 - **Read, then join in:** Vote, reply, and even submit on supported sources. It acts in a popup on the source's own site, using the session you already have there. The script never sees your password.
 - **Take notes across the web:** Add notes to any page or PDF you visit, allowing you to have your own personal commentary track. All stored locally.
 - **New front page of the internet**: Blend together all of your added sources to create a custom front page to find new articles to read.

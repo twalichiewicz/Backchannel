@@ -31,12 +31,15 @@ use to detect updates, so every release bumps it.
   editing a line, and the highlight moves to the words you left in it.
 
 - **Enhanced PDF support**, off by default, under Enable annotations. Turned on,
-  it covers the browser's PDF viewer with
-  [pdf.js](https://mozilla.github.io/pdf.js/), which is what makes highlighting
-  work in Chrome and Safari rather than only in Firefox. It is a choice rather
-  than the default because it downloads 1.74 MiB of pdf.js from
-  `cdn.jsdelivr.net` — the one part of the script that is not self-contained.
-  Safari's own PDF toolbar still floats above the reader and cannot be removed.
+  it covers Chrome's and Safari's PDF viewer with
+  [pdf.js](https://mozilla.github.io/pdf.js/), which is what lets a quoted
+  passage be highlighted on the PDF itself. It is a choice rather than the
+  default because it downloads 1.74 MiB of pdf.js from `cdn.jsdelivr.net` — the
+  one part of the script that is not self-contained. Safari's own PDF toolbar
+  still floats above the reader and cannot be removed. **Firefox is not covered
+  at all**: it reserves its built-in PDF viewer, no extension is allowed to run
+  there, and a PDF opened in Firefox gets no button, no sidebar and no
+  highlights — the setting has no effect.
 
 ### Changed
 

@@ -2825,6 +2825,10 @@ ${
 	// #region hnewhere-test-export
 	const HINTED_SETTINGS = new Set(["annotations", "pdfReader", "notepad"]);
 
+	function pdfViewerRefusesExtensions() {
+		return /firefox/i.test(navigator.userAgent || "");
+	}
+
 	function syncOptionHint(input) {
 		const anchor =
 			input?.closest?.(".settings-option-row") ||
@@ -9777,6 +9781,11 @@ header button svg {
 	font-size:11px;
 }
 
+.settings-option[hidden],
+.settings-option-hint[hidden] {
+	display:none;
+}
+
 .settings-suboptions {
 	overflow:hidden;
 	max-height:0;
@@ -9786,7 +9795,7 @@ header button svg {
 }
 
 .settings-suboptions.is-visible {
-	max-height:140px;
+	max-height:260px;
 	opacity:1;
 	margin-top:8px;
 }
@@ -10178,6 +10187,17 @@ header button svg {
 
 .settings-option-hint-slow {
 	margin:6px 0 0;
+}
+
+.settings-notice {
+	margin:0 0 12px;
+	padding:6px 8px;
+	border:1px solid var(--help-border);
+	border-radius:4px;
+	background:var(--help-bg);
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
 }
 
 .settings-option:has(#setting-hide-without-discussion:checked) ~ .settings-option-hint {
@@ -10811,6 +10831,8 @@ ${
 
 <div class="settings-pane settings-pane-primary">
 
+<div id="settings-pdf-notice" class="settings-notice" hidden>Backchannel not supported in Firefox's PDF viewer</div>
+
 <div class="settings-group">
 <label class="settings-option">
 <input id="setting-auto-open-sidebar" data-setting="autoOpenSidebar" type="checkbox">
@@ -10856,8 +10878,8 @@ Highlights the passages commenters quote, so you can jump between the article an
 </label>
 <div class="settings-option-hint">
 The default PDF reader will be replaced with
-<a href="https://mozilla.github.io/pdf.js/" target="_blank" rel="noreferrer noopener">pdf.js</a>,
-allowing highlighting and annotation directly onto the PDF.
+<a href="https://mozilla.github.io/pdf.js/" target="_blank" rel="noreferrer noopener">pdf.js</a>
+to allow highlighting and annotation directly onto PDFs.
 </div>
 </div>
 <div class="settings-option-row">
@@ -11178,6 +11200,24 @@ ${[
 
 				for (const input of group.querySelectorAll("input")) {
 					input.disabled = !enabled;
+				}
+			}
+
+			if (pdfViewerRefusesExtensions()) {
+				const option = settingsInputs.pdfReader?.closest(".settings-option");
+				const hint = option?.nextElementSibling;
+				const notice = shadow.querySelector("#settings-pdf-notice");
+
+				if (option) {
+					option.hidden = true;
+				}
+
+				if (hint?.classList.contains("settings-option-hint")) {
+					hint.hidden = true;
+				}
+
+				if (notice) {
+					notice.hidden = false;
 				}
 			}
 		};
