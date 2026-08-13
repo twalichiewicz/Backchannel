@@ -9978,7 +9978,16 @@ header button svg {
 	font-weight:600;
 }
 
+.source-strip-label {
+	min-width:0;
+	max-width:16ch;
+	overflow:hidden;
+	text-overflow:ellipsis;
+	white-space:nowrap;
+}
+
 .source-strip-count {
+	flex:0 0 auto;
 	color:var(--muted);
 	font-variant-numeric:tabular-nums;
 }
