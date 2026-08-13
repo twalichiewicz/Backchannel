@@ -41,6 +41,7 @@
 // @exclude      https://*.instagram.com/*
 // @grant        GM.getValue
 // @grant        GM.setValue
+// @grant        GM.notification
 // @grant        GM.xmlHttpRequest
 // @grant        GM.getResourceText
 // @grant        unsafeWindow
@@ -195,7 +196,9 @@
 		votes: "HNewhere:votes",
 		blocked: "HNewhere:blocked_sites",
 		queue: "HNewhere:queue",
+		favorites: "HNewhere:favorites",
 		itemActions: "HNewhere:item_actions",
+		watches: "HNewhere:watches",
 	};
 
 	// #region hnewhere-test-export
@@ -352,6 +355,8 @@
 		autoOpenSidebarOnlyFromHN: false,
 		hideWithoutDiscussion: false,
 		showButtonWithQueue: false,
+		notifyOnWatch: false,
+		syncSources: {},
 		sources: undefined,
 		theme: "auto",
 		buttonShape: "circle",
@@ -593,6 +598,129 @@
 		);
 	}
 
+	const WATCH_MISS_CEILING = 5;
+
+	function addToWatchList(entries, page, now) {
+		const list = Array.isArray(entries) ? entries : [];
+
+		if (list.some((entry) => entry.key === page.key)) {
+			return list;
+		}
+
+		return [
+			...list,
+			{
+				key: page.key,
+				url: page.url,
+				title: page.title || "",
+				site: page.site || "",
+				addedAt: now,
+				checkedAt: 0,
+				marks: {},
+				misses: 0,
+				foundAt: null,
+				seenAt: null,
+			},
+		];
+	}
+
+	function addToFavorites(entries, item, now) {
+		const list = Array.isArray(entries) ? entries : [];
+
+		if (list.some((entry) => entry.key === item.key)) {
+			return list;
+		}
+
+		return [
+			...list,
+			{
+				key: item.key,
+				url: item.url,
+				title: item.title || "",
+				site: item.site || "",
+				kind: item.kind || "discussion",
+				source: item.source || "",
+				id: item.id || "",
+				parent: item.parent || "",
+				addedAt: now,
+			},
+		];
+	}
+
+	function removeFromFavorites(entries, key) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => entry.key !== key,
+		);
+	}
+
+	function favoritesOfKind(entries, kind) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => (entry.kind || "discussion") === kind,
+		);
+	}
+
+	function removeFromWatchList(entries, key) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => entry.key !== key,
+		);
+	}
+
+	function watchMarkChanged(before, after) {
+		if (after === null || after === undefined) {
+			return false;
+		}
+
+		if (before === null || before === undefined) {
+			return false;
+		}
+
+		return before !== after;
+	}
+
+	function watchesDue(entries, now, interval) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) =>
+				!entry.foundAt &&
+				entry.misses < WATCH_MISS_CEILING &&
+				now - (entry.checkedAt || 0) >= interval,
+		);
+	}
+
+	function watchIsFresh(state) {
+		return Boolean(state?.foundAt && !state?.seenAt);
+	}
+
+	function sortWatchedEntries(entries, stateFor) {
+		return [...(Array.isArray(entries) ? entries : [])].sort((a, b) => {
+			const left = stateFor(a);
+			const right = stateFor(b);
+			const freshLeft = watchIsFresh(left) ? 0 : 1;
+			const freshRight = watchIsFresh(right) ? 0 : 1;
+
+			if (freshLeft !== freshRight) {
+				return freshLeft - freshRight;
+			}
+
+			if (freshLeft === 0) {
+				return (right?.foundAt || 0) - (left?.foundAt || 0);
+			}
+
+			return 0;
+		});
+	}
+
+	function unseenWatchCount(entries) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => entry.foundAt && !entry.seenAt,
+		).length;
+	}
+
+	function stalledWatchCount(entries) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => !entry.foundAt && entry.misses >= WATCH_MISS_CEILING,
+		).length;
+	}
+
 	function migrateQueueKeys(entries, normalize) {
 		return (Array.isArray(entries) ? entries : []).map((entry) =>
 			entry.key
@@ -628,9 +756,9 @@
 		);
 	}
 
-	function clearReadFromQueue(entries) {
+	function clearReadFromQueue(entries, keep) {
 		return (Array.isArray(entries) ? entries : []).filter(
-			(entry) => !entry.readAt,
+			(entry) => !entry.readAt || Boolean(keep?.has(entry.key)),
 		);
 	}
 
@@ -677,6 +805,28 @@
 
 	async function saveQueue(entries) {
 		await save(STORAGE.queue, entries);
+		return entries;
+	}
+
+	async function loadFavoriteEntries() {
+		const stored = await load(STORAGE.favorites, []);
+
+		return Array.isArray(stored) ? stored.filter((entry) => entry?.key) : [];
+	}
+
+	async function saveFavorites(entries) {
+		await save(STORAGE.favorites, entries);
+		return entries;
+	}
+
+	async function loadWatches() {
+		const stored = await load(STORAGE.watches, []);
+
+		return Array.isArray(stored) ? stored.filter((entry) => entry?.key) : [];
+	}
+
+	async function saveWatches(entries) {
+		await save(STORAGE.watches, entries);
 		return entries;
 	}
 
@@ -854,27 +1004,36 @@
 		return Boolean(getWriteBridge(sourceID)?.actions?.vote?.itemActions);
 	}
 
-	function itemActionLinksHTML(itemId, sourceID) {
+	function itemActionLinksHTML(itemId, sourceID, watchLink, about = {}) {
+		const between = watchLink ? `\n      |\n      ${watchLink}` : "";
+
 		if (!sourceHasItemActions(sourceID)) {
-			return "";
+			return between;
 		}
 
 		const id = escapeHTML(String(itemId));
 		const source = escapeHTML(String(sourceID || ""));
+		const meta =
+			` data-favorite-key="${escapeHTML(about.key || source + ":" + id)}"` +
+			` data-favorite-url="${escapeHTML(about.url || "")}"` +
+			` data-favorite-title="${escapeHTML(about.title || "")}"` +
+			` data-favorite-site="${escapeHTML(about.site || "")}"` +
+			` data-favorite-kind="${escapeHTML(about.kind || "discussion")}"` +
+			` data-favorite-parent="${escapeHTML(about.parent || "")}"`;
 
 		return `
       |
       <button class="item-action-link" type="button"
-      data-item-action="flag" data-item-action-source="${source}" data-item-action-id="${id}">flag</button>
+      data-item-action="flag" data-item-action-source="${source}" data-item-action-id="${id}">flag</button>${between}
       |
       <button class="item-action-link" type="button"
-      data-item-action="fave" data-item-action-source="${source}" data-item-action-id="${id}">favorite</button>`;
+      data-item-action="fave" data-item-action-source="${source}" data-item-action-id="${id}"${meta}>favorite</button>`;
 	}
 
 	const ITEM_ACTION_FIELD = { fave: "favorite", flag: "flagged" };
 
 	const ITEM_ACTION_LABEL = {
-		favorite: { on: "un-favorite", off: "favorite" },
+		favorite: { on: "unfavorite", off: "favorite" },
 		flagged: { on: "unflag", off: "flag" },
 	};
 
@@ -914,6 +1073,25 @@
 		seen.forEach(refreshItemActionControls);
 	}
 
+	function sourceSyncEnabled(settings, sourceID) {
+		const map = settings?.syncSources;
+
+		return Boolean(map && typeof map === "object" && map[sourceID]);
+	}
+
+	async function toggleFavorite(item, settings) {
+		const entries = await loadFavoriteEntries();
+		const on = entries.some((entry) => entry.key === item.key);
+
+		await saveFavorites(
+			on
+				? removeFromFavorites(entries, item.key)
+				: addToFavorites(entries, item, Date.now()),
+		);
+
+		return !on;
+	}
+
 	async function submitItemAction(button) {
 		const itemId = button.dataset.itemActionId;
 		const kind = button.dataset.itemAction;
@@ -923,18 +1101,30 @@
 			return;
 		}
 
+		const sourceID = button.dataset.itemActionSource;
 		const action = itemActionState(itemId)?.[field] ? "un" + kind : kind;
 
 		button.disabled = true;
 
 		try {
-			await openItemActionPopup(
-				button.dataset.itemActionSource,
-				itemId,
-				itemId,
-				action,
-				null,
-			);
+			if (kind === "fave") {
+				await toggleFavorite({
+					key: button.dataset.favoriteKey || `${sourceID}:${itemId}`,
+					url: button.dataset.favoriteUrl || "",
+					title: button.dataset.favoriteTitle || "",
+					site: button.dataset.favoriteSite || "",
+					kind: button.dataset.favoriteKind || "discussion",
+					source: sourceID,
+					id: itemId,
+					parent: button.dataset.favoriteParent || "",
+				});
+			}
+
+			const settings = await loadSettings();
+
+			if (kind !== "fave" || sourceSyncEnabled(settings, sourceID)) {
+				await openItemActionPopup(sourceID, itemId, itemId, action, null);
+			}
 		} finally {
 			button.disabled = false;
 			refreshItemActionControls(itemId);
@@ -2806,6 +2996,15 @@ ${
 	source.caveat
 		? `<div class="settings-option-hint">${escapeHTML(source.caveat)}${source.slow ? `<p class="settings-option-hint-slow">This source takes longer to fetch comments, so they may take a moment to appear.</p>` : ""}</div>`
 		: ""
+}${
+	sourceHasItemActions(source.id)
+		? `<div class="settings-suboptions" data-suboptions-of="source-${escapeHTML(source.id)}">
+<label class="settings-option sub-option">
+<input${idPrefix ? ` id="${escapeHTML(idPrefix + "sync-" + source.id)}"` : ""} data-source-sync="${escapeHTML(source.id)}" type="checkbox">
+<span>Also favourite and flag on ${escapeHTML(source.label)}</span>
+</label>
+</div>`
+		: ""
 }`,
 			)
 			.join("");
@@ -2823,7 +3022,12 @@ ${
 	}
 
 	// #region hnewhere-test-export
-	const HINTED_SETTINGS = new Set(["annotations", "pdfReader", "notepad"]);
+	const HINTED_SETTINGS = new Set([
+		"annotations",
+		"pdfReader",
+		"notepad",
+		"notifyOnWatch",
+	]);
 
 	function pdfViewerRefusesExtensions() {
 		return /firefox/i.test(navigator.userAgent || "");
@@ -2867,13 +3071,54 @@ ${
 		shortLabel: "HN",
 		caveat:
 			"Will send each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
-		capabilities: { vote: true, reply: true, submit: true },
+		capabilities: {
+			vote: true,
+			reply: true,
+			submit: true,
+			favorite: true,
+			flag: true,
+		},
 
 		profileURL: (author) =>
 			"https://news.ycombinator.com/user?id=" + encodeURIComponent(author),
 
 		async discover(url) {
 			return (await findHN(url)).map(algoliaDiscussion);
+		},
+
+		async probe(url, context) {
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return null;
+			}
+
+			const since = Math.floor((context.since || 0) / 1000);
+			const filter = encodeURIComponent("created_at_i>" + since);
+			let total = 0;
+			let answered = false;
+
+			for (const query of [url, target]) {
+				const result = await request(
+					"https://hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=url&hitsPerPage=0&query=" +
+						encodeURIComponent(query) +
+						"&numericFilters=" +
+						filter,
+				);
+
+				if (!result || typeof result.nbHits !== "number") {
+					continue;
+				}
+
+				answered = true;
+				total = Math.max(total, result.nbHits);
+			}
+
+			if (!answered) {
+				return null;
+			}
+
+			return { mark: total, changed: total > 0 };
 		},
 
 		async frontPage() {
@@ -3027,6 +3272,35 @@ ${
 
 		profileURL: (author) =>
 			"https://www.reddit.com/user/" + encodeURIComponent(author) + "/",
+
+		async probe(url, context) {
+			if ((await redditTier()) !== "archive") {
+				return null;
+			}
+
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return null;
+			}
+
+			const scheme = url.startsWith("http://") ? "http://" : "https://";
+			const result = await request(
+				"https://arctic-shift.photon-reddit.com/api/posts/search?limit=25&fields=id&url=" +
+					encodeURIComponent(scheme + target),
+			);
+
+			if (!result || !Array.isArray(result.data)) {
+				return null;
+			}
+
+			const mark = result.data
+				.map((post) => post.id)
+				.sort()
+				.join(",");
+
+			return { mark, changed: watchMarkChanged(context.mark, mark) };
+		},
 
 		async discover(url) {
 			const target = normalizeURL(url);
@@ -3211,6 +3485,29 @@ ${
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => "https://bsky.app/profile/" + encodeURIComponent(handle),
+
+		async probe(url, context) {
+			const target = bskyTarget(url);
+
+			if (!target) {
+				return null;
+			}
+
+			const counted = await bskyJSON(
+				`${CONSTELLATION}/links/count?target=${encodeURIComponent(target)}` +
+					"&collection=app.bsky.feed.post&path=.embed.external.uri",
+				{ "User-Agent": CONSTELLATION_UA },
+			);
+
+			if (!counted || typeof counted.total !== "number") {
+				return null;
+			}
+
+			return {
+				mark: counted.total,
+				changed: watchMarkChanged(context.mark, counted.total),
+			};
+		},
 
 		async discover(url) {
 			const target = bskyTarget(url);
@@ -4012,7 +4309,7 @@ button {
 			index.welded,
 		);
 
-		if (found.length !== 1) {
+		if (!found.length) {
 			return null;
 		}
 
@@ -4092,6 +4389,49 @@ button {
 		save.textContent = "save";
 
 		let warnedFor = null;
+		let dismissWhy = null;
+
+		const hideWhy = () => {
+			why.classList.remove("is-open");
+
+			if (dismissWhy) {
+				dismissWhy();
+				dismissWhy = null;
+			}
+		};
+
+		const showWhy = (text) => {
+			why.textContent = text;
+			why.classList.add("is-open");
+			hideWhyOnAway();
+		};
+
+		function hideWhyOnAway() {
+			if (dismissWhy) {
+				dismissWhy();
+			}
+
+			const root = editor.getRootNode();
+			const away = (event) => {
+				if (event.composedPath?.().includes(why)) {
+					return;
+				}
+
+				hideWhy();
+			};
+
+			const attach = () => {
+				root.addEventListener("pointerdown", away, true);
+				document.addEventListener("pointerdown", away, true);
+			};
+
+			dismissWhy = () => {
+				root.removeEventListener("pointerdown", away, true);
+				document.removeEventListener("pointerdown", away, true);
+			};
+
+			setTimeout(attach, 0);
+		}
 
 		const commit = () => {
 			const parsed = noteFromText(field.value);
@@ -4107,11 +4447,13 @@ button {
 				!canAnchor(parsed.exact)
 			) {
 				warnedFor = parsed.exact;
-				why.textContent =
-					"That passage is not in this document. Save again to keep it without a highlight.";
+				showWhy(
+					"Your quoted text wasn't found in this document. Press Save again to keep it without a highlight.",
+				);
 				return;
 			}
 
+			hideWhy();
 			onSave(parsed);
 		};
 
@@ -4127,7 +4469,11 @@ button {
 			}
 		};
 
-		row.append(save, cancel, why);
+		const saveWrap = document.createElement("span");
+
+		saveWrap.className = "note-editor-save-wrap";
+		saveWrap.append(save, why);
+		row.append(saveWrap, cancel);
 		editor.append(field, row);
 
 		return { editor, field };
@@ -4707,6 +5053,372 @@ button {
 				compareStoriesByDiscussion,
 			),
 		);
+	}
+
+	// -------------------------
+	// Watch list
+	// -------------------------
+
+	const WATCH_INTERVAL_MS = 3600000;
+	const WATCH_BATCH = 4;
+	const WATCH_POLL_DELAY_MS = 5000;
+
+	async function grantNotifications() {
+		if (typeof Notification === "undefined") {
+			return false;
+		}
+
+		if (Notification.permission === "granted") {
+			return true;
+		}
+
+		if (Notification.permission === "denied") {
+			return false;
+		}
+
+		try {
+			return (await Notification.requestPermission()) === "granted";
+		} catch (error) {
+			console.error("Backchannel notification permission failed:", error);
+
+			return false;
+		}
+	}
+
+	function notifyWatch(entry, count) {
+		const text =
+			pluralize(count, "discussion") +
+			" on " +
+			(entry.title || entry.site || entry.url);
+
+		if (typeof GM === "undefined" || typeof GM.notification !== "function") {
+			try {
+				if (
+					typeof Notification !== "undefined" &&
+					Notification.permission === "granted"
+				) {
+					new Notification("Backchannel", { body: text }).onclick = () => {
+						window.open(entry.url, "_blank");
+					};
+				}
+			} catch (error) {
+				console.error("Backchannel notification failed:", error);
+			}
+
+			return;
+		}
+
+		try {
+			GM.notification({
+				title: "Backchannel",
+				text:
+					pluralize(count, "discussion") +
+					" on " +
+					(entry.title || entry.site || entry.url),
+				timeout: 8000,
+				onclick: () => {
+					window.open(entry.url, "_blank");
+				},
+			});
+		} catch (error) {
+			console.error("Backchannel notification failed:", error);
+		}
+	}
+
+	function watchStory(entry, discussion) {
+		return {
+			id: discussion.id,
+			key: discussion.key,
+			source: discussion.source,
+			permalink: discussion.permalink || "",
+			url: discussion.articleURL || entry.url,
+			title: entry.title || discussion.title || "",
+			by: discussion.author || "",
+			score: discussion.score || 0,
+			time: discussion.createdAt || 0,
+			descendants: discussion.commentCount || 0,
+			site: entry.site || "",
+		};
+	}
+
+	async function probeWatch(entry, settings) {
+		const marks = { ...(entry.marks || {}) };
+		let changed = false;
+		let answered = false;
+
+		for (const source of enabledSources(settings)) {
+			if (typeof source.probe !== "function") {
+				continue;
+			}
+
+			let result = null;
+
+			try {
+				result = await source.probe(entry.url, {
+					mark: marks[source.id],
+					since: entry.addedAt,
+				});
+			} catch (error) {
+				console.error("Backchannel " + source.id + " probe failed:", error);
+			}
+
+			if (!result) {
+				continue;
+			}
+
+			answered = true;
+			marks[source.id] = result.mark;
+			changed = changed || result.changed;
+		}
+
+		return { marks, changed, answered };
+	}
+
+	async function pollWatches(settings) {
+		const entries = await loadWatches();
+		const due = watchesDue(entries, Date.now(), WATCH_INTERVAL_MS).slice(
+			0,
+			WATCH_BATCH,
+		);
+
+		if (!due.length) {
+			return false;
+		}
+
+		for (const entry of due) {
+			const { marks, changed, answered } = await probeWatch(entry, settings);
+			const now = Date.now();
+
+			entry.marks = marks;
+			entry.checkedAt = now;
+			entry.misses = answered ? 0 : (entry.misses || 0) + 1;
+
+			if (changed) {
+				const found = await discoverAll([entry.url], settings);
+
+				if (found.length) {
+					entry.foundAt = now;
+					entry.count = found.length;
+
+					const queued = await loadQueue();
+					const placeholder = queued.find(
+						(item) => queueKey(item) === entry.key,
+					);
+					const story = watchStory(entry, found[0]);
+
+					if (placeholder) {
+						Object.assign(placeholder, story, {
+							key: entry.key,
+							title: story.title || placeholder.title,
+							watchPlaceholder: false,
+							readAt: null,
+						});
+
+						await saveQueue(queued);
+					} else {
+						await saveQueue(addToQueue(queued, story, now));
+					}
+
+					if (settings.notifyOnWatch) {
+						notifyWatch(entry, found.length);
+					}
+				}
+			}
+		}
+
+		await saveWatches(entries);
+
+		return unseenWatchCount(entries) > 0;
+	}
+
+	async function refreshWatchSignal() {
+		if (!sidebarUI?.shadow) {
+			return;
+		}
+
+		await refreshQueueCount(sidebarUI.shadow);
+		await refreshNextUp(sidebarUI.shadow);
+	}
+
+	function watchQueueEntry(page, now) {
+		return {
+			id: page.key,
+			key: page.key,
+			source: "",
+			permalink: "",
+			url: page.url,
+			title: page.title || page.url,
+			by: "",
+			score: 0,
+			time: Math.floor(now / 1000),
+			descendants: 0,
+			site: page.site || "",
+			watchPlaceholder: true,
+		};
+	}
+
+	function watchQueueStory(page, discussions, now) {
+		if (!discussions?.length) {
+			return watchQueueEntry(page, now);
+		}
+
+		const total = discussions.reduce(
+			(sum, each) => sum + (each.commentCount || 0),
+			0,
+		);
+
+		const best = discussions.reduce((pick, each) =>
+			(each.score || 0) > (pick.score || 0) ||
+			((each.score || 0) === (pick.score || 0) &&
+				(each.commentCount || 0) > (pick.commentCount || 0))
+				? each
+				: pick,
+		);
+
+		return {
+			...watchStory(page, best),
+			key: page.key,
+			descendants: total,
+		};
+	}
+
+	async function startWatching(page, discussions) {
+		const now = Date.now();
+
+		await saveWatches(addToWatchList(await loadWatches(), page, now));
+
+		const queued = await loadQueue();
+
+		if (!queued.some((entry) => queueKey(entry) === page.key)) {
+			await saveQueue(
+				addToQueue(queued, watchQueueStory(page, discussions, now), now),
+			);
+		}
+	}
+
+	async function stopWatching(key) {
+		await saveWatches(removeFromWatchList(await loadWatches(), key));
+	}
+
+	function wireRowWatchLink(button, story, options) {
+		if (!button) {
+			return;
+		}
+
+		const url = story.url || "";
+		const key = normalizeURL(url);
+
+		if (!key) {
+			button.hidden = true;
+
+			return;
+		}
+
+		const paint = (on) => {
+			button.textContent = on ? "unwatch" : "watch";
+			button.classList.toggle("item-action-on", on);
+		};
+
+		paint(Boolean(options.watching));
+
+		if (!options.watching) {
+			loadWatches()
+				.then((entries) => paint(entries.some((entry) => entry.key === key)))
+				.catch(console.error);
+		}
+
+		button.onclick = async () => {
+			const entries = await loadWatches();
+			const on = entries.some((entry) => entry.key === key);
+
+			if (on) {
+				await stopWatching(key);
+			} else {
+				await startWatching({
+					key,
+					url,
+					title: story.title || "",
+					site: story.site || "",
+				});
+			}
+
+			paint(!on);
+
+			if (typeof options.reload === "function") {
+				await options.reload();
+			}
+
+			const root = button.getRootNode();
+
+			refreshQueueCount(root);
+			refreshNextUp(root);
+		};
+	}
+
+	function wireWatchToggle(button, title, discussions) {
+		if (!button) {
+			return;
+		}
+
+		const url = pageAddress();
+		const key = normalizeURL(url);
+
+		if (!key) {
+			button.hidden = true;
+
+			return;
+		}
+
+		const paint = (watching) => {
+			button.textContent = watching ? "unwatch" : "watch";
+			button.setAttribute("aria-pressed", watching ? "true" : "false");
+		};
+
+		loadWatches()
+			.then((entries) => paint(entries.some((entry) => entry.key === key)))
+			.catch(console.error);
+
+		button.onclick = async () => {
+			const entries = await loadWatches();
+			const watching = entries.some((entry) => entry.key === key);
+
+			if (watching) {
+				await stopWatching(key);
+			} else {
+				await startWatching(
+					{
+						key,
+						url,
+						title: title || document.title || "",
+						site: hostLabel(url),
+					},
+					discussions,
+				);
+			}
+
+			paint(!watching);
+
+			refreshWatchSignal().catch(console.error);
+		};
+	}
+
+	function scheduleWatchPoll(settings) {
+		const run = () => {
+			pollWatches(settings)
+				.then((found) => {
+					if (found) {
+						refreshWatchSignal().catch(console.error);
+					}
+				})
+				.catch(console.error);
+		};
+
+		if (typeof requestIdleCallback === "function") {
+			requestIdleCallback(run);
+			return;
+		}
+
+		setTimeout(run, WATCH_POLL_DELAY_MS);
 	}
 
 	const THREAD_CEILING_MS = 20000;
@@ -7790,7 +8502,7 @@ button {
 			return;
 		}
 
-		if (on && !frontPageAvailable && !queueHasItems) {
+		if (on && !frontPageAvailable && !queueHasItems && !notedHasItems) {
 			return;
 		}
 
@@ -7844,6 +8556,44 @@ button {
 		crossFadeCommentsView(comments, swap);
 	}
 
+	const BROWSE_TAB_ORDER = ["front", "queue", "collection"];
+
+	function slideBrowseList(ui, direction, render) {
+		const list = ui?.shadow?.querySelector("#browse-list");
+
+		if (!list || prefersReducedMotion()) {
+			render().catch(console.error);
+			return;
+		}
+
+		if (list._hnewhereSlideTimer) {
+			clearTimeout(list._hnewhereSlideTimer);
+		}
+
+		const out = direction > 0 ? "slide-out-left" : "slide-out-right";
+		const enter = direction > 0 ? "slide-in-right" : "slide-in-left";
+
+		list.classList.remove("slide-in-left", "slide-in-right");
+		list.classList.add(out);
+
+		list._hnewhereSlideTimer = window.setTimeout(async () => {
+			try {
+				await render();
+			} catch (error) {
+				console.error(error);
+			}
+
+			list.classList.remove(out);
+			list.classList.add(enter);
+
+			requestAnimationFrame(() => {
+				requestAnimationFrame(() => list.classList.remove(enter));
+			});
+
+			list._hnewhereSlideTimer = null;
+		}, VIEW_SWAP_FADE_MS);
+	}
+
 	function crossFadeCommentsView(comments, swap) {
 		if (comments._hnewhereSwapTimer) {
 			clearTimeout(comments._hnewhereSwapTimer);
@@ -7890,15 +8640,45 @@ button {
 		const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
 	title="Go to the page and read what was said about it">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalWord}</a>`;
 
-		const actions =
-			!story.source || getSource(story.source)?.capabilities?.vote
-				? itemActionLinksHTML(story.id, story.source || "hn")
-				: "";
+		const queueLink = options.watching
+			? ""
+			: `|
+	<button class="browse-save-link" type="button">queue</button>`;
 
-		const meta = `${escapeHTML(pluralize(story.score, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}
+		const watchLink = options.watchable
+			? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
+			: "";
+
+		const actions = options.unfavorite
+			? `${watchLink ? `\n      |\n      ${watchLink}` : ""}
+      |
+      <button class="item-action-link browse-unfavorite-link" type="button">unfavorite</button>`
+			: !story.source || getSource(story.source)?.capabilities?.vote
+				? itemActionLinksHTML(story.id, story.source || "hn", watchLink, {
+						key: `${story.source || "hn"}:${story.id}`,
+						url: story.url,
+						title: story.title,
+						site: story.site,
+						kind: "discussion",
+					})
+					: itemActionLinksHTML("", "", watchLink);
+
+		const meta = options.noted
+			? `${escapeHTML(pluralize(story.noteCount || 0, "note"))}
 	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
-	|
-	<button class="browse-save-link" type="button">queue</button>
+	${queueLink}
+	${actions}`
+			: story.watchPlaceholder
+			? `<span class="item-age">watching since ${escapeHTML(timeAgo(story.time))}</span>
+	${queueLink}
+	${actions}`
+			: `${
+				story.score || story.by
+					? `${escapeHTML(pluralize(story.score || 0, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}`
+					: ""
+			}
+	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
+	${queueLink}
 	${actions}
 	|
 	${commentTotal}`;
@@ -7907,7 +8687,9 @@ button {
 		row.className = "story browse-row";
 		row.dataset.storyId = String(story.id);
 		row.innerHTML = `
-	<div class="browse-rank">${rank}.</div>
+	<div class="browse-rank">${
+		options.bullet ? (options.fresh ? "&#9679;" : "&#9675;") : `${rank}.`
+	}</div>
 	<div class="browse-main">
 	<div class="story-title">
 	<a class="browse-title-link" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
@@ -7928,10 +8710,26 @@ button {
 			};
 		}
 
+		wireRowWatchLink(row.querySelector(".browse-watch-link"), story, options);
+
+		if (options.unfavorite) {
+			const drop = row.querySelector(".browse-unfavorite-link");
+
+			if (drop) {
+				drop.onclick = async () => {
+					await saveFavorites(
+						removeFromFavorites(await loadFavoriteEntries(), options.unfavorite),
+					);
+
+					await options.reload?.();
+				};
+			}
+		}
+
 		const saveButton = row.querySelector(".browse-save-link");
 
-		{
-			const queuedLabel = options.inQueue ? "remove" : "queued";
+		if (saveButton) {
+			const queuedLabel = options.inQueue ? "unqueue" : "queued";
 
 			const key = queueKey(story);
 
@@ -7972,6 +8770,7 @@ button {
 	}
 
 	let queueHasItems = false;
+	let notedHasItems = false;
 	let frontPageAvailable = true;
 
 	function browseLabel() {
@@ -8003,7 +8802,7 @@ button {
 		}
 
 		if (wordmark) {
-			wordmark.hidden = !frontPageAvailable && !queueHasItems;
+			wordmark.hidden = !frontPageAvailable && !queueHasItems && !notedHasItems;
 
 			if (!isBrowsing({ shadow: root })) {
 				wordmark.title = browseLabel();
@@ -8017,6 +8816,123 @@ button {
 				setBrowseMode(sidebarUI, false);
 			}
 		}
+	}
+
+	async function loadNotedIndex() {
+		return notedDocuments(await load(NOTES_INDEX_KEY, [])).sort(
+			(a, b) => (b.updated || 0) - (a.updated || 0),
+		);
+	}
+
+	async function refreshNotedCount(root) {
+		const tab = root?.querySelector?.("#browse-tab-collection");
+
+		if (!tab) {
+			return;
+		}
+
+		const [favorites, noted] = await Promise.all([
+			loadFavoriteEntries(),
+			loadNotedIndex(),
+		]);
+		const entries = favorites.length + noted.length;
+
+		notedHasItems = entries > 0;
+
+		if (notedHasItems) {
+			tab.textContent = "collection";
+			tab.style.setProperty("--collection-tab-width", tab.scrollWidth + "px");
+		}
+
+		tab.classList.toggle("is-collapsed", !notedHasItems);
+		tab.setAttribute("aria-hidden", String(!notedHasItems));
+		tab.tabIndex = notedHasItems ? 0 : -1;
+		tab.parentElement?.classList.toggle("has-collection", notedHasItems);
+
+		if (!notedHasItems && browseTab === "collection" && sidebarUI) {
+			renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+		}
+	}
+
+	function collectionRow(entry, list, rank, options = {}) {
+		return renderBrowseRow(
+			{
+				id: entry.key,
+				key: entry.key,
+				source: "",
+				permalink: "",
+				url: entry.url || "",
+				title: entry.title || entry.url || entry.id,
+				by: "",
+				score: 0,
+				time: Math.floor((entry.updated || entry.addedAt || Date.now()) / 1000),
+				descendants: entry.count || 0,
+				site: entry.url ? hostLabel(entry.url) : "",
+				noteCount: entry.count || 0,
+			},
+			list,
+			rank,
+			{
+				noted: Boolean(entry.count),
+				watchable: (entry.kind || "discussion") !== "comment",
+				...options,
+			},
+		);
+	}
+
+	async function renderCollectionView(ui, list) {
+		const [favorites, noted] = await Promise.all([
+			loadFavoriteEntries(),
+			loadNotedIndex(),
+		]);
+		const saved = favoritesOfKind(favorites, "discussion");
+		const comments = favoritesOfKind(favorites, "comment");
+
+		list.replaceChildren();
+
+		if (!favorites.length && !noted.length) {
+			const empty = document.createElement("div");
+			empty.className = "browse-empty";
+			empty.textContent =
+				"Nothing collected yet. Favourite a discussion, or write a note on any page, and it will be kept here.";
+			list.appendChild(empty);
+			return;
+		}
+
+		let rank = 0;
+		const reload = () => renderCollectionView(ui, list);
+
+		if (saved.length) {
+			subhead(list, "favourites");
+
+			for (const entry of saved) {
+				collectionRow(entry, list, (rank += 1), {
+					unfavorite: entry.key,
+					reload,
+				});
+			}
+		}
+
+		if (comments.length) {
+			subhead(list, "comments");
+
+			for (const entry of comments) {
+				collectionRow(entry, list, (rank += 1), {
+					unfavorite: entry.key,
+					reload,
+				});
+			}
+		}
+
+		if (noted.length) {
+			subhead(list, "noted");
+
+			for (const entry of noted) {
+				collectionRow(entry, list, (rank += 1), { reload });
+			}
+		}
+
+		refreshAllItemActionControls();
 	}
 
 	async function refreshQueueCount(root) {
@@ -8040,6 +8956,7 @@ button {
 		tab.classList.toggle("is-collapsed", !queueHasItems);
 		tab.setAttribute("aria-hidden", String(!queueHasItems));
 		tab.tabIndex = queueHasItems ? 0 : -1;
+		tab.parentElement?.classList.toggle("has-queue", queueHasItems);
 
 		const tabs = tab.parentElement;
 
@@ -8047,6 +8964,7 @@ button {
 			requestAnimationFrame(() => tabs.classList.add("is-ready"));
 		}
 
+		await refreshNotedCount(root);
 		await refreshBrowseAffordances(root);
 
 		if (!queueHasItems && browseTab === "queue" && sidebarUI) {
@@ -8341,8 +9259,18 @@ button {
 		return changed;
 	}
 
+	function subhead(list, text) {
+		const heading = document.createElement("div");
+
+		heading.className = "browse-subhead";
+		heading.textContent = text;
+		list.appendChild(heading);
+	}
+
 	async function renderQueueView(ui, list) {
 		const entries = sortQueue(await loadQueue());
+		const watching = await loadWatches();
+		const watched = new Map(watching.map((entry) => [entry.key, entry]));
 
 		list.replaceChildren();
 
@@ -8355,10 +9283,60 @@ button {
 			return;
 		}
 
-		entries.forEach((entry, index) => {
-			const row = renderBrowseRow(entry, list, index + 1, { inQueue: true });
+		const kept = sortWatchedEntries(
+			entries.filter((entry) => watched.has(queueKey(entry))),
+			(entry) => watched.get(queueKey(entry)),
+		);
+		const rest = entries.filter((entry) => !watched.has(queueKey(entry)));
+		const reload = () => renderQueueView(ui, list);
+		let rank = 0;
+
+		if (kept.length) {
+			subhead(list, "watching");
+		}
+
+		for (const entry of kept) {
+			const state = watched.get(queueKey(entry));
+			const fresh = watchIsFresh(state);
+			const row = renderBrowseRow(entry, list, 0, {
+				inQueue: true,
+				watchable: true,
+				watching: true,
+				bullet: true,
+				fresh,
+				reload,
+			});
+
+			row.classList.add("browse-row-watching");
 			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
-		});
+			row.classList.toggle("browse-row-fresh", fresh);
+
+			if (fresh) {
+				const pill = document.createElement("span");
+
+				pill.className = "browse-unread-pill";
+				pill.textContent = "UNREAD";
+				row.querySelector(".story-title")?.appendChild(pill);
+			}
+			row.classList.toggle(
+				"browse-row-stalled",
+				Boolean(!state?.foundAt && state?.misses >= WATCH_MISS_CEILING),
+			);
+		}
+
+		if (kept.length && rest.length) {
+			subhead(list, "queued");
+		}
+
+		for (const entry of rest) {
+			const row = renderBrowseRow(entry, list, (rank += 1), {
+				inQueue: true,
+				watchable: true,
+				reload,
+			});
+
+			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
+		}
 
 		refreshAllItemActionControls();
 
@@ -8368,13 +9346,16 @@ button {
 			}
 		});
 
-		if (entries.some((entry) => entry.readAt)) {
+		if (entries.some((entry) => entry.readAt && !watched.has(queueKey(entry)))) {
 			const clear = document.createElement("button");
 			clear.type = "button";
 			clear.className = "browse-nav-link browse-clear-read";
 			clear.textContent = "clear read";
 			clear.onclick = async () => {
-				await saveQueue(clearReadFromQueue(await loadQueue()));
+				const keep = new Set((await loadWatches()).map((entry) => entry.key));
+
+				await saveQueue(clearReadFromQueue(await loadQueue(), keep));
+
 				await renderQueueView(ui, list);
 				refreshQueueCount(ui.shadow);
 				refreshNextUp(ui.shadow);
@@ -8463,8 +9444,7 @@ button {
 		}
 
 		for (const tab of ui.shadow.querySelectorAll(".browse-tab")) {
-			const isCurrent =
-				tab.id === (browseTab === "queue" ? "browse-tab-queue" : "browse-tab-front");
+			const isCurrent = tab.id === "browse-tab-" + (browseTab || "front");
 			tab.classList.toggle("is-current", isCurrent);
 			tab.setAttribute("aria-selected", String(isCurrent));
 		}
@@ -8472,7 +9452,7 @@ button {
 		if (sidebarHasDiscussion) {
 			setWordmarkLocation(ui, "Discussion", { elsewhere: true });
 		} else {
-			setWordmarkLocation(ui, browseTab === "queue" ? "Queue" : "");
+			setWordmarkLocation(ui, "");
 		}
 
 		await refreshSubmitAffordance(ui.shadow);
@@ -8482,6 +9462,12 @@ button {
 		if (browseTab === "queue") {
 			setBlendNote(ui, []);
 			await renderQueueView(ui, list);
+			return;
+		}
+
+		if (browseTab === "collection") {
+			setBlendNote(ui, []);
+			await renderCollectionView(ui, list);
 			return;
 		}
 
@@ -9339,18 +10325,123 @@ header {
 	opacity:0;
 }
 
+#browse-list {
+	transition:opacity .16s ease, transform .16s ease;
+}
+
+#browse-list.slide-out-left {
+	opacity:0;
+	transform:translateX(-14px);
+}
+
+#browse-list.slide-out-right {
+	opacity:0;
+	transform:translateX(14px);
+}
+
+#browse-list.slide-in-right,
+#browse-list.slide-in-left {
+	transition:none;
+	opacity:0;
+}
+
+#browse-list.slide-in-right {
+	transform:translateX(14px);
+}
+
+#browse-list.slide-in-left {
+	transform:translateX(-14px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	#browse-list {
+		transition:none;
+	}
+}
+
 .browse-tabs {
 	display:flex;
 	align-items:baseline;
-	margin:0 0 10px var(--browse-indent);
+	margin:0 0 10px 8px;
 	font-family:Verdana, Geneva, sans-serif;
-	font-size:11px;
+	font-size:13px;
 }
 
+.browse-subhead {
+	margin:0 0 6px;
+	padding-left:8px;
+	color:var(--meta);
+	font-size:11px;
+	font-family:Verdana, Geneva, sans-serif;
+}
+
+.browse-row + .browse-subhead {
+	margin-top:14px;
+	padding-top:14px;
+	border-top:1px solid var(--surface-divider);
+}
+
+
+.browse-row-watching .browse-rank {
+	color:var(--accent);
+}
+
+.browse-unread-pill {
+	margin-left:.5em;
+	padding:0 4px;
+	border-radius:3px;
+	background:var(--active-tint);
+	color:var(--muted);
+	font-size:9px;
+	font-weight:600;
+	letter-spacing:.04em;
+	vertical-align:1px;
+}
+
+.browse-row-stalled .story-title::before {
+	opacity:.3;
+}
+
+.browse-row-stalled .story-title a {
+	opacity:.55;
+}
+
+#browse-tab-front::after,
 #browse-tab-queue::after {
-	content:"|";
+	content:none;
 	margin:0 .35em;
 	color:var(--meta);
+}
+
+.browse-tabs.has-queue #browse-tab-front::after {
+	content:"|";
+}
+
+#browse-tab-collection {
+	margin-left:auto;
+}
+
+#browse-tab-collection {
+	max-width:var(--collection-tab-width, 8em);
+	overflow:hidden;
+	white-space:nowrap;
+	opacity:1;
+}
+
+#browse-tab-collection.is-collapsed {
+	max-width:0;
+	opacity:0;
+	pointer-events:none;
+}
+
+.browse-tabs.is-ready #browse-tab-collection {
+	transition:max-width .18s ease, opacity .18s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.browse-tabs.is-ready #browse-tab-collection {
+		transition:none;
+	}
 }
 
 #browse-tab-queue {
@@ -9438,7 +10529,7 @@ header {
 }
 
 .browse-blend-note {
-	margin:-7px 0 10px var(--browse-indent);
+	margin:-7px 0 10px 8px;
 	color:var(--meta);
 	font-size:11px;
 	font-family:Verdana, Geneva, sans-serif;
@@ -9820,6 +10911,40 @@ header button svg {
 	flex:1 1 auto;
 }
 
+.settings-option-byline {
+	display:flex;
+	align-items:baseline;
+	gap:.35em;
+	margin:3px 0 8px 21px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
+}
+
+.settings-byline-sep {
+	color:var(--muted);
+	opacity:.6;
+}
+
+.settings-byline-action {
+	padding:0;
+	border:0;
+	background:none;
+	color:var(--muted);
+	font:inherit;
+	font-size:11px;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.settings-byline-action:hover {
+		color:var(--text);
+	}
+}
+
 .settings-inline-action {
 	flex:0 0 auto;
 	max-width:0;
@@ -9919,7 +11044,8 @@ header button svg {
 	margin-top:8px;
 }
 
-.page-header-disclosure {
+.page-header-disclosure,
+.page-header-watch {
 	font:inherit;
 	color:inherit;
 	background:none;
@@ -9929,6 +11055,11 @@ header button svg {
 	text-decoration:underline dotted;
 	text-underline-offset:2px;
 	text-decoration-color:var(--border);
+}
+
+.page-header-sep {
+	margin:0 .35em;
+	color:var(--meta);
 }
 
 .page-header-disclosure[aria-expanded="true"] {
@@ -10891,16 +12022,25 @@ The default PDF reader will be replaced with
 to allow highlighting and annotation directly onto PDFs.
 </div>
 </div>
-<div class="settings-option-row">
 <label class="settings-option">
 <input id="setting-notepad" data-setting="notepad" type="checkbox">
 <span>Enable notepad</span>
 </label>
-<button id="settings-notes-export" class="settings-inline-action" type="button">export</button>
-</div>
 <div class="settings-option-hint">
 Write your own notes on any article or PDF, with support for annotation.
 All stored locally.
+</div>
+<div class="settings-option-byline">
+<span id="settings-notes-count">0 notes</span>
+<span class="settings-byline-sep">|</span>
+<button id="settings-notes-export" class="settings-byline-action" type="button">export</button>
+</div>
+<label class="settings-option">
+<input id="setting-notify-on-watch" data-setting="notifyOnWatch" type="checkbox">
+<span>Notify me when a watched discussion has something new</span>
+</label>
+<div class="settings-option-hint">
+Sends a desktop notification the moment a watched page has a discussion worth reading.
 </div>
 </div>
 
@@ -10930,7 +12070,7 @@ All stored locally.
 </span>
 <button type="button" class="stepper-button" data-size-step="1" aria-label="Larger button">+</button>
 </div>
-<button id="settings-reset-button" class="settings-reset" type="button">Reset</button>
+<button id="settings-reset-button" class="settings-reset" type="button">reset</button>
 </div>
 <div class="button-preview">
 <div class="button-preview-stage">
@@ -11049,6 +12189,7 @@ ${[
 				"#setting-hide-without-discussion",
 			),
 			showButtonWithQueue: shadow.querySelector("#setting-show-button-with-queue"),
+			notifyOnWatch: shadow.querySelector("#setting-notify-on-watch"),
 			annotations: shadow.querySelector("#setting-annotations"),
 			annotationsWhenSidebarClosed: shadow.querySelector(
 				"#setting-annotations-closed",
@@ -11182,6 +12323,14 @@ ${[
 				}
 			}
 
+			for (const input of settingsPanel.querySelectorAll(
+				"input[data-source-sync]",
+			)) {
+				input.checked = Boolean(
+					(settings.syncSources || {})[input.dataset.sourceSync],
+				);
+			}
+
 			for (const [key, inputs] of Object.entries(settingsRadios)) {
 				for (const input of inputs) {
 					input.checked = input.value === settings[key];
@@ -11200,6 +12349,17 @@ ${[
 			)) {
 				input.checked = Boolean(sourceState[input.dataset.source]);
 				syncSourceHint(input);
+			}
+
+			for (const group of settingsPanel.querySelectorAll(
+				'[data-suboptions-of^="source-"]',
+			)) {
+				const id = group.dataset.suboptionsOf.slice("source-".length);
+				const on = settingsPanel.querySelector(
+					`input[data-source="${CSS.escape(id)}"]`,
+				)?.checked;
+
+				group.classList.toggle("is-visible", Boolean(on));
 			}
 
 			for (const group of suboptionGroups) {
@@ -11242,6 +12402,7 @@ ${[
 
 			if (open) {
 				setHideMenuOpen(false);
+				refreshNotesCount?.().catch(console.error);
 			}
 
 			if (open) {
@@ -11323,6 +12484,22 @@ ${[
 		}
 
 		const notesExport = shadow.querySelector("#settings-notes-export");
+		const notesCount = shadow.querySelector("#settings-notes-count");
+
+		const refreshNotesCount = async () => {
+			if (!notesCount) {
+				return;
+			}
+
+			const total = notedDocuments(await load(NOTES_INDEX_KEY, [])).reduce(
+				(sum, entry) => sum + (entry.count || 0),
+				0,
+			);
+
+			notesCount.textContent = pluralize(total, "note");
+		};
+
+		refreshNotesCount().catch(console.error);
 
 		if (notesExport) {
 			notesExport.onclick = (event) => {
@@ -11366,10 +12543,31 @@ ${[
 		});
 
 		settingsPanel.addEventListener("change", async (event) => {
+			const syncInput = event.target.closest("input[data-source-sync]");
+
+			if (syncInput) {
+				const current = await loadSettings();
+
+				await saveSettings({
+					syncSources: {
+						...(current.syncSources || {}),
+						[syncInput.dataset.sourceSync]: syncInput.checked,
+					},
+				});
+
+				return;
+			}
+
 			const sourceInput = event.target.closest("input[data-source]");
 
 			if (sourceInput) {
 				syncSourceHint(sourceInput);
+
+				settingsPanel
+					.querySelector(
+						`[data-suboptions-of="source-${CSS.escape(sourceInput.dataset.source)}"]`,
+					)
+					?.classList.toggle("is-visible", sourceInput.checked);
 
 				const current = await loadSettings();
 
@@ -11401,6 +12599,15 @@ ${[
 			settlePanesHeight();
 
 			const setting = input.dataset.setting;
+
+			if (setting === "notifyOnWatch") {
+				if (input.checked && !(await grantNotifications())) {
+					applySettingsPanelState(await saveSettings({ notifyOnWatch: false }));
+					settlePanesHeight();
+				}
+
+				return;
+			}
 
 			if (setting === "theme") {
 				refreshThemeSurfaces();
@@ -12035,6 +13242,18 @@ ${SUBMIT_FORM_CSS}
 	cursor:pointer;
 }
 
+.notepad-toggle[hidden] {
+	display:none;
+}
+
+.notepad-toggle::before {
+	content:"|";
+	margin:0 .35em;
+	color:var(--meta);
+	text-decoration:none;
+	display:inline-block;
+}
+
 .notepad-body {
 	overflow:hidden;
 	transition:max-height .22s ease, opacity .18s ease;
@@ -12057,10 +13276,6 @@ ${SUBMIT_FORM_CSS}
 
 .notepad-section.is-collapsed .notepad-body {
 	opacity:0;
-}
-
-.notepad-section.is-collapsed .notepad-rule-close {
-	display:none;
 }
 
 .note-editor {
@@ -12088,9 +13303,66 @@ ${SUBMIT_FORM_CSS}
 	margin-top:6px;
 }
 
+.note-editor-save-wrap {
+	position:relative;
+	display:inline-flex;
+}
+
 .note-editor-why {
-	color:var(--meta);
+	position:absolute;
+	top:calc(100% + 9px);
+	left:0;
+	z-index:5;
+	width:max-content;
+	max-width:min(280px, 72vw);
+	padding:7px 9px;
+	border:1px solid var(--surface-border);
+	border-radius:6px;
+	background:var(--surface);
+	color:var(--surface-text);
+	box-shadow:0 6px 18px rgba(0,0,0,.18);
 	font-size:11px;
+	line-height:1.4;
+	text-align:left;
+	opacity:0;
+	visibility:hidden;
+	pointer-events:none;
+	transform:translateY(-3px);
+	transition:opacity .12s ease, transform .12s ease, visibility .12s;
+}
+
+.note-editor-why::before,
+.note-editor-why::after {
+	content:"";
+	position:absolute;
+	left:11px;
+	width:0;
+	height:0;
+	border-left:6px solid transparent;
+	border-right:6px solid transparent;
+}
+
+.note-editor-why::before {
+	bottom:100%;
+	border-bottom:6px solid var(--surface-border);
+}
+
+.note-editor-why::after {
+	bottom:calc(100% - 1px);
+	border-bottom:6px solid var(--surface);
+}
+
+.note-editor-why.is-open {
+	opacity:1;
+	visibility:visible;
+	transform:translateY(0);
+	pointer-events:auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.note-editor-why {
+		transition:none;
+	}
 }
 
 .note-editor-cancel {
@@ -12727,8 +13999,9 @@ ${settingsPanelHTML()}
 <div id="comments-content">Loading...</div>
 <div id="browse-view" class="browse-view">
 <div class="browse-tabs" role="tablist">
-<button id="browse-tab-queue" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">queue</button>
 <button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front pages</button>
+<button id="browse-tab-queue" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">queue</button>
+<button id="browse-tab-collection" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">collection</button>
 </div>
 <div id="browse-blend-note" class="browse-blend-note" hidden></div>
 <div id="browse-list"></div>
@@ -12963,13 +14236,23 @@ ${settingsPanelHTML()}
 		for (const [id, tab] of [
 			["#browse-tab-front", "front"],
 			["#browse-tab-queue", "queue"],
+			["#browse-tab-collection", "collection"],
 		]) {
 			const button = shadow.querySelector(id);
 
 			if (button) {
 				button.onclick = () => {
+					const from = BROWSE_TAB_ORDER.indexOf(browseTab || "front");
+					const to = BROWSE_TAB_ORDER.indexOf(tab);
+
+					if (from === to) {
+						return;
+					}
+
 					scrollBrowseToTop(ui);
-					renderBrowseView(ui, { tab }).catch(console.error);
+					slideBrowseList(ui, to > from ? 1 : -1, () =>
+						renderBrowseView(ui, { tab }),
+					);
 				};
 			}
 		}
@@ -13010,6 +14293,9 @@ ${settingsPanelHTML()}
 		const storyID = String(story.id);
 		const hnURL = discussionURL(story);
 		const title = options.title ?? story.title;
+		const watchLink = options.watchable
+			? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
+			: "";
 
 		const showActions = options.actions !== false;
 		const showTitle = options.showTitle !== false;
@@ -13067,7 +14353,7 @@ ${settingsPanelHTML()}
 	}${
 		ageLabel ? escapeHTML(ageLabel) + " " : ""
 	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
-	${showActions ? itemActionLinksHTML(storyID, story.source || "hn") : ""}
+	${showActions ? itemActionLinksHTML(storyID, story.source || "hn", watchLink) : itemActionLinksHTML("", "", watchLink)}
 	${
 		showTitle || !hnURL
 			? ""
@@ -13104,6 +14390,16 @@ ${settingsPanelHTML()}
 		storyElement.dataset.storyId = storyID;
 
 		wrapLooseCommentText(storyElement.querySelector(".story-text"));
+
+		if (options.watchable) {
+			const address = pageAddress();
+
+			wireRowWatchLink(
+				storyElement.querySelector(".browse-watch-link"),
+				{ url: address, title: story.title || "", site: hostLabel(address) },
+				{},
+			);
+		}
 
 		container.appendChild(storyElement);
 
@@ -13881,7 +15177,18 @@ ${settingsPanelHTML()}
 
       ${isLocalSource ? "" : `<a class="focus-link" href="#">focus</a>`}
 		${isLocalSource ? `<a class="edit-note-link" href="#">edit</a> | <a class="delete-note-link" href="#">delete</a>` : ""}
-		${capabilities.vote ? itemActionLinksHTML(commentID, comment.source || "hn") : ""}
+		${
+			capabilities.vote
+				? itemActionLinksHTML(commentID, comment.source || "hn", "", {
+						key: `${comment.source || "hn"}:${commentID}`,
+						url: discussionURL(comment) || "",
+						title: comment.by ? `comment by ${comment.by}` : "comment",
+						site: "",
+						kind: "comment",
+						parent: String(comment.storyID || ""),
+					})
+				: ""
+		}
 
       <span class="toggle">
       [–]
@@ -14235,6 +15542,7 @@ ${settingsPanelHTML()}
 				compose: canReply,
 				title: resolved,
 				showTitle: true,
+				watchable: !disambiguating,
 			});
 
 			if (block) {
@@ -14265,7 +15573,14 @@ ${settingsPanelHTML()}
 				onAdd: () => startNotepadDraft(held.section, held.body),
 			});
 
-			ui.body.insertBefore(held.section, ui.body.querySelector(".page-sort"));
+			const composer =
+				stories.length === 1 ? ui.body.querySelector(".comment-composer") : null;
+
+			if (composer?.parentNode) {
+				composer.parentNode.insertBefore(held.section, composer);
+			} else {
+				ui.body.insertBefore(held.section, ui.body.querySelector(".page-sort"));
+			}
 
 			if (notesDiscussion) {
 				const thread = notesThread(notesDiscussion);
@@ -14520,6 +15835,15 @@ ${settingsPanelHTML()}
 					: "";
 			toggle.textContent = collapsed ? "show" : "hide";
 			toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+			body.style.overflow = "hidden";
+
+			if (!collapsed) {
+				window.setTimeout(() => {
+					if (!section.classList.contains("is-collapsed")) {
+						body.style.overflow = "visible";
+					}
+				}, 240);
+			}
 		};
 
 		add.type = "button";
@@ -14537,11 +15861,19 @@ ${settingsPanelHTML()}
 			body,
 
 			settle() {
-				if (!section.classList.contains("is-collapsed")) {
-					body.style.maxHeight = body.scrollHeight
-						? `${body.scrollHeight}px`
-						: "";
+				if (section.classList.contains("is-collapsed")) {
+					return;
 				}
+
+				body.style.maxHeight = body.scrollHeight
+					? `${body.scrollHeight}px`
+					: "";
+
+				window.setTimeout(() => {
+					if (!section.classList.contains("is-collapsed")) {
+						body.style.overflow = "visible";
+					}
+				}, 240);
 			},
 		};
 	}
@@ -14657,9 +15989,9 @@ ${settingsPanelHTML()}
 <div class="page-header-title">${single ? "" : escapeHTML(page)}</div>
 <div class="page-header-meta">${
 	stories.length > 1
-		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button>`
+		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button><span class="page-header-sep">|</span>`
 		: ""
-}</div>
+}<button type="button" class="page-header-watch" aria-pressed="false">watch discussion</button></div>
 <div class="source-strip${stories.length > 1 ? "" : " source-strip-single"}" id="source-strip">
 ${
 	stories
@@ -14677,6 +16009,8 @@ title="Show only this discussion">
 </div>`;
 
 		const strip = wrapper.querySelector(".source-strip");
+		wireWatchToggle(wrapper.querySelector(".page-header-watch"), page, stories);
+
 		const disclosure = wrapper.querySelector(".page-header-disclosure");
 
 		if (!disclosure) {
@@ -19673,6 +21007,8 @@ title="Show only this discussion">
 		}
 
 		const found = await discoverAll(pageAddresses(), settings);
+
+		scheduleWatchPoll(settings);
 
 		const recoverable = arrivedFromClick && (!last.source || last.source === "hn");
 
