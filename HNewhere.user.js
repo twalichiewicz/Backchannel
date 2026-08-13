@@ -2981,7 +2981,7 @@
 				(source) => `
 <label class="settings-option">
 <input${idPrefix ? ` id="${escapeHTML(idPrefix + source.id)}"` : ""} data-source="${escapeHTML(source.id)}" type="checkbox">
-<span>${escapeHTML(source.label)}${source.beta ? ` <span class="op-pill">BETA</span>` : ""}${source.slow ? ` <span class="op-pill op-pill-slow" tabindex="0" role="note" aria-label="Slower comment fetch source">⧗<span class="op-pill-tip" aria-hidden="true">Slower comment fetch source</span></span>` : ""}</span>
+<span>${escapeHTML(source.label)}${source.slow ? ` <span class="op-pill op-pill-slow" tabindex="0" role="note" aria-label="Slower comment fetch source">⧗<span class="op-pill-tip" aria-hidden="true">Slower comment fetch source</span></span>` : ""}</span>
 </label>
 ${
 	source.caveat
@@ -3053,13 +3053,7 @@ ${
 		shortLabel: "HN",
 		caveat:
 			"Will send each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
-		capabilities: {
-			vote: true,
-			reply: true,
-			submit: true,
-			favorite: true,
-			flag: true,
-		},
+		capabilities: { vote: true, reply: true, submit: true },
 
 		profileURL: (author) =>
 			"https://news.ycombinator.com/user?id=" + encodeURIComponent(author),
@@ -3247,7 +3241,6 @@ ${
 		origins: ["reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com"],
 		label: "Reddit",
 		shortLabel: "Reddit",
-		beta: true,
 		caveat:
 			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds. Vote and reply through your existing Reddit session.",
 		capabilities: { vote: true, reply: true, submit: false },
@@ -3459,7 +3452,6 @@ ${
 		label: "Bluesky",
 		shortLabel: "Bluesky",
 		slow: true,
-		beta: true,
 		ageLabel: "Last Bluesky comment",
 		threadArrivesWhole: true,
 		caveat:
@@ -3646,7 +3638,6 @@ ${
 		origins: ["lobste.rs"],
 		label: "Lobsters",
 		shortLabel: "Lobsters",
-		beta: true,
 		threadArrivesWhole: true,
 		caveat:
 			"Will send the domain of each page you visit to lobste.rs, not the full address. Signed in or out, these requests carry no account.",
@@ -3739,7 +3730,6 @@ ${
 		label: "Wikipedia",
 		shortLabel: "Wikipedia",
 		slow: true,
-		beta: true,
 		ageLabel: "Last active on Wikipedia",
 		threadArrivesWhole: true,
 		caveat:
@@ -3870,7 +3860,6 @@ ${
 		origins: ["hypothes.is", "web.hypothes.is"],
 		label: "Hypothes.is",
 		shortLabel: "Hypothes.is",
-		beta: true,
 		ageLabel: "Last annotation",
 		threadArrivesWhole: true,
 		caveat:
@@ -4840,7 +4829,6 @@ button {
 		label: "Mastodon",
 		shortLabel: "Mastodon",
 		slow: true,
-		beta: true,
 		ageLabel: "Last Mastodon post",
 		threadArrivesWhole: true,
 		caveat:
@@ -4941,7 +4929,6 @@ button {
 		label: "Lemmy",
 		shortLabel: "Lemmy",
 		slow: true,
-		beta: true,
 		caveat:
 			"Will send each page you visit to lemmy.world, a large Lemmy instance whose federation reaches across the network. No account, signed in or out.",
 		capabilities: { vote: false, reply: false, submit: false },
@@ -12093,8 +12080,6 @@ ${[
 	["Vote", (source) => Boolean(source.capabilities.vote)],
 	["Reply", (source) => Boolean(source.capabilities.reply)],
 	["Submit", (source) => Boolean(source.capabilities.submit)],
-	["Favorite", (source) => Boolean(source.capabilities.favorite)],
-	["Flag", (source) => Boolean(source.capabilities.flag)],
 ]
 	.map(
 		([label, supported]) => `<tr><th>${escapeHTML(label)}</th>${[
