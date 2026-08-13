@@ -356,7 +356,6 @@
 		hideWithoutDiscussion: false,
 		showButtonWithQueue: false,
 		notifyOnWatch: false,
-		syncSources: {},
 		sources: undefined,
 		theme: "auto",
 		buttonShape: "circle",
@@ -1073,12 +1072,6 @@
 		seen.forEach(refreshItemActionControls);
 	}
 
-	function sourceSyncEnabled(settings, sourceID) {
-		const map = settings?.syncSources;
-
-		return Boolean(map && typeof map === "object" && map[sourceID]);
-	}
-
 	async function toggleFavorite(item, settings) {
 		const entries = await loadFavoriteEntries();
 		const on = entries.some((entry) => entry.key === item.key);
@@ -1120,9 +1113,7 @@
 				});
 			}
 
-			const settings = await loadSettings();
-
-			if (kind !== "fave" || sourceSyncEnabled(settings, sourceID)) {
+			if (kind !== "fave") {
 				await openItemActionPopup(sourceID, itemId, itemId, action, null);
 			}
 		} finally {
@@ -2995,15 +2986,6 @@
 ${
 	source.caveat
 		? `<div class="settings-option-hint">${escapeHTML(source.caveat)}${source.slow ? `<p class="settings-option-hint-slow">This source takes longer to fetch comments, so they may take a moment to appear.</p>` : ""}</div>`
-		: ""
-}${
-	sourceHasItemActions(source.id)
-		? `<div class="settings-suboptions" data-suboptions-of="source-${escapeHTML(source.id)}">
-<label class="settings-option sub-option">
-<input${idPrefix ? ` id="${escapeHTML(idPrefix + "sync-" + source.id)}"` : ""} data-source-sync="${escapeHTML(source.id)}" type="checkbox">
-<span>Also favourite and flag on ${escapeHTML(source.label)}</span>
-</label>
-</div>`
 		: ""
 }`,
 			)
@@ -5063,16 +5045,14 @@ button {
 	const WATCH_BATCH = 4;
 	const WATCH_POLL_DELAY_MS = 5000;
 
+	function notificationsAllowed() {
+		return (
+			typeof Notification !== "undefined" && Notification.permission === "granted"
+		);
+	}
+
 	async function grantNotifications() {
 		if (typeof Notification === "undefined") {
-			return false;
-		}
-
-		if (Notification.permission === "granted") {
-			return true;
-		}
-
-		if (Notification.permission === "denied") {
 			return false;
 		}
 
@@ -5219,7 +5199,7 @@ button {
 						await saveQueue(addToQueue(queued, story, now));
 					}
 
-					if (settings.notifyOnWatch) {
+					if (settings.notifyOnWatch && notificationsAllowed()) {
 						notifyWatch(entry, found.length);
 					}
 				}
@@ -11994,9 +11974,6 @@ ${
 <span>Except when something is waiting in your queue</span>
 </label>
 </div>
-<div class="settings-option-hint">
-When off, pages with no discussion get a greyed-out button that offers to submit them.
-</div>
 </div>
 
 <div class="settings-group">
@@ -12040,7 +12017,7 @@ All stored locally.
 <span>Notify me when a watched discussion has something new</span>
 </label>
 <div class="settings-option-hint">
-Sends a desktop notification the moment a watched page has a discussion worth reading.
+Sends a system notification when a watched page has new comments
 </div>
 </div>
 
@@ -12317,18 +12294,20 @@ ${[
 				if (input) {
 					input.checked = Boolean(settings[key]);
 
+					if (
+						key === "notifyOnWatch" &&
+						input.checked &&
+						typeof Notification !== "undefined" &&
+						Notification.permission === "denied"
+					) {
+						input.checked = false;
+						saveSettings({ notifyOnWatch: false }).catch(console.error);
+					}
+
 					if (HINTED_SETTINGS.has(key)) {
 						syncOptionHint(input);
 					}
 				}
-			}
-
-			for (const input of settingsPanel.querySelectorAll(
-				"input[data-source-sync]",
-			)) {
-				input.checked = Boolean(
-					(settings.syncSources || {})[input.dataset.sourceSync],
-				);
 			}
 
 			for (const [key, inputs] of Object.entries(settingsRadios)) {
@@ -12349,17 +12328,6 @@ ${[
 			)) {
 				input.checked = Boolean(sourceState[input.dataset.source]);
 				syncSourceHint(input);
-			}
-
-			for (const group of settingsPanel.querySelectorAll(
-				'[data-suboptions-of^="source-"]',
-			)) {
-				const id = group.dataset.suboptionsOf.slice("source-".length);
-				const on = settingsPanel.querySelector(
-					`input[data-source="${CSS.escape(id)}"]`,
-				)?.checked;
-
-				group.classList.toggle("is-visible", Boolean(on));
 			}
 
 			for (const group of suboptionGroups) {
@@ -12543,31 +12511,10 @@ ${[
 		});
 
 		settingsPanel.addEventListener("change", async (event) => {
-			const syncInput = event.target.closest("input[data-source-sync]");
-
-			if (syncInput) {
-				const current = await loadSettings();
-
-				await saveSettings({
-					syncSources: {
-						...(current.syncSources || {}),
-						[syncInput.dataset.sourceSync]: syncInput.checked,
-					},
-				});
-
-				return;
-			}
-
 			const sourceInput = event.target.closest("input[data-source]");
 
 			if (sourceInput) {
 				syncSourceHint(sourceInput);
-
-				settingsPanel
-					.querySelector(
-						`[data-suboptions-of="source-${CSS.escape(sourceInput.dataset.source)}"]`,
-					)
-					?.classList.toggle("is-visible", sourceInput.checked);
 
 				const current = await loadSettings();
 
@@ -12590,6 +12537,19 @@ ${[
 				return;
 			}
 
+			if (input.dataset.setting === "notifyOnWatch") {
+				const allowed = input.checked ? await grantNotifications() : false;
+
+				input.checked = input.checked && allowed;
+
+				applySettingsPanelState(
+					await saveSettings({ notifyOnWatch: input.checked }),
+				);
+				settlePanesHeight();
+
+				return;
+			}
+
 			const settings = await saveSettings({
 				[input.dataset.setting]:
 					input.type === "radio" ? input.value : input.checked,
@@ -12599,15 +12559,6 @@ ${[
 			settlePanesHeight();
 
 			const setting = input.dataset.setting;
-
-			if (setting === "notifyOnWatch") {
-				if (input.checked && !(await grantNotifications())) {
-					applySettingsPanelState(await saveSettings({ notifyOnWatch: false }));
-					settlePanesHeight();
-				}
-
-				return;
-			}
 
 			if (setting === "theme") {
 				refreshThemeSurfaces();
@@ -15998,7 +15949,11 @@ ${settingsPanelHTML()}
 	stories.length > 1
 		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button><span class="page-header-sep">|</span>`
 		: ""
-}<button type="button" class="page-header-watch" aria-pressed="false">watch discussion</button></div>
+}${
+	stories.length > 1
+		? `<button type="button" class="page-header-watch" aria-pressed="false">watch</button>`
+		: ""
+}</div>
 <div class="source-strip${stories.length > 1 ? "" : " source-strip-single"}" id="source-strip">
 ${
 	stories
