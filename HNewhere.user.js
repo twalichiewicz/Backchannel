@@ -11676,7 +11676,7 @@ ${[
 
 #panel {
 	all:initial;
-	line-height:inherit;
+	line-height:1.4;
 	color-scheme:inherit;
 	-webkit-text-size-adjust:100%;
 	text-size-adjust:100%;
