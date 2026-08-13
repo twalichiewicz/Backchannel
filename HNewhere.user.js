@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.7
+// @version      1.6.8
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -42,7 +42,10 @@
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.xmlHttpRequest
+// @grant        GM.getResourceText
 // @grant        unsafeWindow
+// @resource     pdfjsCore   https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/legacy/build/pdf.min.mjs
+// @resource     pdfjsWorker https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/legacy/build/pdf.worker.min.mjs
 // @connect      hacker-news.firebaseio.com
 // @connect      hn.algolia.com
 // @connect      news.ycombinator.com
@@ -343,6 +346,8 @@
 	const DEFAULT_SETTINGS = {
 		annotations: false,
 		annotationsWhenSidebarClosed: false,
+		notepad: true,
+		pdfReader: false,
 		autoOpenSidebar: false,
 		autoOpenSidebarOnlyFromHN: false,
 		hideWithoutDiscussion: false,
@@ -413,6 +418,7 @@
 
 	let sidebar = null;
 	let sidebarUI = null;
+	let renderedDiscussions = [];
 	let opening = false;
 	let openingRun = null;
 	let sidebarGeneration = 0;
@@ -2099,11 +2105,149 @@
 			permalink: "https://lemmy.world/post/" + post.id,
 			articleURL: post.url || "",
 			label: "!" + (community.name || "") + (host ? "@" + host : ""),
-			bodyHTML: escapeHTML(post.body || ""),
+			bodyHTML: markdownToHTML(post.body || ""),
 			rootKeys: [],
 			rootTimes: [],
 			creatorId: post.creator_id,
 		};
+	}
+
+	function markdownAnchor(url, label) {
+		return /^https?:\/\//i.test(url) ? `<a href="${url}">${label}</a>` : label;
+	}
+
+	function markdownInline(escaped) {
+		const held = [];
+		const hold = (html) => `\u0000${held.push(html) - 1}\u0000`;
+
+		let out = escaped.replace(/`([^`\n]+)`/g, (m, body) =>
+			hold(`<code>${body}</code>`),
+		);
+
+		out = out.replace(/!\[([^\]\n]*)\]\(([^)\s]+)[^)]*\)/g, (m, alt, url) =>
+			hold(markdownAnchor(url, alt.trim() || "image")),
+		);
+
+		out = out.replace(/\[([^\]\n]*)\]\(([^)\s]+)[^)]*\)/g, (m, label, url) =>
+			hold(markdownAnchor(url, label.trim() || url)),
+		);
+
+		out = out.replace(
+			/(^|[\s(])(https?:\/\/[^\s<]*[^\s<.,;:!?)\]])/g,
+			(m, lead, url) => lead + hold(markdownAnchor(url, url)),
+		);
+
+		out = out
+			.replace(/\*\*(\S(?:[^*\n]*\S)?)\*\*/g, "<strong>$1</strong>")
+			.replace(/(^|[^*\w])\*(\S(?:[^*\n]*\S)?)\*(?!\*)/g, "$1<em>$2</em>")
+			.replace(/(^|[^_\w])_(\S(?:[^_\n]*\S)?)_(?!\w)/g, "$1<em>$2</em>");
+
+		return out.replace(/\u0000(\d+)\u0000/g, (m, index) => held[Number(index)]);
+	}
+
+	function markdownToHTML(text) {
+		const lines = String(text || "")
+			.replace(/\u0000/g, "")
+			.split("\n");
+		const out = [];
+		const paragraph = [];
+		let index = 0;
+
+		const flush = () => {
+			if (!paragraph.length) {
+				return;
+			}
+
+			out.push(
+				`<p>${markdownInline(escapeHTML(paragraph.join("\n"))).replace(/\n/g, "<br>")}</p>`,
+			);
+			paragraph.length = 0;
+		};
+
+		const items = (pattern, tag) => {
+			const collected = [];
+
+			while (index < lines.length && pattern.test(lines[index])) {
+				collected.push(lines[index].replace(pattern, ""));
+				index += 1;
+			}
+
+			out.push(
+				`<${tag}>` +
+					collected
+						.map((item) => `<li>${markdownInline(escapeHTML(item))}</li>`)
+						.join("") +
+					`</${tag}>`,
+			);
+		};
+
+		while (index < lines.length) {
+			const line = lines[index];
+
+			if (/^\s*```/.test(line)) {
+				flush();
+				index += 1;
+
+				const body = [];
+
+				while (index < lines.length && !/^\s*```/.test(lines[index])) {
+					body.push(lines[index]);
+					index += 1;
+				}
+
+				index += 1;
+				out.push(`<pre><code>${escapeHTML(body.join("\n"))}</code></pre>`);
+				continue;
+			}
+
+			if (/^\s*>\s?/.test(line)) {
+				flush();
+
+				const body = [];
+
+				while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
+					body.push(lines[index].replace(/^\s*>\s?/, ""));
+					index += 1;
+				}
+
+				out.push(`<blockquote>${markdownToHTML(body.join("\n"))}</blockquote>`);
+				continue;
+			}
+
+			if (/^\s*[-*+]\s+\S/.test(line)) {
+				flush();
+				items(/^\s*[-*+]\s+/, "ul");
+				continue;
+			}
+
+			if (/^\s*\d+\.\s+\S/.test(line)) {
+				flush();
+				items(/^\s*\d+\.\s+/, "ol");
+				continue;
+			}
+
+			const heading = line.match(/^\s*#{1,6}\s+(.*)$/);
+
+			if (heading) {
+				flush();
+				out.push(`<p><strong>${markdownInline(escapeHTML(heading[1]))}</strong></p>`);
+				index += 1;
+				continue;
+			}
+
+			if (!line.trim()) {
+				flush();
+				index += 1;
+				continue;
+			}
+
+			paragraph.push(line);
+			index += 1;
+		}
+
+		flush();
+
+		return out.join("");
 	}
 
 	function lemmyComment(commentView, discussion) {
@@ -2120,7 +2264,7 @@
 			parentKey: parentId ? sourceKey("lemmy", parentId) : null,
 			author: lemmyHandle(commentView.creator),
 			authorName: lemmyDisplayName(commentView.creator),
-			bodyHTML: removed ? "" : escapeHTML(comment.content || ""),
+			bodyHTML: removed ? "" : markdownToHTML(comment.content || ""),
 			score: commentView.counts?.score ?? null,
 			createdAt: Math.floor(Date.parse(comment.published) / 1000) || 0,
 			isOP:
@@ -2677,6 +2821,30 @@ ${
 
 		option?.classList.toggle("settings-option-on", Boolean(input?.checked));
 	}
+
+	// #region hnewhere-test-export
+	const HINTED_SETTINGS = new Set(["annotations", "pdfReader", "notepad"]);
+
+	function pdfViewerRefusesExtensions() {
+		return /firefox/i.test(navigator.userAgent || "");
+	}
+
+	function syncOptionHint(input) {
+		const anchor =
+			input?.closest?.(".settings-option-row") ||
+			input?.closest?.(".settings-option");
+		const hint = anchor?.nextElementSibling;
+		const checked = Boolean(input?.checked);
+
+		anchor?.classList.toggle("is-checked", checked);
+
+		if (hint?.classList?.contains("settings-option-hint")) {
+			hint.classList.toggle("is-acknowledged", checked);
+		}
+
+		return checked;
+	}
+	// #endregion hnewhere-test-export
 
 	function enabledSources(settings) {
 		return enabledSourceIds(settings, registeredSourceIds()).map((id) =>
@@ -3469,6 +3637,866 @@ ${
 		},
 	});
 
+	// -------------------------
+	// Notes you make yourself
+	// -------------------------
+
+	// #region hnewhere-test-export
+	const NOTES_PREFIX = "HNewhere:notes:";
+	const NOTES_INDEX_KEY = "HNewhere:notes_index";
+	const NOTE_CONTEXT_CHARS = 32;
+	const NOTES_PER_DOCUMENT = 200;
+
+	function noteDocumentRef(fingerprint = null) {
+		return fingerprint
+			? { kind: "pdf", id: String(fingerprint) }
+			: { kind: "url", id: normalizeURL(location.href) || location.href };
+	}
+
+	function noteStorageKey(ref) {
+		return NOTES_PREFIX + ref.kind + ":" + ref.id;
+	}
+
+	function noteSeconds(value) {
+		const number = Number(value) || 0;
+
+		return number > 1e11 ? Math.floor(number / 1000) : number;
+	}
+
+	function keptNotes(stored) {
+		const notes = Array.isArray(stored?.notes) ? stored.notes : [];
+
+		return notes
+			.filter((note) => note?.id && String(note.text ?? "").trim())
+			.map((note) => ({
+				...note,
+				created: noteSeconds(note.created),
+				edited: note.edited ? noteSeconds(note.edited) : note.edited,
+			}))
+			.sort((a, b) => (a.created || 0) - (b.created || 0));
+	}
+
+	function noteTextHTML(text) {
+		return String(text || "")
+			.split(/\n{2,}/)
+			.map((part) => part.trim())
+			.filter(Boolean)
+			.map((part) => `<p>${escapeHTML(part).replace(/\n/g, "<br>")}</p>`)
+			.join("");
+	}
+
+	function noteBodyHTML(note) {
+		const context =
+			(note.prefix ? ` data-hnewhere-prefix="${escapeHTML(note.prefix)}"` : "") +
+			(note.suffix ? ` data-hnewhere-suffix="${escapeHTML(note.suffix)}"` : "");
+
+		return (
+			(note.exact
+				? `<blockquote data-hnewhere-exact="1"${context}>${escapeHTML(note.exact)}</blockquote>`
+				: "") + noteTextHTML(note.text)
+		);
+	}
+
+	function noteComment(note, discussion) {
+		return {
+			source: "notes",
+			local: true,
+			key: sourceKey("notes", note.id),
+			id: note.id,
+			discussionKey: discussion?.key,
+			parentKey: null,
+			author: "you",
+			authorName: "You",
+			bodyHTML: noteBodyHTML(note),
+			score: null,
+			createdAt: note.created || 0,
+			isOP: false,
+			deleted: false,
+			replyKeys: [],
+			note,
+		};
+	}
+
+	function notesCollective(notes, articleURL) {
+		if (!notes.length) {
+			return null;
+		}
+
+		return {
+			source: "notes",
+			local: true,
+			key: sourceKey("notes", "notes"),
+			id: "notes",
+			title: "Notepad",
+			author: "",
+			score: null,
+			commentCount: notes.length,
+			createdAt: Math.max(...notes.map((note) => note.created || 0)),
+			permalink: null,
+			articleURL,
+			label: "Notepad",
+			collective: true,
+			bodyHTML: "",
+			rootKeys: notes.map((note) => sourceKey("notes", note.id)),
+			rootTimes: notes.map((note) => note.created || 0),
+			notes: [...notes].sort((a, b) => (b.created || 0) - (a.created || 0)),
+		};
+	}
+	// #endregion hnewhere-test-export
+
+	const NOTE_COMPOSER_CSS = `
+:host { all: initial; }
+.box {
+	width: 320px;
+	max-width: 82vw;
+	padding: 10px;
+	border-radius: 10px;
+	background: var(--surface, #fff);
+	color: var(--surface-text, #111);
+	box-shadow: 0 8px 28px rgba(0,0,0,.28);
+	font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+blockquote {
+	margin: 0 0 8px;
+	padding: 0 0 0 8px;
+	border-left: 2px solid #237140;
+	color: #666;
+	font-style: italic;
+	max-height: 4.5em;
+	overflow: hidden;
+}
+textarea {
+	width: 100%;
+	min-height: 68px;
+	box-sizing: border-box;
+	padding: 6px 7px;
+	border: 1px solid rgba(0,0,0,.2);
+	border-radius: 6px;
+	font: inherit;
+	resize: vertical;
+}
+.row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; align-items: center; }
+.why { margin-right: auto; color: #a33; font-size: 12px; }
+button {
+	padding: 6px 11px;
+	border: 0;
+	border-radius: 6px;
+	font: inherit;
+	font-weight: 600;
+	cursor: pointer;
+}
+.save { background: #237140; color: #fff; }
+.cancel { background: rgba(0,0,0,.07); color: inherit; }
+@media (prefers-color-scheme: dark) {
+	.box { background: #23262b; color: #e8e8e8; }
+	blockquote { color: #aaa; }
+	textarea { background: #1a1c20; color: #e8e8e8; border-color: rgba(255,255,255,.18); }
+	.cancel { background: rgba(255,255,255,.12); }
+}
+`;
+
+	let noteComposer = null;
+
+	function closeNoteComposer() {
+		noteComposer?.host.remove();
+		noteComposer = null;
+	}
+
+	// #region hnewhere-test-export
+	function rangeTextWelded(range) {
+		const walker = document.createTreeWalker(
+			range.commonAncestorContainer,
+			NodeFilter.SHOW_TEXT,
+		);
+		let text = "";
+		let node = walker.nextNode();
+
+		for (; node; node = walker.nextNode()) {
+			if (!range.intersectsNode(node)) {
+				continue;
+			}
+
+			const value = node.nodeValue || "";
+			const from = node === range.startContainer ? range.startOffset : 0;
+			const to = node === range.endContainer ? range.endOffset : value.length;
+
+			text += value.slice(from, to);
+		}
+
+		return text;
+	}
+
+	function selectedQuoteText(range, selection) {
+		const element = nearestElement(range.commonAncestorContainer);
+
+		return element?.closest(".textLayer")
+			? rangeTextWelded(range).replace(/\s+/g, " ").trim()
+			: String(selection).replace(/\s+/g, " ").trim();
+	}
+
+	function noteSelectionContext(range) {
+		const container =
+			nearestElement(range.commonAncestorContainer)?.closest(
+				".textLayer, article, main, body",
+			) || document.body;
+		const before = document.createRange();
+		const after = document.createRange();
+
+		before.setStart(container, 0);
+		before.setEnd(range.startContainer, range.startOffset);
+		after.setStart(range.endContainer, range.endOffset);
+		after.setEnd(container, container.childNodes.length);
+
+		return {
+			prefix: before.toString().replace(/\s+/g, " ").slice(-NOTE_CONTEXT_CHARS),
+			suffix: after.toString().replace(/\s+/g, " ").slice(0, NOTE_CONTEXT_CHARS),
+		};
+	}
+
+	function noteSelection() {
+		const selection = window.getSelection();
+
+		if (!selection || selection.isCollapsed || !selection.rangeCount) {
+			return null;
+		}
+
+		const range = selection.getRangeAt(0);
+		const element = nearestElement(range.commonAncestorContainer);
+
+		if (
+			!element ||
+			element.closest("[data-hnewhere-sidebar], [data-hnewhere-note-composer]")
+		) {
+			return null;
+		}
+
+		const exact = selectedQuoteText(range, selection);
+
+		if (!exact) {
+			return null;
+		}
+
+		const rect = [...range.getClientRects()].pop() || range.getBoundingClientRect();
+
+		return {
+			exact,
+			...noteSelectionContext(range),
+			anchorable: normalizeSearchText(exact).text.length >= QUOTE_MIN_CHARS,
+			page: Number(element.closest(".page")?.dataset.pageNumber) || null,
+			left: rect.right,
+			top: rect.bottom,
+		};
+	}
+	// #endregion hnewhere-test-export
+
+	async function openNoteComposer(chosen) {
+		closeNoteComposer();
+
+		const host = document.createElement("div");
+
+		host.setAttribute("data-hnewhere-note-composer", "1");
+		host.style.cssText = `
+			position:absolute;
+			left:${Math.max(8, Math.min(chosen.left + window.scrollX, window.scrollX + window.innerWidth - 340))}px;
+			top:${chosen.top + window.scrollY + 8}px;
+			z-index:2147483646;
+		`;
+
+		const shadow = host.attachShadow({ mode: "open" });
+
+		shadow.innerHTML = `
+<style>${NOTE_COMPOSER_CSS}</style>
+<div class="box">
+<blockquote></blockquote>
+<textarea placeholder="Your note" aria-label="Your note"></textarea>
+<div class="row">
+<span class="why"></span>
+<button type="button" class="cancel">Cancel</button>
+<button type="button" class="save">Save note</button>
+</div>
+</div>`;
+
+		const quote = shadow.querySelector("blockquote");
+
+		quote.textContent = chosen.exact || "";
+		quote.hidden = !chosen.exact;
+
+		if (chosen.exact && !chosen.anchorable) {
+			shadow.querySelector(".why").textContent =
+				"Too short to highlight — it will be kept as a note on the page.";
+		}
+
+		const field = shadow.querySelector("textarea");
+
+
+
+		shadow.querySelector(".cancel").onclick = () => closeNoteComposer();
+		shadow.querySelector(".save").onclick = () => {
+			saveNoteFromComposer(chosen, field.value).catch(console.error);
+		};
+		field.onkeydown = (event) => {
+			if (event.key === "Escape") {
+				closeNoteComposer();
+			}
+
+			if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+				saveNoteFromComposer(chosen, field.value).catch(console.error);
+			}
+		};
+
+		document.documentElement.appendChild(host);
+		noteComposer = { host, shadow };
+		field.focus();
+	}
+
+	async function saveNoteFromComposer(chosen, text) {
+		const why = noteComposer?.shadow.querySelector(".why");
+
+		if (!String(text || "").trim()) {
+			if (why) {
+				why.textContent = "A note needs something written in it.";
+			}
+
+			return;
+		}
+
+		const notes = await loadNotes();
+		const written = String(text).trim();
+
+		await saveNotes([
+			...notes,
+			{
+				id:
+					"n" +
+					Date.now().toString(36) +
+					Math.floor(Math.random() * 1e6).toString(36),
+				created: Date.now(),
+				text: written,
+				exact: chosen.anchorable ? chosen.exact : "",
+				prefix: chosen.prefix,
+				suffix: chosen.suffix,
+				page: chosen.page,
+				url: location.href,
+			},
+		]);
+
+		closeNoteComposer();
+		window.getSelection()?.removeAllRanges();
+		await reopenForNotes();
+	}
+
+	// #region hnewhere-test-export
+	function noteAsText(note) {
+		const quote = String(note?.exact || "").trim();
+		const written = String(note?.text || "").trim();
+
+		return quote ? `> ${quote}\n\n${written}` : written;
+	}
+
+	function anchorNoteQuote(exact) {
+		const wanted = normalizeSearchText(exact || "").text;
+
+		if (!wanted) {
+			return null;
+		}
+
+		const index = detectDocumentSource().buildIndex();
+
+		if (!index?.normalizedText) {
+			return null;
+		}
+
+		const found = findNormalizedOccurrences(
+			index.normalizedText,
+			wanted,
+			index.welded,
+		);
+
+		if (found.length !== 1) {
+			return null;
+		}
+
+		const at = found[0];
+		const ends = at + wanted.length;
+		const raw = index.normalizedMap?.[at];
+		const on =
+			index.pageStarts && raw != null
+				? findPageByOffset(index.pageStarts, raw)
+				: null;
+
+		return {
+			prefix: index.normalizedText.slice(Math.max(0, at - NOTE_CONTEXT_CHARS), at),
+			suffix: index.normalizedText.slice(ends, ends + NOTE_CONTEXT_CHARS),
+			page: on ? on.pageIndex + 1 : null,
+		};
+	}
+
+	function reanchoredNote(note, parsed) {
+		const anchor = parsed.exact ? anchorNoteQuote(parsed.exact) : null;
+
+		return {
+			...note,
+			text: parsed.text,
+			exact: parsed.exact,
+			prefix: anchor?.prefix || "",
+			suffix: anchor?.suffix || "",
+			page: anchor?.page ?? null,
+		};
+	}
+
+	function editedNote(note, parsed) {
+		const changed = parsed.exact !== String(note.exact || "").trim();
+
+		return {
+			...(changed ? reanchoredNote(note, parsed) : note),
+			text: parsed.text,
+			exact: parsed.exact,
+			edited: Math.floor(Date.now() / 1000),
+		};
+	}
+
+	function noteFromText(value) {
+		const lines = String(value || "").split("\n");
+		const quoted = [];
+
+		while (lines.length && /^\s*>/.test(lines[0])) {
+			quoted.push(lines.shift().replace(/^\s*>\s?/, ""));
+		}
+
+		return {
+			exact: quoted.join(" ").replace(/\s+/g, " ").trim(),
+			text: lines.join("\n").trim(),
+		};
+	}
+
+	function inlineNoteEditor(note, { onSave, onClose, canAnchor }) {
+		const editor = document.createElement("div");
+		const field = document.createElement("textarea");
+		const row = document.createElement("div");
+		const why = document.createElement("span");
+		const save = document.createElement("button");
+		const cancel = document.createElement("button");
+
+		editor.className = "note-editor";
+		field.className = "note-editor-field";
+		field.value = noteAsText(note);
+		field.setAttribute("aria-label", "Edit your note");
+
+		row.className = "note-editor-row";
+		why.className = "note-editor-why";
+		cancel.type = "button";
+		cancel.className = "note-editor-cancel";
+		cancel.textContent = "cancel";
+		save.type = "button";
+		save.className = "note-editor-save";
+		save.textContent = "save";
+
+		let warnedFor = null;
+
+		const commit = () => {
+			const parsed = noteFromText(field.value);
+
+			if (!parsed.text && !parsed.exact) {
+				return;
+			}
+
+			if (
+				parsed.exact &&
+				canAnchor &&
+				warnedFor !== parsed.exact &&
+				!canAnchor(parsed.exact)
+			) {
+				warnedFor = parsed.exact;
+				why.textContent =
+					"That passage is not in this document. Save again to keep it without a highlight.";
+				return;
+			}
+
+			onSave(parsed);
+		};
+
+		cancel.onclick = onClose;
+		save.onclick = commit;
+		field.onkeydown = (event) => {
+			if (event.key === "Escape") {
+				onClose();
+			}
+
+			if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+				commit();
+			}
+		};
+
+		row.append(save, cancel, why);
+		editor.append(field, row);
+
+		return { editor, field };
+	}
+	// #endregion hnewhere-test-export
+
+	// #region hnewhere-test-export
+	function settleNotepad(node) {
+		const body = node?.closest?.(".notepad-body");
+		const section = body?.closest(".notepad-section");
+
+		if (!body || section?.classList.contains("is-collapsed")) {
+			return;
+		}
+
+		if (body.querySelector(".note-editor")) {
+			body.style.maxHeight = "";
+			return;
+		}
+
+		body.style.maxHeight = body.scrollHeight ? `${body.scrollHeight}px` : "";
+	}
+	// #endregion hnewhere-test-export
+
+	function openNotepad(section) {
+		const body = section?.querySelector(".notepad-body");
+		const toggle = section?.querySelector(".notepad-toggle");
+
+		if (!section?.classList.contains("is-collapsed")) {
+			return;
+		}
+
+		section.classList.remove("is-collapsed");
+		toggle.textContent = "hide";
+		toggle.setAttribute("aria-expanded", "true");
+
+		if (body) {
+			body.style.maxHeight = body.scrollHeight ? `${body.scrollHeight}px` : "";
+		}
+	}
+
+	function startInlineNoteEdit(div, note) {
+		const text = div.querySelector(".text");
+
+		if (!text || div.querySelector(".note-editor")) {
+			return;
+		}
+
+		const held = inlineNoteEditor(note, {
+			canAnchor: (exact) => Boolean(anchorNoteQuote(exact)),
+
+			onSave: (parsed) => {
+				updateNote(note.id, parsed).catch(console.error);
+			},
+			onClose: () => {
+				held.editor.remove();
+				text.hidden = false;
+				settleNotepad(div);
+			},
+		});
+
+		text.hidden = true;
+		text.after(held.editor);
+		held.field.focus();
+		settleNotepad(div);
+	}
+
+	function startNotepadDraft(section, body) {
+		const add = section.querySelector(".notepad-add");
+		const open = body.querySelector(".note-editor-draft");
+
+		if (open) {
+			closeNotepadDraft(section, body);
+			return;
+		}
+
+		openNotepad(section);
+
+		const held = inlineNoteEditor(null, {
+			canAnchor: (exact) => Boolean(anchorNoteQuote(exact)),
+
+			onSave: (parsed) => {
+				writeNote(parsed).catch(console.error);
+			},
+			onClose: () => closeNotepadDraft(section, body),
+		});
+
+		held.editor.classList.add("note-editor-draft");
+		body.prepend(held.editor);
+		add?.classList.add("is-open");
+		add?.setAttribute("aria-expanded", "true");
+
+		requestAnimationFrame(() => {
+			held.editor.classList.add("is-open");
+			held.editor.style.maxHeight = `${held.editor.scrollHeight}px`;
+			settleNotepad(held.editor);
+			held.field.focus();
+		});
+	}
+
+	function closeNotepadDraft(section, body) {
+		const add = section.querySelector(".notepad-add");
+		const draft = body.querySelector(".note-editor-draft");
+
+		add?.classList.remove("is-open");
+		add?.setAttribute("aria-expanded", "false");
+
+		if (!draft) {
+			return;
+		}
+
+		draft.style.maxHeight = "0px";
+		draft.classList.remove("is-open");
+
+		window.setTimeout(() => {
+			draft.remove();
+			settleNotepad(body.firstElementChild || body);
+		}, 220);
+	}
+
+	async function writeNote(parsed) {
+		if (!parsed?.text && !parsed?.exact) {
+			return;
+		}
+
+		const notes = await loadNotes();
+
+		await saveNotes([
+			...notes,
+			reanchoredNote(
+				{
+					id:
+						"n" +
+						Date.now().toString(36) +
+						Math.floor(Math.random() * 1e6).toString(36),
+					created: Math.floor(Date.now() / 1000),
+					url: location.href,
+				},
+				parsed,
+			),
+		]);
+		await reopenForNotes();
+	}
+
+	async function updateNote(id, parsed) {
+		if (!parsed?.text && !parsed?.exact) {
+			return;
+		}
+
+		const notes = await loadNotes();
+
+		await saveNotes(
+			notes.map((note) =>
+				note.id === id ? editedNote(note, parsed) : note,
+			),
+		);
+		await reopenForNotes();
+	}
+
+	async function deleteNote(id) {
+		const notes = await loadNotes();
+
+		await saveNotes(notes.filter((note) => note.id !== id));
+		await reopenForNotes();
+	}
+
+	async function reopenForNotes() {
+		if (!sidebarUI) {
+			return;
+		}
+
+		await renderDiscussions(renderedDiscussions, sidebarUI);
+		await refreshArticleAnnotations();
+	}
+
+	function removeNoteAffordance() {
+		document.querySelector("[data-hnewhere-note-add]")?.remove();
+	}
+
+	function syncNoteAffordance() {
+		if (noteComposer) {
+			return;
+		}
+
+		removeNoteAffordance();
+
+		const chosen = noteSelection();
+
+		if (!chosen) {
+			return;
+		}
+
+		const wrapper = document.createElement("div");
+
+		wrapper.setAttribute("data-hnewhere-note-add", "1");
+		wrapper.style.cssText = `
+			position:absolute;
+			left:${chosen.left + window.scrollX}px;
+			top:${chosen.top + window.scrollY + 6}px;
+			z-index:2147483646;
+		`;
+		wrapper.appendChild(
+			pdfReaderButton("Add note", () => {
+				removeNoteAffordance();
+				openNoteComposer(chosen).catch(console.error);
+			}),
+		);
+
+		document.documentElement.appendChild(wrapper);
+	}
+
+	function watchNoteSelection(settings) {
+		if (!enabledSourceIds(settings, registeredSourceIds()).includes("notes")) {
+			return;
+		}
+
+		const later = () => window.setTimeout(syncNoteAffordance, 0);
+
+		document.addEventListener("pointerup", later);
+		document.addEventListener("keyup", (event) => {
+			if (event.key === "Shift" || String(event.key).startsWith("Arrow")) {
+				later();
+			}
+		});
+	}
+
+	// #region hnewhere-test-export
+	function notesThread(discussion) {
+		const byKey = new Map(
+			(discussion.notes || []).map((note) => [
+				sourceKey("notes", note.id),
+				noteComment(note, discussion),
+			]),
+		);
+
+		return {
+			rootKeys: [...byKey.keys()],
+
+			async getComment(key) {
+				return byKey.get(key) || null;
+			},
+		};
+	}
+	// #endregion hnewhere-test-export
+
+	function noteDocumentRefForPage() {
+		return noteDocumentRef(pdfViewerApp()?.pdfDocument?.fingerprints?.[0]);
+	}
+
+	async function loadNotes(ref = noteDocumentRefForPage()) {
+		return keptNotes(await load(noteStorageKey(ref), null));
+	}
+
+	async function saveNotes(notes, ref = noteDocumentRefForPage()) {
+		const kept = notes.slice(-NOTES_PER_DOCUMENT);
+
+		await save(noteStorageKey(ref), { version: 1, notes: kept });
+		await rememberNotedDocument(ref, kept.length);
+
+		return kept;
+	}
+
+	async function rememberNotedDocument(ref, count) {
+		const stored = await load(NOTES_INDEX_KEY, []);
+		const entries = (Array.isArray(stored) ? stored : []).filter(
+			(entry) => entry?.key !== noteStorageKey(ref),
+		);
+
+		if (count > 0) {
+			entries.push({
+				key: noteStorageKey(ref),
+				kind: ref.kind,
+				id: ref.id,
+				url: location.href,
+				title: pageTitle(),
+				count,
+				updated: Date.now(),
+			});
+		}
+
+		await save(NOTES_INDEX_KEY, entries);
+	}
+
+	// #region hnewhere-test-export
+	function notedDocuments(index) {
+		return (Array.isArray(index) ? index : []).filter(
+			(entry) => entry?.kind && entry?.id,
+		);
+	}
+
+	function notesExportName(now) {
+		const pad = (value) => String(value).padStart(2, "0");
+
+		return (
+			"backchannel-notes-" +
+			now.getFullYear() +
+			"-" +
+			pad(now.getMonth() + 1) +
+			"-" +
+			pad(now.getDate()) +
+			".json"
+		);
+	}
+
+	function notesExportPayload(documents, exported) {
+		const kept = documents.filter((entry) => entry.notes.length);
+
+		return {
+			application: "Backchannel",
+			version: 1,
+			exported,
+			documentCount: kept.length,
+			noteCount: kept.reduce((total, entry) => total + entry.notes.length, 0),
+			documents: kept,
+		};
+	}
+	// #endregion hnewhere-test-export
+
+	async function collectNotes() {
+		const index = notedDocuments(await load(NOTES_INDEX_KEY, []));
+		const documents = [];
+
+		for (const entry of index) {
+			const ref = { kind: entry.kind, id: entry.id };
+
+			documents.push({
+				kind: ref.kind,
+				id: ref.id,
+				url: entry.url || null,
+				title: entry.title || null,
+				updated: entry.updated || null,
+				notes: keptNotes(await load(entry.key || noteStorageKey(ref), null)),
+			});
+		}
+
+		return documents;
+	}
+
+	function downloadJSON(payload, name) {
+		const href = URL.createObjectURL(
+			new Blob([JSON.stringify(payload, null, 2)], {
+				type: "application/json",
+			}),
+		);
+		const link = document.createElement("a");
+
+		link.href = href;
+		link.download = name;
+		link.style.display = "none";
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+
+		window.setTimeout(() => URL.revokeObjectURL(href), 10000);
+	}
+
+	async function exportNotes() {
+		const now = new Date();
+		const payload = notesExportPayload(await collectNotes(), now.toISOString());
+
+		if (!payload.noteCount) {
+			return payload;
+		}
+
+		downloadJSON(payload, notesExportName(now));
+
+		return payload;
+	}
+
 	const MASTODON_INSTANCE = "https://mastodon.social";
 	const TOOTFINDER = "https://www.tootfinder.ch";
 
@@ -4200,9 +5228,11 @@ ${
 	}
 	// #endregion hnewhere-test-export
 
+	// #region hnewhere-test-export
 	function pluralize(value, singular, plural = singular + "s") {
 		return value + " " + (value === 1 ? singular : plural);
 	}
+	// #endregion hnewhere-test-export
 
 	function joinWithAnd(items) {
 		if (items.length < 3) {
@@ -4958,6 +5988,7 @@ ${
 	// #region hnewhere-test-export
 	function pageTitle(doc = document) {
 		const candidates = [
+			doc === document ? pdfTitle : null,
 			doc.querySelector('meta[property="og:title"]')?.content,
 			doc.querySelector('meta[name="twitter:title"]')?.content,
 			doc.title,
@@ -8160,6 +9191,15 @@ header {
 	display:none;
 }
 
+.hide-menu-rule {
+	margin:4px 2px;
+	border-top:1px solid var(--surface-border);
+}
+
+.hide-menu-rule[hidden] {
+	display:none;
+}
+
 .hide-menu button {
 	padding:5px 8px;
 	border:0;
@@ -8541,7 +9581,8 @@ header {
 
 .next-up {
 	display:block;
-	margin:18px -12px 24px;
+	margin:auto -12px 24px;
+	padding-top:18px;
 	font-family:Verdana, Geneva, sans-serif;
 	font-size:11px;
 	color:var(--meta);
@@ -8740,6 +9781,11 @@ header button svg {
 	font-size:11px;
 }
 
+.settings-option[hidden],
+.settings-option-hint[hidden] {
+	display:none;
+}
+
 .settings-suboptions {
 	overflow:hidden;
 	max-height:0;
@@ -8749,17 +9795,58 @@ header button svg {
 }
 
 .settings-suboptions.is-visible {
-	max-height:140px;
+	max-height:260px;
 	opacity:1;
 	margin-top:8px;
 }
 
-.settings-suboptions + .settings-option {
+.settings-suboptions + .settings-option,
+.settings-suboptions + .settings-option-row {
 	margin-top:8px;
 }
 
-.settings-option-hint + .settings-option {
+.settings-option-hint + .settings-option,
+.settings-option-hint + .settings-option-row {
 	margin-top:8px;
+}
+
+.settings-option-row {
+	display:flex;
+	align-items:flex-start;
+	gap:8px;
+}
+
+.settings-option-row > .settings-option {
+	flex:1 1 auto;
+}
+
+.settings-inline-action {
+	flex:0 0 auto;
+	max-width:0;
+	padding:0;
+	border:0;
+	overflow:hidden;
+	background:none;
+	color:var(--muted);
+	font:inherit;
+	font-size:11px;
+	line-height:1.35;
+	white-space:nowrap;
+	text-decoration:none;
+	opacity:0;
+	cursor:pointer;
+	transition:max-width .25s ease, opacity .2s ease;
+}
+
+.settings-option-row.is-checked .settings-inline-action {
+	max-width:120px;
+	opacity:1;
+}
+
+@media (hover: hover) {
+	.settings-inline-action:hover {
+		text-decoration:underline;
+	}
 }
 
 .settings-credits {
@@ -9093,9 +10180,6 @@ header button svg {
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
-	   Stated in px for the same reason the hide menu is: rem here would be
-	   measured against the page's root font-size, and a site using the 62.5%
-	   reset would put this ceiling back below the caveats it has to clear. */
 	max-height:384px;
 	overflow:hidden;
 	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
@@ -9103,6 +10187,17 @@ header button svg {
 
 .settings-option-hint-slow {
 	margin:6px 0 0;
+}
+
+.settings-notice {
+	margin:0 0 12px;
+	padding:6px 8px;
+	border:1px solid var(--help-border);
+	border-radius:4px;
+	background:var(--help-bg);
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
 }
 
 .settings-option:has(#setting-hide-without-discussion:checked) ~ .settings-option-hint {
@@ -9715,6 +10810,8 @@ ${
 	`<div id="hide-menu" class="hide-menu" role="menu" hidden>
 <button type="button" role="menuitem" data-hide-scope="page">Hide on this page only</button>
 <button type="button" role="menuitem" data-hide-scope="site">Hide on all ${escapeHTML(siteKey())} pages</button>
+<div class="hide-menu-rule" data-pdf-reader-only hidden></div>
+<button id="close-pdf-reader" type="button" role="menuitem" data-pdf-reader-only hidden>Close the PDF reader</button>
 </div>`
 }
 
@@ -9733,6 +10830,8 @@ ${
 <div id="settings-panes" class="settings-panes">
 
 <div class="settings-pane settings-pane-primary">
+
+<div id="settings-pdf-notice" class="settings-notice" hidden>Backchannel not supported in Firefox's PDF viewer</div>
 
 <div class="settings-group">
 <label class="settings-option">
@@ -9763,7 +10862,7 @@ When off, pages with no discussion get a greyed-out button that offers to submit
 <div class="settings-group">
 <label class="settings-option">
 <input id="setting-annotations" data-setting="annotations" type="checkbox">
-<span>Enable article annotations <span class="op-pill">BETA</span></span>
+<span>Enable annotations <span class="op-pill">BETA</span></span>
 </label>
 <div class="settings-option-hint">
 Highlights the passages commenters quote, so you can jump between the article and what was said about it.
@@ -9773,6 +10872,26 @@ Highlights the passages commenters quote, so you can jump between the article an
 <input id="setting-annotations-closed" data-setting="annotationsWhenSidebarClosed" type="checkbox">
 <span>Show when sidebar closed</span>
 </label>
+<label class="settings-option sub-option">
+<input id="setting-pdf-reader" data-setting="pdfReader" type="checkbox">
+<span>Enhanced PDF support</span>
+</label>
+<div class="settings-option-hint">
+The default PDF reader will be replaced with
+<a href="https://mozilla.github.io/pdf.js/" target="_blank" rel="noreferrer noopener">pdf.js</a>
+to allow highlighting and annotation directly onto PDFs.
+</div>
+</div>
+<div class="settings-option-row">
+<label class="settings-option">
+<input id="setting-notepad" data-setting="notepad" type="checkbox">
+<span>Enable notepad</span>
+</label>
+<button id="settings-notes-export" class="settings-inline-action" type="button">export</button>
+</div>
+<div class="settings-option-hint">
+Write your own notes on any article or PDF, with support for annotation.
+All stored locally.
 </div>
 </div>
 
@@ -9925,6 +11044,8 @@ ${[
 			annotationsWhenSidebarClosed: shadow.querySelector(
 				"#setting-annotations-closed",
 			),
+			pdfReader: shadow.querySelector("#setting-pdf-reader"),
+			notepad: shadow.querySelector("#setting-notepad"),
 			autoOpenSidebarOnlyFromHN: shadow.querySelector(
 				"#setting-auto-open-only-from-hn",
 			),
@@ -9956,9 +11077,14 @@ ${[
 					: ".settings-pane-primary",
 			);
 
-			if (active) {
+			if (active?.scrollHeight) {
 				panes.style.height = `${active.scrollHeight}px`;
 			}
+		};
+
+		const settlePanesHeight = () => {
+			syncPanesHeight();
+			window.setTimeout(syncPanesHeight, 300);
 		};
 
 		if (panes && typeof ResizeObserver === "function") {
@@ -10040,6 +11166,10 @@ ${[
 			for (const [key, input] of Object.entries(settingsInputs)) {
 				if (input) {
 					input.checked = Boolean(settings[key]);
+
+					if (HINTED_SETTINGS.has(key)) {
+						syncOptionHint(input);
+					}
 				}
 			}
 
@@ -10070,6 +11200,24 @@ ${[
 
 				for (const input of group.querySelectorAll("input")) {
 					input.disabled = !enabled;
+				}
+			}
+
+			if (pdfViewerRefusesExtensions()) {
+				const option = settingsInputs.pdfReader?.closest(".settings-option");
+				const hint = option?.nextElementSibling;
+				const notice = shadow.querySelector("#settings-pdf-notice");
+
+				if (option) {
+					option.hidden = true;
+				}
+
+				if (hint?.classList.contains("settings-option-hint")) {
+					hint.hidden = true;
+				}
+
+				if (notice) {
+					notice.hidden = false;
 				}
 			}
 		};
@@ -10111,6 +11259,10 @@ ${[
 				return;
 			}
 
+			for (const node of hideMenu.querySelectorAll("[data-pdf-reader-only]")) {
+				node.hidden = !ownPdfReader;
+			}
+
 			hideMenu.hidden = !open;
 			hideSiteButton.classList.toggle("is-open", open);
 			hideSiteButton.setAttribute("aria-expanded", open ? "true" : "false");
@@ -10140,6 +11292,18 @@ ${[
 				};
 			}
 
+			const closeReader = shadow.querySelector("#close-pdf-reader");
+
+			if (closeReader) {
+				closeReader.onclick = (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					setHideMenuOpen(false);
+					closePdfReader();
+					refreshArticleAnnotations().catch(console.error);
+				};
+			}
+
 			shadow.addEventListener("click", (event) => {
 				if (event.composedPath().includes(hideSiteButton) || event.composedPath().includes(hideMenu)) {
 					return;
@@ -10147,6 +11311,35 @@ ${[
 
 				setHideMenuOpen(false);
 			});
+		}
+
+		const notesExport = shadow.querySelector("#settings-notes-export");
+
+		if (notesExport) {
+			notesExport.onclick = (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+
+				const restore = notesExport.textContent;
+
+				notesExport
+					.animate?.(
+						[{ opacity: 1 }, { opacity: 0.35 }, { opacity: 1 }],
+						{ duration: 420 },
+					);
+
+				exportNotes()
+					.then((payload) => {
+						notesExport.textContent = payload.noteCount
+							? "exported"
+							: "no notes yet";
+
+						window.setTimeout(() => {
+							notesExport.textContent = restore;
+						}, 1800);
+					})
+					.catch(console.error);
+			};
 		}
 
 		settingsPanel.addEventListener("click", (event) => {
@@ -10196,6 +11389,7 @@ ${[
 			});
 
 			applySettingsPanelState(settings);
+			settlePanesHeight();
 
 			const setting = input.dataset.setting;
 
@@ -10207,6 +11401,11 @@ ${[
 
 			if (setting === "buttonShape") {
 				await refreshButtonAppearance();
+				return;
+			}
+
+			if (setting === "notepad") {
+				await reopenForNotes();
 				return;
 			}
 
@@ -10622,11 +11821,17 @@ ${SUBMIT_FORM_CSS}
 #comments {
 			flex:1 1 auto;
 			min-height:0;
+	display:flex;
+	flex-direction:column;
 	overflow:auto;
 	overflow-x:hidden;
 			overscroll-behavior:contain;
 	padding:12px 12px calc(32px + env(safe-area-inset-bottom, 0px));
 	word-wrap:break-word;
+}
+
+#comments > * {
+	flex:0 0 auto;
 }
 
 .top-level-comments {
@@ -10744,7 +11949,8 @@ ${SUBMIT_FORM_CSS}
 	overflow-wrap:anywhere;
 }
 
-.top-level-comments > .comment {
+.top-level-comments > .comment,
+.notepad-body > .comment {
 	margin-left:0;
 }
 
@@ -10753,6 +11959,163 @@ ${SUBMIT_FORM_CSS}
 	border-left:1px solid var(--border-soft);
 	padding-left:6px;
 }
+
+.notepad-section {
+	margin:0 0 6px;
+}
+
+.notepad-rule {
+	display:flex;
+	align-items:center;
+	gap:6px;
+	margin:0 -12px;
+	padding:10px 12px 0;
+	font-size:11px;
+	color:var(--meta);
+	line-height:13px;
+}
+
+.notepad-rule::after {
+	content:"";
+	flex:1 0 24px;
+	height:1px;
+	background:var(--surface-border);
+}
+
+.notepad-rule-close {
+	padding-top:8px;
+}
+
+.notepad-mark {
+	padding:0 4px;
+	border-radius:3px;
+	font-size:10px;
+	font-weight:600;
+	letter-spacing:.04em;
+	color:var(--surface-text);
+	background:var(--hover-tint);
+}
+
+.notepad-add {
+	margin-left:auto;
+	padding:0;
+	border:0;
+	background:none;
+	color:var(--meta);
+	font:inherit;
+	font-size:11px;
+	text-decoration:none;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.notepad-add:hover,
+	.notepad-toggle:hover {
+		text-decoration:underline;
+	}
+}
+
+.notepad-toggle {
+	padding:0;
+	border:0;
+	background:none;
+	color:var(--meta);
+	font:inherit;
+	font-size:11px;
+	text-decoration:none;
+	cursor:pointer;
+}
+
+.notepad-body {
+	overflow:hidden;
+	transition:max-height .22s ease, opacity .18s ease;
+}
+
+.notepad-add.is-open {
+	text-decoration:underline;
+}
+
+.note-editor-draft {
+	overflow:hidden;
+	max-height:0;
+	opacity:0;
+	transition:max-height .22s ease, opacity .18s ease;
+}
+
+.note-editor-draft.is-open {
+	opacity:1;
+}
+
+.notepad-section.is-collapsed .notepad-body {
+	opacity:0;
+}
+
+.notepad-section.is-collapsed .notepad-rule-close {
+	display:none;
+}
+
+.note-editor {
+	margin:8px 0 2px;
+}
+
+.note-editor-field {
+	width:100%;
+	min-height:76px;
+	box-sizing:border-box;
+	padding:6px 7px;
+	border:1px solid var(--surface-border);
+	border-radius:6px;
+	background:var(--surface);
+	color:var(--surface-text);
+	font:inherit;
+	resize:vertical;
+}
+
+.note-editor-row {
+	display:flex;
+	gap:10px;
+	align-items:center;
+	justify-content:flex-start;
+	margin-top:6px;
+}
+
+.note-editor-why {
+	color:var(--meta);
+	font-size:11px;
+}
+
+.note-editor-cancel {
+	padding:0;
+	border:0;
+	background:none;
+	color:var(--meta);
+	font:inherit;
+	font-size:11px;
+	text-decoration:none;
+	cursor:pointer;
+}
+
+.note-editor-save {
+	padding:3px 10px;
+	border:0;
+	border-radius:5px;
+	background:rgba(var(--accent-rgb),.95);
+	color:var(--header-text);
+	font:inherit;
+	font-size:11px;
+	font-weight:600;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.note-editor-cancel:hover {
+		text-decoration:underline;
+	}
+}
+
+
+
+
 
 .comment.new-comment {
 	border-left-color:rgba(var(--accent-rgb),.95);
@@ -12454,18 +13817,19 @@ ${settingsPanelHTML()}
 		div.dataset.commentId = comment.key;
 		div.dataset.storyId = String(storyID);
 
-		if (isNewComment(comment, seenTime)) {
+		if (!comment.local && isNewComment(comment, seenTime)) {
 			div.classList.add("new-comment");
 		}
 
 		const replies = comment.replyKeys;
 		const commentID = String(comment.id);
 		const capabilities = getSource(comment.source)?.capabilities || {};
+		const isLocalSource = Boolean(comment.local);
 		const threadCanVote = renderedSourcesCanVote();
 
 		div.innerHTML = `
       <div class="comment-layout">
-      <span class="comment-vote-slot${threadCanVote ? "" : " comment-vote-slot-empty"}">
+      <span class="comment-vote-slot${threadCanVote && !isLocalSource ? "" : " comment-vote-slot-empty"}">
       <span class="comment-vote-controls vote-controls hidden"
       data-hn-vote-source="${escapeHTML(String(comment.source || "hn"))}"
       data-hn-vote-story-id="${escapeHTML(String(storyID))}"
@@ -12480,7 +13844,10 @@ ${settingsPanelHTML()}
 		${comment.isOP ? `<span class="op-pill">OP</span>` : ""}
 
 		${
-				parentKey === null && discussion.label && sidebarSourceKeys.size > 1
+				parentKey === null &&
+					!isLocalSource &&
+					discussion.label &&
+					sidebarSourceKeys.size > 1
 					? `<span class="comment-source">${escapeHTML(
 							liveDiscussions.has(discussion.key)
 								? discussion.baseLabel || discussion.label
@@ -12501,11 +13868,10 @@ ${settingsPanelHTML()}
 					: ""
 			}
 
-      |
+      ${isLocalSource ? "" : "|"}
 
-      <a class="focus-link" href="#">
-      focus
-      </a>
+      ${isLocalSource ? "" : `<a class="focus-link" href="#">focus</a>`}
+		${isLocalSource ? `<a class="edit-note-link" href="#">edit</a> | <a class="delete-note-link" href="#">delete</a>` : ""}
 		${capabilities.vote ? itemActionLinksHTML(commentID, comment.source || "hn") : ""}
 
       <span class="toggle">
@@ -12586,11 +13952,30 @@ ${settingsPanelHTML()}
 			const hidden = content.classList.toggle("hidden");
 
 			toggle.textContent = hidden ? "[+]" : "[–]";
+			settleNotepad(div);
 
 			await toggleCollapsed(comment.key, hidden);
 		};
 
 		const replyButton = div.querySelector(".reply-link");
+		const editNoteButton = div.querySelector(".edit-note-link");
+
+		if (editNoteButton) {
+			editNoteButton.onclick = (event) => {
+				event.preventDefault();
+				startInlineNoteEdit(div, comment.note);
+			};
+		}
+
+		const deleteNoteButton = div.querySelector(".delete-note-link");
+
+		if (deleteNoteButton) {
+			deleteNoteButton.onclick = (event) => {
+				event.preventDefault();
+				deleteNote(comment.id).catch(console.error);
+			};
+		}
+
 		const focusButton = div.querySelector(".focus-link");
 		const replyComposer = div.querySelector(".reply-composer");
 
@@ -12628,10 +14013,12 @@ ${settingsPanelHTML()}
 			};
 		}
 
-		focusButton.onclick = function (event) {
-			event.preventDefault();
-			applyCommentFocus(comment.key);
-		};
+		if (focusButton) {
+			focusButton.onclick = function (event) {
+				event.preventDefault();
+				applyCommentFocus(comment.key);
+			};
+		}
 
 		if (replies.length) {
 			await renderChildren(
@@ -12749,6 +14136,7 @@ ${settingsPanelHTML()}
 	}
 
 	async function renderDiscussions(stories, ui) {
+		renderedDiscussions = stories;
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
 		setWordmarkLocation(ui, "Discussion");
@@ -12801,7 +14189,7 @@ ${settingsPanelHTML()}
 		const liveNow = Math.floor(Date.now() / 1000);
 
 		stories.forEach((story, index) => {
-			if (isDiscussionLive(threads[index], liveNow)) {
+			if (!story.local && isDiscussionLive(threads[index], liveNow)) {
 				liveDiscussions.set(story.key, story.baseLabel || story.label || "");
 			}
 		});
@@ -12858,6 +14246,40 @@ ${settingsPanelHTML()}
 				stories.map(async (story) => [story.key, await getSeenTime(story.key)]),
 			),
 		);
+
+		const notes = settings.notepad ? await loadNotes() : [];
+		const notesDiscussion = notesCollective(notes, pageAddress());
+
+		if (settings.notepad) {
+			const held = notesSection({
+				empty: !notes.length,
+				onAdd: () => startNotepadDraft(held.section, held.body),
+			});
+
+			ui.body.insertBefore(held.section, ui.body.querySelector(".page-sort"));
+
+			if (notesDiscussion) {
+				const thread = notesThread(notesDiscussion);
+
+				for (const key of thread.rootKeys) {
+					if (generation !== sidebarGeneration) {
+						return;
+					}
+
+					await renderComment(
+						key,
+						thread,
+						held.body,
+						notesDiscussion,
+						0,
+						collapsedKeys,
+						generation,
+					);
+				}
+			}
+
+			held.settle();
+		}
 
 		const context = new Map(
 			stories.map((story, index) => [
@@ -13052,6 +14474,69 @@ ${settingsPanelHTML()}
 
 		return liveDiscussions.has(filter.key) ? [label].filter(Boolean) : [];
 	}
+
+	// #region hnewhere-test-export
+	function notesSection({ onAdd, empty = false } = {}) {
+		const section = document.createElement("div");
+		const head = document.createElement("div");
+		const body = document.createElement("div");
+		const foot = document.createElement("div");
+		const toggle = document.createElement("button");
+		const add = document.createElement("button");
+
+		section.className = "notepad-section";
+		section.dataset.notesSection = "1";
+
+		head.className = "notepad-rule";
+		head.innerHTML = `<span class="notepad-mark">NOTEPAD</span>`;
+
+		toggle.type = "button";
+		toggle.className = "notepad-toggle";
+		toggle.textContent = empty ? "show" : "hide";
+		toggle.hidden = empty;
+		toggle.setAttribute("aria-expanded", empty ? "false" : "true");
+
+		if (empty) {
+			section.classList.add("is-collapsed");
+			body.style.maxHeight = "0px";
+		}
+		toggle.onclick = () => {
+			const collapsed = !section.classList.contains("is-collapsed");
+
+			section.classList.toggle("is-collapsed", collapsed);
+			body.style.maxHeight = collapsed
+				? "0px"
+				: body.scrollHeight
+					? `${body.scrollHeight}px`
+					: "";
+			toggle.textContent = collapsed ? "show" : "hide";
+			toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+		};
+
+		add.type = "button";
+		add.className = "notepad-add";
+		add.textContent = "add a note";
+		add.onclick = () => onAdd?.(add);
+
+		head.append(add, toggle);
+		body.className = "notepad-body";
+		foot.className = "notepad-rule notepad-rule-close";
+		section.append(head, body, foot);
+
+		return {
+			section,
+			body,
+
+			settle() {
+				if (!section.classList.contains("is-collapsed")) {
+					body.style.maxHeight = body.scrollHeight
+						? `${body.scrollHeight}px`
+						: "";
+				}
+			},
+		};
+	}
+	// #endregion hnewhere-test-export
 
 	function liveBookend(edge) {
 		const node = document.createElement("div");
@@ -14447,13 +15932,19 @@ title="Show only this discussion">
 		return Boolean(sidebar && sidebar.style.display !== "none");
 	}
 
-	function shouldShowArticleAnnotations(settings) {
+	// #region hnewhere-test-export
+	function shouldShowArticleAnnotations(settings, sidebarVisible = isSidebarVisible()) {
 		if (!settings.annotations) {
 			return false;
 		}
 
-		return isSidebarVisible() || Boolean(settings.annotationsWhenSidebarClosed);
+		return (
+			sidebarVisible ||
+			Boolean(settings.annotationsWhenSidebarClosed) ||
+			Boolean(ownPdfReader)
+		);
 	}
+	// #endregion hnewhere-test-export
 
 	async function ensureVoteControlsLoaded() {
 		if (!isSidebarVisible() || !sidebarUI?.body) {
@@ -14667,6 +16158,7 @@ title="Show only this discussion">
 					rendered.contentElement.classList.add("hidden");
 					rendered.toggleElement.textContent = "[+]";
 					delete rendered.element.dataset.filterExpanded;
+					settleNotepad(rendered.element);
 				}
 			}
 
@@ -15045,6 +16537,8 @@ title="Show only this discussion">
 		return variants.sort((a, b) => b.normalized.length - a.normalized.length);
 	}
 
+	const QUOTE_MIN_CHARS = 24;
+
 	function extractQuotedTextCandidates(commentHTML) {
 		const template = document.createElement("template");
 		template.innerHTML = commentHTML || "";
@@ -15061,7 +16555,7 @@ title="Show only this discussion">
 
 			const normalized = normalizeSearchText(value).text;
 
-			if (normalized.length < 24 || seen.has(normalized)) {
+			if (normalized.length < QUOTE_MIN_CHARS || seen.has(normalized)) {
 				return;
 			}
 
@@ -15215,7 +16709,10 @@ title="Show only this discussion">
 			}
 
 			if (node.tagName === "BR") {
-				pushSeparator("\n");
+				if (!options.weldBreaks) {
+					pushSeparator("\n");
+				}
+
 				return;
 			}
 
@@ -15320,6 +16817,10 @@ title="Show only this discussion">
 			);
 		},
 
+		backdropFor(range) {
+			return nearestElement(range?.commonAncestorContainer);
+		},
+
 		scrollIntoView(range) {
 			const rect = range.getBoundingClientRect();
 
@@ -15369,7 +16870,607 @@ title="Show only this discussion">
 		return { pageIndex: low, offsetInPage: offset - pageStarts[low] };
 	}
 
+	// -------------------------
+	// Our own PDF reader
+	// -------------------------
+
+	const PDFJS_VERSION = "6.2.108";
+	const PDFJS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/legacy/build/`;
+
+	const PDF_READER_CSS = `
+.hnewhere-pdf-viewer { --scale-factor: 1; --total-scale-factor: 1; --scale-round-x: 1px; --scale-round-y: 1px; }
+.hnewhere-pdf-viewer .page { position: relative; margin: 12px auto; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+.hnewhere-pdf-viewer .canvasWrapper { position: absolute; inset: 0; overflow: hidden; }
+.hnewhere-pdf-viewer .canvasWrapper canvas { display: block; }
+.hnewhere-pdf-viewer .textLayer {
+	position: absolute; text-align: initial; inset: 0; overflow: clip; opacity: 1;
+	line-height: 1; letter-spacing: normal; word-spacing: normal;
+	-webkit-text-size-adjust: none; text-size-adjust: none;
+	forced-color-adjust: none; transform-origin: 0 0; z-index: 0;
+	--min-font-size: 1;
+	--text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+	--min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.hnewhere-pdf-viewer .textLayer :is(span, br) {
+	color: transparent; position: absolute; white-space: pre; cursor: text;
+	transform-origin: 0% 0%;
+	-webkit-user-select: text; user-select: text;
+}
+.hnewhere-pdf-viewer .textLayer > :not(.markedContent),
+.hnewhere-pdf-viewer .textLayer .markedContent span:not(.markedContent) {
+	z-index: 1;
+	--font-height: 0;
+	font-size: calc(var(--text-scale-factor) * var(--font-height));
+	--scale-x: 1;
+	--rotate: 0deg;
+	transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.hnewhere-pdf-viewer .textLayer .markedContent { display: contents; }
+.hnewhere-pdf-viewer .textLayer .endOfContent {
+	display: block; position: absolute; inset: 100% 0 0; z-index: 0;
+	cursor: default; transform: none; font-size: inherit;
+	-webkit-user-select: none; user-select: none;
+}
+.hnewhere-pdf-viewer .textLayer.selecting .endOfContent { top: 0; }
+`;
+
+	let pdfjsModule = null;
+	let ownPdfReader = null;
+
+	function looksLikePdfDocument() {
+		return (
+			document.contentType === "application/pdf" ||
+			/\.pdf(?:[?#]|$)/i.test(location.pathname + location.search)
+		);
+	}
+
+	async function pdfjsResourceText(name, url) {
+		try {
+			const text = await GM?.getResourceText?.(name);
+
+			if (text) {
+				return text;
+			}
+		} catch {
+			/* empty */
+		}
+
+		return (await fetch(url, { cache: "force-cache" })).text();
+	}
+
+	function importModuleViaPage(url) {
+		const scope = typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+		const key = "__hnewherePdfjsModule";
+
+		return new Promise((resolve, reject) => {
+			const script = document.createElement("script");
+			const timer = setTimeout(
+				() => reject(new Error("timed out loading pdf.js in the page")),
+				20000,
+			);
+			const finish = (value, error) => {
+				clearTimeout(timer);
+				script.remove();
+
+				try {
+					delete scope[key];
+				} catch {
+					/* empty */
+				}
+
+				error ? reject(error) : resolve(value);
+			};
+
+			document.addEventListener(
+				key,
+				() => {
+					const module_ = scope[key];
+
+					finish(
+						module_,
+						module_ ? null : new Error("pdf.js loaded but exported nothing"),
+					);
+				},
+				{ once: true },
+			);
+
+			script.type = "module";
+			script.textContent =
+				`import * as m from ${JSON.stringify(url)};` +
+				`window[${JSON.stringify(key)}] = m;` +
+				`document.dispatchEvent(new CustomEvent(${JSON.stringify(key)}));`;
+			script.addEventListener("error", () =>
+				finish(null, new Error("a module script is not allowed on this page")),
+			);
+
+			(document.head || document.documentElement).appendChild(script);
+		});
+	}
+
+	async function importModuleText(text) {
+		const url = URL.createObjectURL(new Blob([text], { type: "text/javascript" }));
+
+		try {
+			return await import(url);
+		} catch {
+			return await importModuleViaPage(url);
+		}
+	}
+
+	async function loadPdfjs() {
+		if (pdfjsModule) {
+			return pdfjsModule;
+		}
+
+		const [core, worker] = await Promise.all([
+			pdfjsResourceText("pdfjsCore", PDFJS_BASE + "pdf.min.mjs"),
+			pdfjsResourceText("pdfjsWorker", PDFJS_BASE + "pdf.worker.min.mjs"),
+		]);
+
+		const module_ = await importModuleText(core);
+
+		module_.GlobalWorkerOptions.workerSrc = URL.createObjectURL(
+			new Blob([worker], { type: "text/javascript" }),
+		);
+		pdfjsModule = module_;
+
+		return module_;
+	}
+
+	function pdfReaderBus() {
+		const listeners = new Map();
+
+		return {
+			on(name, callback) {
+				if (!listeners.has(name)) {
+					listeners.set(name, new Set());
+				}
+
+				listeners.get(name).add(callback);
+			},
+
+			off(name, callback) {
+				listeners.get(name)?.delete(callback);
+			},
+
+			dispatch(name, payload) {
+				for (const callback of [...(listeners.get(name) || [])]) {
+					try {
+						callback(payload);
+					} catch (e) {
+						console.error("Backchannel pdf reader listener failed:", e);
+					}
+				}
+			},
+		};
+	}
+
+	function pdfReaderButton(label, onClick) {
+		const button = document.createElement("button");
+
+		button.type = "button";
+		button.textContent = label;
+		pinButtonStyle(button, {
+			...BUTTON_STYLE_RESET,
+			display: "inline-block",
+			padding: "8px 14px",
+			borderRadius: "8px",
+			background: "#237140",
+			color: "#fff",
+			fontFamily: "system-ui, -apple-system, Segoe UI, sans-serif",
+			fontSize: "13px",
+			fontWeight: "600",
+			cursor: "pointer",
+			boxShadow: "0 2px 8px rgba(0,0,0,.35)",
+			pointerEvents: "auto",
+		});
+		button.addEventListener("click", onClick);
+
+		return button;
+	}
+
+	function pdfReaderFitScale(host, base) {
+		const byWidth = (host.clientWidth - 32) / base.width;
+		const byHeight = (host.clientHeight - 24) / base.height;
+
+		return Math.max(0.2, Math.min(3, Math.min(byWidth, byHeight) || 1));
+	}
+
+	function buildPdfReaderChrome() {
+		const host = document.createElement("div");
+
+		host.setAttribute("data-hnewhere-pdf-reader", "1");
+		host.tabIndex = -1;
+		host.style.cssText = `
+			position:fixed;
+			inset:0;
+			z-index:2147483644;
+			background:#3a3a3a;
+			overflow:auto;
+			overscroll-behavior:contain;
+			outline:none;
+		`;
+
+		const style = document.createElement("style");
+		style.textContent = PDF_READER_CSS;
+
+		const viewer = document.createElement("div");
+		viewer.className = "hnewhere-pdf-viewer pdfViewer";
+		viewer.style.cssText = "position:relative;";
+
+		host.append(style, viewer);
+
+		return host;
+	}
+
+	async function drawPdfReaderVisiblePages() {
+		const reader = ownPdfReader;
+
+		if (!reader) {
+			return;
+		}
+
+		const view = reader.host.getBoundingClientRect();
+
+		for (const box of reader.pages) {
+			const rect = box.getBoundingClientRect();
+
+			if (rect.bottom > view.top - 400 && rect.top < view.bottom + 400) {
+				await drawPdfReaderPage(Number(box.dataset.pageNumber));
+			}
+		}
+	}
+
+	async function setPdfReaderScale(scale) {
+		const reader = ownPdfReader;
+		const next = Math.max(0.25, Math.min(4, scale));
+
+		if (!reader || Math.abs(next - reader.scale) < 0.001) {
+			return;
+		}
+
+		const held = reader.viewer.scrollHeight
+			? reader.host.scrollTop / reader.viewer.scrollHeight
+			: 0;
+		const sized = (await reader.app.pdfDocument.getPage(1)).getViewport({
+			scale: next,
+		});
+
+		if (ownPdfReader !== reader) {
+			return;
+		}
+
+		reader.scale = next;
+		reader.viewer.style.setProperty("--scale-factor", String(next));
+		reader.viewer.style.setProperty("--total-scale-factor", String(next));
+		reader.drawn.clear();
+
+		for (const box of reader.pages) {
+			box.textContent = "";
+			box.style.width = Math.floor(sized.width) + "px";
+			box.style.height = Math.floor(sized.height) + "px";
+		}
+
+		reader.host.scrollTop = held * reader.viewer.scrollHeight;
+		reader.bus.dispatch("scalechanging", { scale: next, source: reader.app });
+
+		await drawPdfReaderVisiblePages();
+	}
+
+	function reportPdfReaderFailure(error) {
+		document.querySelector("[data-hnewhere-pdf-failed]")?.remove();
+
+		const notice = document.createElement("div");
+
+		notice.setAttribute("data-hnewhere-pdf-failed", "1");
+		notice.style.cssText = `
+			position:fixed;
+			left:50%;
+			bottom:24px;
+			transform:translateX(-50%);
+			z-index:2147483643;
+			max-width:min(90vw,520px);
+			padding:10px 14px;
+			border-radius:8px;
+			background:rgba(0,0,0,.82);
+			color:#fff;
+			font:400 13px/1.45 system-ui, -apple-system, sans-serif;
+		`;
+		notice.textContent =
+			"Backchannel could not read this PDF here: " +
+			String(error?.message || error);
+
+		notice.appendChild(
+			pdfReaderButton("Dismiss", () => notice.remove()),
+		);
+
+		document.documentElement.appendChild(notice);
+	}
+
+	function canPaintOverDocumentViewer() {
+		const probe = document.createElement("div");
+
+		probe.setAttribute("data-hnewhere-paint-probe", "1");
+		probe.style.cssText =
+			"position:fixed;inset:0;z-index:2147483644;background:transparent;";
+		document.documentElement.appendChild(probe);
+
+		const at = document.elementFromPoint(
+			Math.floor(window.innerWidth / 2),
+			Math.floor(window.innerHeight / 2),
+		);
+
+		probe.remove();
+
+		return (
+			at === probe ||
+			at === null ||
+			at === document.documentElement ||
+			at === document.body
+		);
+	}
+
+	async function ensurePdfReader(settings) {
+		if (
+			ownPdfReader ||
+			!settings?.annotations ||
+			!settings.pdfReader ||
+			!looksLikePdfDocument() ||
+			document.querySelector(".pdfViewer .textLayer")
+		) {
+			return;
+		}
+
+		if (!canPaintOverDocumentViewer()) {
+			reportPdfReaderFailure(
+				new Error(
+					"this browser draws its PDF viewer above the page, so a reader cannot be put in front of it",
+				),
+			);
+			return;
+		}
+
+		try {
+			await openPdfReader();
+		} catch (error) {
+			console.error("Backchannel could not open the PDF reader:", error);
+			closePdfReader();
+			reportPdfReaderFailure(error);
+		}
+	}
+
+	async function drawPdfReaderPage(number) {
+		const reader = ownPdfReader;
+
+		if (!reader || reader.drawn.has(number)) {
+			return;
+		}
+
+		reader.drawn.add(number);
+
+		const box = reader.pages[number - 1];
+		const page = await reader.app.pdfDocument.getPage(number);
+
+		if (ownPdfReader !== reader || !box) {
+			return;
+		}
+
+		const viewport = page.getViewport({ scale: reader.scale });
+
+		box.style.width = Math.floor(viewport.width) + "px";
+		box.style.height = Math.floor(viewport.height) + "px";
+
+		const canvas = document.createElement("canvas");
+		canvas.width = Math.floor(viewport.width);
+		canvas.height = Math.floor(viewport.height);
+
+		const wrapper = document.createElement("div");
+		wrapper.className = "canvasWrapper";
+		wrapper.appendChild(canvas);
+		box.appendChild(wrapper);
+
+		await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+
+		if (ownPdfReader !== reader) {
+			return;
+		}
+
+		const layer = document.createElement("div");
+		layer.className = "textLayer";
+		box.appendChild(layer);
+
+		await new reader.pdfjs.TextLayer({
+			textContentSource: page.streamTextContent(),
+			container: layer,
+			viewport,
+		}).render();
+
+		if (ownPdfReader !== reader) {
+			return;
+		}
+
+		const endOfContent = document.createElement("div");
+		endOfContent.className = "endOfContent";
+		layer.appendChild(endOfContent);
+
+		layer.addEventListener("pointerdown", () => {
+			layer.classList.add("selecting");
+
+			document.addEventListener(
+				"pointerup",
+				() => layer.classList.remove("selecting"),
+				{ once: true },
+			);
+		});
+
+		reader.bus.dispatch("textlayerrendered", {
+			pageNumber: number,
+			source: reader.app,
+		});
+	}
+
+	function observePdfReaderPages() {
+		const reader = ownPdfReader;
+
+		if (!reader) {
+			return;
+		}
+
+		reader.observer = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					if (entry.isIntersecting) {
+						drawPdfReaderPage(Number(entry.target.dataset.pageNumber)).catch(
+							console.error,
+						);
+					}
+				}
+			},
+			{ root: reader.host, rootMargin: "400px 0px" },
+		);
+
+		for (const box of reader.pages) {
+			reader.observer.observe(box);
+		}
+	}
+
+	const PDF_ZOOM_IN_KEYS = new Set(["=", "+"]);
+	const PDF_ZOOM_OUT_KEYS = new Set(["-", "_"]);
+
+	function installPdfReaderZoom() {
+		const reader = ownPdfReader;
+
+		if (!reader) {
+			return;
+		}
+
+		const onKeyDown = (event) => {
+			if (!ownPdfReader || !(event.metaKey || event.ctrlKey) || event.altKey) {
+				return;
+			}
+
+			const step = PDF_ZOOM_IN_KEYS.has(event.key)
+				? reader.scale * 1.2
+				: PDF_ZOOM_OUT_KEYS.has(event.key)
+					? reader.scale / 1.2
+					: event.key === "0"
+						? reader.fitScale
+						: null;
+
+			if (step === null) {
+				return;
+			}
+
+			event.preventDefault();
+			setPdfReaderScale(step).catch(console.error);
+		};
+
+		const onWheel = (event) => {
+			if (!ownPdfReader || !event.ctrlKey) {
+				return;
+			}
+
+			event.preventDefault();
+			setPdfReaderScale(reader.scale * (event.deltaY < 0 ? 1.05 : 0.95)).catch(
+				console.error,
+			);
+		};
+
+		const takeFocus = () => {
+			if (ownPdfReader === reader && !reader.host.contains(document.activeElement)) {
+				reader.host.focus({ preventScroll: true });
+			}
+		};
+
+		window.addEventListener("keydown", onKeyDown, { capture: true });
+		reader.host.addEventListener("wheel", onWheel, { passive: false });
+		reader.host.addEventListener("pointerdown", takeFocus);
+
+		takeFocus();
+
+		reader.stopZoom = () => {
+			window.removeEventListener("keydown", onKeyDown, { capture: true });
+			reader.host.removeEventListener("wheel", onWheel);
+			reader.host.removeEventListener("pointerdown", takeFocus);
+		};
+	}
+
+	async function openPdfReader() {
+		if (ownPdfReader) {
+			return ownPdfReader;
+		}
+
+		const pdfjs = await loadPdfjs();
+		const response = await fetch(location.href, { cache: "force-cache" });
+		const bytes = new Uint8Array(await response.arrayBuffer());
+		const pdfDocument = await pdfjs.getDocument({ data: bytes }).promise;
+		const host = buildPdfReaderChrome();
+		const viewer = host.querySelector(".pdfViewer");
+
+		document.documentElement.appendChild(host);
+
+		const base = (await pdfDocument.getPage(1)).getViewport({ scale: 1 });
+		const scale = pdfReaderFitScale(host, base);
+		const sized = (await pdfDocument.getPage(1)).getViewport({ scale });
+		const pages = [];
+
+		for (let number = 1; number <= pdfDocument.numPages; number += 1) {
+			const box = document.createElement("div");
+
+			box.className = "page";
+			box.dataset.pageNumber = String(number);
+			box.style.width = Math.floor(sized.width) + "px";
+			box.style.height = Math.floor(sized.height) + "px";
+			viewer.appendChild(box);
+			pages.push(box);
+		}
+
+		viewer.style.setProperty("--scale-factor", String(scale));
+		viewer.style.setProperty("--total-scale-factor", String(scale));
+
+		const bus = pdfReaderBus();
+
+		ownPdfReader = {
+			app: { pdfDocument, eventBus: bus },
+			bus,
+			host,
+			viewer,
+			pages,
+			pdfjs,
+			scale,
+			fitScale: scale,
+			drawn: new Set(),
+			observer: null,
+			stopZoom: null,
+		};
+
+		observePdfReaderPages();
+		installPdfReaderZoom();
+		bus.dispatch("pagesloaded", { source: ownPdfReader.app });
+
+		return ownPdfReader;
+	}
+
+	function closePdfReader() {
+		ownPdfReader?.stopZoom?.();
+		ownPdfReader?.observer?.disconnect();
+
+		for (const host of document.querySelectorAll("[data-hnewhere-pdf-reader]")) {
+			host.remove();
+		}
+
+		ownPdfReader = null;
+		pdfTexts = null;
+		pdfTextsFor = null;
+		pdfTitle = null;
+		pdfTitleFor = null;
+	}
+
 	function pdfViewerApp() {
+		if (ownPdfReader?.app?.pdfDocument) {
+			return ownPdfReader.app;
+		}
+
 		const scopes = [
 			typeof unsafeWindow !== "undefined" ? unsafeWindow : null,
 			typeof window !== "undefined" ? window : null,
@@ -15405,11 +17506,16 @@ title="Show only this discussion">
 
 		const index = buildTextIndex(layer, {
 			skipHidden: true,
+			weldBreaks: true,
 			excludeSelectors: [
 				"[data-hnewhere-annotation-overlay]",
 				"[data-hnewhere-sidebar]",
 			],
 		});
+
+		if (index.normalizedText) {
+			index.welded = true;
+		}
 
 		return index.normalizedText ? index : null;
 	}
@@ -15424,6 +17530,93 @@ title="Show only this discussion">
 				waiter();
 			} catch (e) {
 				console.error("Backchannel pdf reindex failed:", e);
+			}
+		}
+	}
+
+	let pdfTitle = null;
+	let pdfTitleFor = null;
+
+	function plausiblePdfTitle(value) {
+		const title = String(value || "")
+			.replace(/\s+/g, " ")
+			.replace(/^Microsoft Word\s*-\s*/i, "")
+			.trim();
+
+		if (title.length < 4 || title.length > 200) {
+			return null;
+		}
+
+		if (/^untitled/i.test(title) || /\.(pdf|tex|dvi|docx?|indd|qxd)$/i.test(title)) {
+			return null;
+		}
+
+		return title;
+	}
+
+	async function pdfHeadingTitle(document_) {
+		const upright = (await pdfPageTextItems(await document_.getPage(1))).filter(
+			(item) => {
+				const transform = item.transform || [1, 0, 0, 1, 0, 0];
+
+				return (
+					item.str.trim() &&
+					Math.abs(transform[1]) < 0.01 &&
+					Math.abs(transform[2]) < 0.01
+				);
+			},
+		);
+
+		if (!upright.length) {
+			return null;
+		}
+
+		const tallest = Math.max(
+			...upright.map((item) => Math.round(item.height * 10)),
+		);
+
+		return plausiblePdfTitle(
+			upright
+				.filter((item) => Math.round(item.height * 10) === tallest)
+				.map((item) => item.str)
+				.join(""),
+		);
+	}
+
+	async function loadPdfTitle(app) {
+		const document_ = app?.pdfDocument;
+
+		if (!document_ || pdfTitleFor === document_) {
+			return;
+		}
+
+		pdfTitleFor = document_;
+
+		try {
+			const meta = await document_.getMetadata();
+
+			pdfTitle =
+				plausiblePdfTitle(meta?.info?.Title) ||
+				plausiblePdfTitle(meta?.metadata?.get?.("dc:title")) ||
+				(await pdfHeadingTitle(document_));
+		} catch (error) {
+			console.error("Backchannel could not read the PDF title:", error);
+		}
+	}
+
+	async function pdfPageTextItems(page) {
+		const reader = page.streamTextContent().getReader();
+		const items = [];
+
+		for (;;) {
+			const chunk = await reader.read();
+
+			if (chunk.done) {
+				return items;
+			}
+
+			for (const item of chunk.value?.items || []) {
+				items.push(item);
 			}
 		}
 	}
@@ -15445,9 +17638,9 @@ title="Show only this discussion">
 
 			for (let number = 1; number <= document_.numPages; number += 1) {
 				const page = await document_.getPage(number);
-				const content = await page.getTextContent();
+				const items = await pdfPageTextItems(page);
 
-				texts.push(content.items.map((item) => item.str).join(""));
+				texts.push(items.map((item) => item.str).join(""));
 			}
 
 			if (app.pdfDocument !== document_) {
@@ -15473,6 +17666,7 @@ title="Show only this discussion">
 			normalizedText: normalized.text,
 			normalizedMap: normalized.map,
 			pageStarts: joined.pageStarts,
+			welded: true,
 
 			rangeAt(matchStart, matchLength) {
 				const rawStart = normalized.map[matchStart];
@@ -15480,6 +17674,10 @@ title="Show only this discussion">
 				const pageIndex = at && pdfPageIndex(at.pageIndex);
 
 				if (!pageIndex) {
+					if (at && ownPdfReader) {
+						drawPdfReaderPage(at.pageIndex + 1).catch(console.error);
+					}
+
 					return null;
 				}
 
@@ -15487,13 +17685,29 @@ title="Show only this discussion">
 					matchStart,
 					matchStart + matchLength,
 				);
-				const here = findNormalizedOccurrences(pageIndex.normalizedText, needle);
+				const here = findNormalizedOccurrences(
+					pageIndex.normalizedText,
+					needle,
+					true,
+				);
 
 				if (here.length !== 1) {
 					return null;
 				}
 
-				return createRangeFromMatch(pageIndex, here[0], needle.length);
+				const span = createRangeFromMatch(pageIndex, here[0], needle.length);
+
+				if (!span) {
+					return null;
+				}
+
+				const base = joined.pageStarts[at.pageIndex];
+
+				return {
+					startRaw: base + span.startRaw,
+					endRaw: base + span.endRaw,
+					range: span.range,
+				};
 			},
 		};
 	}
@@ -15532,8 +17746,15 @@ title="Show only this discussion">
 				: host.scrollHeight;
 		},
 
+		backdropFor(range) {
+			const element = nearestElement(range?.commonAncestorContainer);
+
+			return element?.closest(".page") || ownPdfReader?.pages[0] || element;
+		},
+
 		scrollIntoView(range) {
-			const container = document.getElementById("viewerContainer");
+			const container =
+				ownPdfReader?.host || document.getElementById("viewerContainer");
 
 			if (!container) {
 				HTML_DOCUMENT_SOURCE.scrollIntoView(range);
@@ -15591,12 +17812,14 @@ title="Show only this discussion">
 	}
 	// #endregion hnewhere-test-export
 
+	// #region hnewhere-test-export
 	function buildArticleTextIndex() {
 		return documentSource().buildIndex();
 	}
+	// #endregion hnewhere-test-export
 
 	// #region hnewhere-test-export
-	function findNormalizedOccurrences(haystack, needle) {
+	function findNormalizedOccurrences(haystack, needle, welded = false) {
 		const matches = [];
 
 		if (!haystack || !needle) {
@@ -15617,7 +17840,7 @@ title="Show only this discussion">
 				index + needle.length === haystack.length ||
 				haystack[index + needle.length] === " ";
 
-			if (before && after) {
+			if (welded || (before && after)) {
 				matches.push(index);
 			}
 
@@ -15628,7 +17851,7 @@ title="Show only this discussion">
 	}
 
 	function resolveRawPoint(index, rawOffset, bias) {
-		if (!index.rawPoints.length) {
+		if (!index.rawPoints?.length) {
 			return null;
 		}
 
@@ -15757,18 +17980,29 @@ title="Show only this discussion">
 		};
 	}
 
-	function findBestQuoteMatch(articleIndex, candidate) {
-		const quoteText = typeof candidate === "string" ? candidate : candidate.text;
-		let best = null;
+	function exactSearchTexts(text) {
+		const whole = String(text || "");
+		const withoutNumber = whole.replace(/^\s*\d+\.\s*/, "");
 
-		if (typeof candidate === "object" && candidate.exact) {
-			const normalized = normalizeSearchText(quoteText).text;
-			const matches = findNormalizedOccurrences(
-				articleIndex.normalizedText,
-				normalized,
-			);
-			let at = null;
-			let context = null;
+		return withoutNumber && withoutNumber !== whole
+			? [whole, withoutNumber]
+			: [whole];
+	}
+
+	function matchExactQuote(articleIndex, candidate, text, quoteText) {
+		const normalized = normalizeSearchText(text).text;
+
+		if (!normalized) {
+			return null;
+		}
+
+		const matches = findNormalizedOccurrences(
+			articleIndex.normalizedText,
+			normalized,
+			articleIndex.welded,
+		);
+		let at = null;
+		let context = null;
 
 			if (matches.length === 1) {
 				at = matches[0];
@@ -15802,25 +18036,39 @@ title="Show only this discussion">
 				}
 			}
 
-			if (at !== null) {
-				const rangeMatch = rangeFromIndexMatch(
-					articleIndex,
-					at,
-					normalized.length,
-				);
+		if (at === null) {
+			return null;
+		}
 
-				if (rangeMatch && getPageRectsForRange(rangeMatch.range).length) {
-					return {
-						score: normalized.length * 10 + 10000,
-						key: `${rangeMatch.startRaw}:${rangeMatch.endRaw}`,
-						range: rangeMatch.range,
-						quoteText,
-						fullQuoteText: quoteText,
-						quoteNormalized: normalized,
-						startRaw: rangeMatch.startRaw,
-						endRaw: rangeMatch.endRaw,
-						contextMatched: context?.matched ?? null,
-					};
+		const rangeMatch = rangeFromIndexMatch(articleIndex, at, normalized.length);
+
+		if (!rangeMatch || !getPageRectsForRange(rangeMatch.range).length) {
+			return null;
+		}
+
+		return {
+			score: normalized.length * 10 + 10000,
+			key: `${rangeMatch.startRaw}:${rangeMatch.endRaw}`,
+			range: rangeMatch.range,
+			quoteText,
+			fullQuoteText: quoteText,
+			quoteNormalized: normalized,
+			startRaw: rangeMatch.startRaw,
+			endRaw: rangeMatch.endRaw,
+			contextMatched: context?.matched ?? null,
+		};
+	}
+
+	function findBestQuoteMatch(articleIndex, candidate) {
+		const quoteText = typeof candidate === "string" ? candidate : candidate.text;
+		let best = null;
+
+		if (typeof candidate === "object" && candidate.exact) {
+			for (const text of exactSearchTexts(quoteText)) {
+				const match = matchExactQuote(articleIndex, candidate, text, quoteText);
+
+				if (match) {
+					return match;
 				}
 			}
 		}
@@ -15829,6 +18077,7 @@ title="Show only this discussion">
 			const matches = findNormalizedOccurrences(
 				articleIndex.normalizedText,
 				variant.normalized,
+				articleIndex.welded,
 			);
 
 			if (!matches.length) {
@@ -15930,6 +18179,7 @@ title="Show only this discussion">
 
 				group.comments.push({
 					commentId: rendered.id,
+					local: rendered.local,
 					element: rendered.element,
 					textElement: rendered.textElement,
 					author: rendered.author,
@@ -15952,7 +18202,28 @@ title="Show only this discussion">
 	}
 
 	// #region hnewhere-test-export
+	function dedupeGroupComments(groups) {
+		for (const group of groups) {
+			const seen = new Set();
+
+			group.comments = group.comments.filter((comment) => {
+				if (seen.has(comment.commentId)) {
+					return false;
+				}
+
+				seen.add(comment.commentId);
+				return true;
+			});
+		}
+
+		return groups;
+	}
+
 	function mergeOverlappingGroups(groups, articleIndex) {
+		if (!articleIndex.rawPoints) {
+			return dedupeGroupComments([...groups]);
+		}
+
 		const sorted = [...groups].sort(
 			(a, b) => a.startRaw - b.startRaw || a.endRaw - b.endRaw,
 		);
@@ -16571,6 +18842,7 @@ title="Show only this discussion">
 					rendered.contentElement.classList.remove("hidden");
 					rendered.toggleElement.textContent = "[–]";
 					rendered.element.dataset.filterExpanded = "1";
+					settleNotepad(rendered.element);
 				}
 			}
 
@@ -16744,6 +19016,10 @@ title="Show only this discussion">
 	function decorateSidebarMatches(controller) {
 		for (const group of controller.groups) {
 			for (const comment of group.comments) {
+				if (comment.local) {
+					continue;
+				}
+
 				const onActivate = () => {
 					applyCommentFilter(group.key, {
 						commentId: comment.commentId,
@@ -16882,8 +19158,8 @@ title="Show only this discussion">
 			rectsByGroup.clear();
 
 			const backdrop =
-				nearestElement(groups[0]?.range?.commonAncestorContainer) ||
-				nearestElement(heatRegions[0]?.range?.commonAncestorContainer) ||
+				source.backdropFor(groups[0]?.range) ||
+				source.backdropFor(heatRegions[0]?.range) ||
 				document.body;
 			const dark = isDarkBackdrop(backdrop);
 
@@ -17342,6 +19618,10 @@ title="Show only this discussion">
 		sweepBridgePayloads().catch(console.error);
 
 		markQueueArrival().catch(console.error);
+
+		await ensurePdfReader(settings);
+		await loadPdfTitle(pdfViewerApp());
+		watchNoteSelection(settings);
 
 		const votesReady = Promise.all([
 			loadRememberedVotes(),

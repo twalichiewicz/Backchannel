@@ -8,6 +8,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.8] — 2026-08-12
+
+### Added
+
+- **A notepad of your own, on any page or PDF.** Select a passage and write what
+  you think of it, or open the notepad and write without selecting anything. A
+  note keeps the passage it was written about, so it lights up in the article the
+  way a commenter's quote does, and clicking it filters to the note. It sits in
+  its own section above the sort, and it is a setting rather than a source —
+  nobody else is in it, so it does not belong in a list of places to fetch from.
+  It is on to begin with, and unticking Enable notepad takes the section away.
+
+- Notes are yours to take away. **Export** next to the setting writes every note
+  across every document to a JSON file: the text, the quoted passage, and enough
+  context to find that passage again. Notes live in your userscript manager's
+  storage, which means they do not follow you to another browser and a manager
+  reset takes them with it — the export is the answer to both.
+
+- A note is edited as text rather than through a form. The quoted passage is a
+  `>` line at the top, so changing your mind about which words you meant is
+  editing a line, and the highlight moves to the words you left in it.
+
+- **Enhanced PDF support**, off by default, under Enable annotations. Turned on,
+  it covers Chrome's and Safari's PDF viewer with
+  [pdf.js](https://mozilla.github.io/pdf.js/), which is what lets a quoted
+  passage be highlighted on the PDF itself. It is a choice rather than the
+  default because it downloads 1.74 MiB of pdf.js from `cdn.jsdelivr.net` — the
+  one part of the script that is not self-contained. Safari's own PDF toolbar
+  still floats above the reader and cannot be removed. **Firefox is not covered
+  at all**: it reserves its built-in PDF viewer, no extension is allowed to run
+  there, and a PDF opened in Firefox gets no button, no sidebar and no
+  highlights — the setting has no effect.
+
+### Changed
+
+- A PDF is named by its title. The panel used to head the discussion with the
+  host, so every paper on a preprint server read as the same thing.
+
+- Lemmy comments render their Markdown. Lemmy's API hands over Markdown rather
+  than HTML and it was being escaped and shown as written, so a link arrived as
+  `[text](url)`. Links, quotes, lists, emphasis and code now render; images
+  become links rather than loading anything into the panel. Measured across 1,899
+  comments from lemmy.world, quotes were the commonest thing in them, ahead of
+  emphasis and links. (#96)
+
+- Ticking Enable annotations, Enhanced PDF support or Enable notepad folds that
+  setting's explanation away, the way a source's caveat already does — the tick
+  is the acknowledgement.
+
+- Next in queue sits at the bottom of the sidebar when the discussion is short,
+  instead of following the last comment up the panel. A long thread is unchanged.
+
+### Fixed
+
+- One quoted passage that overlapped another stopped every highlight on the page
+  from being drawn, rather than just its own.
+
+- A quoted passage that runs across a line break inside a PDF anchors. The text
+  layer welds those lines together, so the words the commenter quoted and the
+  words in the document were not the same string.
+
+- Turning the notepad on or off applies immediately. It needed a page reload
+  before, because the setting was saved without anything being told to re-draw.
+
+- Notes line up with the comments beside them. A note sat eight pixels right of
+  every discussion comment, because the rule that clears that indent only ever
+  matched comments in the discussion list.
+
+- Collapsing or expanding a note resizes the notepad around it. The section keeps
+  an explicit height so it can animate, and that height was measured once and
+  never revisited, so an expanded note was cut off partway down.
+
+- The explanations under the settings checkboxes animate again. The rule that
+  gives them a height to collapse from had lost its opening `/*`, and the
+  malformed comment swallowed the height along with it.
+
+- PubPeer was measured for this release and is not viable as a source: its API
+  returns a comment count, the commenters' names and a link, and no comment text.
+  (#87)
+
 ## [1.6.7] — 2026-08-10
 
 ### Added
