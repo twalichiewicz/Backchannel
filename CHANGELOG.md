@@ -8,6 +8,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.9] — 2026-08-13
+
+### Added
+
+- **Watch a page, and be told when someone starts talking about it.** Discovery
+  happens once, when you land: a page nobody has posted anywhere yet is dark, and
+  stays dark however long you sit on it. **watch** in the byline keeps asking.
+  When a discussion turns up it goes into your queue as unread, and the watch
+  stops. Checks ride the page loads you were already making rather than running
+  on a schedule, so a page you never go near again is checked rarely, and a watch
+  that cannot be answered several times running says so instead of waiting
+  silently.
+
+- **Notify me when a watched discussion has something new**, under Enable
+  notepad in settings. Off to begin with, and ticking it is what asks for
+  permission to send notifications. Left off, a watch still lands in your queue —
+  the notification only decides whether you are told before you look.
+
+- **Collection**, a third tab beside front pages and queue, holding what you have
+  kept rather than what you are working through: favourites, favourited comments,
+  and every page you have written a note on, each under its own heading.
+
+- **Favourites are kept here**, which means they work on Bluesky, Mastodon, Lemmy
+  and Hypothes.is — sources that have no way to favourite anything. Where a
+  source can do it for real, **Also favourite and flag on Hacker News** appears
+  nested under it, and only then does your account see it. Hacker News is the
+  only source that can today.
+
+- The number of notes you have taken sits under Enable notepad, next to export.
+
+### Changed
+
+- Front pages and queue read as two halves of one page rather than two places.
+  The wordmark stays **Backchannel** across both instead of becoming
+  Backchannel / Queue, the pair sits under it rather than indented past it, and
+  moving between them slides.
+
+- A watched page with something new rises to the top of the queue, newest first,
+  marked with a filled bullet and **UNREAD**.
+
+- **clear read** leaves watched pages alone. Unwatching one drops it into the
+  queue, where it clears like anything else.
+
+- **un-favorite** is **unfavorite**, and **remove** in the queue is **unqueue**,
+  matching unflag and unwatch.
+
+- The explanation under Enable notepad folds away when it is ticked, the way the
+  other settings' explanations do.
+
+### Fixed
+
+- Some pages changed the spacing of everything in the sidebar. The panel resets
+  what a page can send into it and let one property through — line height — so a
+  page with unusual spacing reshaped the panel. (#105)
+
+- A Lemmy discussion stretched its pill out of shape under **discussions**,
+  because the community's full address is a good deal longer than `HN` or
+  `r/OpenAI`. Long names are shortened; the count stays. (#106)
+
+- A comment count reads **418+ comments** rather than 418 comments+.
+
+- A quoted passage that appears more than once in a page now anchors to the first
+  one instead of refusing to anchor at all and reporting that the passage was not
+  there.
+
+- The reason a note could not be pinned to a passage is attached to **save**,
+  where the answer is, rather than sitting beside cancel where it read as another
+  button.
+
+- A rule inside a comment is drawn as a hairline, the same as every other line in
+  the panel, rather than the browser's default groove.
+
+- The notepad's closing rule is there on first load, not only after it has been
+  opened once, and **add a note** and **show** have a separator between them.
+
 ## [1.6.8] — 2026-08-12
 
 ### Added
