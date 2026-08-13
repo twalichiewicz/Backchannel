@@ -126,6 +126,39 @@ Worth stating plainly, because the permissions are broad by necessity:
 
 ## Exact table of what each source requests
 
+One row per request the script can make, read from the code rather than described.
+`<page>` is the address of the page you are on; `<domain>` is only its host. A
+source you have not switched on issues none of these.
+
+| Source | Request | What it carries | Arrives as you? |
+| --- | --- | --- | --- |
+| Hacker News | `GET hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=url&hitsPerPage=20&query=<page>` | `<page>` | No, and no identifier of any kind |
+| Hacker News | `GET hacker-news.firebaseio.com/v0/item/<id>` | story and comment ids it already has | No |
+| Hacker News | `GET news.ycombinator.com/item?id=<id>` | a thread id, to read scores and flags | Yes, if you are signed in there |
+| Reddit | `GET www.reddit.com/search.json?type=link&limit=25&q=<page>` | `<page>` | Yes when signed in. `reddit_session` is `SameSite=None`, so the browser attaches it cross-site. Signed out it carries `loid`, a device id that lasts over a year |
+| Reddit (fallback) | `GET arctic-shift.photon-reddit.com<path>` | the same lookup, against an archive mirror | No identifier, no session |
+| Reddit (vote, reply) | popup window on `old.reddit.com` | the one comment you acted on, only when you press | Yes, in a window you can see, using the session already in your browser |
+| Bluesky | `GET constellation.microcosm.blue/links/all?target=<page>` | `<page>`, plus a `User-Agent` naming Backchannel and its version | No |
+| Bluesky | `GET constellation.microcosm.blue/xrpc/blue.microcosm.links.getBacklinks?subject=<page>&source=...&limit=100` | `<page>` | No |
+| Bluesky | `GET public.api.bsky.app/xrpc/app.bsky.feed.getPosts` and `...getPostThread` | post ids Constellation named, never `<page>` | No. Signed in, the cookie jar for `bsky.app` is empty -- it authenticates from local storage, which the browser never attaches |
+| Lobsters | `GET lobste.rs/domains/<domain>.json` | `<domain>` only, never the full address | No |
+| Wikipedia | `GET en.wikipedia.org/w/api.php?action=query&list=exturlusage&eunamespace=1\|3\|4\|5&euquery=<page>&eulimit=100` | `<page>`, to find the Talk and project pages citing it | No |
+| Wikipedia | `GET en.wikipedia.org/w/api.php?action=query&prop=revisions&titles=<titles>` | the names of those pages | No |
+| Lemmy | `GET lemmy.world/api/v3/search?q=<page>&type_=Url&listing_type=All&limit=20` | `<page>` | No |
+| Lemmy | `GET lemmy.world/api/v3/comment/list?post_id=<id>&type_=All&sort=Top&max_depth=8&limit=300` | a post id it already found | No |
+| Mastodon | `GET www.tootfinder.ch/rest/api/search/<domain>` | `<domain>` only, never the full address | No |
+| Mastodon (front page) | `GET mastodon.social/api/v1/trends/links?limit=40` | nothing about you, only what that instance is linking to | No |
+| Hypothes.is | `GET api.hypothes.is/api/search?url=<page>&limit=200` | `<page>` | No |
+| pdf.js, not a source | `GET cdn.jsdelivr.net/npm/pdfjs-dist@<version>/legacy/build/pdf.min.mjs` and `pdf.worker.min.mjs` | nothing about you, two fixed files at a pinned version | No |
+| no source enabled | none | nothing, no lookup is performed at all | -- |
+
+Two rows are worth reading twice. Reddit is the only source that learns who you
+are, which is why it is a checkbox rather than a default and why the caveat sits
+next to that checkbox; *Never contact Reddit directly* uses only the archive
+mirror row, which carries neither a session nor an identifier. Bluesky never
+learns which page you are on -- Constellation does, and Bluesky is asked only
+about the posts Constellation named.
+
 ## Out of scope
 
 - Vulnerabilities in your userscript manager, browser, or sources themselves --
