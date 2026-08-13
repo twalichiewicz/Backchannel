@@ -54,6 +54,17 @@ use to detect updates, so every release bumps it.
 - **un-favorite** is **unfavorite**, and **remove** in the queue is **unqueue**,
   matching unflag and unwatch.
 
+- **favorite keeps an item here rather than favouriting it on Hacker News.** It
+  used to do the latter, through the same popup vote and reply use. Every source
+  has some equivalent of favouriting and only Hacker News could be wired to it,
+  so it is kept locally for now and works on all of them. **flag** is unchanged
+  and still goes to Hacker News.
+
+- The **BETA** pills are gone from the sources. Every source carried one, which
+  made it say nothing about any of them. **Favorite** and **Flag** have gone from
+  What each source supports for the same reason — favourites are kept here, so
+  there is nothing per-source to report.
+
 - The explanation under Enable notepad folds away when it is ticked, the way the
   other settings' explanations do.
 
