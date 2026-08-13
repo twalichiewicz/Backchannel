@@ -14,12 +14,12 @@ use to detect updates, so every release bumps it.
 
 - **Watch a page, and be told when someone starts talking about it.** Discovery
   happens once, when you land: a page nobody has posted anywhere yet is dark, and
-  stays dark however long you sit on it. **watch** in the byline keeps asking.
-  When a discussion turns up it goes into your queue as unread, and the watch
-  stops. Checks ride the page loads you were already making rather than running
-  on a schedule, so a page you never go near again is checked rarely, and a watch
-  that cannot be answered several times running says so instead of waiting
-  silently.
+  stays dark however long you sit on it. **watch**, next to the comment count,
+  keeps asking. When a discussion turns up it goes into your queue as unread, and
+  the watch stops. Checks ride the page loads you were already making rather than
+  running on a schedule, so a page you never go near again is checked rarely, and
+  a watch that cannot be answered several times running says so instead of
+  waiting silently.
 
 - **Notify me when a watched discussion has something new**, under Enable
   notepad in settings. Off to begin with, and ticking it is what asks for
@@ -30,11 +30,11 @@ use to detect updates, so every release bumps it.
   kept rather than what you are working through: favourites, favourited comments,
   and every page you have written a note on, each under its own heading.
 
-- **Favourites are kept here**, which means they work on Bluesky, Mastodon, Lemmy
-  and Hypothes.is — sources that have no way to favourite anything. Where a
-  source can do it for real, **Also favourite and flag on Hacker News** appears
-  nested under it, and only then does your account see it. Hacker News is the
-  only source that can today.
+- **Favourites are kept here rather than on the source**, which is what lets them
+  work everywhere — Bluesky, Mastodon, Lemmy and Hypothes.is have no way to
+  favourite anything, and a favourite that only worked on some of your sources
+  would be a stranger thing than one that works on all of them. Nothing is sent
+  to your account.
 
 - The number of notes you have taken sits under Enable notepad, next to export.
 
