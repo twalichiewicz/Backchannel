@@ -3,7 +3,7 @@
 <span style="color:#FFFFFF">█ ▄▄█</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█▄▄▄▄</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█▄▄▄▄</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF"> ▀▄▄▄</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█▄▄▄</span></pre>
 
 ```
-See what everyone's talking about.  
+The internet's commentary track.  
 ```
 
 <a href="https://trendshift.io/repositories/95983?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-95983" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/95983/daily?language=JavaScript" alt="twalichiewicz%2FBackchannel | Trendshift" width="250" height="55"/></a>
