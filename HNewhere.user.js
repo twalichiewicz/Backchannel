@@ -13457,6 +13457,13 @@ ${SUBMIT_FORM_CSS}
 	max-width:100%;
 }
 
+.text hr,
+.story-text hr {
+	border:none;
+	border-top:1px solid var(--surface-divider);
+	margin:14px 0;
+}
+
 .text pre,
 .text ul,
 .text ol,
