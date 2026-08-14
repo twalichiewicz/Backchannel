@@ -4670,6 +4670,8 @@ button {
 		return kept;
 	}
 
+	// #region hnewhere-test-export
+
 	function latestNoteExcerpt(notes) {
 		const latest = [...notes].sort(
 			(a, b) => (b.edited || b.created || 0) - (a.edited || a.created || 0),
@@ -4678,24 +4680,41 @@ button {
 		return favoriteExcerpt(latest?.text || latest?.exact || "", FAVORITE_EXCERPT_CHARS);
 	}
 
-	async function rememberNotedDocument(ref, notes) {
-		const count = notes.length;
-		const stored = await load(NOTES_INDEX_KEY, []);
-		const entries = (Array.isArray(stored) ? stored : []).filter(
-			(entry) => entry?.key !== noteStorageKey(ref),
-		);
+	function notedIndexEntry(ref, notes, previous, hereRef, here, now) {
+		const onThisPage = noteStorageKey(ref) === noteStorageKey(hereRef);
 
-		if (count > 0) {
-			entries.push({
-				key: noteStorageKey(ref),
-				kind: ref.kind,
-				id: ref.id,
-				url: location.href,
-				title: pageTitle(),
-				excerpt: latestNoteExcerpt(notes),
-				count,
-				updated: Date.now(),
-			});
+		return {
+			key: noteStorageKey(ref),
+			kind: ref.kind,
+			id: ref.id,
+			url: onThisPage ? here.url : previous?.url || "",
+			title: onThisPage ? here.title : previous?.title || "",
+			excerpt: latestNoteExcerpt(notes),
+			count: notes.length,
+			updated: now,
+		};
+	}
+
+	// #endregion hnewhere-test-export
+
+	async function rememberNotedDocument(ref, notes) {
+		const key = noteStorageKey(ref);
+		const stored = await load(NOTES_INDEX_KEY, []);
+		const list = Array.isArray(stored) ? stored : [];
+		const previous = list.find((entry) => entry?.key === key);
+		const entries = list.filter((entry) => entry?.key !== key);
+
+		if (notes.length > 0) {
+			entries.push(
+				notedIndexEntry(
+					ref,
+					notes,
+					previous,
+					noteDocumentRefForPage(),
+					{ url: location.href, title: pageTitle() },
+					Date.now(),
+				),
+			);
 		}
 
 		await save(NOTES_INDEX_KEY, entries);
