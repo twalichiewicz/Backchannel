@@ -4597,19 +4597,59 @@ button {
 		await reopenForNotes();
 	}
 
+	async function refreshNotepadInPlace() {
+		const section = sidebarUI?.body?.querySelector("[data-notes-section]");
+		const body = section?.querySelector(".notepad-body");
+
+		if (!body) {
+			return false;
+		}
+
+		const notes = await loadNotes();
+		const discussion = notesCollective(notes, pageAddress());
+		const toggle = section.querySelector(".notepad-toggle");
+		const empty = !notes.length;
+
+		renderedComments = renderedComments.filter(
+			(rendered) => !body.contains(rendered.element),
+		);
+		body.replaceChildren();
+
+		toggle.hidden = empty;
+		toggle.textContent = empty ? "show" : "hide";
+		toggle.setAttribute("aria-expanded", empty ? "false" : "true");
+		section.classList.toggle("is-collapsed", empty);
+		body.style.maxHeight = empty ? "0px" : "";
+
+		if (discussion) {
+			const thread = notesThread(discussion);
+			const collapsedKeys = await loadCollapsed();
+
+			for (const key of thread.rootKeys) {
+				await renderComment(
+					key,
+					thread,
+					body,
+					discussion,
+					0,
+					collapsedKeys,
+					sidebarGeneration,
+				);
+			}
+		}
+
+		settleNotepad(body);
+
+		return true;
+	}
+
 	async function reopenForNotes() {
 		if (!sidebarUI) {
 			return;
 		}
 
-		const filter = activeCommentFilter;
-
-		await renderDiscussions(renderedDiscussions, sidebarUI);
-
-		if (filter?.type === "discussion") {
-			applyDiscussionFilter(filter.key, { restore: false });
-		} else if (filter?.type === "comment") {
-			applyCommentFocus(filter.id, { restore: false });
+		if (!(await refreshNotepadInPlace())) {
+			await renderDiscussions(renderedDiscussions, sidebarUI);
 		}
 
 		await refreshArticleAnnotations();
