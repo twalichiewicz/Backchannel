@@ -8590,6 +8590,8 @@ button {
 			? `${inPost}
 	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
 	|
+	<button class="item-action-link browse-edit-note-link" type="button">edit</button>
+	|
 	<button class="item-action-link browse-delete-note-link" type="button">delete</button>`
 			: story.watchPlaceholder
 			? `<span class="item-age">watching since ${escapeHTML(timeAgo(story.time))}</span>
@@ -8863,16 +8865,16 @@ button {
 		);
 	}
 
-	function noteCollectionRow({ note, document }, list, onDelete) {
+	function noteCollectionRow({ note, document: page }, list, { onDelete, onEdit }) {
 		const row = collectionRow(
 			{
 				key: note.id,
 				kind: "noted",
-				url: document.url || "",
+				url: page.url || "",
 				title: favoriteExcerpt(note.text, FAVORITE_EXCERPT_CHARS),
-				context: document.title || document.url || document.id,
+				context: page.title || page.url || page.id,
 				time: note.edited || note.created || 0,
-				site: document.url ? hostLabel(document.url) : "",
+				site: page.url ? hostLabel(page.url) : "",
 			},
 			list,
 			null,
@@ -8882,24 +8884,72 @@ button {
 		const drop = row.querySelector(".browse-delete-note-link");
 
 		if (drop) {
-			drop.onclick = () => onDelete(document, note).catch(console.error);
+			drop.onclick = () => onDelete(page, note).catch(console.error);
+		}
+
+		const edit = row.querySelector(".browse-edit-note-link");
+
+		if (edit) {
+			edit.onclick = () => startCollectionNoteEdit(row, page, note, onEdit);
 		}
 
 		return row;
 	}
 
-	async function deleteCollectedNote(document, note) {
-		const ref = { kind: document.kind, id: document.id };
-		const notes = keptNotes(await load(noteStorageKey(ref), null));
+	function startCollectionNoteEdit(row, page, note, onEdit) {
+		const main = row.querySelector(".browse-main");
 
-		await saveNotes(
-			notes.filter((kept) => kept.id !== note.id),
-			ref,
-		);
+		if (!main || row.querySelector(".note-editor")) {
+			return;
+		}
 
-		if (sameURL(document.url || "", location.href)) {
+		const title = row.querySelector(".story-title");
+		const held = inlineNoteEditor(note, {
+			canAnchor: null,
+			onSave: (parsed) => onEdit(page, note, parsed).catch(console.error),
+			onClose: () => {
+				held.editor.remove();
+				title.hidden = false;
+			},
+		});
+
+		title.hidden = true;
+		title.after(held.editor);
+		held.field.focus();
+	}
+
+	async function collectedNotesFor(page) {
+		return keptNotes(await load(noteStorageKey({ kind: page.kind, id: page.id }), null));
+	}
+
+	async function saveCollectedNotes(page, notes) {
+		await saveNotes(notes, { kind: page.kind, id: page.id });
+
+		if (sameURL(page.url || "", location.href)) {
 			await reopenForNotes();
 		}
+	}
+
+	async function deleteCollectedNote(page, note) {
+		const notes = await collectedNotesFor(page);
+
+		await saveCollectedNotes(
+			page,
+			notes.filter((kept) => kept.id !== note.id),
+		);
+	}
+
+	async function updateCollectedNote(page, note, parsed) {
+		if (!parsed?.text && !parsed?.exact) {
+			return;
+		}
+
+		const notes = await collectedNotesFor(page);
+
+		await saveCollectedNotes(
+			page,
+			notes.map((kept) => (kept.id === note.id ? editedNote(kept, parsed) : kept)),
+		);
 	}
 
 	async function renderCollectionView(ui, list) {
@@ -8962,9 +9012,15 @@ button {
 			subhead(list, "noted");
 
 			for (const entry of noted) {
-				noteCollectionRow(entry, list, async (document, note) => {
-					await deleteCollectedNote(document, note);
-					await reload();
+				noteCollectionRow(entry, list, {
+					onDelete: async (page, note) => {
+						await deleteCollectedNote(page, note);
+						await reload();
+					},
+					onEdit: async (page, note, parsed) => {
+						await updateCollectedNote(page, note, parsed);
+						await reload();
+					},
 				});
 			}
 		}
