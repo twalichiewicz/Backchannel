@@ -1060,7 +1060,11 @@
 			return;
 		}
 
+		const turningOn = !button.classList.contains("item-action-on");
+
 		button.disabled = true;
+		button.textContent = turningOn ? "unfavorite" : "favorite";
+		button.classList.toggle("item-action-on", turningOn);
 
 		try {
 			await toggleFavorite({
@@ -1079,7 +1083,7 @@
 			});
 		} finally {
 			button.disabled = false;
-			await refreshFavoriteControls();
+			refreshFavoriteControls().catch(console.error);
 			refreshNotedCount(sidebarUI?.shadow).catch(console.error);
 		}
 	}
@@ -10850,7 +10854,7 @@ header {
 
 .next-up {
 	display:block;
-	margin:auto -12px 24px;
+	margin:auto -12px 10px;
 	padding-top:18px;
 	font-family:Verdana, Geneva, sans-serif;
 	font-size:11px;
