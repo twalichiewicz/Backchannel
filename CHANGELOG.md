@@ -21,7 +21,7 @@ use to detect updates, so every release bumps it.
   a watch that cannot be answered several times running says so instead of
   waiting silently.
 
-- **Notify me when a watched discussion has something new**, under Enable
+- **Enable notifications for updates to watched discussions**, under Enable
   notepad in settings. Off to begin with, and ticking it is what asks for
   permission to send notifications. Left off, a watch still lands in your queue —
   the notification only decides whether you are told before you look.
@@ -98,7 +98,9 @@ use to detect updates, so every release bumps it.
 
 - **Queueing a story only worked once.** A front page row names no key of its
   own, so the first story queued stored an empty one and every story queued
-  after it was read as the same story and dropped without a word. (#107)
+  after it was read as the same story and dropped without a word. Entries
+  already saved that way could not be removed either, and were cleared even
+  where the page was being watched. (#107)
 
 - The top of the field was cut off when you started a note, and the note saying
   a quoted passage was not found was cut off below **save** and painted under
@@ -117,8 +119,9 @@ use to detect updates, so every release bumps it.
   it, and writing a note dropped the filter and put the blend back. Notes belong
   to the page rather than to any one discussion of it, and the filter survives.
 
-- A settings checkbox sat above its own label rather than centred on it, and
-  **reset** did not light up under the pointer the way **export** does.
+- A settings checkbox sat below the line of its own label. It is centred on that
+  line now, and a little larger, so it nearly fills it. **reset** lights up under
+  the pointer the way **export** does.
 
 - **reset**, **Backchannel** and **Report an issue** each drew a different
   underline in a different font. They read as **export** does, which is what
