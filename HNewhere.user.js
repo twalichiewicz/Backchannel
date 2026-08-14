@@ -4425,6 +4425,7 @@ button {
 
 		if (body.querySelector(".note-editor")) {
 			body.style.maxHeight = "";
+			body.style.overflow = "visible";
 			return;
 		}
 
@@ -4471,7 +4472,7 @@ button {
 
 		text.hidden = true;
 		text.after(held.editor);
-		held.field.focus();
+		held.field.focus({ preventScroll: true });
 		settleNotepad(div);
 	}
 
@@ -4504,8 +4505,26 @@ button {
 			held.editor.classList.add("is-open");
 			held.editor.style.maxHeight = `${held.editor.scrollHeight}px`;
 			settleNotepad(held.editor);
-			held.field.focus();
+			held.field.focus({ preventScroll: true });
+
+			window.setTimeout(() => releaseNotepadDraft(held.editor), 240);
 		});
+	}
+
+	function releaseNotepadDraft(draft) {
+		if (!draft?.isConnected || !draft.classList.contains("is-open")) {
+			return;
+		}
+
+		draft.style.maxHeight = "none";
+		draft.style.overflow = "visible";
+		draft.scrollTop = 0;
+	}
+
+	function clampNotepadDraft(draft) {
+		draft.style.overflow = "";
+		draft.style.maxHeight = `${draft.scrollHeight}px`;
+		draft.getBoundingClientRect();
 	}
 
 	function closeNotepadDraft(section, body) {
@@ -4519,6 +4538,7 @@ button {
 			return;
 		}
 
+		clampNotepadDraft(draft);
 		draft.style.maxHeight = "0px";
 		draft.classList.remove("is-open");
 
@@ -8934,7 +8954,7 @@ button {
 
 		title.hidden = true;
 		title.after(held.editor);
-		held.field.focus();
+		held.field.focus({ preventScroll: true });
 	}
 
 	async function collectedNotesFor(page) {
