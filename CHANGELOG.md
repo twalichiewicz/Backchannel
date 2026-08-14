@@ -27,12 +27,20 @@ use to detect updates, so every release bumps it.
   the notification only decides whether you are told before you look.
 
 - **Collection**, a third tab beside front pages and queue, holding what you have
-  kept rather than what you are working through: favourites, favourited comments,
-  and every page you have written a note on, each under its own heading.
+  kept rather than what you are working through, under three headings: favorite
+  discussions, favorite comments, and noted. A comment and a note are a piece of
+  writing rather than a headline, so each is shown as itself — set as a quote,
+  cut to a line — above who wrote it and which discussion or page it is in.
+  Opening a favorited comment loads the page its discussion is about and focuses
+  that comment. **noted** lists your notes one by one, newest first, each with an
+  **edit** and a **delete** that reach the note itself rather than just the row —
+  so the place you go to find a note you wrote elsewhere is a place you can
+  change it. Nothing in the collection is numbered; the rows are told apart by
+  the room between them.
 
-- **Favourites are kept here rather than on the source**, which is what lets them
+- **Favorites are kept here rather than on the source**, which is what lets them
   work everywhere — Bluesky, Mastodon, Lemmy and Hypothes.is have no way to
-  favourite anything, and a favourite that only worked on some of your sources
+  favorite anything, and a favorite that only worked on some of your sources
   would be a stranger thing than one that works on all of them. Nothing is sent
   to your account.
 
@@ -52,23 +60,72 @@ use to detect updates, so every release bumps it.
   queue, where it clears like anything else.
 
 - **un-favorite** is **unfavorite**, and **remove** in the queue is **unqueue**,
-  matching unflag and unwatch.
+  matching unwatch.
 
 - **favorite keeps an item here rather than favouriting it on Hacker News.** It
   used to do the latter, through the same popup vote and reply use. Every source
   has some equivalent of favouriting and only Hacker News could be wired to it,
-  so it is kept locally for now and works on all of them. **flag** is unchanged
-  and still goes to Hacker News.
+  so it is kept locally for now and works on all of them.
+
+- **favorite is on everything there is to keep**, rather than on Hacker News
+  alone: every source's discussions, in both the front pages and the queue, and
+  every comment in them. A favorited item now says **unfavorite** wherever it
+  appears, which it did not when the label was still asking Hacker News.
+
+- A page carrying several discussions is favorited as a page. **favorite** sits
+  beside watch above them, keeping the page rather than picking one of them.
+
+- A watched page keeps its colour once read. The bullet beside it already says
+  whether there is anything new, and a watch is something you asked to keep
+  hearing about.
 
 - The **BETA** pills are gone from the sources. Every source carried one, which
   made it say nothing about any of them. **Favorite** and **Flag** have gone from
-  What each source supports for the same reason — favourites are kept here, so
+  What each source supports for the same reason — favorites are kept here, so
   there is nothing per-source to report.
 
 - The explanation under Enable notepad folds away when it is ticked, the way the
   other settings' explanations do.
 
+### Removed
+
+- **flag** is gone. It was Hacker News's alone, it could not be offered anywhere
+  else, and it is the one thing here that asks a moderator to act rather than
+  keeping something for you. Flagging is where it always was, on the item's own
+  page.
+
 ### Fixed
+
+- **Queueing a story only worked once.** A front page row names no key of its
+  own, so the first story queued stored an empty one and every story queued
+  after it was read as the same story and dropped without a word. (#107)
+
+- The top of the field was cut off when you started a note, and the note saying
+  a quoted passage was not found was cut off below **save** and painted under
+  the note beneath it. The draft gives up the clipping it slides open with once
+  it is open.
+
+- Editing or deleting a note from **collection** while reading a different
+  article moved that note to the article you were reading. A note keeps the
+  address it was written at.
+
+- The notepad sat below every comment on a discussion from a single source, and
+  **favorite** was missing from that discussion's byline. Both now read the way
+  a blended discussion already did.
+
+- Filtering a blended discussion to one of its sources took your notes away with
+  it, and writing a note dropped the filter and put the blend back. Notes belong
+  to the page rather than to any one discussion of it, and the filter survives.
+
+- A settings checkbox sat above its own label rather than centred on it, and
+  **reset** did not light up under the pointer the way **export** does.
+
+- **reset**, **Backchannel** and **Report an issue** each drew a different
+  underline in a different font. They read as **export** does, which is what
+  every other small action in the panel looks like.
+
+- The discussion count in a blended header underlines on hover, the way the
+  toggles beside it do.
 
 - Some pages changed the spacing of everything in the sidebar. The panel resets
   what a page can send into it and let one property through — line height — so a
@@ -724,7 +781,7 @@ use to detect updates, so every release bumps it.
 - **Indent guides line up with the comment they belong to.** They sat eight
   pixels past the parent's first letter, which read as a slight stagger down a
   long thread.
-- **Reply, flag and favourite no longer appear on comments that cannot take
+- **Reply, flag and favorite no longer appear on comments that cannot take
   them.** They are offered where the source supports them and nowhere else; on
   Reddit they would have acted on an item id Hacker News never issued.
 - **A switched-off source stays off, whichever way the panel is opened.** The URL
