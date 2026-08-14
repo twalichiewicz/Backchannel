@@ -8607,17 +8607,12 @@ button {
 	${commentTotal}`;
 
 		const row = document.createElement("div");
-		row.className = "story browse-row";
+		row.className =
+			"story browse-row" + (!rank && !options.bullet ? " browse-row-loose" : "");
 		row.dataset.storyId = String(story.id);
 		row.innerHTML = `
 	<div class="browse-rank">${
-		options.bullet
-			? options.fresh
-				? "&#9679;"
-				: "&#9675;"
-			: rank
-				? `${rank}.`
-				: "&#8226;"
+		options.bullet ? (options.fresh ? "&#9679;" : "&#9675;") : rank ? `${rank}.` : ""
 	}</div>
 	<div class="browse-main">
 	<div class="story-title">
@@ -8926,14 +8921,13 @@ button {
 			return;
 		}
 
-		let rank = 0;
 		const reload = () => renderCollectionView(ui, list);
 
 		if (saved.length) {
 			subhead(list, "favorite discussions");
 
 			for (const entry of saved) {
-				collectionRow(entry, list, (rank += 1), {
+				collectionRow(entry, list, null, {
 					unfavorite: entry.key,
 					reload,
 				});
@@ -10612,6 +10606,18 @@ header {
 	text-align:right;
 	color:var(--meta);
 	font-size:11px;
+}
+
+.browse-row-loose {
+	padding-bottom:0;
+}
+
+.browse-row-loose + .browse-row-loose {
+	margin-top:14px;
+}
+
+.browse-row-loose .browse-rank {
+	min-width:0;
 }
 
 .browse-main {
