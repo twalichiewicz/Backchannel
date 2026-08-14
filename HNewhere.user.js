@@ -597,7 +597,7 @@
 
 	function removeFromQueue(entries, key) {
 		return (Array.isArray(entries) ? entries : []).filter(
-			(entry) => entry.key !== key,
+			(entry) => queueKey(entry) !== key,
 		);
 	}
 
@@ -765,7 +765,7 @@
 
 	function clearReadFromQueue(entries, keep) {
 		return (Array.isArray(entries) ? entries : []).filter(
-			(entry) => !entry.readAt || Boolean(keep?.has(entry.key)),
+			(entry) => !entry.readAt || Boolean(keep?.has(queueKey(entry))),
 		);
 	}
 
