@@ -11110,7 +11110,9 @@ header button svg {
 }
 
 @media (hover: hover) {
-	.settings-byline-action:hover {
+	.settings-byline-action:hover,
+	.settings-reset:hover,
+	.settings-credits a:hover {
 		color:var(--text);
 	}
 }
