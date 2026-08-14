@@ -197,6 +197,7 @@
 		blocked: "HNewhere:blocked_sites",
 		queue: "HNewhere:queue",
 		favorites: "HNewhere:favorites",
+		pendingFocus: "HNewhere:pending_focus",
 		watches: "HNewhere:watches",
 	};
 
@@ -644,6 +645,8 @@
 				kind: item.kind || "discussion",
 				context: item.context || "",
 				by: item.by || "",
+				time: Number(item.time) || 0,
+				focus: item.focus || "",
 				source: item.source || "",
 				id: item.id || "",
 				parent: item.parent || "",
@@ -986,6 +989,8 @@
       data-favorite-kind="${escapeHTML(about.kind || "discussion")}"
       data-favorite-context="${escapeHTML(about.context || "")}"
       data-favorite-by="${escapeHTML(about.by || "")}"
+      data-favorite-time="${escapeHTML(String(about.time || ""))}"
+      data-favorite-focus="${escapeHTML(about.focus || "")}"
       data-favorite-parent="${escapeHTML(about.parent || "")}">favorite</button>`;
 	}
 
@@ -1067,6 +1072,8 @@
 				kind: button.dataset.favoriteKind || "discussion",
 				context: button.dataset.favoriteContext || "",
 				by: button.dataset.favoriteBy || "",
+				time: Number(button.dataset.favoriteTime) || 0,
+				focus: button.dataset.favoriteFocus || "",
 				source: sourceID,
 				id: itemId,
 				parent: button.dataset.favoriteParent || "",
@@ -8571,15 +8578,19 @@ button {
 					kind: "discussion",
 				});
 
+		const inPost = story.context
+			? `in ${escapeHTML(story.context)}${story.site ? ` (${escapeHTML(story.site)})` : ""}`
+			: "";
+
 		const meta = story.kind === "comment"
-			? `${story.by ? `by ${escapeHTML(story.by)}` : ""}
+			? `${story.by ? `by ${escapeHTML(story.by)} ` : ""}${inPost}
 	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
 	${actions}`
-			: options.noted
-			? `${escapeHTML(pluralize(story.noteCount || 0, "note"))}
+			: story.kind === "noted"
+			? `${inPost}
 	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
-	${queueLink}
-	${actions}`
+	|
+	<button class="item-action-link browse-delete-note-link" type="button">delete</button>`
 			: story.watchPlaceholder
 			? `<span class="item-age">watching since ${escapeHTML(timeAgo(story.time))}</span>
 	${queueLink}
@@ -8610,16 +8621,9 @@ button {
 	}</div>
 	<div class="browse-main">
 	<div class="story-title">
-	<a class="browse-title-link" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
+	<a class="browse-title-link${isWriting ? " browse-quote" : ""}" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
 	${story.site && !isWriting ? `<span class="browse-site">(${escapeHTML(story.site)})</span>` : ""}
 	</div>
-	${
-		story.context
-			? `<div class="browse-context">${escapeHTML(story.context)}${
-					story.site ? ` <span class="browse-site">(${escapeHTML(story.site)})</span>` : ""
-				}</div>`
-			: ""
-	}
 	<div class="story-meta">
 	${meta}
 	</div>
@@ -8743,6 +8747,61 @@ button {
 		}
 	}
 
+	const PENDING_FOCUS_TTL = 60000;
+
+	async function rememberPendingFocus(url, commentKey) {
+		const page = normalizeURL(url || "");
+
+		if (!page || !commentKey) {
+			return;
+		}
+
+		await save(STORAGE.pendingFocus, { page, commentKey, at: Date.now() });
+	}
+
+	async function applyPendingFocus() {
+		const commentKey = await takePendingFocus();
+
+		if (commentKey && getCommentGraph().byId.has(commentKey)) {
+			applyCommentFocus(commentKey);
+		}
+	}
+
+	async function takePendingFocus() {
+		const pending = await load(STORAGE.pendingFocus, null);
+
+		if (!pending?.commentKey) {
+			return null;
+		}
+
+		await save(STORAGE.pendingFocus, null);
+
+		const stale = Date.now() - (pending.at || 0) > PENDING_FOCUS_TTL;
+
+		return !stale && pending.page === normalizeURL(pageAddress())
+			? pending.commentKey
+			: null;
+	}
+
+	async function loadCollectedNotes() {
+		const documents = await loadNotedIndex();
+		const lists = await Promise.all(
+			documents.map(async (document) => {
+				const notes = keptNotes(await load(document.key, null));
+
+				return notes.map((note) => ({ note, document }));
+			}),
+		);
+
+		return lists
+			.flat()
+			.sort(
+				(a, b) =>
+					(b.note.edited || b.note.created || 0) -
+					(a.note.edited || a.note.created || 0),
+			);
+	}
+
 	async function loadNotedIndex() {
 		return notedDocuments(await load(NOTES_INDEX_KEY, [])).sort(
 			(a, b) => (b.updated || 0) - (a.updated || 0),
@@ -8791,28 +8850,67 @@ button {
 				kind,
 				permalink: "",
 				url: entry.url || "",
-				title: kind === "noted" ? entry.excerpt || page : page,
-				context: kind === "noted" ? page : entry.context || "",
+				title: page,
+				context: entry.context || "",
 				by: entry.by || "",
 				score: 0,
-				time: Math.floor((entry.updated || entry.addedAt || Date.now()) / 1000),
+				time:
+					entry.time || Math.floor((entry.updated || entry.addedAt || Date.now()) / 1000),
 				descendants: entry.count || 0,
 				site: entry.site || (entry.url ? hostLabel(entry.url) : ""),
-				noteCount: entry.count || 0,
 			},
 			list,
 			rank,
 			{
-				watchable: kind !== "comment",
+				watchable: kind !== "comment" && kind !== "noted",
 				...options,
 			},
 		);
 	}
 
+	function noteCollectionRow({ note, document }, list, onDelete) {
+		const row = collectionRow(
+			{
+				key: note.id,
+				kind: "noted",
+				url: document.url || "",
+				title: favoriteExcerpt(note.text, FAVORITE_EXCERPT_CHARS),
+				context: document.title || document.url || document.id,
+				time: note.edited || note.created || 0,
+				site: document.url ? hostLabel(document.url) : "",
+			},
+			list,
+			null,
+			{ noted: true },
+		);
+
+		const drop = row.querySelector(".browse-delete-note-link");
+
+		if (drop) {
+			drop.onclick = () => onDelete(document, note).catch(console.error);
+		}
+
+		return row;
+	}
+
+	async function deleteCollectedNote(document, note) {
+		const ref = { kind: document.kind, id: document.id };
+		const notes = keptNotes(await load(noteStorageKey(ref), null));
+
+		await saveNotes(
+			notes.filter((kept) => kept.id !== note.id),
+			ref,
+		);
+
+		if (sameURL(document.url || "", location.href)) {
+			await reopenForNotes();
+		}
+	}
+
 	async function renderCollectionView(ui, list) {
 		const [favorites, noted] = await Promise.all([
 			loadFavoriteEntries(),
-			loadNotedIndex(),
+			loadCollectedNotes(),
 		]);
 		const saved = favoritesOfKind(favorites, "discussion");
 		const comments = favoritesOfKind(favorites, "comment");
@@ -8846,10 +8944,23 @@ button {
 			subhead(list, "favorite comments");
 
 			for (const entry of comments) {
-				collectionRow(entry, list, null, {
+				const row = collectionRow(entry, list, null, {
 					unfavorite: entry.key,
 					reload,
 				});
+
+				const open = row.querySelector(".browse-title-link");
+
+				if (open && entry.focus && entry.url) {
+					open.onclick = (event) => {
+						event.preventDefault();
+						rememberPendingFocus(entry.url, entry.focus)
+							.catch(console.error)
+							.then(() => {
+								location.href = entry.url;
+							});
+					};
+				}
 			}
 		}
 
@@ -8857,7 +8968,10 @@ button {
 			subhead(list, "noted");
 
 			for (const entry of noted) {
-				collectionRow(entry, list, null, { noted: true, reload });
+				noteCollectionRow(entry, list, async (document, note) => {
+					await deleteCollectedNote(document, note);
+					await reload();
+				});
 			}
 		}
 
@@ -10510,13 +10624,27 @@ header {
 	font-size:11px;
 }
 
-.browse-context {
-	margin-top:1px;
-	color:var(--meta);
-	font-size:11px;
-	overflow:hidden;
-	text-overflow:ellipsis;
-	white-space:nowrap;
+.browse-quote {
+	position:relative;
+	display:inline-block;
+	padding-left:15px;
+	color:var(--quote-text);
+	font-style:italic;
+}
+
+.browse-quote::before {
+	content:"❛";
+	position:absolute;
+	left:0;
+	top:0;
+	color:var(--quote-ornament);
+	font-size:15px;
+	font-style:normal;
+	line-height:1.35;
+}
+
+.browse-quote:visited {
+	color:var(--quote-text);
 }
 
 .browse-title-link:visited {
@@ -15104,11 +15232,13 @@ ${settingsPanelHTML()}
 				? ""
 				: itemActionLinksHTML(commentID, comment.source || "hn", "", {
 						key: `${comment.source || "hn"}:${commentID}`,
-						url: discussionURL(comment) || "",
+						url: discussion.articleURL || discussionURL(comment) || "",
+						focus: comment.key,
 						title: favoriteExcerpt(comment.bodyHTML, FAVORITE_EXCERPT_CHARS),
 						site: getSource(comment.source)?.shortLabel || "",
 						context: discussion.title || discussion.label || "",
 						by: comment.authorName || comment.author || "",
+						time: comment.createdAt || 0,
 						kind: "comment",
 						parent: String(comment.storyID || ""),
 					})
@@ -15618,6 +15748,7 @@ ${settingsPanelHTML()}
 
 		reconcileWholeThreads(stories, ui);
 		refreshFavoriteControls().catch(console.error);
+		applyPendingFocus().catch(console.error);
 
 		for (const story of stories) {
 			await markSeen(story.key);
