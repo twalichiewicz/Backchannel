@@ -14448,7 +14448,6 @@ ${settingsPanelHTML()}
 			? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
 			: "";
 
-		const showActions = options.actions !== false;
 		const showTitle = options.showTitle !== false;
 		const showComposer = options.compose === true;
 		const storyAuthor = story.author ?? story.by;
@@ -14504,7 +14503,7 @@ ${settingsPanelHTML()}
 	}${
 		ageLabel ? escapeHTML(ageLabel) + " " : ""
 	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
-	${itemActionLinksHTML(showActions ? storyID : "", story.source, watchLink, {
+	${itemActionLinksHTML(storyID, story.source, watchLink, {
 		key: favoriteKeyFor({ ...story, id: storyID, url: hnURL || story.url || "" }),
 		url: hnURL || story.url || "",
 		title: title || "",
@@ -15699,7 +15698,6 @@ ${settingsPanelHTML()}
 			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
 			const resolved = storyTitle(story, page, disambiguating);
 			const block = renderStory(story, details, {
-				actions: canVote,
 				compose: canReply,
 				title: resolved,
 				showTitle: true,
@@ -15734,14 +15732,10 @@ ${settingsPanelHTML()}
 				onAdd: () => startNotepadDraft(held.section, held.body),
 			});
 
-			const composer =
-				stories.length === 1 ? ui.body.querySelector(".comment-composer") : null;
-
-			if (composer?.parentNode) {
-				composer.parentNode.insertBefore(held.section, composer);
-			} else {
-				ui.body.insertBefore(held.section, ui.body.querySelector(".page-sort"));
-			}
+			ui.body.insertBefore(
+				held.section,
+				ui.body.querySelector(".page-sort") || comments,
+			);
 
 			if (notesDiscussion) {
 				const thread = notesThread(notesDiscussion);
