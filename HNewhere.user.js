@@ -11050,10 +11050,10 @@ header button svg {
 	-webkit-appearance:none;
 	box-sizing:border-box;
 	flex:0 0 auto;
-	width:13px;
-	height:13px;
+	width:15px;
+	height:15px;
 	font-size:inherit;
-	margin:calc((1.35em - 13px) / 2) 0 0;
+	margin:calc((1.35em - 15px) / 2) 0 0;
 	display:inline-grid;
 	place-content:center;
 	border:1px solid var(--help-border);
@@ -11071,8 +11071,8 @@ header button svg {
 
 .settings-option input[type="checkbox"]:checked::after {
 	content:"";
-	width:6px;
-	height:3px;
+	width:7px;
+	height:3.5px;
 	border-left:1.5px solid #fff;
 	border-bottom:1.5px solid #fff;
 	transform:translateY(-1px) rotate(-45deg);
