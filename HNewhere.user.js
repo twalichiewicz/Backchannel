@@ -11115,8 +11115,8 @@ header button svg {
 
 .settings-credits a {
 	color:var(--muted);
-	text-decoration:underline;
-	text-decoration-color:var(--underline-soft);
+	text-decoration:underline dotted;
+	text-decoration-color:var(--border);
 	text-underline-offset:2px;
 }
 
@@ -11966,9 +11966,11 @@ header button svg {
 	border:0;
 	background:none;
 	color:var(--muted);
+	font:inherit;
 	font-size:11px;
-	text-decoration:underline;
+	text-decoration:underline dotted;
 	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 	cursor:pointer;
 }
 
