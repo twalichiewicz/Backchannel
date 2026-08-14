@@ -9165,7 +9165,6 @@ button {
 			});
 
 			row.classList.add("browse-row-watching");
-			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
 			row.classList.toggle("browse-row-fresh", fresh);
 
 			if (fresh) {
