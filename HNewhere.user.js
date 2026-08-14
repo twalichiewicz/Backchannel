@@ -8818,7 +8818,7 @@ button {
 			const empty = document.createElement("div");
 			empty.className = "browse-empty";
 			empty.textContent =
-				"Nothing collected yet. Favourite a discussion, or write a note on any page, and it will be kept here.";
+				"Nothing collected yet. Favorite a discussion, or write a note on any page, and it will be kept here.";
 			list.appendChild(empty);
 			return;
 		}
@@ -8827,7 +8827,7 @@ button {
 		const reload = () => renderCollectionView(ui, list);
 
 		if (saved.length) {
-			subhead(list, "favourites");
+			subhead(list, "favorite discussions");
 
 			for (const entry of saved) {
 				collectionRow(entry, list, (rank += 1), {
@@ -8838,7 +8838,7 @@ button {
 		}
 
 		if (comments.length) {
-			subhead(list, "comments");
+			subhead(list, "favorite comments");
 
 			for (const entry of comments) {
 				collectionRow(entry, list, null, {
