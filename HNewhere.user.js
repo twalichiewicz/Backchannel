@@ -563,10 +563,15 @@
 			: entry + " (domain-wide)";
 	}
 
+	function queueKey(story) {
+		return story.key || normalizeURL(story.url || "");
+	}
+
 	function addToQueue(entries, story, now) {
 		const list = Array.isArray(entries) ? entries : [];
+		const key = queueKey(story);
 
-		if (list.some((entry) => entry.key === story.key)) {
+		if (list.some((entry) => queueKey(entry) === key)) {
 			return list;
 		}
 
@@ -574,7 +579,7 @@
 			...list,
 			{
 				id: story.id,
-				key: story.key,
+				key,
 				source: story.source,
 				permalink: story.permalink || "",
 				url: story.url,
@@ -17117,10 +17122,6 @@ title="Show only this discussion">
 	// -------------------------
 	// URL helpers
 	// -------------------------
-
-	function queueKey(story) {
-		return story.key || normalizeURL(story.url || "");
-	}
 
 	function sameURL(a, b) {
 		return normalizeURL(a) === normalizeURL(b);
