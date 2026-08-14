@@ -924,6 +924,14 @@
 
 	// #region hnewhere-test-export
 
+	function favoriteKeyFor(story) {
+		if (story.source) {
+			return `${story.source}:${story.id}`;
+		}
+
+		return normalizeURL(story.url || "") || String(story.id ?? "");
+	}
+
 	function favoriteButtonHTML(about = {}) {
 		const id = String(about.id ?? about.key ?? "");
 		const key = String(about.key || "");
@@ -8504,8 +8512,8 @@ button {
 			? `${watchLink ? `\n      |\n      ${watchLink}` : ""}
       |
       <button class="item-action-link browse-unfavorite-link" type="button">unfavorite</button>`
-			: itemActionLinksHTML(story.id, story.source || "hn", watchLink, {
-					key: `${story.source || "hn"}:${story.id}`,
+			: itemActionLinksHTML(story.id, story.source, watchLink, {
+					key: favoriteKeyFor(story),
 					url: story.url,
 					title: story.title,
 					site: story.site,
@@ -14181,8 +14189,8 @@ ${settingsPanelHTML()}
 	}${
 		ageLabel ? escapeHTML(ageLabel) + " " : ""
 	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
-	${itemActionLinksHTML(showActions ? storyID : "", story.source || "hn", watchLink, {
-		key: `${story.source || "hn"}:${storyID}`,
+	${itemActionLinksHTML(showActions ? storyID : "", story.source, watchLink, {
+		key: favoriteKeyFor({ ...story, id: storyID, url: hnURL || story.url || "" }),
 		url: hnURL || story.url || "",
 		title: title || "",
 		site: story.site || (story.url ? hostLabel(story.url) : ""),
