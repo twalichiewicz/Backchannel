@@ -8595,6 +8595,7 @@ button {
 	function renderBrowseRow(story, container, rank, options = {}) {
 		const isWriting = story.kind === "comment" || story.kind === "noted";
 		const discussions = [story, ...(options.also || [])];
+		const counted = discussions.some((each) => Number.isFinite(each.descendants));
 		const totalComments = discussions.reduce(
 			(sum, each) => sum + (each.descendants || 0),
 			0,
@@ -8652,8 +8653,7 @@ button {
 	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
 	${queueLink}
 	${actions}
-	|
-	${commentTotal}`;
+	${counted ? `|\n\t${commentTotal}` : ""}`;
 
 		const row = document.createElement("div");
 		row.className =
@@ -8900,7 +8900,7 @@ button {
 				score: 0,
 				time:
 					entry.time || Math.floor((entry.updated || entry.addedAt || Date.now()) / 1000),
-				descendants: entry.count || 0,
+				descendants: entry.count,
 				site: entry.site || (entry.url ? hostLabel(entry.url) : ""),
 			},
 			list,
@@ -9056,7 +9056,7 @@ button {
 		}
 
 		if (noted.length) {
-			subhead(list, "noted");
+			subhead(list, "notes");
 
 			for (const entry of noted) {
 				noteCollectionRow(entry, list, {
