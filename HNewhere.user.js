@@ -41,7 +41,6 @@
 // @exclude      https://*.instagram.com/*
 // @grant        GM.getValue
 // @grant        GM.setValue
-// @grant        GM.notification
 // @grant        GM.xmlHttpRequest
 // @grant        GM.getResourceText
 // @grant        unsafeWindow
