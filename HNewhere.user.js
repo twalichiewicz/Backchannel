@@ -1020,20 +1020,16 @@
 			` data-favorite-kind="${escapeHTML(about.kind || "discussion")}"` +
 			` data-favorite-parent="${escapeHTML(about.parent || "")}"`;
 
-		return `
-      |
-      <button class="item-action-link" type="button"
-      data-item-action="flag" data-item-action-source="${source}" data-item-action-id="${id}">flag</button>${between}
+		return `${between}
       |
       <button class="item-action-link" type="button"
       data-item-action="fave" data-item-action-source="${source}" data-item-action-id="${id}"${meta}>favorite</button>`;
 	}
 
-	const ITEM_ACTION_FIELD = { fave: "favorite", flag: "flagged" };
+	const ITEM_ACTION_FIELD = { fave: "favorite" };
 
 	const ITEM_ACTION_LABEL = {
 		favorite: { on: "unfavorite", off: "favorite" },
-		flagged: { on: "unflag", off: "flag" },
 	};
 
 	function refreshItemActionControls(itemId) {
@@ -1095,27 +1091,20 @@
 		}
 
 		const sourceID = button.dataset.itemActionSource;
-		const action = itemActionState(itemId)?.[field] ? "un" + kind : kind;
 
 		button.disabled = true;
 
 		try {
-			if (kind === "fave") {
-				await toggleFavorite({
-					key: button.dataset.favoriteKey || `${sourceID}:${itemId}`,
-					url: button.dataset.favoriteUrl || "",
-					title: button.dataset.favoriteTitle || "",
-					site: button.dataset.favoriteSite || "",
-					kind: button.dataset.favoriteKind || "discussion",
-					source: sourceID,
-					id: itemId,
-					parent: button.dataset.favoriteParent || "",
-				});
-			}
-
-			if (kind !== "fave") {
-				await openItemActionPopup(sourceID, itemId, itemId, action, null);
-			}
+			await toggleFavorite({
+				key: button.dataset.favoriteKey || `${sourceID}:${itemId}`,
+				url: button.dataset.favoriteUrl || "",
+				title: button.dataset.favoriteTitle || "",
+				site: button.dataset.favoriteSite || "",
+				kind: button.dataset.favoriteKind || "discussion",
+				source: sourceID,
+				id: itemId,
+				parent: button.dataset.favoriteParent || "",
+			});
 		} finally {
 			button.disabled = false;
 			refreshItemActionControls(itemId);
@@ -7906,7 +7895,7 @@ button {
 			}
 
 			if (data.itemId && ITEM_ACTION_PATHS[data.action]) {
-				const field = data.action.endsWith("fave") ? "favorite" : "flagged";
+				const field = "favorite";
 
 				if (data.reason === "action-unavailable") {
 					rememberItemActionUnavailable(field);
@@ -16334,8 +16323,6 @@ title="Show only this discussion">
 	const ITEM_ACTION_PATHS = {
 		fave: { path: "fave", params: {} },
 		unfave: { path: "fave", params: { un: "t" } },
-		flag: { path: "flag", params: {} },
-		unflag: { path: "flag", params: { un: "t" } },
 	};
 
 	const VOTE_ACTIONS = ["up", "down", "un"];
@@ -16389,15 +16376,15 @@ title="Show only this discussion">
 			return null;
 		}
 
-		const isFaveOrFlag = Boolean(ITEM_ACTION_PATHS[payload.action]);
+		const isFave = Boolean(ITEM_ACTION_PATHS[payload.action]);
 
-		if (!isFaveOrFlag && location.pathname !== "/item") {
+		if (!isFave && location.pathname !== "/item") {
 			return null;
 		}
 
 		clearBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY);
 
-		if (isFaveOrFlag) {
+		if (isFave) {
 			const base = payload.action.startsWith("un")
 				? payload.action.slice(2)
 				: payload.action;
