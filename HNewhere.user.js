@@ -12164,7 +12164,7 @@ ${
 <div class="settings-suboptions" data-suboptions-of="autoOpenSidebar">
 <label class="settings-option sub-option">
 <input id="setting-auto-open-only-from-hn" data-setting="autoOpenSidebarOnlyFromHN" type="checkbox">
-<span>Only when arriving from Hacker News</span>
+<span>Only when arriving from an enabled source</span>
 </label>
 </div>
 <label class="settings-option">
@@ -12174,7 +12174,7 @@ ${
 <div class="settings-suboptions" data-suboptions-of="hideWithoutDiscussion">
 <label class="settings-option sub-option">
 <input id="setting-show-button-with-queue" data-setting="showButtonWithQueue" type="checkbox">
-<span>Except when something is waiting in your queue</span>
+<span>Unless there are unread items in the queue</span>
 </label>
 </div>
 </div>
@@ -12217,7 +12217,7 @@ All stored locally.
 </div>
 <label class="settings-option">
 <input id="setting-notify-on-watch" data-setting="notifyOnWatch" type="checkbox">
-<span>Notify me when a watched discussion has something new</span>
+<span>Enable notifications for updates to watched discussions</span>
 </label>
 <div class="settings-option-hint">
 Sends a system notification when a watched page has new comments
