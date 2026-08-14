@@ -197,7 +197,6 @@
 		blocked: "HNewhere:blocked_sites",
 		queue: "HNewhere:queue",
 		favorites: "HNewhere:favorites",
-		itemActions: "HNewhere:item_actions",
 		watches: "HNewhere:watches",
 	};
 
@@ -895,8 +894,6 @@
 
 	let rememberedVotes = {};
 
-	let rememberedItemActions = {};
-
 	async function loadRememberedVotes() {
 		const stored = await load(STORAGE.votes, {});
 		const now = Date.now();
@@ -925,88 +922,12 @@
 		}
 	}
 
-	async function loadRememberedItemActions() {
-		const stored = await load(STORAGE.itemActions, {});
-		const now = Date.now();
-		const kept = {};
-		let expired = 0;
-
-		if (stored && typeof stored === "object" && !Array.isArray(stored)) {
-			for (const [itemId, record] of Object.entries(stored)) {
-				if (!record || typeof record !== "object") {
-					continue;
-				}
-
-				if (Number.isFinite(record.at) && now - record.at > VOTE_MEMORY_TTL) {
-					expired++;
-					continue;
-				}
-
-				kept[itemId] = record;
-			}
-		}
-
-		rememberedItemActions = kept;
-
-		if (expired) {
-			await save(STORAGE.itemActions, kept);
-		}
-	}
-
-	function rememberItemAction(itemId, patch) {
-		const key = String(itemId);
-		const next = { ...(rememberedItemActions[key] || {}), ...patch, at: Date.now() };
-
-		rememberedItemActions[key] = next;
-		save(STORAGE.itemActions, rememberedItemActions).catch(console.error);
-
-		return next;
-	}
-
-	function itemActionState(itemId) {
-		return rememberedItemActions[String(itemId)] || null;
-	}
-
-	const ITEM_ACTION_ACCOUNT_KEY = "account";
-
-	function rememberItemActionUnavailable(field) {
-		const account = rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY] || {};
-
-		rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY] = {
-			...account,
-			[field + "Unavailable"]: true,
-			at: Date.now(),
-		};
-
-		save(STORAGE.itemActions, rememberedItemActions).catch(console.error);
-	}
-
-	function clearItemActionUnavailable(field) {
-		const account = rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY];
-
-		if (!account?.[field + "Unavailable"]) {
-			return;
-		}
-
-		delete account[field + "Unavailable"];
-		save(STORAGE.itemActions, rememberedItemActions).catch(console.error);
-		refreshAllItemActionControls();
-	}
-
-	function itemActionUnavailable(field) {
-		return Boolean(
-			rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY]?.[field + "Unavailable"],
-		);
-	}
-
-	function sourceHasItemActions(sourceID) {
-		return Boolean(getWriteBridge(sourceID)?.actions?.vote?.itemActions);
-	}
+	// #region hnewhere-test-export
 
 	function itemActionLinksHTML(itemId, sourceID, watchLink, about = {}) {
 		const between = watchLink ? `\n      |\n      ${watchLink}` : "";
 
-		if (!sourceHasItemActions(sourceID)) {
+		if (!itemId) {
 			return between;
 		}
 
@@ -1026,46 +947,31 @@
       data-item-action="fave" data-item-action-source="${source}" data-item-action-id="${id}"${meta}>favorite</button>`;
 	}
 
-	const ITEM_ACTION_FIELD = { fave: "favorite" };
+	function favoriteKeysOf(entries) {
+		return new Set(
+			(Array.isArray(entries) ? entries : [])
+				.map((entry) => entry?.key)
+				.filter(Boolean),
+		);
+	}
 
-	const ITEM_ACTION_LABEL = {
-		favorite: { on: "unfavorite", off: "favorite" },
-	};
+	function paintFavoriteControls(root, keys) {
+		for (const button of root.querySelectorAll(`[data-item-action="fave"]`)) {
+			const on = keys.has(button.dataset.favoriteKey);
 
-	function refreshItemActionControls(itemId) {
-		const root = sidebarUI?.shadow;
-
-		if (!root) {
-			return;
-		}
-
-		const state = itemActionState(itemId) || {};
-		const selector = `[data-item-action-id="${CSS.escape(String(itemId))}"]`;
-
-		for (const button of root.querySelectorAll(selector)) {
-			const field = ITEM_ACTION_FIELD[button.dataset.itemAction];
-			const on = Boolean(state[field]);
-
-			button.hidden = itemActionUnavailable(field);
-			button.textContent = ITEM_ACTION_LABEL[field][on ? "on" : "off"];
+			button.textContent = on ? "unfavorite" : "favorite";
 			button.classList.toggle("item-action-on", on);
 		}
 	}
 
-	function refreshAllItemActionControls() {
+	// #endregion hnewhere-test-export
+
+	async function refreshFavoriteControls() {
 		const root = sidebarUI?.shadow;
 
-		if (!root) {
-			return;
+		if (root) {
+			paintFavoriteControls(root, favoriteKeysOf(await loadFavoriteEntries()));
 		}
-
-		const seen = new Set();
-
-		for (const button of root.querySelectorAll("[data-item-action-id]")) {
-			seen.add(button.dataset.itemActionId);
-		}
-
-		seen.forEach(refreshItemActionControls);
 	}
 
 	async function toggleFavorite(item, settings) {
@@ -1083,14 +989,11 @@
 
 	async function submitItemAction(button) {
 		const itemId = button.dataset.itemActionId;
-		const kind = button.dataset.itemAction;
-		const field = ITEM_ACTION_FIELD[kind];
+		const sourceID = button.dataset.itemActionSource;
 
-		if (!itemId || !field || button.disabled) {
+		if (!itemId || button.dataset.itemAction !== "fave" || button.disabled) {
 			return;
 		}
-
-		const sourceID = button.dataset.itemActionSource;
 
 		button.disabled = true;
 
@@ -1107,7 +1010,8 @@
 			});
 		} finally {
 			button.disabled = false;
-			refreshItemActionControls(itemId);
+			await refreshFavoriteControls();
+			refreshNotedCount(sidebarUI?.shadow).catch(console.error);
 		}
 	}
 
@@ -7894,24 +7798,6 @@ button {
 				);
 			}
 
-			if (data.itemId && ITEM_ACTION_PATHS[data.action]) {
-				const field = "favorite";
-
-				if (data.reason === "action-unavailable") {
-					rememberItemActionUnavailable(field);
-					refreshAllItemActionControls();
-					return;
-				}
-
-				if (typeof data.applied === "boolean") {
-					rememberItemAction(data.itemId, { [field]: data.applied });
-
-					clearItemActionUnavailable(field);
-				}
-
-				refreshItemActionControls(data.itemId);
-			}
-
 			const pending = itemActionRequests.get(data.nonce);
 
 			if (!pending) {
@@ -8201,13 +8087,7 @@ button {
 		}
 	}
 
-	function hydrateItemActionsForRoot() {
-		refreshAllItemActionControls();
-	}
-
 	function hydrateVoteControlsForStory(storyID, voteLinks = new Map()) {
-		hydrateItemActionsForRoot();
-
 		const containers = sidebarUI?.body?.querySelectorAll(
 			`[data-hn-vote-story-id="${String(storyID)}"]`,
 		);
@@ -8609,15 +8489,13 @@ button {
 			? `${watchLink ? `\n      |\n      ${watchLink}` : ""}
       |
       <button class="item-action-link browse-unfavorite-link" type="button">unfavorite</button>`
-			: !story.source || getSource(story.source)?.capabilities?.vote
-				? itemActionLinksHTML(story.id, story.source || "hn", watchLink, {
-						key: `${story.source || "hn"}:${story.id}`,
-						url: story.url,
-						title: story.title,
-						site: story.site,
-						kind: "discussion",
-					})
-					: itemActionLinksHTML("", "", watchLink);
+			: itemActionLinksHTML(story.id, story.source || "hn", watchLink, {
+					key: `${story.source || "hn"}:${story.id}`,
+					url: story.url,
+					title: story.title,
+					site: story.site,
+					kind: "discussion",
+				});
 
 		const meta = options.noted
 			? `${escapeHTML(pluralize(story.noteCount || 0, "note"))}
@@ -8888,7 +8766,7 @@ button {
 			}
 		}
 
-		refreshAllItemActionControls();
+		refreshFavoriteControls().catch(console.error);
 	}
 
 	async function refreshQueueCount(root) {
@@ -9294,7 +9172,7 @@ button {
 			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
 		}
 
-		refreshAllItemActionControls();
+		refreshFavoriteControls().catch(console.error);
 
 		refreshQueueEntries(entries).then((refreshed) => {
 			if (refreshed && isBrowsing(ui) && browseTab === "queue") {
@@ -9372,7 +9250,7 @@ button {
 				renderBrowseRow(row.story, list, start + index + 1, { also: row.also }),
 			);
 
-		refreshAllItemActionControls();
+		refreshFavoriteControls().catch(console.error);
 
 		renderBrowseNav(
 			list,
@@ -14285,7 +14163,13 @@ ${settingsPanelHTML()}
 	}${
 		ageLabel ? escapeHTML(ageLabel) + " " : ""
 	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
-	${showActions ? itemActionLinksHTML(storyID, story.source || "hn", watchLink) : itemActionLinksHTML("", "", watchLink)}
+	${itemActionLinksHTML(showActions ? storyID : "", story.source || "hn", watchLink, {
+		key: `${story.source || "hn"}:${storyID}`,
+		url: hnURL || story.url || "",
+		title: title || "",
+		site: story.site || (story.url ? hostLabel(story.url) : ""),
+		kind: "discussion",
+	})}
 	${
 		showTitle || !hnURL
 			? ""
@@ -15110,8 +14994,9 @@ ${settingsPanelHTML()}
       ${isLocalSource ? "" : `<a class="focus-link" href="#">focus</a>`}
 		${isLocalSource ? `<a class="edit-note-link" href="#">edit</a> | <a class="delete-note-link" href="#">delete</a>` : ""}
 		${
-			capabilities.vote
-				? itemActionLinksHTML(commentID, comment.source || "hn", "", {
+			isLocalSource
+				? ""
+				: itemActionLinksHTML(commentID, comment.source || "hn", "", {
 						key: `${comment.source || "hn"}:${commentID}`,
 						url: discussionURL(comment) || "",
 						title: comment.by ? `comment by ${comment.by}` : "comment",
@@ -15119,7 +15004,6 @@ ${settingsPanelHTML()}
 						kind: "comment",
 						parent: String(comment.storyID || ""),
 					})
-				: ""
 		}
 
       <span class="toggle">
@@ -15625,6 +15509,7 @@ ${settingsPanelHTML()}
 		}
 
 		reconcileWholeThreads(stories, ui);
+		refreshFavoriteControls().catch(console.error);
 
 		for (const story of stories) {
 			await markSeen(story.key);
@@ -20900,10 +20785,7 @@ title="Show only this discussion">
 		await loadPdfTitle(pdfViewerApp());
 		watchNoteSelection(settings);
 
-		const votesReady = Promise.all([
-			loadRememberedVotes(),
-			loadRememberedItemActions(),
-		]);
+		const votesReady = loadRememberedVotes();
 
 		const hideButton =
 			settings.hideWithoutDiscussion &&
