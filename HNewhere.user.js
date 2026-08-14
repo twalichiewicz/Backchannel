@@ -2840,7 +2840,7 @@
 		return SOURCES.get(id) || null;
 	}
 
-	function arrivalSource(referrer = document.referrer) {
+	function arrivalSource(referrer = document.referrer, sources = SOURCES.values()) {
 		let host;
 
 		try {
@@ -2849,7 +2849,7 @@
 			return null;
 		}
 
-		for (const source of SOURCES.values()) {
+		for (const source of sources) {
 			if ((source.origins || []).some((origin) => origin.toLowerCase() === host)) {
 				return source.id;
 			}
@@ -17415,12 +17415,8 @@ title="Show only this discussion">
 	// #endregion hnewhere-test-export
 
 	// #region hnewhere-test-export
-	function referrerIsHN(referrer = document.referrer) {
-		try {
-			return new URL(referrer).origin === HN_ORIGIN;
-		} catch {
-			return false;
-		}
+	function arrivedFromEnabledSource(sourceId, enabledIds) {
+		return Boolean(sourceId) && (enabledIds || []).includes(sourceId);
 	}
 
 	function shouldAutoOpenSidebar(settings, siteState = null, fromHN = false) {
@@ -17432,10 +17428,10 @@ title="Show only this discussion">
 	}
 	// #endregion hnewhere-test-export
 
-	let arrivedFromHNReferrer = referrerIsHN();
+	let arrivedFromSourceId = arrivalSource();
 
 	function forgetHNReferrer() {
-		arrivedFromHNReferrer = false;
+		arrivedFromSourceId = null;
 	}
 
 	function shouldPreloadHiddenSidebar(settings, siteState = null, fromHN = false) {
@@ -21208,7 +21204,11 @@ title="Show only this discussion">
 				stories,
 				settings,
 				siteState,
-				arrivedFromClick || arrivedFromHNReferrer,
+				arrivedFromClick ||
+					arrivedFromEnabledSource(
+						arrivedFromSourceId,
+						enabledSourceIds(settings, registeredSourceIds()),
+					),
 			);
 			return;
 		}
