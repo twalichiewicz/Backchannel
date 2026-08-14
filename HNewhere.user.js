@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.8
+// @version      1.6.9
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -195,7 +195,9 @@
 		votes: "HNewhere:votes",
 		blocked: "HNewhere:blocked_sites",
 		queue: "HNewhere:queue",
-		itemActions: "HNewhere:item_actions",
+		favorites: "HNewhere:favorites",
+		pendingFocus: "HNewhere:pending_focus",
+		watches: "HNewhere:watches",
 	};
 
 	// #region hnewhere-test-export
@@ -352,6 +354,7 @@
 		autoOpenSidebarOnlyFromHN: false,
 		hideWithoutDiscussion: false,
 		showButtonWithQueue: false,
+		notifyOnWatch: false,
 		sources: undefined,
 		theme: "auto",
 		buttonShape: "circle",
@@ -560,10 +563,15 @@
 			: entry + " (domain-wide)";
 	}
 
+	function queueKey(story) {
+		return story.key || normalizeURL(story.url || "");
+	}
+
 	function addToQueue(entries, story, now) {
 		const list = Array.isArray(entries) ? entries : [];
+		const key = queueKey(story);
 
-		if (list.some((entry) => entry.key === story.key)) {
+		if (list.some((entry) => queueKey(entry) === key)) {
 			return list;
 		}
 
@@ -571,7 +579,7 @@
 			...list,
 			{
 				id: story.id,
-				key: story.key,
+				key,
 				source: story.source,
 				permalink: story.permalink || "",
 				url: story.url,
@@ -589,8 +597,135 @@
 
 	function removeFromQueue(entries, key) {
 		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => queueKey(entry) !== key,
+		);
+	}
+
+	const WATCH_MISS_CEILING = 5;
+
+	function addToWatchList(entries, page, now) {
+		const list = Array.isArray(entries) ? entries : [];
+
+		if (list.some((entry) => entry.key === page.key)) {
+			return list;
+		}
+
+		return [
+			...list,
+			{
+				key: page.key,
+				url: page.url,
+				title: page.title || "",
+				site: page.site || "",
+				addedAt: now,
+				checkedAt: 0,
+				marks: {},
+				misses: 0,
+				foundAt: null,
+				seenAt: null,
+			},
+		];
+	}
+
+	function addToFavorites(entries, item, now) {
+		const list = Array.isArray(entries) ? entries : [];
+
+		if (list.some((entry) => entry.key === item.key)) {
+			return list;
+		}
+
+		return [
+			...list,
+			{
+				key: item.key,
+				url: item.url,
+				title: item.title || "",
+				site: item.site || "",
+				kind: item.kind || "discussion",
+				context: item.context || "",
+				by: item.by || "",
+				time: Number(item.time) || 0,
+				focus: item.focus || "",
+				source: item.source || "",
+				id: item.id || "",
+				parent: item.parent || "",
+				addedAt: now,
+			},
+		];
+	}
+
+	function removeFromFavorites(entries, key) {
+		return (Array.isArray(entries) ? entries : []).filter(
 			(entry) => entry.key !== key,
 		);
+	}
+
+	function favoritesOfKind(entries, kind) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => (entry.kind || "discussion") === kind,
+		);
+	}
+
+	function removeFromWatchList(entries, key) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => entry.key !== key,
+		);
+	}
+
+	function watchMarkChanged(before, after) {
+		if (after === null || after === undefined) {
+			return false;
+		}
+
+		if (before === null || before === undefined) {
+			return false;
+		}
+
+		return before !== after;
+	}
+
+	function watchesDue(entries, now, interval) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) =>
+				!entry.foundAt &&
+				entry.misses < WATCH_MISS_CEILING &&
+				now - (entry.checkedAt || 0) >= interval,
+		);
+	}
+
+	function watchIsFresh(state) {
+		return Boolean(state?.foundAt && !state?.seenAt);
+	}
+
+	function sortWatchedEntries(entries, stateFor) {
+		return [...(Array.isArray(entries) ? entries : [])].sort((a, b) => {
+			const left = stateFor(a);
+			const right = stateFor(b);
+			const freshLeft = watchIsFresh(left) ? 0 : 1;
+			const freshRight = watchIsFresh(right) ? 0 : 1;
+
+			if (freshLeft !== freshRight) {
+				return freshLeft - freshRight;
+			}
+
+			if (freshLeft === 0) {
+				return (right?.foundAt || 0) - (left?.foundAt || 0);
+			}
+
+			return 0;
+		});
+	}
+
+	function unseenWatchCount(entries) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => entry.foundAt && !entry.seenAt,
+		).length;
+	}
+
+	function stalledWatchCount(entries) {
+		return (Array.isArray(entries) ? entries : []).filter(
+			(entry) => !entry.foundAt && entry.misses >= WATCH_MISS_CEILING,
+		).length;
 	}
 
 	function migrateQueueKeys(entries, normalize) {
@@ -628,9 +763,9 @@
 		);
 	}
 
-	function clearReadFromQueue(entries) {
+	function clearReadFromQueue(entries, keep) {
 		return (Array.isArray(entries) ? entries : []).filter(
-			(entry) => !entry.readAt,
+			(entry) => !entry.readAt || Boolean(keep?.has(queueKey(entry))),
 		);
 	}
 
@@ -677,6 +812,28 @@
 
 	async function saveQueue(entries) {
 		await save(STORAGE.queue, entries);
+		return entries;
+	}
+
+	async function loadFavoriteEntries() {
+		const stored = await load(STORAGE.favorites, []);
+
+		return Array.isArray(stored) ? stored.filter((entry) => entry?.key) : [];
+	}
+
+	async function saveFavorites(entries) {
+		await save(STORAGE.favorites, entries);
+		return entries;
+	}
+
+	async function loadWatches() {
+		const stored = await load(STORAGE.watches, []);
+
+		return Array.isArray(stored) ? stored.filter((entry) => entry?.key) : [];
+	}
+
+	async function saveWatches(entries) {
+		await save(STORAGE.watches, entries);
 		return entries;
 	}
 
@@ -746,8 +903,6 @@
 
 	let rememberedVotes = {};
 
-	let rememberedItemActions = {};
-
 	async function loadRememberedVotes() {
 		const stored = await load(STORAGE.votes, {});
 		const now = Date.now();
@@ -776,168 +931,160 @@
 		}
 	}
 
-	async function loadRememberedItemActions() {
-		const stored = await load(STORAGE.itemActions, {});
-		const now = Date.now();
-		const kept = {};
-		let expired = 0;
+	// #region hnewhere-test-export
 
-		if (stored && typeof stored === "object" && !Array.isArray(stored)) {
-			for (const [itemId, record] of Object.entries(stored)) {
-				if (!record || typeof record !== "object") {
-					continue;
-				}
+	const FAVORITE_EXCERPT_CHARS = 140;
 
-				if (Number.isFinite(record.at) && now - record.at > VOTE_MEMORY_TTL) {
-					expired++;
-					continue;
-				}
+	function favoriteExcerpt(value, limit) {
+		const text = String(value ?? "")
+			.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+			.replace(/<[^>]*>/g, " ")
+			.replace(/&(?:nbsp|amp|lt|gt|quot|#39);/g, (entity) =>
+				({
+					"&nbsp;": " ",
+					"&amp;": "&",
+					"&lt;": "<",
+					"&gt;": ">",
+					"&quot;": '"',
+					"&#39;": "'",
+				})[entity],
+			)
+			.replace(/\s+/g, " ")
+			.trim();
 
-				kept[itemId] = record;
-			}
+		if (text.length <= limit) {
+			return text;
 		}
 
-		rememberedItemActions = kept;
+		const cut = text.slice(0, limit);
+		const boundary = cut.lastIndexOf(" ");
 
-		if (expired) {
-			await save(STORAGE.itemActions, kept);
-		}
+		return (boundary > limit / 2 ? cut.slice(0, boundary) : cut).trim() + "…";
 	}
 
-	function rememberItemAction(itemId, patch) {
-		const key = String(itemId);
-		const next = { ...(rememberedItemActions[key] || {}), ...patch, at: Date.now() };
-
-		rememberedItemActions[key] = next;
-		save(STORAGE.itemActions, rememberedItemActions).catch(console.error);
-
-		return next;
-	}
-
-	function itemActionState(itemId) {
-		return rememberedItemActions[String(itemId)] || null;
-	}
-
-	const ITEM_ACTION_ACCOUNT_KEY = "account";
-
-	function rememberItemActionUnavailable(field) {
-		const account = rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY] || {};
-
-		rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY] = {
-			...account,
-			[field + "Unavailable"]: true,
-			at: Date.now(),
-		};
-
-		save(STORAGE.itemActions, rememberedItemActions).catch(console.error);
-	}
-
-	function clearItemActionUnavailable(field) {
-		const account = rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY];
-
-		if (!account?.[field + "Unavailable"]) {
-			return;
+	function favoriteKeyFor(story) {
+		if (story.source) {
+			return `${story.source}:${story.id}`;
 		}
 
-		delete account[field + "Unavailable"];
-		save(STORAGE.itemActions, rememberedItemActions).catch(console.error);
-		refreshAllItemActionControls();
+		return normalizeURL(story.url || "") || String(story.id ?? "");
 	}
 
-	function itemActionUnavailable(field) {
-		return Boolean(
-			rememberedItemActions[ITEM_ACTION_ACCOUNT_KEY]?.[field + "Unavailable"],
-		);
-	}
+	function favoriteButtonHTML(about = {}) {
+		const id = String(about.id ?? about.key ?? "");
+		const key = String(about.key || "");
 
-	function sourceHasItemActions(sourceID) {
-		return Boolean(getWriteBridge(sourceID)?.actions?.vote?.itemActions);
-	}
-
-	function itemActionLinksHTML(itemId, sourceID) {
-		if (!sourceHasItemActions(sourceID)) {
+		if (!key) {
 			return "";
 		}
 
-		const id = escapeHTML(String(itemId));
-		const source = escapeHTML(String(sourceID || ""));
-
-		return `
-      |
-      <button class="item-action-link" type="button"
-      data-item-action="flag" data-item-action-source="${source}" data-item-action-id="${id}">flag</button>
-      |
-      <button class="item-action-link" type="button"
-      data-item-action="fave" data-item-action-source="${source}" data-item-action-id="${id}">favorite</button>`;
+		return `<button class="item-action-link" type="button"
+      data-item-action="fave" data-item-action-source="${escapeHTML(String(about.source || ""))}"
+      data-item-action-id="${escapeHTML(id)}"
+      data-favorite-key="${escapeHTML(key)}"
+      data-favorite-url="${escapeHTML(about.url || "")}"
+      data-favorite-title="${escapeHTML(about.title || "")}"
+      data-favorite-site="${escapeHTML(about.site || "")}"
+      data-favorite-kind="${escapeHTML(about.kind || "discussion")}"
+      data-favorite-context="${escapeHTML(about.context || "")}"
+      data-favorite-by="${escapeHTML(about.by || "")}"
+      data-favorite-time="${escapeHTML(String(about.time || ""))}"
+      data-favorite-focus="${escapeHTML(about.focus || "")}"
+      data-favorite-parent="${escapeHTML(about.parent || "")}">favorite</button>`;
 	}
 
-	const ITEM_ACTION_FIELD = { fave: "favorite", flag: "flagged" };
+	function itemActionLinksHTML(itemId, sourceID, watchLink, about = {}) {
+		const between = watchLink ? `\n      |\n      ${watchLink}` : "";
 
-	const ITEM_ACTION_LABEL = {
-		favorite: { on: "un-favorite", off: "favorite" },
-		flagged: { on: "unflag", off: "flag" },
-	};
-
-	function refreshItemActionControls(itemId) {
-		const root = sidebarUI?.shadow;
-
-		if (!root) {
-			return;
+		if (!itemId) {
+			return between;
 		}
 
-		const state = itemActionState(itemId) || {};
-		const selector = `[data-item-action-id="${CSS.escape(String(itemId))}"]`;
+		const button = favoriteButtonHTML({
+			...about,
+			key: about.key || `${sourceID || ""}:${itemId}`,
+			source: sourceID,
+			id: itemId,
+		});
 
-		for (const button of root.querySelectorAll(selector)) {
-			const field = ITEM_ACTION_FIELD[button.dataset.itemAction];
-			const on = Boolean(state[field]);
+		return `${between}
+      |
+      ${button}`;
+	}
 
-			button.hidden = itemActionUnavailable(field);
-			button.textContent = ITEM_ACTION_LABEL[field][on ? "on" : "off"];
+	function favoriteKeysOf(entries) {
+		return new Set(
+			(Array.isArray(entries) ? entries : [])
+				.map((entry) => entry?.key)
+				.filter(Boolean),
+		);
+	}
+
+	function paintFavoriteControls(root, keys) {
+		for (const button of root.querySelectorAll(`[data-item-action="fave"]`)) {
+			const on = keys.has(button.dataset.favoriteKey);
+
+			button.textContent = on ? "unfavorite" : "favorite";
 			button.classList.toggle("item-action-on", on);
 		}
 	}
 
-	function refreshAllItemActionControls() {
+	// #endregion hnewhere-test-export
+
+	async function refreshFavoriteControls() {
 		const root = sidebarUI?.shadow;
 
-		if (!root) {
-			return;
+		if (root) {
+			paintFavoriteControls(root, favoriteKeysOf(await loadFavoriteEntries()));
 		}
+	}
 
-		const seen = new Set();
+	async function toggleFavorite(item, settings) {
+		const entries = await loadFavoriteEntries();
+		const on = entries.some((entry) => entry.key === item.key);
 
-		for (const button of root.querySelectorAll("[data-item-action-id]")) {
-			seen.add(button.dataset.itemActionId);
-		}
+		await saveFavorites(
+			on
+				? removeFromFavorites(entries, item.key)
+				: addToFavorites(entries, item, Date.now()),
+		);
 
-		seen.forEach(refreshItemActionControls);
+		return !on;
 	}
 
 	async function submitItemAction(button) {
 		const itemId = button.dataset.itemActionId;
-		const kind = button.dataset.itemAction;
-		const field = ITEM_ACTION_FIELD[kind];
+		const sourceID = button.dataset.itemActionSource;
 
-		if (!itemId || !field || button.disabled) {
+		if (!itemId || button.dataset.itemAction !== "fave" || button.disabled) {
 			return;
 		}
 
-		const action = itemActionState(itemId)?.[field] ? "un" + kind : kind;
+		const turningOn = !button.classList.contains("item-action-on");
 
 		button.disabled = true;
+		button.textContent = turningOn ? "unfavorite" : "favorite";
+		button.classList.toggle("item-action-on", turningOn);
 
 		try {
-			await openItemActionPopup(
-				button.dataset.itemActionSource,
-				itemId,
-				itemId,
-				action,
-				null,
-			);
+			await toggleFavorite({
+				key: button.dataset.favoriteKey || `${sourceID}:${itemId}`,
+				url: button.dataset.favoriteUrl || "",
+				title: button.dataset.favoriteTitle || "",
+				site: button.dataset.favoriteSite || "",
+				kind: button.dataset.favoriteKind || "discussion",
+				context: button.dataset.favoriteContext || "",
+				by: button.dataset.favoriteBy || "",
+				time: Number(button.dataset.favoriteTime) || 0,
+				focus: button.dataset.favoriteFocus || "",
+				source: sourceID,
+				id: itemId,
+				parent: button.dataset.favoriteParent || "",
+			});
 		} finally {
 			button.disabled = false;
-			refreshItemActionControls(itemId);
+			refreshFavoriteControls().catch(console.error);
+			refreshNotedCount(sidebarUI?.shadow).catch(console.error);
 		}
 	}
 
@@ -2697,7 +2844,7 @@
 		return SOURCES.get(id) || null;
 	}
 
-	function arrivalSource(referrer = document.referrer) {
+	function arrivalSource(referrer = document.referrer, sources = SOURCES.values()) {
 		let host;
 
 		try {
@@ -2706,7 +2853,7 @@
 			return null;
 		}
 
-		for (const source of SOURCES.values()) {
+		for (const source of sources) {
 			if ((source.origins || []).some((origin) => origin.toLowerCase() === host)) {
 				return source.id;
 			}
@@ -2800,7 +2947,7 @@
 				(source) => `
 <label class="settings-option">
 <input${idPrefix ? ` id="${escapeHTML(idPrefix + source.id)}"` : ""} data-source="${escapeHTML(source.id)}" type="checkbox">
-<span>${escapeHTML(source.label)}${source.beta ? ` <span class="op-pill">BETA</span>` : ""}${source.slow ? ` <span class="op-pill op-pill-slow" tabindex="0" role="note" aria-label="Slower comment fetch source">⧗<span class="op-pill-tip" aria-hidden="true">Slower comment fetch source</span></span>` : ""}</span>
+<span>${escapeHTML(source.label)}${source.slow ? ` <span class="op-pill op-pill-slow" tabindex="0" role="note" aria-label="Slower comment fetch source">⧗<span class="op-pill-tip" aria-hidden="true">Slower comment fetch source</span></span>` : ""}</span>
 </label>
 ${
 	source.caveat
@@ -2823,7 +2970,12 @@ ${
 	}
 
 	// #region hnewhere-test-export
-	const HINTED_SETTINGS = new Set(["annotations", "pdfReader", "notepad"]);
+	const HINTED_SETTINGS = new Set([
+		"annotations",
+		"pdfReader",
+		"notepad",
+		"notifyOnWatch",
+	]);
 
 	function pdfViewerRefusesExtensions() {
 		return /firefox/i.test(navigator.userAgent || "");
@@ -2874,6 +3026,41 @@ ${
 
 		async discover(url) {
 			return (await findHN(url)).map(algoliaDiscussion);
+		},
+
+		async probe(url, context) {
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return null;
+			}
+
+			const since = Math.floor((context.since || 0) / 1000);
+			const filter = encodeURIComponent("created_at_i>" + since);
+			let total = 0;
+			let answered = false;
+
+			for (const query of [url, target]) {
+				const result = await request(
+					"https://hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=url&hitsPerPage=0&query=" +
+						encodeURIComponent(query) +
+						"&numericFilters=" +
+						filter,
+				);
+
+				if (!result || typeof result.nbHits !== "number") {
+					continue;
+				}
+
+				answered = true;
+				total = Math.max(total, result.nbHits);
+			}
+
+			if (!answered) {
+				return null;
+			}
+
+			return { mark: total, changed: total > 0 };
 		},
 
 		async frontPage() {
@@ -3020,13 +3207,41 @@ ${
 		origins: ["reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com"],
 		label: "Reddit",
 		shortLabel: "Reddit",
-		beta: true,
 		caveat:
 			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds. Vote and reply through your existing Reddit session.",
 		capabilities: { vote: true, reply: true, submit: false },
 
 		profileURL: (author) =>
 			"https://www.reddit.com/user/" + encodeURIComponent(author) + "/",
+
+		async probe(url, context) {
+			if ((await redditTier()) !== "archive") {
+				return null;
+			}
+
+			const target = normalizeURL(url);
+
+			if (!target) {
+				return null;
+			}
+
+			const scheme = url.startsWith("http://") ? "http://" : "https://";
+			const result = await request(
+				"https://arctic-shift.photon-reddit.com/api/posts/search?limit=25&fields=id&url=" +
+					encodeURIComponent(scheme + target),
+			);
+
+			if (!result || !Array.isArray(result.data)) {
+				return null;
+			}
+
+			const mark = result.data
+				.map((post) => post.id)
+				.sort()
+				.join(",");
+
+			return { mark, changed: watchMarkChanged(context.mark, mark) };
+		},
 
 		async discover(url) {
 			const target = normalizeURL(url);
@@ -3203,7 +3418,6 @@ ${
 		label: "Bluesky",
 		shortLabel: "Bluesky",
 		slow: true,
-		beta: true,
 		ageLabel: "Last Bluesky comment",
 		threadArrivesWhole: true,
 		caveat:
@@ -3211,6 +3425,29 @@ ${
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => "https://bsky.app/profile/" + encodeURIComponent(handle),
+
+		async probe(url, context) {
+			const target = bskyTarget(url);
+
+			if (!target) {
+				return null;
+			}
+
+			const counted = await bskyJSON(
+				`${CONSTELLATION}/links/count?target=${encodeURIComponent(target)}` +
+					"&collection=app.bsky.feed.post&path=.embed.external.uri",
+				{ "User-Agent": CONSTELLATION_UA },
+			);
+
+			if (!counted || typeof counted.total !== "number") {
+				return null;
+			}
+
+			return {
+				mark: counted.total,
+				changed: watchMarkChanged(context.mark, counted.total),
+			};
+		},
 
 		async discover(url) {
 			const target = bskyTarget(url);
@@ -3367,7 +3604,6 @@ ${
 		origins: ["lobste.rs"],
 		label: "Lobsters",
 		shortLabel: "Lobsters",
-		beta: true,
 		threadArrivesWhole: true,
 		caveat:
 			"Will send the domain of each page you visit to lobste.rs, not the full address. Signed in or out, these requests carry no account.",
@@ -3460,7 +3696,6 @@ ${
 		label: "Wikipedia",
 		shortLabel: "Wikipedia",
 		slow: true,
-		beta: true,
 		ageLabel: "Last active on Wikipedia",
 		threadArrivesWhole: true,
 		caveat:
@@ -3591,7 +3826,6 @@ ${
 		origins: ["hypothes.is", "web.hypothes.is"],
 		label: "Hypothes.is",
 		shortLabel: "Hypothes.is",
-		beta: true,
 		ageLabel: "Last annotation",
 		threadArrivesWhole: true,
 		caveat:
@@ -4012,7 +4246,7 @@ button {
 			index.welded,
 		);
 
-		if (found.length !== 1) {
+		if (!found.length) {
 			return null;
 		}
 
@@ -4092,6 +4326,49 @@ button {
 		save.textContent = "save";
 
 		let warnedFor = null;
+		let dismissWhy = null;
+
+		const hideWhy = () => {
+			why.classList.remove("is-open");
+
+			if (dismissWhy) {
+				dismissWhy();
+				dismissWhy = null;
+			}
+		};
+
+		const showWhy = (text) => {
+			why.textContent = text;
+			why.classList.add("is-open");
+			hideWhyOnAway();
+		};
+
+		function hideWhyOnAway() {
+			if (dismissWhy) {
+				dismissWhy();
+			}
+
+			const root = editor.getRootNode();
+			const away = (event) => {
+				if (event.composedPath?.().includes(why)) {
+					return;
+				}
+
+				hideWhy();
+			};
+
+			const attach = () => {
+				root.addEventListener("pointerdown", away, true);
+				document.addEventListener("pointerdown", away, true);
+			};
+
+			dismissWhy = () => {
+				root.removeEventListener("pointerdown", away, true);
+				document.removeEventListener("pointerdown", away, true);
+			};
+
+			setTimeout(attach, 0);
+		}
 
 		const commit = () => {
 			const parsed = noteFromText(field.value);
@@ -4107,11 +4384,13 @@ button {
 				!canAnchor(parsed.exact)
 			) {
 				warnedFor = parsed.exact;
-				why.textContent =
-					"That passage is not in this document. Save again to keep it without a highlight.";
+				showWhy(
+					"Your quoted text wasn't found in this document. Press Save again to keep it without a highlight.",
+				);
 				return;
 			}
 
+			hideWhy();
 			onSave(parsed);
 		};
 
@@ -4127,7 +4406,11 @@ button {
 			}
 		};
 
-		row.append(save, cancel, why);
+		const saveWrap = document.createElement("span");
+
+		saveWrap.className = "note-editor-save-wrap";
+		saveWrap.append(save, why);
+		row.append(saveWrap, cancel);
 		editor.append(field, row);
 
 		return { editor, field };
@@ -4145,6 +4428,7 @@ button {
 
 		if (body.querySelector(".note-editor")) {
 			body.style.maxHeight = "";
+			body.style.overflow = "visible";
 			return;
 		}
 
@@ -4191,7 +4475,7 @@ button {
 
 		text.hidden = true;
 		text.after(held.editor);
-		held.field.focus();
+		held.field.focus({ preventScroll: true });
 		settleNotepad(div);
 	}
 
@@ -4224,8 +4508,26 @@ button {
 			held.editor.classList.add("is-open");
 			held.editor.style.maxHeight = `${held.editor.scrollHeight}px`;
 			settleNotepad(held.editor);
-			held.field.focus();
+			held.field.focus({ preventScroll: true });
+
+			window.setTimeout(() => releaseNotepadDraft(held.editor), 240);
 		});
+	}
+
+	function releaseNotepadDraft(draft) {
+		if (!draft?.isConnected || !draft.classList.contains("is-open")) {
+			return;
+		}
+
+		draft.style.maxHeight = "none";
+		draft.style.overflow = "visible";
+		draft.scrollTop = 0;
+	}
+
+	function clampNotepadDraft(draft) {
+		draft.style.overflow = "";
+		draft.style.maxHeight = `${draft.scrollHeight}px`;
+		draft.getBoundingClientRect();
 	}
 
 	function closeNotepadDraft(section, body) {
@@ -4239,6 +4541,7 @@ button {
 			return;
 		}
 
+		clampNotepadDraft(draft);
 		draft.style.maxHeight = "0px";
 		draft.classList.remove("is-open");
 
@@ -4294,12 +4597,61 @@ button {
 		await reopenForNotes();
 	}
 
+	async function refreshNotepadInPlace() {
+		const section = sidebarUI?.body?.querySelector("[data-notes-section]");
+		const body = section?.querySelector(".notepad-body");
+
+		if (!body) {
+			return false;
+		}
+
+		const notes = await loadNotes();
+		const discussion = notesCollective(notes, pageAddress());
+		const toggle = section.querySelector(".notepad-toggle");
+		const empty = !notes.length;
+
+		renderedComments = renderedComments.filter(
+			(rendered) => !body.contains(rendered.element),
+		);
+		body.replaceChildren();
+
+		toggle.hidden = empty;
+		toggle.textContent = empty ? "show" : "hide";
+		toggle.setAttribute("aria-expanded", empty ? "false" : "true");
+		section.classList.toggle("is-collapsed", empty);
+		body.style.maxHeight = empty ? "0px" : "";
+
+		if (discussion) {
+			const thread = notesThread(discussion);
+			const collapsedKeys = await loadCollapsed();
+
+			for (const key of thread.rootKeys) {
+				await renderComment(
+					key,
+					thread,
+					body,
+					discussion,
+					0,
+					collapsedKeys,
+					sidebarGeneration,
+				);
+			}
+		}
+
+		settleNotepad(body);
+
+		return true;
+	}
+
 	async function reopenForNotes() {
 		if (!sidebarUI) {
 			return;
 		}
 
-		await renderDiscussions(renderedDiscussions, sidebarUI);
+		if (!(await refreshNotepadInPlace())) {
+			await renderDiscussions(renderedDiscussions, sidebarUI);
+		}
+
 		await refreshArticleAnnotations();
 	}
 
@@ -4385,27 +4737,56 @@ button {
 		const kept = notes.slice(-NOTES_PER_DOCUMENT);
 
 		await save(noteStorageKey(ref), { version: 1, notes: kept });
-		await rememberNotedDocument(ref, kept.length);
+		await rememberNotedDocument(ref, kept);
 
 		return kept;
 	}
 
-	async function rememberNotedDocument(ref, count) {
-		const stored = await load(NOTES_INDEX_KEY, []);
-		const entries = (Array.isArray(stored) ? stored : []).filter(
-			(entry) => entry?.key !== noteStorageKey(ref),
-		);
+	// #region hnewhere-test-export
 
-		if (count > 0) {
-			entries.push({
-				key: noteStorageKey(ref),
-				kind: ref.kind,
-				id: ref.id,
-				url: location.href,
-				title: pageTitle(),
-				count,
-				updated: Date.now(),
-			});
+	function latestNoteExcerpt(notes) {
+		const latest = [...notes].sort(
+			(a, b) => (b.edited || b.created || 0) - (a.edited || a.created || 0),
+		)[0];
+
+		return favoriteExcerpt(latest?.text || latest?.exact || "", FAVORITE_EXCERPT_CHARS);
+	}
+
+	function notedIndexEntry(ref, notes, previous, hereRef, here, now) {
+		const onThisPage = noteStorageKey(ref) === noteStorageKey(hereRef);
+
+		return {
+			key: noteStorageKey(ref),
+			kind: ref.kind,
+			id: ref.id,
+			url: onThisPage ? here.url : previous?.url || "",
+			title: onThisPage ? here.title : previous?.title || "",
+			excerpt: latestNoteExcerpt(notes),
+			count: notes.length,
+			updated: now,
+		};
+	}
+
+	// #endregion hnewhere-test-export
+
+	async function rememberNotedDocument(ref, notes) {
+		const key = noteStorageKey(ref);
+		const stored = await load(NOTES_INDEX_KEY, []);
+		const list = Array.isArray(stored) ? stored : [];
+		const previous = list.find((entry) => entry?.key === key);
+		const entries = list.filter((entry) => entry?.key !== key);
+
+		if (notes.length > 0) {
+			entries.push(
+				notedIndexEntry(
+					ref,
+					notes,
+					previous,
+					noteDocumentRefForPage(),
+					{ url: location.href, title: pageTitle() },
+					Date.now(),
+				),
+			);
 		}
 
 		await save(NOTES_INDEX_KEY, entries);
@@ -4512,7 +4893,6 @@ button {
 		label: "Mastodon",
 		shortLabel: "Mastodon",
 		slow: true,
-		beta: true,
 		ageLabel: "Last Mastodon post",
 		threadArrivesWhole: true,
 		caveat:
@@ -4613,7 +4993,6 @@ button {
 		label: "Lemmy",
 		shortLabel: "Lemmy",
 		slow: true,
-		beta: true,
 		caveat:
 			"Will send each page you visit to lemmy.world, a large Lemmy instance whose federation reaches across the network. No account, signed in or out.",
 		capabilities: { vote: false, reply: false, submit: false },
@@ -4707,6 +5086,370 @@ button {
 				compareStoriesByDiscussion,
 			),
 		);
+	}
+
+	// -------------------------
+	// Watch list
+	// -------------------------
+
+	const WATCH_INTERVAL_MS = 3600000;
+	const WATCH_BATCH = 4;
+	const WATCH_POLL_DELAY_MS = 5000;
+
+	function notificationsAllowed() {
+		return (
+			typeof Notification !== "undefined" && Notification.permission === "granted"
+		);
+	}
+
+	async function grantNotifications() {
+		if (typeof Notification === "undefined") {
+			return false;
+		}
+
+		try {
+			return (await Notification.requestPermission()) === "granted";
+		} catch (error) {
+			console.error("Backchannel notification permission failed:", error);
+
+			return false;
+		}
+	}
+
+	function notifyWatch(entry, count) {
+		const text =
+			pluralize(count, "discussion") +
+			" on " +
+			(entry.title || entry.site || entry.url);
+
+		if (typeof GM === "undefined" || typeof GM.notification !== "function") {
+			try {
+				if (
+					typeof Notification !== "undefined" &&
+					Notification.permission === "granted"
+				) {
+					new Notification("Backchannel", { body: text }).onclick = () => {
+						window.open(entry.url, "_blank");
+					};
+				}
+			} catch (error) {
+				console.error("Backchannel notification failed:", error);
+			}
+
+			return;
+		}
+
+		try {
+			GM.notification({
+				title: "Backchannel",
+				text:
+					pluralize(count, "discussion") +
+					" on " +
+					(entry.title || entry.site || entry.url),
+				timeout: 8000,
+				onclick: () => {
+					window.open(entry.url, "_blank");
+				},
+			});
+		} catch (error) {
+			console.error("Backchannel notification failed:", error);
+		}
+	}
+
+	function watchStory(entry, discussion) {
+		return {
+			id: discussion.id,
+			key: discussion.key,
+			source: discussion.source,
+			permalink: discussion.permalink || "",
+			url: discussion.articleURL || entry.url,
+			title: entry.title || discussion.title || "",
+			by: discussion.author || "",
+			score: discussion.score || 0,
+			time: discussion.createdAt || 0,
+			descendants: discussion.commentCount || 0,
+			site: entry.site || "",
+		};
+	}
+
+	async function probeWatch(entry, settings) {
+		const marks = { ...(entry.marks || {}) };
+		let changed = false;
+		let answered = false;
+
+		for (const source of enabledSources(settings)) {
+			if (typeof source.probe !== "function") {
+				continue;
+			}
+
+			let result = null;
+
+			try {
+				result = await source.probe(entry.url, {
+					mark: marks[source.id],
+					since: entry.addedAt,
+				});
+			} catch (error) {
+				console.error("Backchannel " + source.id + " probe failed:", error);
+			}
+
+			if (!result) {
+				continue;
+			}
+
+			answered = true;
+			marks[source.id] = result.mark;
+			changed = changed || result.changed;
+		}
+
+		return { marks, changed, answered };
+	}
+
+	async function pollWatches(settings) {
+		const entries = await loadWatches();
+		const due = watchesDue(entries, Date.now(), WATCH_INTERVAL_MS).slice(
+			0,
+			WATCH_BATCH,
+		);
+
+		if (!due.length) {
+			return false;
+		}
+
+		for (const entry of due) {
+			const { marks, changed, answered } = await probeWatch(entry, settings);
+			const now = Date.now();
+
+			entry.marks = marks;
+			entry.checkedAt = now;
+			entry.misses = answered ? 0 : (entry.misses || 0) + 1;
+
+			if (changed) {
+				const found = await discoverAll([entry.url], settings);
+
+				if (found.length) {
+					entry.foundAt = now;
+					entry.count = found.length;
+
+					const queued = await loadQueue();
+					const placeholder = queued.find(
+						(item) => queueKey(item) === entry.key,
+					);
+					const story = watchStory(entry, found[0]);
+
+					if (placeholder) {
+						Object.assign(placeholder, story, {
+							key: entry.key,
+							title: story.title || placeholder.title,
+							watchPlaceholder: false,
+							readAt: null,
+						});
+
+						await saveQueue(queued);
+					} else {
+						await saveQueue(addToQueue(queued, story, now));
+					}
+
+					if (settings.notifyOnWatch && notificationsAllowed()) {
+						notifyWatch(entry, found.length);
+					}
+				}
+			}
+		}
+
+		await saveWatches(entries);
+
+		return unseenWatchCount(entries) > 0;
+	}
+
+	async function refreshWatchSignal() {
+		if (!sidebarUI?.shadow) {
+			return;
+		}
+
+		await refreshQueueCount(sidebarUI.shadow);
+		await refreshNextUp(sidebarUI.shadow);
+	}
+
+	function watchQueueEntry(page, now) {
+		return {
+			id: page.key,
+			key: page.key,
+			source: "",
+			permalink: "",
+			url: page.url,
+			title: page.title || page.url,
+			by: "",
+			score: 0,
+			time: Math.floor(now / 1000),
+			descendants: 0,
+			site: page.site || "",
+			watchPlaceholder: true,
+		};
+	}
+
+	function watchQueueStory(page, discussions, now) {
+		if (!discussions?.length) {
+			return watchQueueEntry(page, now);
+		}
+
+		const total = discussions.reduce(
+			(sum, each) => sum + (each.commentCount || 0),
+			0,
+		);
+
+		const best = discussions.reduce((pick, each) =>
+			(each.score || 0) > (pick.score || 0) ||
+			((each.score || 0) === (pick.score || 0) &&
+				(each.commentCount || 0) > (pick.commentCount || 0))
+				? each
+				: pick,
+		);
+
+		return {
+			...watchStory(page, best),
+			key: page.key,
+			descendants: total,
+		};
+	}
+
+	async function startWatching(page, discussions) {
+		const now = Date.now();
+
+		await saveWatches(addToWatchList(await loadWatches(), page, now));
+
+		const queued = await loadQueue();
+
+		if (!queued.some((entry) => queueKey(entry) === page.key)) {
+			await saveQueue(
+				addToQueue(queued, watchQueueStory(page, discussions, now), now),
+			);
+		}
+	}
+
+	async function stopWatching(key) {
+		await saveWatches(removeFromWatchList(await loadWatches(), key));
+	}
+
+	function wireRowWatchLink(button, story, options) {
+		if (!button) {
+			return;
+		}
+
+		const url = story.url || "";
+		const key = normalizeURL(url);
+
+		if (!key) {
+			button.hidden = true;
+
+			return;
+		}
+
+		const paint = (on) => {
+			button.textContent = on ? "unwatch" : "watch";
+			button.classList.toggle("item-action-on", on);
+		};
+
+		paint(Boolean(options.watching));
+
+		if (!options.watching) {
+			loadWatches()
+				.then((entries) => paint(entries.some((entry) => entry.key === key)))
+				.catch(console.error);
+		}
+
+		button.onclick = async () => {
+			const entries = await loadWatches();
+			const on = entries.some((entry) => entry.key === key);
+
+			if (on) {
+				await stopWatching(key);
+			} else {
+				await startWatching({
+					key,
+					url,
+					title: story.title || "",
+					site: story.site || "",
+				});
+			}
+
+			paint(!on);
+
+			if (typeof options.reload === "function") {
+				await options.reload();
+			}
+
+			const root = button.getRootNode();
+
+			refreshQueueCount(root);
+			refreshNextUp(root);
+		};
+	}
+
+	function wireWatchToggle(button, title, discussions) {
+		if (!button) {
+			return;
+		}
+
+		const url = pageAddress();
+		const key = normalizeURL(url);
+
+		if (!key) {
+			button.hidden = true;
+
+			return;
+		}
+
+		const paint = (watching) => {
+			button.textContent = watching ? "unwatch" : "watch";
+			button.setAttribute("aria-pressed", watching ? "true" : "false");
+		};
+
+		loadWatches()
+			.then((entries) => paint(entries.some((entry) => entry.key === key)))
+			.catch(console.error);
+
+		button.onclick = async () => {
+			const entries = await loadWatches();
+			const watching = entries.some((entry) => entry.key === key);
+
+			if (watching) {
+				await stopWatching(key);
+			} else {
+				await startWatching(
+					{
+						key,
+						url,
+						title: title || document.title || "",
+						site: hostLabel(url),
+					},
+					discussions,
+				);
+			}
+
+			paint(!watching);
+
+			refreshWatchSignal().catch(console.error);
+		};
+	}
+
+	function scheduleWatchPoll(settings) {
+		const run = () => {
+			pollWatches(settings)
+				.then((found) => {
+					if (found) {
+						refreshWatchSignal().catch(console.error);
+					}
+				})
+				.catch(console.error);
+		};
+
+		if (typeof requestIdleCallback === "function") {
+			requestIdleCallback(run);
+			return;
+		}
+
+		setTimeout(run, WATCH_POLL_DELAY_MS);
 	}
 
 	const THREAD_CEILING_MS = 20000;
@@ -7226,24 +7969,6 @@ button {
 				);
 			}
 
-			if (data.itemId && ITEM_ACTION_PATHS[data.action]) {
-				const field = data.action.endsWith("fave") ? "favorite" : "flagged";
-
-				if (data.reason === "action-unavailable") {
-					rememberItemActionUnavailable(field);
-					refreshAllItemActionControls();
-					return;
-				}
-
-				if (typeof data.applied === "boolean") {
-					rememberItemAction(data.itemId, { [field]: data.applied });
-
-					clearItemActionUnavailable(field);
-				}
-
-				refreshItemActionControls(data.itemId);
-			}
-
 			const pending = itemActionRequests.get(data.nonce);
 
 			if (!pending) {
@@ -7533,13 +8258,7 @@ button {
 		}
 	}
 
-	function hydrateItemActionsForRoot() {
-		refreshAllItemActionControls();
-	}
-
 	function hydrateVoteControlsForStory(storyID, voteLinks = new Map()) {
-		hydrateItemActionsForRoot();
-
 		const containers = sidebarUI?.body?.querySelectorAll(
 			`[data-hn-vote-story-id="${String(storyID)}"]`,
 		);
@@ -7790,7 +8509,7 @@ button {
 			return;
 		}
 
-		if (on && !frontPageAvailable && !queueHasItems) {
+		if (on && !frontPageAvailable && !queueHasItems && !notedHasItems) {
 			return;
 		}
 
@@ -7844,6 +8563,44 @@ button {
 		crossFadeCommentsView(comments, swap);
 	}
 
+	const BROWSE_TAB_ORDER = ["front", "queue", "collection"];
+
+	function slideBrowseList(ui, direction, render) {
+		const list = ui?.shadow?.querySelector("#browse-list");
+
+		if (!list || prefersReducedMotion()) {
+			render().catch(console.error);
+			return;
+		}
+
+		if (list._hnewhereSlideTimer) {
+			clearTimeout(list._hnewhereSlideTimer);
+		}
+
+		const out = direction > 0 ? "slide-out-left" : "slide-out-right";
+		const enter = direction > 0 ? "slide-in-right" : "slide-in-left";
+
+		list.classList.remove("slide-in-left", "slide-in-right");
+		list.classList.add(out);
+
+		list._hnewhereSlideTimer = window.setTimeout(async () => {
+			try {
+				await render();
+			} catch (error) {
+				console.error(error);
+			}
+
+			list.classList.remove(out);
+			list.classList.add(enter);
+
+			requestAnimationFrame(() => {
+				requestAnimationFrame(() => list.classList.remove(enter));
+			});
+
+			list._hnewhereSlideTimer = null;
+		}, VIEW_SWAP_FADE_MS);
+	}
+
 	function crossFadeCommentsView(comments, swap) {
 		if (comments._hnewhereSwapTimer) {
 			clearTimeout(comments._hnewhereSwapTimer);
@@ -7880,38 +8637,80 @@ button {
 	}
 
 	function renderBrowseRow(story, container, rank, options = {}) {
+		const isWriting = story.kind === "comment" || story.kind === "noted";
 		const discussions = [story, ...(options.also || [])];
+		const counted = discussions.some((each) => Number.isFinite(each.descendants));
 		const totalComments = discussions.reduce(
 			(sum, each) => sum + (each.descendants || 0),
 			0,
 		);
-		const totalText = escapeHTML(pluralize(totalComments, "comment"));
+		const totalWord = totalComments === 1 ? "comment" : "comments";
 
 		const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
-	title="Go to the page and read what was said about it">${totalText}<span class="browse-comments-floor" aria-hidden="true">+</span></a>`;
+	title="Go to the page and read what was said about it">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalWord}</a>`;
 
-		const actions =
-			!story.source || getSource(story.source)?.capabilities?.vote
-				? itemActionLinksHTML(story.id, story.source || "hn")
-				: "";
+		const queueLink = options.watching
+			? ""
+			: `|
+	<button class="browse-save-link" type="button">queue</button>`;
 
-		const meta = `${escapeHTML(pluralize(story.score, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}
+		const watchLink = options.watchable
+			? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
+			: "";
+
+		const actions = options.unfavorite
+			? `${watchLink ? `\n      |\n      ${watchLink}` : ""}
+      |
+      <button class="item-action-link browse-unfavorite-link" type="button">unfavorite</button>`
+			: itemActionLinksHTML(story.id, story.source, watchLink, {
+					key: favoriteKeyFor(story),
+					url: story.url,
+					title: story.title,
+					site: story.site,
+					kind: "discussion",
+				});
+
+		const inPost = story.context
+			? `in ${escapeHTML(story.context)}${story.site ? ` (${escapeHTML(story.site)})` : ""}`
+			: "";
+
+		const meta = story.kind === "comment"
+			? `${story.by ? `by ${escapeHTML(story.by)} ` : ""}${inPost}
+	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
+	${actions}`
+			: story.kind === "noted"
+			? `${inPost}
 	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
 	|
-	<button class="browse-save-link" type="button">queue</button>
-	${actions}
+	<button class="item-action-link browse-edit-note-link" type="button">edit</button>
 	|
-	${commentTotal}`;
+	<button class="item-action-link browse-delete-note-link" type="button">delete</button>`
+			: story.watchPlaceholder
+			? `<span class="item-age">watching since ${escapeHTML(timeAgo(story.time))}</span>
+	${queueLink}
+	${actions}`
+			: `${
+				story.score || story.by
+					? `${escapeHTML(pluralize(story.score || 0, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}`
+					: ""
+			}
+	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
+	${queueLink}
+	${actions}
+	${counted ? `|\n\t${commentTotal}` : ""}`;
 
 		const row = document.createElement("div");
-		row.className = "story browse-row";
+		row.className =
+			"story browse-row" + (!rank && !options.bullet ? " browse-row-loose" : "");
 		row.dataset.storyId = String(story.id);
 		row.innerHTML = `
-	<div class="browse-rank">${rank}.</div>
+	<div class="browse-rank">${
+		options.bullet ? (options.fresh ? "&#9679;" : "&#9675;") : rank ? `${rank}.` : ""
+	}</div>
 	<div class="browse-main">
 	<div class="story-title">
-	<a class="browse-title-link" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
-	${story.site ? `<span class="browse-site">(${escapeHTML(story.site)})</span>` : ""}
+	<a class="browse-title-link${isWriting ? " browse-quote" : ""}" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
+	${story.site && !isWriting ? `<span class="browse-site">(${escapeHTML(story.site)})</span>` : ""}
 	</div>
 	<div class="story-meta">
 	${meta}
@@ -7928,10 +8727,26 @@ button {
 			};
 		}
 
+		wireRowWatchLink(row.querySelector(".browse-watch-link"), story, options);
+
+		if (options.unfavorite) {
+			const drop = row.querySelector(".browse-unfavorite-link");
+
+			if (drop) {
+				drop.onclick = async () => {
+					await saveFavorites(
+						removeFromFavorites(await loadFavoriteEntries(), options.unfavorite),
+					);
+
+					await options.reload?.();
+				};
+			}
+		}
+
 		const saveButton = row.querySelector(".browse-save-link");
 
-		{
-			const queuedLabel = options.inQueue ? "remove" : "queued";
+		if (saveButton) {
+			const queuedLabel = options.inQueue ? "unqueue" : "queued";
 
 			const key = queueKey(story);
 
@@ -7972,6 +8787,7 @@ button {
 	}
 
 	let queueHasItems = false;
+	let notedHasItems = false;
 	let frontPageAvailable = true;
 
 	function browseLabel() {
@@ -8003,7 +8819,7 @@ button {
 		}
 
 		if (wordmark) {
-			wordmark.hidden = !frontPageAvailable && !queueHasItems;
+			wordmark.hidden = !frontPageAvailable && !queueHasItems && !notedHasItems;
 
 			if (!isBrowsing({ shadow: root })) {
 				wordmark.title = browseLabel();
@@ -8017,6 +8833,292 @@ button {
 				setBrowseMode(sidebarUI, false);
 			}
 		}
+	}
+
+	const PENDING_FOCUS_TTL = 60000;
+
+	async function rememberPendingFocus(url, commentKey) {
+		const page = normalizeURL(url || "");
+
+		if (!page || !commentKey) {
+			return;
+		}
+
+		await save(STORAGE.pendingFocus, { page, commentKey, at: Date.now() });
+	}
+
+	async function applyPendingFocus() {
+		const commentKey = await takePendingFocus();
+
+		if (commentKey && getCommentGraph().byId.has(commentKey)) {
+			applyCommentFocus(commentKey);
+		}
+	}
+
+	async function takePendingFocus() {
+		const pending = await load(STORAGE.pendingFocus, null);
+
+		if (!pending?.commentKey) {
+			return null;
+		}
+
+		await save(STORAGE.pendingFocus, null);
+
+		const stale = Date.now() - (pending.at || 0) > PENDING_FOCUS_TTL;
+
+		return !stale && pending.page === normalizeURL(pageAddress())
+			? pending.commentKey
+			: null;
+	}
+
+	async function loadCollectedNotes() {
+		const documents = await loadNotedIndex();
+		const lists = await Promise.all(
+			documents.map(async (document) => {
+				const notes = keptNotes(await load(document.key, null));
+
+				return notes.map((note) => ({ note, document }));
+			}),
+		);
+
+		return lists
+			.flat()
+			.sort(
+				(a, b) =>
+					(b.note.edited || b.note.created || 0) -
+					(a.note.edited || a.note.created || 0),
+			);
+	}
+
+	async function loadNotedIndex() {
+		return notedDocuments(await load(NOTES_INDEX_KEY, [])).sort(
+			(a, b) => (b.updated || 0) - (a.updated || 0),
+		);
+	}
+
+	async function refreshNotedCount(root) {
+		const tab = root?.querySelector?.("#browse-tab-collection");
+
+		if (!tab) {
+			return;
+		}
+
+		const [favorites, noted] = await Promise.all([
+			loadFavoriteEntries(),
+			loadNotedIndex(),
+		]);
+		const entries = favorites.length + noted.length;
+
+		notedHasItems = entries > 0;
+
+		if (notedHasItems) {
+			tab.textContent = "collection";
+			tab.style.setProperty("--collection-tab-width", tab.scrollWidth + "px");
+		}
+
+		tab.classList.toggle("is-collapsed", !notedHasItems);
+		tab.setAttribute("aria-hidden", String(!notedHasItems));
+		tab.tabIndex = notedHasItems ? 0 : -1;
+		tab.parentElement?.classList.toggle("has-collection", notedHasItems);
+
+		if (!notedHasItems && browseTab === "collection" && sidebarUI) {
+			renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+		}
+	}
+
+	function collectionRow(entry, list, rank, options = {}) {
+		const kind = entry.kind === "comment" ? "comment" : options.noted ? "noted" : "discussion";
+		const page = entry.title || entry.url || entry.id;
+
+		return renderBrowseRow(
+			{
+				id: entry.key,
+				key: entry.key,
+				source: "",
+				kind,
+				permalink: "",
+				url: entry.url || "",
+				title: page,
+				context: entry.context || "",
+				by: entry.by || "",
+				score: 0,
+				time:
+					entry.time || Math.floor((entry.updated || entry.addedAt || Date.now()) / 1000),
+				descendants: entry.count,
+				site: entry.site || (entry.url ? hostLabel(entry.url) : ""),
+			},
+			list,
+			rank,
+			{
+				watchable: kind !== "comment" && kind !== "noted",
+				...options,
+			},
+		);
+	}
+
+	function noteCollectionRow({ note, document: page }, list, { onDelete, onEdit }) {
+		const row = collectionRow(
+			{
+				key: note.id,
+				kind: "noted",
+				url: page.url || "",
+				title: favoriteExcerpt(note.text, FAVORITE_EXCERPT_CHARS),
+				context: page.title || page.url || page.id,
+				time: note.edited || note.created || 0,
+				site: page.url ? hostLabel(page.url) : "",
+			},
+			list,
+			null,
+			{ noted: true },
+		);
+
+		const drop = row.querySelector(".browse-delete-note-link");
+
+		if (drop) {
+			drop.onclick = () => onDelete(page, note).catch(console.error);
+		}
+
+		const edit = row.querySelector(".browse-edit-note-link");
+
+		if (edit) {
+			edit.onclick = () => startCollectionNoteEdit(row, page, note, onEdit);
+		}
+
+		return row;
+	}
+
+	function startCollectionNoteEdit(row, page, note, onEdit) {
+		const main = row.querySelector(".browse-main");
+
+		if (!main || row.querySelector(".note-editor")) {
+			return;
+		}
+
+		const title = row.querySelector(".story-title");
+		const held = inlineNoteEditor(note, {
+			canAnchor: null,
+			onSave: (parsed) => onEdit(page, note, parsed).catch(console.error),
+			onClose: () => {
+				held.editor.remove();
+				title.hidden = false;
+			},
+		});
+
+		title.hidden = true;
+		title.after(held.editor);
+		held.field.focus({ preventScroll: true });
+	}
+
+	async function collectedNotesFor(page) {
+		return keptNotes(
+			await load(page.key || noteStorageKey({ kind: page.kind, id: page.id }), null),
+		);
+	}
+
+	async function saveCollectedNotes(page, notes) {
+		await saveNotes(notes, { kind: page.kind, id: page.id });
+
+		if (sameURL(page.url || "", location.href)) {
+			await reopenForNotes();
+		}
+	}
+
+	async function deleteCollectedNote(page, note) {
+		const notes = await collectedNotesFor(page);
+
+		await saveCollectedNotes(
+			page,
+			notes.filter((kept) => kept.id !== note.id),
+		);
+	}
+
+	async function updateCollectedNote(page, note, parsed) {
+		if (!parsed?.text && !parsed?.exact) {
+			return;
+		}
+
+		const notes = await collectedNotesFor(page);
+
+		await saveCollectedNotes(
+			page,
+			notes.map((kept) => (kept.id === note.id ? editedNote(kept, parsed) : kept)),
+		);
+	}
+
+	async function renderCollectionView(ui, list) {
+		const [favorites, noted] = await Promise.all([
+			loadFavoriteEntries(),
+			loadCollectedNotes(),
+		]);
+		const saved = favoritesOfKind(favorites, "discussion");
+		const comments = favoritesOfKind(favorites, "comment");
+
+		list.replaceChildren();
+
+		if (!favorites.length && !noted.length) {
+			const empty = document.createElement("div");
+			empty.className = "browse-empty";
+			empty.textContent =
+				"Nothing collected yet. Favorite a discussion, or write a note on any page, and it will be kept here.";
+			list.appendChild(empty);
+			return;
+		}
+
+		const reload = () => renderCollectionView(ui, list);
+
+		if (saved.length) {
+			subhead(list, "favorite discussions");
+
+			for (const entry of saved) {
+				collectionRow(entry, list, null, {
+					unfavorite: entry.key,
+					reload,
+				});
+			}
+		}
+
+		if (comments.length) {
+			subhead(list, "favorite comments");
+
+			for (const entry of comments) {
+				const row = collectionRow(entry, list, null, {
+					unfavorite: entry.key,
+					reload,
+				});
+
+				const open = row.querySelector(".browse-title-link");
+
+				if (open && entry.focus && entry.url) {
+					open.onclick = (event) => {
+						event.preventDefault();
+						rememberPendingFocus(entry.url, entry.focus)
+							.catch(console.error)
+							.then(() => {
+								location.href = entry.url;
+							});
+					};
+				}
+			}
+		}
+
+		if (noted.length) {
+			subhead(list, "notes");
+
+			for (const entry of noted) {
+				noteCollectionRow(entry, list, {
+					onDelete: async (page, note) => {
+						await deleteCollectedNote(page, note);
+						await reload();
+					},
+					onEdit: async (page, note, parsed) => {
+						await updateCollectedNote(page, note, parsed);
+						await reload();
+					},
+				});
+			}
+		}
+
+		refreshFavoriteControls().catch(console.error);
 	}
 
 	async function refreshQueueCount(root) {
@@ -8040,6 +9142,7 @@ button {
 		tab.classList.toggle("is-collapsed", !queueHasItems);
 		tab.setAttribute("aria-hidden", String(!queueHasItems));
 		tab.tabIndex = queueHasItems ? 0 : -1;
+		tab.parentElement?.classList.toggle("has-queue", queueHasItems);
 
 		const tabs = tab.parentElement;
 
@@ -8047,6 +9150,7 @@ button {
 			requestAnimationFrame(() => tabs.classList.add("is-ready"));
 		}
 
+		await refreshNotedCount(root);
 		await refreshBrowseAffordances(root);
 
 		if (!queueHasItems && browseTab === "queue" && sidebarUI) {
@@ -8341,8 +9445,18 @@ button {
 		return changed;
 	}
 
+	function subhead(list, text) {
+		const heading = document.createElement("div");
+
+		heading.className = "browse-subhead";
+		heading.textContent = text;
+		list.appendChild(heading);
+	}
+
 	async function renderQueueView(ui, list) {
 		const entries = sortQueue(await loadQueue());
+		const watching = await loadWatches();
+		const watched = new Map(watching.map((entry) => [entry.key, entry]));
 
 		list.replaceChildren();
 
@@ -8355,12 +9469,61 @@ button {
 			return;
 		}
 
-		entries.forEach((entry, index) => {
-			const row = renderBrowseRow(entry, list, index + 1, { inQueue: true });
-			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
-		});
+		const kept = sortWatchedEntries(
+			entries.filter((entry) => watched.has(queueKey(entry))),
+			(entry) => watched.get(queueKey(entry)),
+		);
+		const rest = entries.filter((entry) => !watched.has(queueKey(entry)));
+		const reload = () => renderQueueView(ui, list);
+		let rank = 0;
 
-		refreshAllItemActionControls();
+		if (kept.length) {
+			subhead(list, "watching");
+		}
+
+		for (const entry of kept) {
+			const state = watched.get(queueKey(entry));
+			const fresh = watchIsFresh(state);
+			const row = renderBrowseRow(entry, list, 0, {
+				inQueue: true,
+				watchable: true,
+				watching: true,
+				bullet: true,
+				fresh,
+				reload,
+			});
+
+			row.classList.add("browse-row-watching");
+			row.classList.toggle("browse-row-fresh", fresh);
+
+			if (fresh) {
+				const pill = document.createElement("span");
+
+				pill.className = "browse-unread-pill";
+				pill.textContent = "UNREAD";
+				row.querySelector(".story-title")?.appendChild(pill);
+			}
+			row.classList.toggle(
+				"browse-row-stalled",
+				Boolean(!state?.foundAt && state?.misses >= WATCH_MISS_CEILING),
+			);
+		}
+
+		if (kept.length && rest.length) {
+			subhead(list, "queued");
+		}
+
+		for (const entry of rest) {
+			const row = renderBrowseRow(entry, list, (rank += 1), {
+				inQueue: true,
+				watchable: true,
+				reload,
+			});
+
+			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
+		}
+
+		refreshFavoriteControls().catch(console.error);
 
 		refreshQueueEntries(entries).then((refreshed) => {
 			if (refreshed && isBrowsing(ui) && browseTab === "queue") {
@@ -8368,13 +9531,16 @@ button {
 			}
 		});
 
-		if (entries.some((entry) => entry.readAt)) {
+		if (entries.some((entry) => entry.readAt && !watched.has(queueKey(entry)))) {
 			const clear = document.createElement("button");
 			clear.type = "button";
 			clear.className = "browse-nav-link browse-clear-read";
 			clear.textContent = "clear read";
 			clear.onclick = async () => {
-				await saveQueue(clearReadFromQueue(await loadQueue()));
+				const keep = new Set((await loadWatches()).map((entry) => entry.key));
+
+				await saveQueue(clearReadFromQueue(await loadQueue(), keep));
+
 				await renderQueueView(ui, list);
 				refreshQueueCount(ui.shadow);
 				refreshNextUp(ui.shadow);
@@ -8435,7 +9601,7 @@ button {
 				renderBrowseRow(row.story, list, start + index + 1, { also: row.also }),
 			);
 
-		refreshAllItemActionControls();
+		refreshFavoriteControls().catch(console.error);
 
 		renderBrowseNav(
 			list,
@@ -8463,8 +9629,7 @@ button {
 		}
 
 		for (const tab of ui.shadow.querySelectorAll(".browse-tab")) {
-			const isCurrent =
-				tab.id === (browseTab === "queue" ? "browse-tab-queue" : "browse-tab-front");
+			const isCurrent = tab.id === "browse-tab-" + (browseTab || "front");
 			tab.classList.toggle("is-current", isCurrent);
 			tab.setAttribute("aria-selected", String(isCurrent));
 		}
@@ -8472,7 +9637,7 @@ button {
 		if (sidebarHasDiscussion) {
 			setWordmarkLocation(ui, "Discussion", { elsewhere: true });
 		} else {
-			setWordmarkLocation(ui, browseTab === "queue" ? "Queue" : "");
+			setWordmarkLocation(ui, "");
 		}
 
 		await refreshSubmitAffordance(ui.shadow);
@@ -8482,6 +9647,12 @@ button {
 		if (browseTab === "queue") {
 			setBlendNote(ui, []);
 			await renderQueueView(ui, list);
+			return;
+		}
+
+		if (browseTab === "collection") {
+			setBlendNote(ui, []);
+			await renderCollectionView(ui, list);
 			return;
 		}
 
@@ -9339,18 +10510,123 @@ header {
 	opacity:0;
 }
 
+#browse-list {
+	transition:opacity .16s ease, transform .16s ease;
+}
+
+#browse-list.slide-out-left {
+	opacity:0;
+	transform:translateX(-14px);
+}
+
+#browse-list.slide-out-right {
+	opacity:0;
+	transform:translateX(14px);
+}
+
+#browse-list.slide-in-right,
+#browse-list.slide-in-left {
+	transition:none;
+	opacity:0;
+}
+
+#browse-list.slide-in-right {
+	transform:translateX(14px);
+}
+
+#browse-list.slide-in-left {
+	transform:translateX(-14px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	#browse-list {
+		transition:none;
+	}
+}
+
 .browse-tabs {
 	display:flex;
 	align-items:baseline;
-	margin:0 0 10px var(--browse-indent);
+	margin:0 0 10px 8px;
 	font-family:Verdana, Geneva, sans-serif;
-	font-size:11px;
+	font-size:13px;
 }
 
+.browse-subhead {
+	margin:0 0 6px;
+	padding-left:8px;
+	color:var(--meta);
+	font-size:11px;
+	font-family:Verdana, Geneva, sans-serif;
+}
+
+.browse-row + .browse-subhead {
+	margin-top:14px;
+	padding-top:14px;
+	border-top:1px solid var(--surface-divider);
+}
+
+
+.browse-row-watching .browse-rank {
+	color:var(--accent);
+}
+
+.browse-unread-pill {
+	margin-left:.5em;
+	padding:0 4px;
+	border-radius:3px;
+	background:var(--active-tint);
+	color:var(--muted);
+	font-size:9px;
+	font-weight:600;
+	letter-spacing:.04em;
+	vertical-align:1px;
+}
+
+.browse-row-stalled .story-title::before {
+	opacity:.3;
+}
+
+.browse-row-stalled .story-title a {
+	opacity:.55;
+}
+
+#browse-tab-front::after,
 #browse-tab-queue::after {
-	content:"|";
+	content:none;
 	margin:0 .35em;
 	color:var(--meta);
+}
+
+.browse-tabs.has-queue #browse-tab-front::after {
+	content:"|";
+}
+
+#browse-tab-collection {
+	margin-left:auto;
+}
+
+#browse-tab-collection {
+	max-width:var(--collection-tab-width, 8em);
+	overflow:hidden;
+	white-space:nowrap;
+	opacity:1;
+}
+
+#browse-tab-collection.is-collapsed {
+	max-width:0;
+	opacity:0;
+	pointer-events:none;
+}
+
+.browse-tabs.is-ready #browse-tab-collection {
+	transition:max-width .18s ease, opacity .18s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.browse-tabs.is-ready #browse-tab-collection {
+		transition:none;
+	}
 }
 
 #browse-tab-queue {
@@ -9438,7 +10714,7 @@ header {
 }
 
 .browse-blend-note {
-	margin:-7px 0 10px var(--browse-indent);
+	margin:-7px 0 10px 8px;
 	color:var(--meta);
 	font-size:11px;
 	font-family:Verdana, Geneva, sans-serif;
@@ -9481,6 +10757,18 @@ header {
 	font-size:11px;
 }
 
+.browse-row-loose {
+	padding:0 0 0 8px;
+}
+
+.browse-row-loose + .browse-row-loose {
+	margin-top:14px;
+}
+
+.browse-row-loose .browse-rank {
+	display:none;
+}
+
 .browse-main {
 	flex:1 1 auto;
 	min-width:0;
@@ -9489,6 +10777,29 @@ header {
 .browse-site {
 	color:var(--meta);
 	font-size:11px;
+}
+
+.browse-quote {
+	position:relative;
+	display:inline-block;
+	padding-left:15px;
+	color:var(--quote-text);
+	font-style:italic;
+}
+
+.browse-quote::before {
+	content:"❛";
+	position:absolute;
+	left:0;
+	top:0;
+	color:var(--quote-ornament);
+	font-size:15px;
+	font-style:normal;
+	line-height:1.35;
+}
+
+.browse-quote:visited {
+	color:var(--quote-text);
 }
 
 .browse-title-link:visited {
@@ -9526,12 +10837,16 @@ header {
 	cursor:default;
 }
 
-.item-action-link:enabled:focus-visible {
+.item-action-link:enabled:focus-visible,
+.page-header-watch:focus-visible,
+.page-header-disclosure:focus-visible {
 	text-decoration:underline;
 }
 
 @media (hover: hover) {
-	.item-action-link:enabled:hover {
+	.item-action-link:enabled:hover,
+	.page-header-watch:hover,
+	.page-header-disclosure:hover {
 		text-decoration:underline;
 	}
 }
@@ -9581,7 +10896,7 @@ header {
 
 .next-up {
 	display:block;
-	margin:auto -12px 24px;
+	margin:auto -12px 10px;
 	padding-top:18px;
 	font-family:Verdana, Geneva, sans-serif;
 	font-size:11px;
@@ -9737,10 +11052,10 @@ header button svg {
 	-webkit-appearance:none;
 	box-sizing:border-box;
 	flex:0 0 auto;
-	width:13px;
-	height:13px;
+	width:15px;
+	height:15px;
 	font-size:inherit;
-	margin:calc((1.35em - 13px) / 2) 0 0;
+	margin:calc((1.35em - 15px) / 2) 0 0;
 	display:inline-grid;
 	place-content:center;
 	border:1px solid var(--help-border);
@@ -9758,8 +11073,8 @@ header button svg {
 
 .settings-option input[type="checkbox"]:checked::after {
 	content:"";
-	width:6px;
-	height:3px;
+	width:7px;
+	height:3.5px;
 	border-left:1.5px solid #fff;
 	border-bottom:1.5px solid #fff;
 	transform:translateY(-1px) rotate(-45deg);
@@ -9820,6 +11135,42 @@ header button svg {
 	flex:1 1 auto;
 }
 
+.settings-option-byline {
+	display:flex;
+	align-items:baseline;
+	gap:.35em;
+	margin:3px 0 8px 21px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
+}
+
+.settings-byline-sep {
+	color:var(--muted);
+	opacity:.6;
+}
+
+.settings-byline-action {
+	padding:0;
+	border:0;
+	background:none;
+	color:var(--muted);
+	font:inherit;
+	font-size:11px;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.settings-byline-action:hover,
+	.settings-reset:hover,
+	.settings-credits a:hover {
+		color:var(--text);
+	}
+}
+
 .settings-inline-action {
 	flex:0 0 auto;
 	max-width:0;
@@ -9861,8 +11212,8 @@ header button svg {
 
 .settings-credits a {
 	color:var(--muted);
-	text-decoration:underline;
-	text-decoration-color:var(--underline-soft);
+	text-decoration:underline dotted;
+	text-decoration-color:var(--border);
 	text-underline-offset:2px;
 }
 
@@ -9919,7 +11270,9 @@ header button svg {
 	margin-top:8px;
 }
 
-.page-header-disclosure {
+.page-header-disclosure,
+.page-header-watch,
+.page-header-meta .item-action-link {
 	font:inherit;
 	color:inherit;
 	background:none;
@@ -9929,6 +11282,11 @@ header button svg {
 	text-decoration:underline dotted;
 	text-underline-offset:2px;
 	text-decoration-color:var(--border);
+}
+
+.page-header-sep {
+	margin:0 .35em;
+	color:var(--meta);
 }
 
 .page-header-disclosure[aria-expanded="true"] {
@@ -9978,7 +11336,16 @@ header button svg {
 	font-weight:600;
 }
 
+.source-strip-label {
+	min-width:0;
+	max-width:16ch;
+	overflow:hidden;
+	text-overflow:ellipsis;
+	white-space:nowrap;
+}
+
 .source-strip-count {
+	flex:0 0 auto;
 	color:var(--muted);
 	font-variant-numeric:tabular-nums;
 }
@@ -10696,9 +12063,11 @@ header button svg {
 	border:0;
 	background:none;
 	color:var(--muted);
+	font:inherit;
 	font-size:11px;
-	text-decoration:underline;
+	text-decoration:underline dotted;
 	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 	cursor:pointer;
 }
 
@@ -10841,7 +12210,7 @@ ${
 <div class="settings-suboptions" data-suboptions-of="autoOpenSidebar">
 <label class="settings-option sub-option">
 <input id="setting-auto-open-only-from-hn" data-setting="autoOpenSidebarOnlyFromHN" type="checkbox">
-<span>Only when arriving from Hacker News</span>
+<span>Only when arriving from an enabled source</span>
 </label>
 </div>
 <label class="settings-option">
@@ -10851,11 +12220,8 @@ ${
 <div class="settings-suboptions" data-suboptions-of="hideWithoutDiscussion">
 <label class="settings-option sub-option">
 <input id="setting-show-button-with-queue" data-setting="showButtonWithQueue" type="checkbox">
-<span>Except when something is waiting in your queue</span>
+<span>Unless there are unread items in the queue</span>
 </label>
-</div>
-<div class="settings-option-hint">
-When off, pages with no discussion get a greyed-out button that offers to submit them.
 </div>
 </div>
 
@@ -10882,16 +12248,25 @@ The default PDF reader will be replaced with
 to allow highlighting and annotation directly onto PDFs.
 </div>
 </div>
-<div class="settings-option-row">
 <label class="settings-option">
 <input id="setting-notepad" data-setting="notepad" type="checkbox">
 <span>Enable notepad</span>
 </label>
-<button id="settings-notes-export" class="settings-inline-action" type="button">export</button>
-</div>
 <div class="settings-option-hint">
 Write your own notes on any article or PDF, with support for annotation.
 All stored locally.
+</div>
+<div class="settings-option-byline">
+<span id="settings-notes-count">0 notes</span>
+<span class="settings-byline-sep">|</span>
+<button id="settings-notes-export" class="settings-byline-action" type="button">export</button>
+</div>
+<label class="settings-option">
+<input id="setting-notify-on-watch" data-setting="notifyOnWatch" type="checkbox">
+<span>Enable notifications for updates to watched discussions</span>
+</label>
+<div class="settings-option-hint">
+Sends a system notification when a watched page has new comments
 </div>
 </div>
 
@@ -10921,7 +12296,7 @@ All stored locally.
 </span>
 <button type="button" class="stepper-button" data-size-step="1" aria-label="Larger button">+</button>
 </div>
-<button id="settings-reset-button" class="settings-reset" type="button">Reset</button>
+<button id="settings-reset-button" class="settings-reset" type="button">reset</button>
 </div>
 <div class="button-preview">
 <div class="button-preview-stage">
@@ -10967,8 +12342,6 @@ ${[
 	["Vote", (source) => Boolean(source.capabilities.vote)],
 	["Reply", (source) => Boolean(source.capabilities.reply)],
 	["Submit", (source) => Boolean(source.capabilities.submit)],
-	["Favorite", (source) => Boolean(source.capabilities.favorite)],
-	["Flag", (source) => Boolean(source.capabilities.flag)],
 ]
 	.map(
 		([label, supported]) => `<tr><th>${escapeHTML(label)}</th>${[
@@ -11040,6 +12413,7 @@ ${[
 				"#setting-hide-without-discussion",
 			),
 			showButtonWithQueue: shadow.querySelector("#setting-show-button-with-queue"),
+			notifyOnWatch: shadow.querySelector("#setting-notify-on-watch"),
 			annotations: shadow.querySelector("#setting-annotations"),
 			annotationsWhenSidebarClosed: shadow.querySelector(
 				"#setting-annotations-closed",
@@ -11167,6 +12541,16 @@ ${[
 				if (input) {
 					input.checked = Boolean(settings[key]);
 
+					if (
+						key === "notifyOnWatch" &&
+						input.checked &&
+						typeof Notification !== "undefined" &&
+						Notification.permission === "denied"
+					) {
+						input.checked = false;
+						saveSettings({ notifyOnWatch: false }).catch(console.error);
+					}
+
 					if (HINTED_SETTINGS.has(key)) {
 						syncOptionHint(input);
 					}
@@ -11233,6 +12617,7 @@ ${[
 
 			if (open) {
 				setHideMenuOpen(false);
+				refreshNotesCount?.().catch(console.error);
 			}
 
 			if (open) {
@@ -11314,6 +12699,22 @@ ${[
 		}
 
 		const notesExport = shadow.querySelector("#settings-notes-export");
+		const notesCount = shadow.querySelector("#settings-notes-count");
+
+		const refreshNotesCount = async () => {
+			if (!notesCount) {
+				return;
+			}
+
+			const total = notedDocuments(await load(NOTES_INDEX_KEY, [])).reduce(
+				(sum, entry) => sum + (entry.count || 0),
+				0,
+			);
+
+			notesCount.textContent = pluralize(total, "note");
+		};
+
+		refreshNotesCount().catch(console.error);
 
 		if (notesExport) {
 			notesExport.onclick = (event) => {
@@ -11380,6 +12781,19 @@ ${[
 			const input = event.target.closest("input[data-setting]");
 
 			if (!input) {
+				return;
+			}
+
+			if (input.dataset.setting === "notifyOnWatch") {
+				const allowed = input.checked ? await grantNotifications() : false;
+
+				input.checked = input.checked && allowed;
+
+				applySettingsPanelState(
+					await saveSettings({ notifyOnWatch: input.checked }),
+				);
+				settlePanesHeight();
+
 				return;
 			}
 
@@ -11676,7 +13090,7 @@ ${[
 
 #panel {
 	all:initial;
-	line-height:inherit;
+	line-height:1.4;
 	color-scheme:inherit;
 	-webkit-text-size-adjust:100%;
 	text-size-adjust:100%;
@@ -11996,8 +13410,13 @@ ${SUBMIT_FORM_CSS}
 	background:var(--hover-tint);
 }
 
-.notepad-add {
+.notepad-actions {
+	display:inline-flex;
+	align-items:baseline;
 	margin-left:auto;
+}
+
+.notepad-add {
 	padding:0;
 	border:0;
 	background:none;
@@ -12026,6 +13445,18 @@ ${SUBMIT_FORM_CSS}
 	cursor:pointer;
 }
 
+.notepad-toggle[hidden] {
+	display:none;
+}
+
+.notepad-toggle::before {
+	content:"|";
+	margin:0 .35em;
+	color:var(--meta);
+	text-decoration:none;
+	display:inline-block;
+}
+
 .notepad-body {
 	overflow:hidden;
 	transition:max-height .22s ease, opacity .18s ease;
@@ -12048,10 +13479,6 @@ ${SUBMIT_FORM_CSS}
 
 .notepad-section.is-collapsed .notepad-body {
 	opacity:0;
-}
-
-.notepad-section.is-collapsed .notepad-rule-close {
-	display:none;
 }
 
 .note-editor {
@@ -12079,9 +13506,66 @@ ${SUBMIT_FORM_CSS}
 	margin-top:6px;
 }
 
+.note-editor-save-wrap {
+	position:relative;
+	display:inline-flex;
+}
+
 .note-editor-why {
-	color:var(--meta);
+	position:absolute;
+	top:calc(100% + 9px);
+	left:0;
+	z-index:5;
+	width:max-content;
+	max-width:min(280px, 72vw);
+	padding:7px 9px;
+	border:1px solid var(--surface-border);
+	border-radius:6px;
+	background:var(--surface);
+	color:var(--surface-text);
+	box-shadow:0 6px 18px rgba(0,0,0,.18);
 	font-size:11px;
+	line-height:1.4;
+	text-align:left;
+	opacity:0;
+	visibility:hidden;
+	pointer-events:none;
+	transform:translateY(-3px);
+	transition:opacity .12s ease, transform .12s ease, visibility .12s;
+}
+
+.note-editor-why::before,
+.note-editor-why::after {
+	content:"";
+	position:absolute;
+	left:11px;
+	width:0;
+	height:0;
+	border-left:6px solid transparent;
+	border-right:6px solid transparent;
+}
+
+.note-editor-why::before {
+	bottom:100%;
+	border-bottom:6px solid var(--surface-border);
+}
+
+.note-editor-why::after {
+	bottom:calc(100% - 1px);
+	border-bottom:6px solid var(--surface);
+}
+
+.note-editor-why.is-open {
+	opacity:1;
+	visibility:visible;
+	transform:translateY(0);
+	pointer-events:auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.note-editor-why {
+		transition:none;
+	}
 }
 
 .note-editor-cancel {
@@ -12174,6 +13658,13 @@ ${SUBMIT_FORM_CSS}
 	white-space:pre-wrap;
 	overflow-x:auto;
 	max-width:100%;
+}
+
+.text hr,
+.story-text hr {
+	border:none;
+	border-top:1px solid var(--surface-divider);
+	margin:14px 0;
 }
 
 .text pre,
@@ -12718,8 +14209,9 @@ ${settingsPanelHTML()}
 <div id="comments-content">Loading...</div>
 <div id="browse-view" class="browse-view">
 <div class="browse-tabs" role="tablist">
-<button id="browse-tab-queue" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">queue</button>
 <button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front pages</button>
+<button id="browse-tab-queue" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">queue</button>
+<button id="browse-tab-collection" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">collection</button>
 </div>
 <div id="browse-blend-note" class="browse-blend-note" hidden></div>
 <div id="browse-list"></div>
@@ -12954,13 +14446,23 @@ ${settingsPanelHTML()}
 		for (const [id, tab] of [
 			["#browse-tab-front", "front"],
 			["#browse-tab-queue", "queue"],
+			["#browse-tab-collection", "collection"],
 		]) {
 			const button = shadow.querySelector(id);
 
 			if (button) {
 				button.onclick = () => {
+					const from = BROWSE_TAB_ORDER.indexOf(browseTab || "front");
+					const to = BROWSE_TAB_ORDER.indexOf(tab);
+
+					if (from === to) {
+						return;
+					}
+
 					scrollBrowseToTop(ui);
-					renderBrowseView(ui, { tab }).catch(console.error);
+					slideBrowseList(ui, to > from ? 1 : -1, () =>
+						renderBrowseView(ui, { tab }),
+					);
 				};
 			}
 		}
@@ -13001,8 +14503,10 @@ ${settingsPanelHTML()}
 		const storyID = String(story.id);
 		const hnURL = discussionURL(story);
 		const title = options.title ?? story.title;
+		const watchLink = options.watchable
+			? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
+			: "";
 
-		const showActions = options.actions !== false;
 		const showTitle = options.showTitle !== false;
 		const showComposer = options.compose === true;
 		const storyAuthor = story.author ?? story.by;
@@ -13058,7 +14562,13 @@ ${settingsPanelHTML()}
 	}${
 		ageLabel ? escapeHTML(ageLabel) + " " : ""
 	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
-	${showActions ? itemActionLinksHTML(storyID, story.source || "hn") : ""}
+	${itemActionLinksHTML(storyID, story.source, watchLink, {
+		key: favoriteKeyFor({ ...story, id: storyID, url: hnURL || story.url || "" }),
+		url: hnURL || story.url || "",
+		title: title || "",
+		site: story.site || (story.url ? hostLabel(story.url) : ""),
+		kind: "discussion",
+	})}
 	${
 		showTitle || !hnURL
 			? ""
@@ -13095,6 +14605,16 @@ ${settingsPanelHTML()}
 		storyElement.dataset.storyId = storyID;
 
 		wrapLooseCommentText(storyElement.querySelector(".story-text"));
+
+		if (options.watchable) {
+			const address = pageAddress();
+
+			wireRowWatchLink(
+				storyElement.querySelector(".browse-watch-link"),
+				{ url: address, title: story.title || "", site: hostLabel(address) },
+				{},
+			);
+		}
 
 		container.appendChild(storyElement);
 
@@ -13872,7 +15392,22 @@ ${settingsPanelHTML()}
 
       ${isLocalSource ? "" : `<a class="focus-link" href="#">focus</a>`}
 		${isLocalSource ? `<a class="edit-note-link" href="#">edit</a> | <a class="delete-note-link" href="#">delete</a>` : ""}
-		${capabilities.vote ? itemActionLinksHTML(commentID, comment.source || "hn") : ""}
+		${
+			isLocalSource
+				? ""
+				: itemActionLinksHTML(commentID, comment.source || "hn", "", {
+						key: `${comment.source || "hn"}:${commentID}`,
+						url: discussion.articleURL || discussionURL(comment) || "",
+						focus: comment.key,
+						title: favoriteExcerpt(comment.bodyHTML, FAVORITE_EXCERPT_CHARS),
+						site: getSource(comment.source)?.shortLabel || "",
+						context: discussion.title || discussion.label || "",
+						by: comment.authorName || comment.author || "",
+						time: comment.createdAt || 0,
+						kind: "comment",
+						parent: String(comment.storyID || ""),
+					})
+		}
 
       <span class="toggle">
       [–]
@@ -14222,10 +15757,10 @@ ${settingsPanelHTML()}
 			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
 			const resolved = storyTitle(story, page, disambiguating);
 			const block = renderStory(story, details, {
-				actions: canVote,
 				compose: canReply,
 				title: resolved,
 				showTitle: true,
+				watchable: !disambiguating,
 			});
 
 			if (block) {
@@ -14256,7 +15791,10 @@ ${settingsPanelHTML()}
 				onAdd: () => startNotepadDraft(held.section, held.body),
 			});
 
-			ui.body.insertBefore(held.section, ui.body.querySelector(".page-sort"));
+			ui.body.insertBefore(
+				held.section,
+				ui.body.querySelector(".page-sort") || comments,
+			);
 
 			if (notesDiscussion) {
 				const thread = notesThread(notesDiscussion);
@@ -14369,6 +15907,8 @@ ${settingsPanelHTML()}
 		}
 
 		reconcileWholeThreads(stories, ui);
+		refreshFavoriteControls().catch(console.error);
+		applyPendingFocus().catch(console.error);
 
 		for (const story of stories) {
 			await markSeen(story.key);
@@ -14511,6 +16051,15 @@ ${settingsPanelHTML()}
 					: "";
 			toggle.textContent = collapsed ? "show" : "hide";
 			toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+			body.style.overflow = "hidden";
+
+			if (!collapsed) {
+				window.setTimeout(() => {
+					if (!section.classList.contains("is-collapsed")) {
+						body.style.overflow = "visible";
+					}
+				}, 240);
+			}
 		};
 
 		add.type = "button";
@@ -14518,7 +16067,11 @@ ${settingsPanelHTML()}
 		add.textContent = "add a note";
 		add.onclick = () => onAdd?.(add);
 
-		head.append(add, toggle);
+		const actions = document.createElement("span");
+
+		actions.className = "notepad-actions";
+		actions.append(add, toggle);
+		head.append(actions);
 		body.className = "notepad-body";
 		foot.className = "notepad-rule notepad-rule-close";
 		section.append(head, body, foot);
@@ -14528,11 +16081,19 @@ ${settingsPanelHTML()}
 			body,
 
 			settle() {
-				if (!section.classList.contains("is-collapsed")) {
-					body.style.maxHeight = body.scrollHeight
-						? `${body.scrollHeight}px`
-						: "";
+				if (section.classList.contains("is-collapsed")) {
+					return;
 				}
+
+				body.style.maxHeight = body.scrollHeight
+					? `${body.scrollHeight}px`
+					: "";
+
+				window.setTimeout(() => {
+					if (!section.classList.contains("is-collapsed")) {
+						body.style.overflow = "visible";
+					}
+				}, 240);
 			},
 		};
 	}
@@ -14642,13 +16203,29 @@ ${settingsPanelHTML()}
 		const wrapper = document.createElement("div");
 
 		const single = stories.length < 2;
+		const pageURL = pageAddress();
+		const pageFavorite = single
+			? ""
+			: favoriteButtonHTML({
+					key: normalizeURL(pageURL) || "",
+					url: pageURL,
+					title: page || document.title || "",
+					site: hostLabel(pageURL),
+					kind: "discussion",
+				});
 
 		wrapper.className = single ? "page-header page-header-quiet" : "page-header";
 		wrapper.innerHTML = `
 <div class="page-header-title">${single ? "" : escapeHTML(page)}</div>
 <div class="page-header-meta">${
 	stories.length > 1
-		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button>`
+		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button><span class="page-header-sep">|</span>`
+		: ""
+}${
+	stories.length > 1
+		? `<button type="button" class="page-header-watch" aria-pressed="false">watch</button>${
+			pageFavorite ? `<span class="page-header-sep">|</span>${pageFavorite}` : ""
+		}`
 		: ""
 }</div>
 <div class="source-strip${stories.length > 1 ? "" : " source-strip-single"}" id="source-strip">
@@ -14668,6 +16245,8 @@ title="Show only this discussion">
 </div>`;
 
 		const strip = wrapper.querySelector(".source-strip");
+		wireWatchToggle(wrapper.querySelector(".page-header-watch"), page, stories);
+
 		const disclosure = wrapper.querySelector(".page-header-disclosure");
 
 		if (!disclosure) {
@@ -15044,8 +16623,6 @@ title="Show only this discussion">
 	const ITEM_ACTION_PATHS = {
 		fave: { path: "fave", params: {} },
 		unfave: { path: "fave", params: { un: "t" } },
-		flag: { path: "flag", params: {} },
-		unflag: { path: "flag", params: { un: "t" } },
 	};
 
 	const VOTE_ACTIONS = ["up", "down", "un"];
@@ -15099,15 +16676,15 @@ title="Show only this discussion">
 			return null;
 		}
 
-		const isFaveOrFlag = Boolean(ITEM_ACTION_PATHS[payload.action]);
+		const isFave = Boolean(ITEM_ACTION_PATHS[payload.action]);
 
-		if (!isFaveOrFlag && location.pathname !== "/item") {
+		if (!isFave && location.pathname !== "/item") {
 			return null;
 		}
 
 		clearBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY);
 
-		if (isFaveOrFlag) {
+		if (isFave) {
 			const base = payload.action.startsWith("un")
 				? payload.action.slice(2)
 				: payload.action;
@@ -15841,10 +17418,6 @@ title="Show only this discussion">
 	// URL helpers
 	// -------------------------
 
-	function queueKey(story) {
-		return story.key || normalizeURL(story.url || "");
-	}
-
 	function sameURL(a, b) {
 		return normalizeURL(a) === normalizeURL(b);
 	}
@@ -15897,12 +17470,8 @@ title="Show only this discussion">
 	// #endregion hnewhere-test-export
 
 	// #region hnewhere-test-export
-	function referrerIsHN(referrer = document.referrer) {
-		try {
-			return new URL(referrer).origin === HN_ORIGIN;
-		} catch {
-			return false;
-		}
+	function arrivedFromEnabledSource(sourceId, enabledIds) {
+		return Boolean(sourceId) && (enabledIds || []).includes(sourceId);
 	}
 
 	function shouldAutoOpenSidebar(settings, siteState = null, fromHN = false) {
@@ -15914,10 +17483,10 @@ title="Show only this discussion">
 	}
 	// #endregion hnewhere-test-export
 
-	let arrivedFromHNReferrer = referrerIsHN();
+	let arrivedFromSourceId = arrivalSource();
 
 	function forgetHNReferrer() {
-		arrivedFromHNReferrer = false;
+		arrivedFromSourceId = null;
 	}
 
 	function shouldPreloadHiddenSidebar(settings, siteState = null, fromHN = false) {
@@ -18812,6 +20381,10 @@ title="Show only this discussion">
 		return visibleCommentIdsFromGraph(getCommentGraph(), commentIds);
 	}
 
+	function isNotepadComment(rendered) {
+		return Boolean(rendered?.element?.closest?.(".notepad-body"));
+	}
+
 	function applyFocusedDiscussion(
 		{ filter, directMatchIds, anchorElement, paintBanner, onFiltered, banner },
 		options = {},
@@ -18832,7 +20405,7 @@ title="Show only this discussion">
 			for (const rendered of renderedComments) {
 				rendered.element.classList.toggle(
 					"comment-filter-hidden",
-					!visibleCommentIds.has(rendered.id),
+					!visibleCommentIds.has(rendered.id) && !isNotepadComment(rendered),
 				);
 
 				if (
@@ -19623,10 +21196,7 @@ title="Show only this discussion">
 		await loadPdfTitle(pdfViewerApp());
 		watchNoteSelection(settings);
 
-		const votesReady = Promise.all([
-			loadRememberedVotes(),
-			loadRememberedItemActions(),
-		]);
+		const votesReady = loadRememberedVotes();
 
 		const hideButton =
 			settings.hideWithoutDiscussion &&
@@ -19665,6 +21235,8 @@ title="Show only this discussion">
 
 		const found = await discoverAll(pageAddresses(), settings);
 
+		scheduleWatchPoll(settings);
+
 		const recoverable = arrivedFromClick && (!last.source || last.source === "hn");
 
 		const stories =
@@ -19687,7 +21259,11 @@ title="Show only this discussion">
 				stories,
 				settings,
 				siteState,
-				arrivedFromClick || arrivedFromHNReferrer,
+				arrivedFromClick ||
+					arrivedFromEnabledSource(
+						arrivedFromSourceId,
+						enabledSourceIds(settings, registeredSourceIds()),
+					),
 			);
 			return;
 		}
