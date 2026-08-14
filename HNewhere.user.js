@@ -9010,7 +9010,9 @@ button {
 	}
 
 	async function collectedNotesFor(page) {
-		return keptNotes(await load(noteStorageKey({ kind: page.kind, id: page.id }), null));
+		return keptNotes(
+			await load(page.key || noteStorageKey({ kind: page.kind, id: page.id }), null),
+		);
 	}
 
 	async function saveCollectedNotes(page, notes) {
