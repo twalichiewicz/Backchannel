@@ -4599,7 +4599,16 @@ button {
 			return;
 		}
 
+		const filter = activeCommentFilter;
+
 		await renderDiscussions(renderedDiscussions, sidebarUI);
+
+		if (filter?.type === "discussion") {
+			applyDiscussionFilter(filter.key, { restore: false });
+		} else if (filter?.type === "comment") {
+			applyCommentFocus(filter.id, { restore: false });
+		}
+
 		await refreshArticleAnnotations();
 	}
 
@@ -20322,6 +20331,10 @@ title="Show only this discussion">
 		return visibleCommentIdsFromGraph(getCommentGraph(), commentIds);
 	}
 
+	function isNotepadComment(rendered) {
+		return Boolean(rendered?.element?.closest?.(".notepad-body"));
+	}
+
 	function applyFocusedDiscussion(
 		{ filter, directMatchIds, anchorElement, paintBanner, onFiltered, banner },
 		options = {},
@@ -20342,7 +20355,7 @@ title="Show only this discussion">
 			for (const rendered of renderedComments) {
 				rendered.element.classList.toggle(
 					"comment-filter-hidden",
-					!visibleCommentIds.has(rendered.id),
+					!visibleCommentIds.has(rendered.id) && !isNotepadComment(rendered),
 				);
 
 				if (
