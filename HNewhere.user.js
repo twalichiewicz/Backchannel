@@ -924,6 +924,25 @@
 
 	// #region hnewhere-test-export
 
+	function favoriteButtonHTML(about = {}) {
+		const id = String(about.id ?? about.key ?? "");
+		const key = String(about.key || "");
+
+		if (!key) {
+			return "";
+		}
+
+		return `<button class="item-action-link" type="button"
+      data-item-action="fave" data-item-action-source="${escapeHTML(String(about.source || ""))}"
+      data-item-action-id="${escapeHTML(id)}"
+      data-favorite-key="${escapeHTML(key)}"
+      data-favorite-url="${escapeHTML(about.url || "")}"
+      data-favorite-title="${escapeHTML(about.title || "")}"
+      data-favorite-site="${escapeHTML(about.site || "")}"
+      data-favorite-kind="${escapeHTML(about.kind || "discussion")}"
+      data-favorite-parent="${escapeHTML(about.parent || "")}">favorite</button>`;
+	}
+
 	function itemActionLinksHTML(itemId, sourceID, watchLink, about = {}) {
 		const between = watchLink ? `\n      |\n      ${watchLink}` : "";
 
@@ -931,20 +950,16 @@
 			return between;
 		}
 
-		const id = escapeHTML(String(itemId));
-		const source = escapeHTML(String(sourceID || ""));
-		const meta =
-			` data-favorite-key="${escapeHTML(about.key || source + ":" + id)}"` +
-			` data-favorite-url="${escapeHTML(about.url || "")}"` +
-			` data-favorite-title="${escapeHTML(about.title || "")}"` +
-			` data-favorite-site="${escapeHTML(about.site || "")}"` +
-			` data-favorite-kind="${escapeHTML(about.kind || "discussion")}"` +
-			` data-favorite-parent="${escapeHTML(about.parent || "")}"`;
+		const button = favoriteButtonHTML({
+			...about,
+			key: about.key || `${sourceID || ""}:${itemId}`,
+			source: sourceID,
+			id: itemId,
+		});
 
 		return `${between}
       |
-      <button class="item-action-link" type="button"
-      data-item-action="fave" data-item-action-source="${source}" data-item-action-id="${id}"${meta}>favorite</button>`;
+      ${button}`;
 	}
 
 	function favoriteKeysOf(entries) {
@@ -10451,12 +10466,14 @@ header {
 	cursor:default;
 }
 
-.item-action-link:enabled:focus-visible {
+.item-action-link:enabled:focus-visible,
+.page-header-watch:focus-visible {
 	text-decoration:underline;
 }
 
 @media (hover: hover) {
-	.item-action-link:enabled:hover {
+	.item-action-link:enabled:hover,
+	.page-header-watch:hover {
 		text-decoration:underline;
 	}
 }
@@ -10879,7 +10896,8 @@ header button svg {
 }
 
 .page-header-disclosure,
-.page-header-watch {
+.page-header-watch,
+.page-header-meta .item-action-link {
 	font:inherit;
 	color:inherit;
 	background:none;
@@ -15800,6 +15818,16 @@ ${settingsPanelHTML()}
 		const wrapper = document.createElement("div");
 
 		const single = stories.length < 2;
+		const pageURL = pageAddress();
+		const pageFavorite = single
+			? ""
+			: favoriteButtonHTML({
+					key: normalizeURL(pageURL) || "",
+					url: pageURL,
+					title: page || document.title || "",
+					site: hostLabel(pageURL),
+					kind: "discussion",
+				});
 
 		wrapper.className = single ? "page-header page-header-quiet" : "page-header";
 		wrapper.innerHTML = `
@@ -15810,7 +15838,9 @@ ${settingsPanelHTML()}
 		: ""
 }${
 	stories.length > 1
-		? `<button type="button" class="page-header-watch" aria-pressed="false">watch</button>`
+		? `<button type="button" class="page-header-watch" aria-pressed="false">watch</button>${
+			pageFavorite ? `<span class="page-header-sep">|</span>${pageFavorite}` : ""
+		}`
 		: ""
 }</div>
 <div class="source-strip${stories.length > 1 ? "" : " source-strip-single"}" id="source-strip">
