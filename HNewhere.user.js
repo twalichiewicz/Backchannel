@@ -10745,13 +10745,15 @@ header {
 }
 
 .item-action-link:enabled:focus-visible,
-.page-header-watch:focus-visible {
+.page-header-watch:focus-visible,
+.page-header-disclosure:focus-visible {
 	text-decoration:underline;
 }
 
 @media (hover: hover) {
 	.item-action-link:enabled:hover,
-	.page-header-watch:hover {
+	.page-header-watch:hover,
+	.page-header-disclosure:hover {
 		text-decoration:underline;
 	}
 }
