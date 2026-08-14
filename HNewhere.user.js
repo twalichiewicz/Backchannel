@@ -13410,8 +13410,13 @@ ${SUBMIT_FORM_CSS}
 	background:var(--hover-tint);
 }
 
-.notepad-add {
+.notepad-actions {
+	display:inline-flex;
+	align-items:baseline;
 	margin-left:auto;
+}
+
+.notepad-add {
 	padding:0;
 	border:0;
 	background:none;
@@ -16062,7 +16067,11 @@ ${settingsPanelHTML()}
 		add.textContent = "add a note";
 		add.onclick = () => onAdd?.(add);
 
-		head.append(add, toggle);
+		const actions = document.createElement("span");
+
+		actions.className = "notepad-actions";
+		actions.append(add, toggle);
+		head.append(actions);
 		body.className = "notepad-body";
 		foot.className = "notepad-rule notepad-rule-close";
 		section.append(head, body, foot);
