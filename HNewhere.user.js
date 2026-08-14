@@ -10665,7 +10665,7 @@ header {
 }
 
 .browse-row-loose {
-	padding-bottom:0;
+	padding:0 0 0 8px;
 }
 
 .browse-row-loose + .browse-row-loose {
@@ -10673,7 +10673,7 @@ header {
 }
 
 .browse-row-loose .browse-rank {
-	min-width:0;
+	display:none;
 }
 
 .browse-main {
