@@ -637,6 +637,8 @@
 				title: item.title || "",
 				site: item.site || "",
 				kind: item.kind || "discussion",
+				context: item.context || "",
+				by: item.by || "",
 				source: item.source || "",
 				id: item.id || "",
 				parent: item.parent || "",
@@ -924,6 +926,35 @@
 
 	// #region hnewhere-test-export
 
+	const FAVORITE_EXCERPT_CHARS = 140;
+
+	function favoriteExcerpt(value, limit) {
+		const text = String(value ?? "")
+			.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+			.replace(/<[^>]*>/g, " ")
+			.replace(/&(?:nbsp|amp|lt|gt|quot|#39);/g, (entity) =>
+				({
+					"&nbsp;": " ",
+					"&amp;": "&",
+					"&lt;": "<",
+					"&gt;": ">",
+					"&quot;": '"',
+					"&#39;": "'",
+				})[entity],
+			)
+			.replace(/\s+/g, " ")
+			.trim();
+
+		if (text.length <= limit) {
+			return text;
+		}
+
+		const cut = text.slice(0, limit);
+		const boundary = cut.lastIndexOf(" ");
+
+		return (boundary > limit / 2 ? cut.slice(0, boundary) : cut).trim() + "…";
+	}
+
 	function favoriteKeyFor(story) {
 		if (story.source) {
 			return `${story.source}:${story.id}`;
@@ -948,6 +979,8 @@
       data-favorite-title="${escapeHTML(about.title || "")}"
       data-favorite-site="${escapeHTML(about.site || "")}"
       data-favorite-kind="${escapeHTML(about.kind || "discussion")}"
+      data-favorite-context="${escapeHTML(about.context || "")}"
+      data-favorite-by="${escapeHTML(about.by || "")}"
       data-favorite-parent="${escapeHTML(about.parent || "")}">favorite</button>`;
 	}
 
@@ -1027,6 +1060,8 @@
 				title: button.dataset.favoriteTitle || "",
 				site: button.dataset.favoriteSite || "",
 				kind: button.dataset.favoriteKind || "discussion",
+				context: button.dataset.favoriteContext || "",
+				by: button.dataset.favoriteBy || "",
 				source: sourceID,
 				id: itemId,
 				parent: button.dataset.favoriteParent || "",
@@ -4618,12 +4653,21 @@ button {
 		const kept = notes.slice(-NOTES_PER_DOCUMENT);
 
 		await save(noteStorageKey(ref), { version: 1, notes: kept });
-		await rememberNotedDocument(ref, kept.length);
+		await rememberNotedDocument(ref, kept);
 
 		return kept;
 	}
 
-	async function rememberNotedDocument(ref, count) {
+	function latestNoteExcerpt(notes) {
+		const latest = [...notes].sort(
+			(a, b) => (b.edited || b.created || 0) - (a.edited || a.created || 0),
+		)[0];
+
+		return favoriteExcerpt(latest?.text || latest?.exact || "", FAVORITE_EXCERPT_CHARS);
+	}
+
+	async function rememberNotedDocument(ref, notes) {
+		const count = notes.length;
 		const stored = await load(NOTES_INDEX_KEY, []);
 		const entries = (Array.isArray(stored) ? stored : []).filter(
 			(entry) => entry?.key !== noteStorageKey(ref),
@@ -4636,6 +4680,7 @@ button {
 				id: ref.id,
 				url: location.href,
 				title: pageTitle(),
+				excerpt: latestNoteExcerpt(notes),
 				count,
 				updated: Date.now(),
 			});
@@ -8489,6 +8534,7 @@ button {
 	}
 
 	function renderBrowseRow(story, container, rank, options = {}) {
+		const isWriting = story.kind === "comment" || story.kind === "noted";
 		const discussions = [story, ...(options.also || [])];
 		const totalComments = discussions.reduce(
 			(sum, each) => sum + (each.descendants || 0),
@@ -8520,7 +8566,11 @@ button {
 					kind: "discussion",
 				});
 
-		const meta = options.noted
+		const meta = story.kind === "comment"
+			? `${story.by ? `by ${escapeHTML(story.by)}` : ""}
+	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
+	${actions}`
+			: options.noted
 			? `${escapeHTML(pluralize(story.noteCount || 0, "note"))}
 	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
 	${queueLink}
@@ -8545,13 +8595,26 @@ button {
 		row.dataset.storyId = String(story.id);
 		row.innerHTML = `
 	<div class="browse-rank">${
-		options.bullet ? (options.fresh ? "&#9679;" : "&#9675;") : `${rank}.`
+		options.bullet
+			? options.fresh
+				? "&#9679;"
+				: "&#9675;"
+			: rank
+				? `${rank}.`
+				: "&#8226;"
 	}</div>
 	<div class="browse-main">
 	<div class="story-title">
 	<a class="browse-title-link" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
-	${story.site ? `<span class="browse-site">(${escapeHTML(story.site)})</span>` : ""}
+	${story.site && !isWriting ? `<span class="browse-site">(${escapeHTML(story.site)})</span>` : ""}
 	</div>
+	${
+		story.context
+			? `<div class="browse-context">${escapeHTML(story.context)}${
+					story.site ? ` <span class="browse-site">(${escapeHTML(story.site)})</span>` : ""
+				}</div>`
+			: ""
+	}
 	<div class="story-meta">
 	${meta}
 	</div>
@@ -8712,26 +8775,30 @@ button {
 	}
 
 	function collectionRow(entry, list, rank, options = {}) {
+		const kind = entry.kind === "comment" ? "comment" : options.noted ? "noted" : "discussion";
+		const page = entry.title || entry.url || entry.id;
+
 		return renderBrowseRow(
 			{
 				id: entry.key,
 				key: entry.key,
 				source: "",
+				kind,
 				permalink: "",
 				url: entry.url || "",
-				title: entry.title || entry.url || entry.id,
-				by: "",
+				title: kind === "noted" ? entry.excerpt || page : page,
+				context: kind === "noted" ? page : entry.context || "",
+				by: entry.by || "",
 				score: 0,
 				time: Math.floor((entry.updated || entry.addedAt || Date.now()) / 1000),
 				descendants: entry.count || 0,
-				site: entry.url ? hostLabel(entry.url) : "",
+				site: entry.site || (entry.url ? hostLabel(entry.url) : ""),
 				noteCount: entry.count || 0,
 			},
 			list,
 			rank,
 			{
-				noted: Boolean(entry.count),
-				watchable: (entry.kind || "discussion") !== "comment",
+				watchable: kind !== "comment",
 				...options,
 			},
 		);
@@ -8774,7 +8841,7 @@ button {
 			subhead(list, "comments");
 
 			for (const entry of comments) {
-				collectionRow(entry, list, (rank += 1), {
+				collectionRow(entry, list, null, {
 					unfavorite: entry.key,
 					reload,
 				});
@@ -8785,7 +8852,7 @@ button {
 			subhead(list, "noted");
 
 			for (const entry of noted) {
-				collectionRow(entry, list, (rank += 1), { reload });
+				collectionRow(entry, list, null, { noted: true, reload });
 			}
 		}
 
@@ -10436,6 +10503,15 @@ header {
 .browse-site {
 	color:var(--meta);
 	font-size:11px;
+}
+
+.browse-context {
+	margin-top:1px;
+	color:var(--meta);
+	font-size:11px;
+	overflow:hidden;
+	text-overflow:ellipsis;
+	white-space:nowrap;
 }
 
 .browse-title-link:visited {
@@ -15024,8 +15100,10 @@ ${settingsPanelHTML()}
 				: itemActionLinksHTML(commentID, comment.source || "hn", "", {
 						key: `${comment.source || "hn"}:${commentID}`,
 						url: discussionURL(comment) || "",
-						title: comment.by ? `comment by ${comment.by}` : "comment",
-						site: "",
+						title: favoriteExcerpt(comment.bodyHTML, FAVORITE_EXCERPT_CHARS),
+						site: getSource(comment.source)?.shortLabel || "",
+						context: discussion.title || discussion.label || "",
+						by: comment.authorName || comment.author || "",
 						kind: "comment",
 						parent: String(comment.storyID || ""),
 					})
