@@ -15865,7 +15865,6 @@ ${settingsPanelHTML()}
 		const disambiguating = stories.length > 1;
 
 		for (const story of stories) {
-			const canVote = Boolean(getSource(story.source)?.capabilities.vote);
 			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
 			const resolved = storyTitle(story, page, disambiguating);
 			const block = renderStory(story, details, {
