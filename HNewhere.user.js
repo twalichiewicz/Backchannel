@@ -8576,7 +8576,13 @@ button {
 		if (on) {
 			browseTab =
 				options.tab ||
-				(queueHasItems || !frontPageAvailable ? "queue" : "front");
+				(queueHasItems
+					? "queue"
+					: frontPageAvailable
+						? "front"
+						: notedHasItems
+							? "collection"
+							: "queue");
 		}
 
 		const swap = () => {
@@ -8885,6 +8891,8 @@ button {
 		if (!frontPageAvailable && browseTab === "front" && sidebarUI) {
 			if (queueHasItems) {
 				renderBrowseView(sidebarUI, { tab: "queue" }).catch(console.error);
+			} else if (notedHasItems) {
+				renderBrowseView(sidebarUI, { tab: "collection" }).catch(console.error);
 			} else {
 				setBrowseMode(sidebarUI, false);
 			}
@@ -8978,7 +8986,13 @@ button {
 		tab.parentElement?.classList.toggle("has-collection", notedHasItems);
 
 		if (!notedHasItems && browseTab === "collection" && sidebarUI) {
-			renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+			if (frontPageAvailable) {
+				renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+			} else if (queueHasItems) {
+				renderBrowseView(sidebarUI, { tab: "queue" }).catch(console.error);
+			} else {
+				setBrowseMode(sidebarUI, false);
+			}
 		}
 	}
 
@@ -9212,6 +9226,8 @@ button {
 		if (!queueHasItems && browseTab === "queue" && sidebarUI) {
 			if (frontPageAvailable) {
 				renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+			} else if (notedHasItems) {
+				renderBrowseView(sidebarUI, { tab: "collection" }).catch(console.error);
 			} else {
 				setBrowseMode(sidebarUI, false);
 			}
@@ -20992,7 +21008,7 @@ title="Show only this discussion">
 				if (!discussions.length) {
 					sidebarHasDiscussion = false;
 
-					if (frontPageAvailable || queueHasItems) {
+					if (frontPageAvailable || queueHasItems || notedHasItems) {
 						setBrowseMode(ui, true);
 						return;
 					}
