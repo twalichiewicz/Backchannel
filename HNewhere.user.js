@@ -8817,7 +8817,11 @@ button {
 			"story browse-row" + (!rank && !options.bullet ? " browse-row-loose" : "");
 		row.dataset.storyId = String(story.id);
 		row.innerHTML = `
-	<div class="browse-rank">${
+	<div class="browse-rank"${
+		options.bullet
+			? ` title="${options.fresh ? "New since you last looked" : "Watching; nothing new yet"}"`
+			: ""
+	}>${
 		options.bullet ? (options.fresh ? "&#9679;" : "&#9675;") : rank ? `${rank}.` : ""
 	}</div>
 	<div class="browse-main">
@@ -9639,13 +9643,6 @@ button {
 			row.classList.add("browse-row-watching");
 			row.classList.toggle("browse-row-fresh", fresh);
 
-			if (fresh) {
-				const pill = document.createElement("span");
-
-				pill.className = "browse-unread-pill";
-				pill.textContent = "UNREAD";
-				row.querySelector(".story-title")?.appendChild(pill);
-			}
 			row.classList.toggle("browse-row-stalled", watchIsStalled(state));
 		}
 
@@ -10726,18 +10723,6 @@ header {
 
 .browse-row-watching .browse-rank {
 	color:var(--accent);
-}
-
-.browse-unread-pill {
-	margin-left:.5em;
-	padding:0 4px;
-	border-radius:3px;
-	background:var(--active-tint);
-	color:var(--muted);
-	font-size:9px;
-	font-weight:600;
-	letter-spacing:.04em;
-	vertical-align:1px;
 }
 
 .browse-row-stalled .story-title::before {
