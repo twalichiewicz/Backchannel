@@ -997,6 +997,27 @@
 		return normalizeURL(story.url || "") || String(story.id ?? "");
 	}
 
+	function favoriteCovers(entry, item) {
+		if (!entry?.key || !item?.key) {
+			return false;
+		}
+
+		if (entry.key === item.key) {
+			return true;
+		}
+
+		if (
+			(entry.kind || "discussion") !== "discussion" ||
+			(item.kind || "discussion") !== "discussion"
+		) {
+			return false;
+		}
+
+		const page = normalizeURL(item.url || "");
+
+		return Boolean(page && normalizeURL(entry.url || "") === page);
+	}
+
 	function favoriteButtonHTML(about = {}) {
 		const id = String(about.id ?? about.key ?? "");
 		const key = String(about.key || "");
@@ -1039,17 +1060,16 @@
       ${button}`;
 	}
 
-	function favoriteKeysOf(entries) {
-		return new Set(
-			(Array.isArray(entries) ? entries : [])
-				.map((entry) => entry?.key)
-				.filter(Boolean),
-		);
-	}
+	function paintFavoriteControls(root, entries) {
+		const list = Array.isArray(entries) ? entries : [];
 
-	function paintFavoriteControls(root, keys) {
 		for (const button of root.querySelectorAll(`[data-item-action="fave"]`)) {
-			const on = keys.has(button.dataset.favoriteKey);
+			const item = {
+				key: button.dataset.favoriteKey,
+				url: button.dataset.favoriteUrl || "",
+				kind: button.dataset.favoriteKind || "discussion",
+			};
+			const on = list.some((entry) => favoriteCovers(entry, item));
 
 			button.textContent = on ? "unfavorite" : "favorite";
 			button.classList.toggle("item-action-on", on);
@@ -1062,18 +1082,17 @@
 		const root = sidebarUI?.shadow;
 
 		if (root) {
-			paintFavoriteControls(root, favoriteKeysOf(await loadFavoriteEntries()));
+			paintFavoriteControls(root, await loadFavoriteEntries());
 		}
 	}
 
 	async function toggleFavorite(item, settings) {
 		const entries = await loadFavoriteEntries();
-		const on = entries.some((entry) => entry.key === item.key);
+		const kept = entries.filter((entry) => !favoriteCovers(entry, item));
+		const on = kept.length !== entries.length;
 
 		await saveFavorites(
-			on
-				? removeFromFavorites(entries, item.key)
-				: addToFavorites(entries, item, Date.now()),
+			on ? kept : addToFavorites(entries, item, Date.now()),
 		);
 
 		return !on;
