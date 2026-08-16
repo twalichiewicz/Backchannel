@@ -8666,7 +8666,7 @@ button {
 	function openStoryFromRow(story, event, { openPanel = false } = {}) {
 		const record = save(STORAGE.last, {
 			url: story.url,
-			source: story.source || "hn",
+			source: story.source || "",
 			ids: [String(story.id)],
 			timestamp: Date.now(),
 			...(openPanel ? { openPanel: true } : {}),
@@ -9283,7 +9283,7 @@ button {
 		title.onclick = (event) => {
 			const record = save(STORAGE.last, {
 				url: next.url,
-				source: next.source || "hn",
+				source: next.source || "",
 				ids: [String(next.id)],
 				timestamp: Date.now(),
 			});
@@ -17392,6 +17392,7 @@ title="Show only this discussion">
 
 					await save(STORAGE.last, {
 						url: link.href,
+						source: "hn",
 						ids: [row.id],
 						timestamp: Date.now(),
 					});
@@ -21287,7 +21288,7 @@ title="Show only this discussion">
 
 		scheduleWatchPoll(settings);
 
-		const recoverable = arrivedFromClick && (!last.source || last.source === "hn");
+		const recoverable = arrivedFromClick && last.source === "hn";
 
 		const stories =
 			found.length || !recoverable
