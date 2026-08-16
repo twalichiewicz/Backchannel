@@ -729,9 +729,15 @@
 		).length;
 	}
 
+	function watchIsStalled(state) {
+		return Boolean(
+			state && !state.foundAt && (state.misses || 0) >= WATCH_MISS_CEILING,
+		);
+	}
+
 	function stalledWatchCount(entries) {
-		return (Array.isArray(entries) ? entries : []).filter(
-			(entry) => !entry.foundAt && entry.misses >= WATCH_MISS_CEILING,
+		return (Array.isArray(entries) ? entries : []).filter((entry) =>
+			watchIsStalled(entry),
 		).length;
 	}
 
@@ -9636,10 +9642,7 @@ button {
 				pill.textContent = "UNREAD";
 				row.querySelector(".story-title")?.appendChild(pill);
 			}
-			row.classList.toggle(
-				"browse-row-stalled",
-				Boolean(!state?.foundAt && state?.misses >= WATCH_MISS_CEILING),
-			);
+			row.classList.toggle("browse-row-stalled", watchIsStalled(state));
 		}
 
 		if (kept.length && rest.length) {
