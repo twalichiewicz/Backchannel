@@ -8998,6 +8998,24 @@ button {
 		);
 	}
 
+	function paintBrowseTab(tab, on, label, widthProperty, hasClass) {
+		if (on) {
+			tab.textContent = label;
+			tab.style.setProperty(widthProperty, tab.scrollWidth + "px");
+		}
+
+		tab.classList.toggle("is-collapsed", !on);
+		tab.setAttribute("aria-hidden", String(!on));
+		tab.tabIndex = on ? 0 : -1;
+		tab.parentElement?.classList.toggle(hasClass, on);
+
+		const tabs = tab.parentElement;
+
+		if (tabs && !tabs.classList.contains("is-ready")) {
+			requestAnimationFrame(() => tabs.classList.add("is-ready"));
+		}
+	}
+
 	async function refreshNotedCount(root) {
 		const tab = root?.querySelector?.("#browse-tab-collection");
 
@@ -9013,15 +9031,13 @@ button {
 
 		notedHasItems = entries > 0;
 
-		if (notedHasItems) {
-			tab.textContent = "collection";
-			tab.style.setProperty("--collection-tab-width", tab.scrollWidth + "px");
-		}
-
-		tab.classList.toggle("is-collapsed", !notedHasItems);
-		tab.setAttribute("aria-hidden", String(!notedHasItems));
-		tab.tabIndex = notedHasItems ? 0 : -1;
-		tab.parentElement?.classList.toggle("has-collection", notedHasItems);
+		paintBrowseTab(
+			tab,
+			notedHasItems,
+			"collection",
+			"--collection-tab-width",
+			"has-collection",
+		);
 
 		if (!notedHasItems && browseTab === "collection" && sidebarUI) {
 			if (frontPageAvailable) {
@@ -9241,22 +9257,13 @@ button {
 
 		queueHasItems = entries.length > 0;
 
-		if (queueHasItems) {
-			tab.textContent = unread ? `queue (${unread})` : "queue";
-
-			tab.style.setProperty("--queue-tab-width", tab.scrollWidth + "px");
-		}
-
-		tab.classList.toggle("is-collapsed", !queueHasItems);
-		tab.setAttribute("aria-hidden", String(!queueHasItems));
-		tab.tabIndex = queueHasItems ? 0 : -1;
-		tab.parentElement?.classList.toggle("has-queue", queueHasItems);
-
-		const tabs = tab.parentElement;
-
-		if (tabs && !tabs.classList.contains("is-ready")) {
-			requestAnimationFrame(() => tabs.classList.add("is-ready"));
-		}
+		paintBrowseTab(
+			tab,
+			queueHasItems,
+			unread ? `queue (${unread})` : "queue",
+			"--queue-tab-width",
+			"has-queue",
+		);
 
 		await refreshNotedCount(root);
 		await refreshBrowseAffordances(root);
