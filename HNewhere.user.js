@@ -9657,6 +9657,21 @@ button {
 		const reload = () => renderQueueView(ui, list);
 		let rank = 0;
 
+		if (kept.length && rest.length) {
+			subhead(list, "queued");
+		}
+
+		for (const entry of rest) {
+			const row = renderBrowseRow(entry, list, (rank += 1), {
+				inQueue: true,
+				watchable: true,
+				watchKeys,
+				reload,
+			});
+
+			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
+		}
+
 		if (kept.length) {
 			subhead(list, "watching");
 		}
@@ -9677,21 +9692,6 @@ button {
 			row.classList.toggle("browse-row-fresh", fresh);
 
 			row.classList.toggle("browse-row-stalled", watchIsStalled(state));
-		}
-
-		if (kept.length && rest.length) {
-			subhead(list, "queued");
-		}
-
-		for (const entry of rest) {
-			const row = renderBrowseRow(entry, list, (rank += 1), {
-				inQueue: true,
-				watchable: true,
-				watchKeys,
-				reload,
-			});
-
-			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
 		}
 
 		refreshFavoriteControls().catch(console.error);
