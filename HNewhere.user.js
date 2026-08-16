@@ -3908,7 +3908,7 @@ ${
 	}
 
 	function noteStorageKey(ref) {
-		return NOTES_PREFIX + ref.kind + ":" + ref.id;
+		return ref.key || NOTES_PREFIX + ref.kind + ":" + ref.id;
 	}
 
 	function noteSeconds(value) {
@@ -9146,13 +9146,11 @@ button {
 	}
 
 	async function collectedNotesFor(page) {
-		return keptNotes(
-			await load(page.key || noteStorageKey({ kind: page.kind, id: page.id }), null),
-		);
+		return keptNotes(await load(noteStorageKey(page), null));
 	}
 
 	async function saveCollectedNotes(page, notes) {
-		await saveNotes(notes, { kind: page.kind, id: page.id });
+		await saveNotes(notes, page);
 
 		if (sameURL(page.url || "", location.href)) {
 			await reopenForNotes();
