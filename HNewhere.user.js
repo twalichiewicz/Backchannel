@@ -16776,41 +16776,7 @@ title="Show only this discussion">
 
 	// #region hnewhere-test-export
 
-	const ITEM_ACTION_PATHS = {
-		fave: { path: "fave", params: {} },
-		unfave: { path: "fave", params: { un: "t" } },
-	};
-
 	const VOTE_ACTIONS = ["up", "down", "un"];
-
-	const ITEM_ACTIONS = [...VOTE_ACTIONS, ...Object.keys(ITEM_ACTION_PATHS)];
-
-	function findItemActionAnchor(root, action, itemId) {
-		const shape = ITEM_ACTION_PATHS[action];
-
-		if (!shape) {
-			return null;
-		}
-
-		const wantsUndo = "un" in shape.params;
-
-		return (
-			[...root.querySelectorAll("a[href]")].find((anchor) => {
-				const href = anchor.getAttribute("href") || "";
-
-				if (!href.startsWith(shape.path + "?")) {
-					return false;
-				}
-
-				const params = new URL(href, HN_ORIGIN + "/").searchParams;
-
-				return (
-					params.get("id") === String(itemId) &&
-					(params.get("un") === "t") === wantsUndo
-				);
-			}) || null
-		);
-	}
 
 	// #endregion hnewhere-test-export
 
@@ -16827,40 +16793,16 @@ title="Show only this discussion">
 			return null;
 		}
 
-		if (!payload.item) {
+		if (!payload.item || !VOTE_ACTIONS.includes(payload.action)) {
 			clearBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY);
 			return null;
 		}
 
-		const isFave = Boolean(ITEM_ACTION_PATHS[payload.action]);
-
-		if (!isFave && location.pathname !== "/item") {
+		if (location.pathname !== "/item") {
 			return null;
 		}
 
 		clearBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY);
-
-		if (isFave) {
-			const base = payload.action.startsWith("un")
-				? payload.action.slice(2)
-				: payload.action;
-			const wanted = !payload.action.startsWith("un");
-
-			const onLink = findItemActionAnchor(root, "un" + base, payload.item);
-			const offLink = findItemActionAnchor(root, base, payload.item);
-
-			const applied = onLink ? true : offLink ? false : wanted;
-
-			return {
-				payload,
-				result: {
-					ok: applied === wanted,
-					reason: applied === wanted ? "updated" : "unchanged",
-					action: payload.action,
-					applied,
-				},
-			};
-		}
 
 		const voteInfo = currentVoteInfoFor(root, payload.item);
 		const changed = voteInfo?.state !== payload.beforeState;
@@ -16876,46 +16818,7 @@ title="Show only this discussion">
 		};
 	}
 
-	function actHNFaveFlag(payload, root) {
-		const anchor = findItemActionAnchor(root, payload.action, payload.item);
-
-		if (!anchor) {
-			const base = payload.action.startsWith("un")
-				? payload.action.slice(2)
-				: payload.action;
-			const opposite = payload.action.startsWith("un") ? base : "un" + base;
-
-			const already = findItemActionAnchor(root, opposite, payload.item);
-
-			return {
-				ok: Boolean(already),
-				reason: already ? "already" : "action-unavailable",
-				action: payload.action,
-				...(already ? { applied: !payload.action.startsWith("un") } : {}),
-			};
-		}
-
-		const target = new URL(anchor.getAttribute("href"), HN_ORIGIN + "/");
-
-		target.searchParams.set("goto", "item?id=" + payload.item);
-
-		if (!stageBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY, payload)) {
-			return {
-				ok: false,
-				reason: "storage-unavailable",
-				action: payload.action,
-			};
-		}
-
-		location.href = target.href;
-		return BRIDGE_NAVIGATED;
-	}
-
 	function actHNItemAction({ payload, root }) {
-		if (ITEM_ACTION_PATHS[payload.action]) {
-			return actHNFaveFlag(payload, root);
-		}
-
 		const before = currentVoteInfoFor(root, payload.item);
 
 		const anchor = root.getElementById(payload.action + "_" + payload.item);
@@ -17207,7 +17110,7 @@ title="Show only this discussion">
 				fields: ["item", "action", "voteURL"],
 				accepts: (payload) =>
 					Boolean(payload.storyID && payload.item) &&
-					ITEM_ACTIONS.includes(payload.action),
+					VOTE_ACTIONS.includes(payload.action),
 				echo: (payload) => ({
 					storyID: payload.storyID,
 					itemId: payload.item,
@@ -17217,7 +17120,6 @@ title="Show only this discussion">
 				url: ({ itemId }) => commentURL(itemId),
 				descriptors: hnVoteDescriptors,
 				voteLinks: loadVoteLinks,
-				itemActions: true,
 				act: actHNItemAction,
 				report: reportHNItemAction,
 			},
