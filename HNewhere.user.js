@@ -1060,14 +1060,10 @@
 			return;
 		}
 
-		const turningOn = !button.classList.contains("item-action-on");
-
 		button.disabled = true;
-		button.textContent = turningOn ? "unfavorite" : "favorite";
-		button.classList.toggle("item-action-on", turningOn);
 
 		try {
-			await toggleFavorite({
+			const on = await toggleFavorite({
 				key: button.dataset.favoriteKey || `${sourceID}:${itemId}`,
 				url: button.dataset.favoriteUrl || "",
 				title: button.dataset.favoriteTitle || "",
@@ -1081,6 +1077,9 @@
 				id: itemId,
 				parent: button.dataset.favoriteParent || "",
 			});
+
+			button.textContent = on ? "unfavorite" : "favorite";
+			button.classList.toggle("item-action-on", on);
 		} finally {
 			button.disabled = false;
 			refreshFavoriteControls().catch(console.error);
@@ -15639,6 +15638,8 @@ ${settingsPanelHTML()}
 				context.generation,
 				context.parentKey,
 			);
+
+			refreshFavoriteControls().catch(console.error);
 
 			pending = remaining;
 			remainingCount = Math.max(0, remainingCount - added.length);
