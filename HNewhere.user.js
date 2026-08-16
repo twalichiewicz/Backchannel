@@ -5462,9 +5462,13 @@ button {
 		paint(Boolean(options.watching));
 
 		if (!options.watching) {
-			loadWatches()
-				.then((entries) => paint(entries.some((entry) => entry.key === key)))
-				.catch(console.error);
+			if (options.watchKeys) {
+				paint(options.watchKeys.has(key));
+			} else {
+				loadWatches()
+					.then((entries) => paint(entries.some((entry) => entry.key === key)))
+					.catch(console.error);
+			}
 		}
 
 		button.onclick = async () => {
@@ -8875,16 +8879,20 @@ button {
 
 		if (saveButton) {
 			const queuedLabel = options.inQueue ? "unqueue" : "queued";
-
 			const key = queueKey(story);
+			const paintQueued = (queued) => {
+				saveButton.textContent = queued ? queuedLabel : "queue";
+			};
 
-			loadQueue()
-				.then((entries) => {
-					saveButton.textContent = entries.some((e) => queueKey(e) === key)
-						? queuedLabel
-						: "queue";
-				})
-				.catch(console.error);
+			if (options.inQueue) {
+				paintQueued(true);
+			} else if (options.queuedKeys) {
+				paintQueued(options.queuedKeys.has(key));
+			} else {
+				loadQueue()
+					.then((entries) => paintQueued(entries.some((e) => queueKey(e) === key)))
+					.catch(console.error);
+			}
 
 			saveButton.onclick = async () => {
 				const entries = await loadQueue();
@@ -9599,6 +9607,7 @@ button {
 		const watching = await loadWatches();
 		const watchFor = (entry) =>
 			watching.find((watch) => queueEntryMatchesWatch(entry, watch)) || null;
+		const watchKeys = new Set(watching.map((entry) => entry.key));
 
 		list.replaceChildren();
 
@@ -9659,6 +9668,7 @@ button {
 			const row = renderBrowseRow(entry, list, (rank += 1), {
 				inQueue: true,
 				watchable: true,
+				watchKeys,
 				reload,
 			});
 
@@ -9725,11 +9735,16 @@ button {
 		}
 
 		const requested = browsePage;
-		const { rows, sources } = await loadFrontPages();
+		const [{ rows, sources }, queued] = await Promise.all([
+			loadFrontPages(),
+			loadQueue(),
+		]);
 
 		if (browsePage !== requested || browseTab !== "front") {
 			return;
 		}
+
+		const queuedKeys = new Set(queued.map(queueKey));
 
 		setBlendNote(ui, sources);
 
@@ -9748,7 +9763,10 @@ button {
 		rows
 			.slice(start, start + FRONT_PAGE_SIZE)
 			.forEach((row, index) =>
-				renderBrowseRow(row.story, list, start + index + 1, { also: row.also }),
+				renderBrowseRow(row.story, list, start + index + 1, {
+					also: row.also,
+					queuedKeys,
+				}),
 			);
 
 		refreshFavoriteControls().catch(console.error);
