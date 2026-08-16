@@ -8678,14 +8678,17 @@ button {
 		}, VIEW_SWAP_FADE_MS);
 	}
 
-	function openStoryFromRow(story, event, { openPanel = false } = {}) {
-		const record = save(STORAGE.last, {
-			url: story.url,
-			source: story.source || "",
-			ids: [String(story.id)],
-			timestamp: Date.now(),
-			...(openPanel ? { openPanel: true } : {}),
-		});
+	function openStoryFromRow(story, event, { openPanel = false, focus = "" } = {}) {
+		const records = Promise.allSettled([
+			save(STORAGE.last, {
+				url: story.url,
+				source: story.source || "",
+				ids: [String(story.id)],
+				timestamp: Date.now(),
+				...(openPanel ? { openPanel: true } : {}),
+			}),
+			focus ? rememberPendingFocus(story.url, focus) : null,
+		]);
 
 		if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
 			return;
@@ -8693,7 +8696,7 @@ button {
 
 		event.preventDefault();
 
-		record.catch(() => {}).then(() => {
+		records.then(() => {
 			location.href = story.url;
 		});
 	}
@@ -8912,27 +8915,27 @@ button {
 	}
 
 	async function applyPendingFocus() {
-		const commentKey = await takePendingFocus();
-
-		if (commentKey && getCommentGraph().byId.has(commentKey)) {
-			applyCommentFocus(commentKey);
-		}
-	}
-
-	async function takePendingFocus() {
 		const pending = await load(STORAGE.pendingFocus, null);
 
 		if (!pending?.commentKey) {
-			return null;
+			return;
+		}
+
+		if (Date.now() - (pending.at || 0) > PENDING_FOCUS_TTL) {
+			await save(STORAGE.pendingFocus, null);
+			return;
+		}
+
+		if (pending.page !== normalizeURL(pageAddress())) {
+			return;
+		}
+
+		if (!getCommentGraph().byId.has(pending.commentKey)) {
+			return;
 		}
 
 		await save(STORAGE.pendingFocus, null);
-
-		const stale = Date.now() - (pending.at || 0) > PENDING_FOCUS_TTL;
-
-		return !stale && pending.page === normalizeURL(pageAddress())
-			? pending.commentKey
-			: null;
+		applyCommentFocus(pending.commentKey);
 	}
 
 	async function loadCollectedNotes() {
@@ -9160,12 +9163,11 @@ button {
 
 				if (open && entry.focus && entry.url) {
 					open.onclick = (event) => {
-						event.preventDefault();
-						rememberPendingFocus(entry.url, entry.focus)
-							.catch(console.error)
-							.then(() => {
-								location.href = entry.url;
-							});
+						openStoryFromRow(
+							{ url: entry.url, source: entry.source || "", id: entry.id || "" },
+							event,
+							{ openPanel: true, focus: entry.focus },
+						);
 					};
 				}
 			}
@@ -15716,6 +15718,7 @@ ${settingsPanelHTML()}
 			);
 
 			refreshFavoriteControls().catch(console.error);
+			applyPendingFocus().catch(console.error);
 
 			pending = remaining;
 			remainingCount = Math.max(0, remainingCount - added.length);
