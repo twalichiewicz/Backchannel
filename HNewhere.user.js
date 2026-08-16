@@ -5421,12 +5421,15 @@ button {
 			if (on) {
 				await stopWatching(key);
 			} else {
-				await startWatching({
-					key,
-					url,
-					title: story.title || "",
-					site: story.site || "",
-				});
+				await startWatching(
+					{
+						key,
+						url,
+						title: story.title || "",
+						site: story.site || "",
+					},
+					options.discussions,
+				);
 			}
 
 			paint(!on);
@@ -14689,7 +14692,7 @@ ${settingsPanelHTML()}
 			wireRowWatchLink(
 				storyElement.querySelector(".browse-watch-link"),
 				{ url: address, title: story.title || "", site: hostLabel(address) },
-				{},
+				{ discussions: [story] },
 			);
 		}
 
