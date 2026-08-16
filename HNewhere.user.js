@@ -9071,7 +9071,7 @@ button {
 		const kind = entry.kind === "comment" ? "comment" : options.noted ? "noted" : "discussion";
 		const page = entry.title || entry.url || entry.id;
 
-		return renderBrowseRow(
+		const row = renderBrowseRow(
 			{
 				id: entry.id || entry.key,
 				key: entry.key,
@@ -9095,6 +9095,10 @@ button {
 				...options,
 			},
 		);
+
+		row.classList.add("browse-row-collected");
+
+		return row;
 	}
 
 	function noteCollectionRow({ note, document: page }, list, { onDelete, onEdit }) {
@@ -10953,6 +10957,10 @@ header {
 
 .browse-title-link:visited {
 	color:var(--meta);
+}
+
+.browse-row-collected .browse-title-link:visited {
+	color:var(--text);
 }
 
 .browse-nav {
