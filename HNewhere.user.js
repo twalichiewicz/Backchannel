@@ -1083,7 +1083,7 @@
 		const itemId = button.dataset.itemActionId;
 		const sourceID = button.dataset.itemActionSource;
 
-		if (!itemId || button.dataset.itemAction !== "fave" || button.disabled) {
+		if (!itemId || button.disabled) {
 			return;
 		}
 
@@ -1091,7 +1091,7 @@
 
 		try {
 			const on = await toggleFavorite({
-				key: button.dataset.favoriteKey || `${sourceID}:${itemId}`,
+				key: button.dataset.favoriteKey,
 				url: button.dataset.favoriteUrl || "",
 				title: button.dataset.favoriteTitle || "",
 				site: button.dataset.favoriteSite || "",
