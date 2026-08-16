@@ -8732,68 +8732,81 @@ button {
 
 	function renderBrowseRow(story, container, rank, options = {}) {
 		const isWriting = story.kind === "comment" || story.kind === "noted";
-		const discussions = [story, ...(options.also || [])];
-		const totalComments = discussions.reduce(
-			(sum, each) => sum + (each.descendants || 0),
-			0,
-		);
-		const counted =
-			totalComments > 0 &&
-			discussions.some((each) => Number.isFinite(each.descendants));
-		const totalWord = totalComments === 1 ? "comment" : "comments";
-
-		const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
-	title="Go to the page and read what was said about it">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalWord}</a>`;
-
-		const queueLink = options.watching
-			? ""
-			: `|
-	<button class="browse-save-link" type="button">queue</button>`;
-
-		const watchLink = options.watchable
-			? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
-			: "";
-
-		const actions = options.unfavorite
-			? `${watchLink ? `\n      |\n      ${watchLink}` : ""}
-      |
-      <button class="item-action-link browse-unfavorite-link" type="button">unfavorite</button>`
-			: itemActionLinksHTML(story.id, story.source, watchLink, {
-					key: favoriteKeyFor(story),
-					url: story.url,
-					title: story.title,
-					site: story.site,
-					kind: "discussion",
-				});
-
+		const age = `<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>`;
 		const inPost = story.context
 			? `in ${escapeHTML(story.context)}${story.site ? ` (${escapeHTML(story.site)})` : ""}`
 			: "";
 
-		const meta = story.kind === "comment"
-			? `${story.by ? `by ${escapeHTML(story.by)} ` : ""}${inPost}
-	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
-	${actions}`
-			: story.kind === "noted"
-			? `${inPost}
-	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
+		const rowQueueLink = () =>
+			options.watching
+				? ""
+				: `|
+	<button class="browse-save-link" type="button">queue</button>`;
+
+		const rowActions = () => {
+			const watchLink = options.watchable
+				? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
+				: "";
+
+			return options.unfavorite
+				? `${watchLink ? `\n      |\n      ${watchLink}` : ""}
+      |
+      <button class="item-action-link browse-unfavorite-link" type="button">unfavorite</button>`
+				: itemActionLinksHTML(story.id, story.source, watchLink, {
+						key: favoriteKeyFor(story),
+						url: story.url,
+						title: story.title,
+						site: story.site,
+						kind: "discussion",
+					});
+		};
+
+		const rowMeta = () => {
+			if (story.kind === "comment") {
+				return `${story.by ? `by ${escapeHTML(story.by)} ` : ""}${inPost}
+	${age}
+	${rowActions()}`;
+			}
+
+			if (story.kind === "noted") {
+				return `${inPost}
+	${age}
 	|
 	<button class="item-action-link browse-edit-note-link" type="button">edit</button>
 	|
-	<button class="item-action-link browse-delete-note-link" type="button">delete</button>`
-			: story.watchPlaceholder
-			? `<span class="item-age">watching since ${escapeHTML(timeAgo(story.time))}</span>
-	${queueLink}
-	${actions}`
-			: `${
+	<button class="item-action-link browse-delete-note-link" type="button">delete</button>`;
+			}
+
+			if (story.watchPlaceholder) {
+				return `<span class="item-age">watching since ${escapeHTML(timeAgo(story.time))}</span>
+	${rowQueueLink()}
+	${rowActions()}`;
+			}
+
+			const discussions = [story, ...(options.also || [])];
+			const totalComments = discussions.reduce(
+				(sum, each) => sum + (each.descendants || 0),
+				0,
+			);
+			const counted =
+				totalComments > 0 &&
+				discussions.some((each) => Number.isFinite(each.descendants));
+			const totalWord = totalComments === 1 ? "comment" : "comments";
+			const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
+	title="Go to the page and read what was said about it">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalWord}</a>`;
+
+			return `${
 				story.score || story.by
 					? `${escapeHTML(pluralize(story.score || 0, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}`
 					: ""
 			}
-	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
-	${queueLink}
-	${actions}
+	${age}
+	${rowQueueLink()}
+	${rowActions()}
 	${counted ? `|\n\t${commentTotal}` : ""}`;
+		};
+
+		const meta = rowMeta();
 
 		const row = document.createElement("div");
 		row.className =
