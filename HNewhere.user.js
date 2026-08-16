@@ -728,6 +728,16 @@
 		).length;
 	}
 
+	function markWatchesSeen(entries, url, now) {
+		const key = normalizeURL(url || "");
+
+		return (Array.isArray(entries) ? entries : []).map((entry) =>
+			key && entry.key === key && entry.foundAt && !entry.seenAt
+				? { ...entry, seenAt: now }
+				: entry,
+		);
+	}
+
 	function migrateQueueKeys(entries, normalize) {
 		return (Array.isArray(entries) ? entries : []).map((entry) =>
 			entry.key
@@ -801,6 +811,18 @@
 			refreshNextUp(sidebarUI.shadow).catch(console.error);
 		}
 
+		return true;
+	}
+
+	async function markWatchArrival(url = pageAddress(), now = Date.now()) {
+		const entries = await loadWatches();
+		const marked = markWatchesSeen(entries, url, now);
+
+		if (marked.every((entry, index) => entry === entries[index])) {
+			return false;
+		}
+
+		await saveWatches(marked);
 		return true;
 	}
 
@@ -21192,6 +21214,7 @@ title="Show only this discussion">
 		sweepBridgePayloads().catch(console.error);
 
 		markQueueArrival().catch(console.error);
+		markWatchArrival().catch(console.error);
 
 		await ensurePdfReader(settings);
 		await loadPdfTitle(pdfViewerApp());
