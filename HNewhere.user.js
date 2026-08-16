@@ -5346,6 +5346,32 @@ button {
 				addToQueue(queued, watchQueueStory(page, discussions, now), now),
 			);
 		}
+
+		seedWatchMarks(page.key).catch(console.error);
+	}
+
+	async function seedWatchMarks(key) {
+		const entry = (await loadWatches()).find((each) => each.key === key);
+
+		if (!entry || entry.checkedAt) {
+			return;
+		}
+
+		const { marks, answered } = await probeWatch(entry, await loadSettings());
+
+		if (!answered) {
+			return;
+		}
+
+		const now = Date.now();
+
+		await saveWatches(
+			(await loadWatches()).map((each) =>
+				each.key === key && !each.checkedAt
+					? { ...each, marks, checkedAt: now }
+					: each,
+			),
+		);
 	}
 
 	async function stopWatching(key) {
