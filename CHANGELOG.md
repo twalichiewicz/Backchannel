@@ -62,9 +62,9 @@ use to detect updates, so every release bumps it.
 - **un-favorite** is **unfavorite**, and **remove** in the queue is **unqueue**,
   matching unwatch.
 
-- **favorite keeps an item here rather than favouriting it on Hacker News.** It
+- **favorite keeps an item here rather than favoriting it on Hacker News.** It
   used to do the latter, through the same popup vote and reply use. Every source
-  has some equivalent of favouriting and only Hacker News could be wired to it,
+  has some equivalent of favoriting and only Hacker News could be wired to it,
   so it is kept locally for now and works on all of them.
 
 - **favorite is on everything there is to keep**, rather than on Hacker News
@@ -75,7 +75,7 @@ use to detect updates, so every release bumps it.
 - A page carrying several discussions is favorited as a page. **favorite** sits
   beside watch above them, keeping the page rather than picking one of them.
 
-- A watched page keeps its colour once read. The bullet beside it already says
+- A watched page keeps its color once read. The bullet beside it already says
   whether there is anything new, and a watch is something you asked to keep
   hearing about.
 
@@ -119,7 +119,7 @@ use to detect updates, so every release bumps it.
   it, and writing a note dropped the filter and put the blend back. Notes belong
   to the page rather than to any one discussion of it, and the filter survives.
 
-- A settings checkbox sat below the line of its own label. It is centred on that
+- A settings checkbox sat below the line of its own label. It is centered on that
   line now, and a little larger, so it nearly fills it. **reset** lights up under
   the pointer the way **export** does.
 
@@ -288,7 +288,7 @@ use to detect updates, so every release bumps it.
 
 - Pressing the wordmark to browse no longer hides where you came from.
   `Backchannel / Discussion` reads as a toggle: the view you are on keeps the
-  text colour and the other dims, so the way back is on screen rather than
+  text color and the other dims, so the way back is on screen rather than
   something to guess at.
 
 - Every collective names its own discussion — "Hypothes.is annotations",
@@ -311,7 +311,7 @@ use to detect updates, so every release bumps it.
   discussion you can join it, and which source it landed on is not your problem —
   so the offer to post it somewhere else goes away.
 
-- The what-each-source-supports table lists favouriting and flagging. Every one
+- The what-each-source-supports table lists favoriting and flagging. Every one
   of these sites has both and this does none of them, which the table used to
   say by omission — reading as though nobody did.
 
@@ -615,8 +615,8 @@ use to detect updates, so every release bumps it.
 
 - **Indent guides stop thickening as you read.** The orange accent on a new
   comment widened its guide from 1px to 2px, and clearing the accent only put the
-  colour back — so every comment you had already read kept a doubled guide for
-  good. The accent is now a colour rather than a width. Top-level comments were
+  color back — so every comment you had already read kept a doubled guide for
+  good. The accent is now a color rather than a width. Top-level comments were
   also being pushed 7px to the right by it and left there, which is why a thread
   read over two sittings had a ragged left edge.
 
@@ -709,8 +709,8 @@ use to detect updates, so every release bumps it.
 - **HNewhere is now Backchannel.** The name described a product that checked one
   site. This one asks several, so it is named for what it shows rather than where
   it looked: the conversation running alongside the page you are reading. The
-  accent colour moves off Hacker News orange for the same reason — the panel
-  speaks for several sources now and should not wear any one of their colours —
+  accent color moves off Hacker News orange for the same reason — the panel
+  speaks for several sources now and should not wear any one of their colors —
   and the floating button reads **BC** rather than **HN**.
 
   The repository, the filename and the install URL are unchanged, so an install
@@ -746,16 +746,16 @@ use to detect updates, so every release bumps it.
   only source and `BC` after the rename, and neither is right for everyone. The
   preview in the settings panel is now the field: click it and type one or two
   characters. It is the preview precisely so the mark is edited on the thing it
-  applies to, at the size and colour it will actually be.
-- **The accent colour is yours.** The measure under the button in Settings used
+  applies to, at the size and color it will actually be.
+- **The accent color is yours.** The measure under the button in Settings used
   to caption the button's width, which the stepper beside it already states.
   It carries the accent's hex instead, and you can type over it: leaving the
   field applies it, Enter commits, Escape abandons, and emptying it goes back to
-  the built-in colour.
+  the built-in color.
 
   The panel keeps its accent as a pair — one value for a light background and a
   lifted one for a dark background, where the light value reads muddy — so a
-  colour you type has to become a pair too. Each half is walked until it clears
+  color you type has to become a pair too. Each half is walked until it clears
   4.5:1 against the panel it sits on, which is what body text is asked for. How
   far it has to move depends entirely on what you type: the built-in green needs
   a sixteen-point lift to be legible on the dark panel, a pale green needs none,
@@ -764,7 +764,7 @@ use to detect updates, so every release bumps it.
 
   The mark on the button follows too, black or white depending on what it is
   sitting on. That was worth fixing regardless: the dark theme's accent is
-  lifted, which makes it a light colour, and white on it was 2.9:1 — a mark you
+  lifted, which makes it a light color, and white on it was 2.9:1 — a mark you
   had to look for.
 
 - **A single blended thread.** Top-level comments from every discussion are
@@ -1032,8 +1032,8 @@ use to detect updates, so every release bumps it.
 
 - **A page's own text styling no longer reaches into the sidebar.** Shadow DOM
   keeps a page's selectors out but not its inheritance, and the panel pinned its
-  font and its colours without pinning anything that moves text about. A site
-  that centres its body centred the entire panel, comments and all.
+  font and its colors without pinning anything that moves text about. A site
+  that centers its body centered the entire panel, comments and all.
 
   `text-align` is only the one that turned up. The same door was open for
   `text-transform`, `letter-spacing`, `word-spacing`, `font-style`,
@@ -1256,7 +1256,7 @@ use to detect updates, so every release bumps it.
   the comments' 8px, so the submission and the replies to it read at different
   rhythms. It now matches.
 - Sub-option checkboxes sat two pixels below their labels. The box carried a flat
-  2px top margin, which centres it against the 12px settings rows it was tuned
+  2px top margin, which centers it against the 12px settings rows it was tuned
   for and overshoots on the 11px sub-option rows, whose line box is shorter. The
   offset is now derived from the row's own type size, so both sizes land within a
   pixel and a third would too.
@@ -1355,11 +1355,11 @@ use to detect updates, so every release bumps it.
   banner stay put, rather than the whole sidebar blinking for what is an edit to
   the list underneath.
 - Header icons are drawn rather than typed. The gear and the minimize dash were
-  text characters, and flexbox centres a glyph's line box rather than its ink —
+  text characters, and flexbox centers a glyph's line box rather than its ink —
   so the gear sat about a pixel low and the dash half a pixel high, while the
-  drawn eye was exactly centred and read as the odd one out. All three are now
+  drawn eye was exactly centered and read as the odd one out. All three are now
   paths on the same 16-unit grid, aligned by construction on every platform.
-  Retires the iOS workaround that kept the gear from rendering as a colour emoji.
+  Retires the iOS workaround that kept the gear from rendering as a color emoji.
 - The sidebar builds its chrome before loading stories rather than after. The
   panel does not depend on them, and loading first meant the reader watched an
   empty page through the slowest part of startup.
