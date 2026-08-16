@@ -5237,20 +5237,25 @@ button {
 			return false;
 		}
 
+		const patches = new Map();
+
 		for (const entry of due) {
 			const { marks, changed, answered } = await probeWatch(entry, settings);
 			const now = Date.now();
+			const patch = {
+				marks,
+				checkedAt: now,
+				misses: answered ? 0 : (entry.misses || 0) + 1,
+			};
 
-			entry.marks = marks;
-			entry.checkedAt = now;
-			entry.misses = answered ? 0 : (entry.misses || 0) + 1;
+			patches.set(entry.key, patch);
 
 			if (changed) {
 				const found = await discoverAll([entry.url], settings);
 
 				if (found.length) {
-					entry.foundAt = now;
-					entry.count = found.length;
+					patch.foundAt = now;
+					patch.count = found.length;
 
 					const queued = await loadQueue();
 					const placeholder = queued.find(
@@ -5278,9 +5283,13 @@ button {
 			}
 		}
 
-		await saveWatches(entries);
+		const merged = (await loadWatches()).map((entry) =>
+			patches.has(entry.key) ? { ...entry, ...patches.get(entry.key) } : entry,
+		);
 
-		return unseenWatchCount(entries) > 0;
+		await saveWatches(merged);
+
+		return unseenWatchCount(merged) > 0;
 	}
 
 	async function refreshWatchSignal() {
@@ -9454,17 +9463,16 @@ button {
 			);
 		}
 
-		let changed = false;
+		const updates = new Map();
 
-		const next = entries.map((entry, index) => {
+		entries.forEach((entry, index) => {
 			const item = fetched[index];
 
 			if (!item?.id) {
-				return entry;
+				return;
 			}
 
 			const fresh = {
-				...entry,
 				by: item.by || entry.by || "",
 				score: item.score ?? entry.score ?? 0,
 				time: item.time || entry.time || 0,
@@ -9479,17 +9487,21 @@ button {
 				fresh.title !== entry.title ||
 				fresh.time !== entry.time
 			) {
-				changed = true;
+				updates.set(queueKey(entry), fresh);
 			}
-
-			return fresh;
 		});
 
-		if (changed) {
-			await saveQueue(next);
+		if (updates.size) {
+			await saveQueue(
+				(await loadQueue()).map((entry) =>
+					updates.has(queueKey(entry))
+						? { ...entry, ...updates.get(queueKey(entry)) }
+						: entry,
+				),
+			);
 		}
 
-		return changed;
+		return updates.size > 0;
 	}
 
 	function subhead(list, text) {
