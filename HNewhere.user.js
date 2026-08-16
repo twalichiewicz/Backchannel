@@ -3002,9 +3002,7 @@ ${
 	}
 
 	function syncOptionHint(input) {
-		const anchor =
-			input?.closest?.(".settings-option-row") ||
-			input?.closest?.(".settings-option");
+		const anchor = input?.closest?.(".settings-option");
 		const hint = anchor?.nextElementSibling;
 		const checked = Boolean(input?.checked);
 
@@ -10743,8 +10741,7 @@ header {
 	opacity:.55;
 }
 
-#browse-tab-front::after,
-#browse-tab-queue::after {
+#browse-tab-front::after {
 	content:none;
 	margin:0 .35em;
 	color:var(--meta);
@@ -10756,9 +10753,6 @@ header {
 
 #browse-tab-collection {
 	margin-left:auto;
-}
-
-#browse-tab-collection {
 	max-width:var(--collection-tab-width, 8em);
 	overflow:hidden;
 	white-space:nowrap;
@@ -11267,24 +11261,12 @@ header button svg {
 	margin-top:8px;
 }
 
-.settings-suboptions + .settings-option,
-.settings-suboptions + .settings-option-row {
+.settings-suboptions + .settings-option {
 	margin-top:8px;
 }
 
-.settings-option-hint + .settings-option,
-.settings-option-hint + .settings-option-row {
+.settings-option-hint + .settings-option {
 	margin-top:8px;
-}
-
-.settings-option-row {
-	display:flex;
-	align-items:flex-start;
-	gap:8px;
-}
-
-.settings-option-row > .settings-option {
-	flex:1 1 auto;
 }
 
 .settings-option-byline {
@@ -11320,35 +11302,6 @@ header button svg {
 	.settings-reset:hover,
 	.settings-credits a:hover {
 		color:var(--text);
-	}
-}
-
-.settings-inline-action {
-	flex:0 0 auto;
-	max-width:0;
-	padding:0;
-	border:0;
-	overflow:hidden;
-	background:none;
-	color:var(--muted);
-	font:inherit;
-	font-size:11px;
-	line-height:1.35;
-	white-space:nowrap;
-	text-decoration:none;
-	opacity:0;
-	cursor:pointer;
-	transition:max-width .25s ease, opacity .2s ease;
-}
-
-.settings-option-row.is-checked .settings-inline-action {
-	max-width:120px;
-	opacity:1;
-}
-
-@media (hover: hover) {
-	.settings-inline-action:hover {
-		text-decoration:underline;
 	}
 }
 
