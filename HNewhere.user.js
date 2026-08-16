@@ -13485,8 +13485,6 @@ ${SUBMIT_FORM_CSS}
 
 .children > .comment {
 	margin-left:0;
-	border-left:1px solid var(--border-soft);
-	padding-left:6px;
 }
 
 .notepad-section {
@@ -13716,26 +13714,12 @@ ${SUBMIT_FORM_CSS}
 
 
 
-.comment.new-comment {
-	border-left-color:rgba(var(--accent-rgb),.95);
-	transition:border-left-color .9s ease;
+.comment.new-comment > .comment-layout > .comment-vote-slot::after {
+	background:rgba(var(--accent-rgb),.95);
 }
 
-.top-level-comments > .comment.new-comment {
-	box-shadow:-1px 0 0 rgba(var(--accent-rgb),.95);
-	transition:box-shadow .9s ease;
-}
-
-.comment.new-comment.comment-new-seen {
-	border-left-color:transparent;
-}
-
-.top-level-comments > .comment.new-comment.comment-new-seen {
-	box-shadow:-1px 0 0 transparent;
-}
-
-.children > .comment.new-comment.comment-new-seen {
-	border-left-color:var(--border-soft);
+.comment.new-comment.comment-new-seen > .comment-layout > .comment-vote-slot::after {
+	background:var(--border-soft);
 }
 
 .comment.comment-filter-hidden {
@@ -13885,9 +13869,19 @@ ${SUBMIT_FORM_CSS}
 	flex:0 0 17px;
 	width:17px;
 	display:flex;
-	justify-content:center;
-	align-items:flex-start;
+	flex-direction:column;
+	align-items:center;
+	align-self:stretch;
 	padding-top:1px;
+}
+
+.comment-vote-slot::after {
+	content:"";
+	flex:1 0 0;
+	width:1px;
+	margin-top:3px;
+	background:var(--border-soft);
+	transition:background-color .9s ease;
 }
 
 .comment-main {
