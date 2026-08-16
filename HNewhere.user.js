@@ -8820,7 +8820,7 @@ button {
 
 			return `${
 				story.score || story.by
-					? `${escapeHTML(pluralize(story.score || 0, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}`
+					? `${escapeHTML(pluralize(story.score || 0, "point"))}${story.by ? ` by ${authorLinkHTML(story.source, story.by)}` : ""}`
 					: ""
 			}
 	${age}
@@ -9344,7 +9344,7 @@ button {
 
 		if (page <= 1) {
 			if (nextPage) {
-				nav.appendChild(link("More", nextPage));
+				nav.appendChild(link("more", nextPage));
 				view.appendChild(nav);
 			}
 
@@ -10870,7 +10870,6 @@ header {
 	background:none;
 	font:inherit;
 	color:inherit;
-	text-decoration:none;
 	cursor:pointer;
 }
 
@@ -10999,8 +10998,9 @@ header {
 	cursor:pointer;
 	font-family:inherit;
 	font-size:inherit;
-	text-decoration:none;
+	text-decoration:underline dotted;
 	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 }
 
 .item-action-link[hidden] {
@@ -11034,8 +11034,9 @@ header {
 	cursor:pointer;
 	font-family:inherit;
 	font-size:inherit;
-	text-decoration:none;
+	text-decoration:underline dotted;
 	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 }
 
 @media (hover: hover) {
@@ -11056,8 +11057,9 @@ header {
 	cursor:pointer;
 	font-family:inherit;
 	font-size:inherit;
-	text-decoration:none;
+	text-decoration:underline dotted;
 	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 }
 
 .browse-nav-link:disabled {
@@ -13819,7 +13821,9 @@ ${SUBMIT_FORM_CSS}
 
 .meta a {
 	color:var(--meta);
-	text-decoration:none;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 }
 
 @media (hover: hover) {
@@ -14124,11 +14128,14 @@ blockquote.comment-quote-redundant {
 
 .story-meta a {
 	color:var(--meta);
-	text-decoration:none;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 }
 
 @media (hover: hover) {
-	.story-meta a:hover {
+	.story-meta a:hover,
+	.browse-nav-link:hover {
 		text-decoration:underline;
 	}
 }
