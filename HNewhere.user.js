@@ -10642,9 +10642,23 @@ header {
 	outline-offset:2px;
 }
 
+#panel.has-trail .header-wordmark {
+	cursor:default;
+}
+
+#panel.has-trail:not(.trail-elsewhere) .wordmark-root,
+#panel.trail-elsewhere .wordmark-where {
+	cursor:pointer;
+}
+
 @media (hover: hover) {
-	.header-wordmark:hover {
+	#panel:not(.has-trail) .header-wordmark:hover {
 		opacity:.75;
+	}
+
+	#panel.has-trail:not(.trail-elsewhere) .wordmark-root:hover,
+	#panel.trail-elsewhere .wordmark-where:hover {
+		color:inherit;
 	}
 }
 
@@ -14534,13 +14548,23 @@ ${settingsPanelHTML()}
 		const browseToggle = shadow.querySelector("#browse-toggle");
 
 		if (browseToggle) {
-			browseToggle.onclick = () => {
+			browseToggle.onclick = (event) => {
 				if (isSubmitting(ui)) {
 					setBrowseMode(ui, true);
 					return;
 				}
 
-				setBrowseMode(ui, !isBrowsing(ui));
+				const browsing = isBrowsing(ui);
+
+				if (
+					event.detail &&
+					shadow.querySelector("#panel")?.classList.contains("has-trail") &&
+					!event.target?.closest?.(browsing ? ".wordmark-where" : ".wordmark-root")
+				) {
+					return;
+				}
+
+				setBrowseMode(ui, !browsing);
 			};
 		}
 
