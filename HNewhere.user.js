@@ -590,7 +590,7 @@
 				descendants: story.descendants || 0,
 				site: story.site || "",
 				addedAt: now,
-				readAt: null,
+				readAt: story.readAt || null,
 			},
 		];
 	}
@@ -5314,6 +5314,7 @@ button {
 			time: Math.floor(now / 1000),
 			descendants: 0,
 			site: page.site || "",
+			readAt: now,
 			watchPlaceholder: true,
 		};
 	}
@@ -5340,6 +5341,7 @@ button {
 			...watchStory(page, best),
 			key: page.key,
 			descendants: total,
+			readAt: now,
 		};
 	}
 
