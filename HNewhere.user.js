@@ -9440,7 +9440,7 @@ button {
 	async function refreshQueueEntries(entries) {
 		const fetched = [];
 
-		const refreshable = (entry) => !entry.source || entry.source === "hn";
+		const refreshable = (entry) => entry.source === "hn";
 
 		for (let i = 0; i < entries.length; i += QUEUE_REFRESH_BATCH) {
 			fetched.push(
