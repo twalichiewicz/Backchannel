@@ -965,19 +965,11 @@
 	const FAVORITE_EXCERPT_CHARS = 140;
 
 	function favoriteExcerpt(value, limit) {
-		const text = String(value ?? "")
-			.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
-			.replace(/<[^>]*>/g, " ")
-			.replace(/&(?:nbsp|amp|lt|gt|quot|#39);/g, (entity) =>
-				({
-					"&nbsp;": " ",
-					"&amp;": "&",
-					"&lt;": "<",
-					"&gt;": ">",
-					"&quot;": '"',
-					"&#39;": "'",
-				})[entity],
-			)
+		const text = unescapeHTML(
+			String(value ?? "")
+				.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+				.replace(/<[^>]*>/g, " "),
+		)
 			.replace(/\s+/g, " ")
 			.trim();
 
@@ -1566,7 +1558,7 @@
 		);
 	}
 
-	function unescapeRedditHTML(value) {
+	function unescapeHTML(value) {
 		if (!value) {
 			return "";
 		}
@@ -1591,7 +1583,7 @@
 			permalink: "https://www.reddit.com" + (post.permalink || ""),
 			articleURL: post.url || "",
 			label: post.subreddit_name_prefixed || "r/" + (post.subreddit || ""),
-			bodyHTML: unescapeRedditHTML(post.selftext_html),
+			bodyHTML: unescapeHTML(post.selftext_html),
 			rootKeys: [],
 			rootTimes: [],
 		};
@@ -1610,7 +1602,7 @@
 				? sourceKey("reddit", parent.slice(3))
 				: null,
 			author: data.author || "[deleted]",
-			bodyHTML: unescapeRedditHTML(data.body_html),
+			bodyHTML: unescapeHTML(data.body_html),
 			score: data.score ?? null,
 			createdAt: data.created_utc ?? 0,
 			isOP: Boolean(data.is_submitter),
