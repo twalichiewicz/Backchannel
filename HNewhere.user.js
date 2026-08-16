@@ -4248,7 +4248,51 @@ button {
 		return quote ? `> ${quote}\n\n${written}` : written;
 	}
 
-	function anchorNoteQuote(exact) {
+	function sharedEdge(stored, candidate, fromEnd) {
+		let length = 0;
+
+		while (
+			length < stored.length &&
+			length < candidate.length &&
+			(fromEnd
+				? stored[stored.length - 1 - length] ===
+					candidate[candidate.length - 1 - length]
+				: stored[length] === candidate[length])
+		) {
+			length += 1;
+		}
+
+		return length;
+	}
+
+	function pickNoteOccurrence(found, text, length, near) {
+		const prefix = normalizeSearchText(near?.prefix || "").text.trimEnd();
+		const suffix = normalizeSearchText(near?.suffix || "").text.trimStart();
+
+		if (found.length === 1 || (!prefix && !suffix)) {
+			return found[0];
+		}
+
+		let best = found[0];
+		let bestScore = -1;
+
+		for (const at of found) {
+			const ends = at + length;
+			const before = text.slice(Math.max(0, at - NOTE_CONTEXT_CHARS), at).trimEnd();
+			const after = text.slice(ends, ends + NOTE_CONTEXT_CHARS).trimStart();
+			const score =
+				sharedEdge(prefix, before, true) + sharedEdge(suffix, after, false);
+
+			if (score > bestScore) {
+				bestScore = score;
+				best = at;
+			}
+		}
+
+		return best;
+	}
+
+	function anchorNoteQuote(exact, near) {
 		const wanted = normalizeSearchText(exact || "").text;
 
 		if (!wanted) {
@@ -4271,7 +4315,7 @@ button {
 			return null;
 		}
 
-		const at = found[0];
+		const at = pickNoteOccurrence(found, index.normalizedText, wanted.length, near);
 		const ends = at + wanted.length;
 		const raw = index.normalizedMap?.[at];
 		const on =
@@ -4287,7 +4331,7 @@ button {
 	}
 
 	function reanchoredNote(note, parsed) {
-		const anchor = parsed.exact ? anchorNoteQuote(parsed.exact) : null;
+		const anchor = parsed.exact ? anchorNoteQuote(parsed.exact, note) : null;
 
 		return {
 			...note,
