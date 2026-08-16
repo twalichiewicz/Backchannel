@@ -8979,9 +8979,9 @@ button {
 
 		return renderBrowseRow(
 			{
-				id: entry.key,
+				id: entry.id || entry.key,
 				key: entry.key,
-				source: "",
+				source: entry.source || "",
 				kind,
 				permalink: "",
 				url: entry.url || "",
