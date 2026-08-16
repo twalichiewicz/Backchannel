@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.9
+// @version      1.6.10
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -567,6 +567,13 @@
 		return story.key || normalizeURL(story.url || "");
 	}
 
+	function queueEntryMatchesWatch(entry, watch) {
+		return (
+			queueKey(entry) === watch.key ||
+			normalizeURL(entry.url || "") === watch.key
+		);
+	}
+
 	function addToQueue(entries, story, now) {
 		const list = Array.isArray(entries) ? entries : [];
 		const key = queueKey(story);
@@ -590,7 +597,7 @@
 				descendants: story.descendants || 0,
 				site: story.site || "",
 				addedAt: now,
-				readAt: null,
+				readAt: story.readAt || null,
 			},
 		];
 	}
@@ -722,10 +729,26 @@
 		).length;
 	}
 
+	function watchIsStalled(state) {
+		return Boolean(
+			state && !state.foundAt && (state.misses || 0) >= WATCH_MISS_CEILING,
+		);
+	}
+
 	function stalledWatchCount(entries) {
-		return (Array.isArray(entries) ? entries : []).filter(
-			(entry) => !entry.foundAt && entry.misses >= WATCH_MISS_CEILING,
+		return (Array.isArray(entries) ? entries : []).filter((entry) =>
+			watchIsStalled(entry),
 		).length;
+	}
+
+	function markWatchesSeen(entries, url, now) {
+		const key = normalizeURL(url || "");
+
+		return (Array.isArray(entries) ? entries : []).map((entry) =>
+			key && entry.key === key && entry.foundAt && !entry.seenAt
+				? { ...entry, seenAt: now }
+				: entry,
+		);
 	}
 
 	function migrateQueueKeys(entries, normalize) {
@@ -801,6 +824,18 @@
 			refreshNextUp(sidebarUI.shadow).catch(console.error);
 		}
 
+		return true;
+	}
+
+	async function markWatchArrival(url = pageAddress(), now = Date.now()) {
+		const entries = await loadWatches();
+		const marked = markWatchesSeen(entries, url, now);
+
+		if (marked.every((entry, index) => entry === entries[index])) {
+			return false;
+		}
+
+		await saveWatches(marked);
 		return true;
 	}
 
@@ -936,19 +971,11 @@
 	const FAVORITE_EXCERPT_CHARS = 140;
 
 	function favoriteExcerpt(value, limit) {
-		const text = String(value ?? "")
-			.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
-			.replace(/<[^>]*>/g, " ")
-			.replace(/&(?:nbsp|amp|lt|gt|quot|#39);/g, (entity) =>
-				({
-					"&nbsp;": " ",
-					"&amp;": "&",
-					"&lt;": "<",
-					"&gt;": ">",
-					"&quot;": '"',
-					"&#39;": "'",
-				})[entity],
-			)
+		const text = unescapeHTML(
+			String(value ?? "")
+				.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+				.replace(/<[^>]*>/g, " "),
+		)
 			.replace(/\s+/g, " ")
 			.trim();
 
@@ -968,6 +995,27 @@
 		}
 
 		return normalizeURL(story.url || "") || String(story.id ?? "");
+	}
+
+	function favoriteCovers(entry, item) {
+		if (!entry?.key || !item?.key) {
+			return false;
+		}
+
+		if (entry.key === item.key) {
+			return true;
+		}
+
+		if (
+			(entry.kind || "discussion") !== "discussion" ||
+			(item.kind || "discussion") !== "discussion"
+		) {
+			return false;
+		}
+
+		const page = normalizeURL(item.url || "");
+
+		return Boolean(page && normalizeURL(entry.url || "") === page);
 	}
 
 	function favoriteButtonHTML(about = {}) {
@@ -1012,17 +1060,16 @@
       ${button}`;
 	}
 
-	function favoriteKeysOf(entries) {
-		return new Set(
-			(Array.isArray(entries) ? entries : [])
-				.map((entry) => entry?.key)
-				.filter(Boolean),
-		);
-	}
+	function paintFavoriteControls(root, entries) {
+		const list = Array.isArray(entries) ? entries : [];
 
-	function paintFavoriteControls(root, keys) {
 		for (const button of root.querySelectorAll(`[data-item-action="fave"]`)) {
-			const on = keys.has(button.dataset.favoriteKey);
+			const item = {
+				key: button.dataset.favoriteKey,
+				url: button.dataset.favoriteUrl || "",
+				kind: button.dataset.favoriteKind || "discussion",
+			};
+			const on = list.some((entry) => favoriteCovers(entry, item));
 
 			button.textContent = on ? "unfavorite" : "favorite";
 			button.classList.toggle("item-action-on", on);
@@ -1035,18 +1082,17 @@
 		const root = sidebarUI?.shadow;
 
 		if (root) {
-			paintFavoriteControls(root, favoriteKeysOf(await loadFavoriteEntries()));
+			paintFavoriteControls(root, await loadFavoriteEntries());
 		}
 	}
 
 	async function toggleFavorite(item, settings) {
 		const entries = await loadFavoriteEntries();
-		const on = entries.some((entry) => entry.key === item.key);
+		const kept = entries.filter((entry) => !favoriteCovers(entry, item));
+		const on = kept.length !== entries.length;
 
 		await saveFavorites(
-			on
-				? removeFromFavorites(entries, item.key)
-				: addToFavorites(entries, item, Date.now()),
+			on ? kept : addToFavorites(entries, item, Date.now()),
 		);
 
 		return !on;
@@ -1056,19 +1102,15 @@
 		const itemId = button.dataset.itemActionId;
 		const sourceID = button.dataset.itemActionSource;
 
-		if (!itemId || button.dataset.itemAction !== "fave" || button.disabled) {
+		if (!itemId || button.disabled) {
 			return;
 		}
 
-		const turningOn = !button.classList.contains("item-action-on");
-
 		button.disabled = true;
-		button.textContent = turningOn ? "unfavorite" : "favorite";
-		button.classList.toggle("item-action-on", turningOn);
 
 		try {
-			await toggleFavorite({
-				key: button.dataset.favoriteKey || `${sourceID}:${itemId}`,
+			const on = await toggleFavorite({
+				key: button.dataset.favoriteKey,
 				url: button.dataset.favoriteUrl || "",
 				title: button.dataset.favoriteTitle || "",
 				site: button.dataset.favoriteSite || "",
@@ -1081,6 +1123,9 @@
 				id: itemId,
 				parent: button.dataset.favoriteParent || "",
 			});
+
+			button.textContent = on ? "unfavorite" : "favorite";
+			button.classList.toggle("item-action-on", on);
 		} finally {
 			button.disabled = false;
 			refreshFavoriteControls().catch(console.error);
@@ -1538,7 +1583,7 @@
 		);
 	}
 
-	function unescapeRedditHTML(value) {
+	function unescapeHTML(value) {
 		if (!value) {
 			return "";
 		}
@@ -1563,7 +1608,7 @@
 			permalink: "https://www.reddit.com" + (post.permalink || ""),
 			articleURL: post.url || "",
 			label: post.subreddit_name_prefixed || "r/" + (post.subreddit || ""),
-			bodyHTML: unescapeRedditHTML(post.selftext_html),
+			bodyHTML: unescapeHTML(post.selftext_html),
 			rootKeys: [],
 			rootTimes: [],
 		};
@@ -1582,7 +1627,7 @@
 				? sourceKey("reddit", parent.slice(3))
 				: null,
 			author: data.author || "[deleted]",
-			bodyHTML: unescapeRedditHTML(data.body_html),
+			bodyHTML: unescapeHTML(data.body_html),
 			score: data.score ?? null,
 			createdAt: data.created_utc ?? 0,
 			isOP: Boolean(data.is_submitter),
@@ -2982,9 +3027,7 @@ ${
 	}
 
 	function syncOptionHint(input) {
-		const anchor =
-			input?.closest?.(".settings-option-row") ||
-			input?.closest?.(".settings-option");
+		const anchor = input?.closest?.(".settings-option");
 		const hint = anchor?.nextElementSibling;
 		const checked = Boolean(input?.checked);
 
@@ -3060,7 +3103,7 @@ ${
 				return null;
 			}
 
-			return { mark: total, changed: total > 0 };
+			return { mark: total, changed: watchMarkChanged(context.mark, total) };
 		},
 
 		async frontPage() {
@@ -3888,7 +3931,7 @@ ${
 	}
 
 	function noteStorageKey(ref) {
-		return NOTES_PREFIX + ref.kind + ":" + ref.id;
+		return ref.key || NOTES_PREFIX + ref.kind + ":" + ref.id;
 	}
 
 	function noteSeconds(value) {
@@ -4227,7 +4270,51 @@ button {
 		return quote ? `> ${quote}\n\n${written}` : written;
 	}
 
-	function anchorNoteQuote(exact) {
+	function sharedEdge(stored, candidate, fromEnd) {
+		let length = 0;
+
+		while (
+			length < stored.length &&
+			length < candidate.length &&
+			(fromEnd
+				? stored[stored.length - 1 - length] ===
+					candidate[candidate.length - 1 - length]
+				: stored[length] === candidate[length])
+		) {
+			length += 1;
+		}
+
+		return length;
+	}
+
+	function pickNoteOccurrence(found, text, length, near) {
+		const prefix = normalizeSearchText(near?.prefix || "").text.trimEnd();
+		const suffix = normalizeSearchText(near?.suffix || "").text.trimStart();
+
+		if (found.length === 1 || (!prefix && !suffix)) {
+			return found[0];
+		}
+
+		let best = found[0];
+		let bestScore = -1;
+
+		for (const at of found) {
+			const ends = at + length;
+			const before = text.slice(Math.max(0, at - NOTE_CONTEXT_CHARS), at).trimEnd();
+			const after = text.slice(ends, ends + NOTE_CONTEXT_CHARS).trimStart();
+			const score =
+				sharedEdge(prefix, before, true) + sharedEdge(suffix, after, false);
+
+			if (score > bestScore) {
+				bestScore = score;
+				best = at;
+			}
+		}
+
+		return best;
+	}
+
+	function anchorNoteQuote(exact, near) {
 		const wanted = normalizeSearchText(exact || "").text;
 
 		if (!wanted) {
@@ -4250,7 +4337,7 @@ button {
 			return null;
 		}
 
-		const at = found[0];
+		const at = pickNoteOccurrence(found, index.normalizedText, wanted.length, near);
 		const ends = at + wanted.length;
 		const raw = index.normalizedMap?.[at];
 		const on =
@@ -4266,7 +4353,7 @@ button {
 	}
 
 	function reanchoredNote(note, parsed) {
-		const anchor = parsed.exact ? anchorNoteQuote(parsed.exact) : null;
+		const anchor = parsed.exact ? anchorNoteQuote(parsed.exact, note) : null;
 
 		return {
 			...note,
@@ -4481,7 +4568,7 @@ button {
 
 	function startNotepadDraft(section, body) {
 		const add = section.querySelector(".notepad-add");
-		const open = body.querySelector(".note-editor-draft");
+		const open = body.querySelector(".note-editor-draft:not([data-closing])");
 
 		if (open) {
 			closeNotepadDraft(section, body);
@@ -4541,6 +4628,7 @@ button {
 			return;
 		}
 
+		draft.dataset.closing = "1";
 		clampNotepadDraft(draft);
 		draft.style.maxHeight = "0px";
 		draft.classList.remove("is-open");
@@ -4614,6 +4702,11 @@ button {
 			(rendered) => !body.contains(rendered.element),
 		);
 		body.replaceChildren();
+
+		const add = section.querySelector(".notepad-add");
+
+		add?.classList.remove("is-open");
+		add?.setAttribute("aria-expanded", "false");
 
 		toggle.hidden = empty;
 		toggle.textContent = empty ? "show" : "hide";
@@ -5216,24 +5309,29 @@ button {
 			return false;
 		}
 
+		const patches = new Map();
+
 		for (const entry of due) {
 			const { marks, changed, answered } = await probeWatch(entry, settings);
 			const now = Date.now();
+			const patch = {
+				marks,
+				checkedAt: now,
+				misses: answered ? 0 : (entry.misses || 0) + 1,
+			};
 
-			entry.marks = marks;
-			entry.checkedAt = now;
-			entry.misses = answered ? 0 : (entry.misses || 0) + 1;
+			patches.set(entry.key, patch);
 
 			if (changed) {
 				const found = await discoverAll([entry.url], settings);
 
 				if (found.length) {
-					entry.foundAt = now;
-					entry.count = found.length;
+					patch.foundAt = now;
+					patch.count = found.length;
 
 					const queued = await loadQueue();
-					const placeholder = queued.find(
-						(item) => queueKey(item) === entry.key,
+					const placeholder = queued.find((item) =>
+						queueEntryMatchesWatch(item, entry),
 					);
 					const story = watchStory(entry, found[0]);
 
@@ -5247,7 +5345,9 @@ button {
 
 						await saveQueue(queued);
 					} else {
-						await saveQueue(addToQueue(queued, story, now));
+						await saveQueue(
+							addToQueue(queued, { ...story, key: entry.key }, now),
+						);
 					}
 
 					if (settings.notifyOnWatch && notificationsAllowed()) {
@@ -5257,9 +5357,13 @@ button {
 			}
 		}
 
-		await saveWatches(entries);
+		const merged = (await loadWatches()).map((entry) =>
+			patches.has(entry.key) ? { ...entry, ...patches.get(entry.key) } : entry,
+		);
 
-		return unseenWatchCount(entries) > 0;
+		await saveWatches(merged);
+
+		return unseenWatchCount(merged) > 0;
 	}
 
 	async function refreshWatchSignal() {
@@ -5284,6 +5388,7 @@ button {
 			time: Math.floor(now / 1000),
 			descendants: 0,
 			site: page.site || "",
+			readAt: now,
 			watchPlaceholder: true,
 		};
 	}
@@ -5310,6 +5415,7 @@ button {
 			...watchStory(page, best),
 			key: page.key,
 			descendants: total,
+			readAt: now,
 		};
 	}
 
@@ -5320,11 +5426,37 @@ button {
 
 		const queued = await loadQueue();
 
-		if (!queued.some((entry) => queueKey(entry) === page.key)) {
+		if (!queued.some((entry) => queueEntryMatchesWatch(entry, page))) {
 			await saveQueue(
 				addToQueue(queued, watchQueueStory(page, discussions, now), now),
 			);
 		}
+
+		seedWatchMarks(page.key).catch(console.error);
+	}
+
+	async function seedWatchMarks(key) {
+		const entry = (await loadWatches()).find((each) => each.key === key);
+
+		if (!entry || entry.checkedAt) {
+			return;
+		}
+
+		const { marks, answered } = await probeWatch(entry, await loadSettings());
+
+		if (!answered) {
+			return;
+		}
+
+		const now = Date.now();
+
+		await saveWatches(
+			(await loadWatches()).map((each) =>
+				each.key === key && !each.checkedAt
+					? { ...each, marks, checkedAt: now }
+					: each,
+			),
+		);
 	}
 
 	async function stopWatching(key) {
@@ -5348,14 +5480,19 @@ button {
 		const paint = (on) => {
 			button.textContent = on ? "unwatch" : "watch";
 			button.classList.toggle("item-action-on", on);
+			button.setAttribute("aria-pressed", on ? "true" : "false");
 		};
 
 		paint(Boolean(options.watching));
 
 		if (!options.watching) {
-			loadWatches()
-				.then((entries) => paint(entries.some((entry) => entry.key === key)))
-				.catch(console.error);
+			if (options.watchKeys) {
+				paint(options.watchKeys.has(key));
+			} else {
+				loadWatches()
+					.then((entries) => paint(entries.some((entry) => entry.key === key)))
+					.catch(console.error);
+			}
 		}
 
 		button.onclick = async () => {
@@ -5365,12 +5502,15 @@ button {
 			if (on) {
 				await stopWatching(key);
 			} else {
-				await startWatching({
-					key,
-					url,
-					title: story.title || "",
-					site: story.site || "",
-				});
+				await startWatching(
+					{
+						key,
+						url,
+						title: story.title || "",
+						site: story.site || "",
+					},
+					options.discussions,
+				);
 			}
 
 			paint(!on);
@@ -5387,50 +5527,13 @@ button {
 	}
 
 	function wireWatchToggle(button, title, discussions) {
-		if (!button) {
-			return;
-		}
-
 		const url = pageAddress();
-		const key = normalizeURL(url);
 
-		if (!key) {
-			button.hidden = true;
-
-			return;
-		}
-
-		const paint = (watching) => {
-			button.textContent = watching ? "unwatch" : "watch";
-			button.setAttribute("aria-pressed", watching ? "true" : "false");
-		};
-
-		loadWatches()
-			.then((entries) => paint(entries.some((entry) => entry.key === key)))
-			.catch(console.error);
-
-		button.onclick = async () => {
-			const entries = await loadWatches();
-			const watching = entries.some((entry) => entry.key === key);
-
-			if (watching) {
-				await stopWatching(key);
-			} else {
-				await startWatching(
-					{
-						key,
-						url,
-						title: title || document.title || "",
-						site: hostLabel(url),
-					},
-					discussions,
-				);
-			}
-
-			paint(!watching);
-
-			refreshWatchSignal().catch(console.error);
-		};
+		wireRowWatchLink(
+			button,
+			{ url, title: title || document.title || "", site: hostLabel(url) },
+			{ discussions },
+		);
 	}
 
 	function scheduleWatchPoll(settings) {
@@ -6696,7 +6799,7 @@ button {
 			display: "flex",
 			alignItems: "center",
 			justifyContent: "center",
-			transition: "background .2s ease, box-shadow .2s ease",
+			transition: "background .2s ease, box-shadow .2s ease, transform .15s ease",
 			overflow: "hidden",
 			isolation: "isolate",
 		});
@@ -6708,6 +6811,13 @@ button {
 		);
 
 		setFloatingButtonVariant(button, variant);
+
+		button.addEventListener("mouseenter", () => {
+			pinButtonStyle(button, { transform: "scale(1.06)" });
+		});
+		button.addEventListener("mouseleave", () => {
+			pinButtonStyle(button, { transform: null });
+		});
 
 		const updateButtonStyle = () => {
 			applyButtonMobileStyle(button);
@@ -8271,6 +8381,13 @@ button {
 			const itemId = container.dataset.hnVoteItemId;
 			renderVoteControls(container, storyID, itemId, voteLinks.get(String(itemId)));
 		}
+
+		for (const container of containers) {
+			container.classList.toggle(
+				"vote-controls-absent",
+				container.classList.contains("hidden"),
+			);
+		}
 	}
 
 	// -------------------------
@@ -8520,7 +8637,13 @@ button {
 		if (on) {
 			browseTab =
 				options.tab ||
-				(queueHasItems || !frontPageAvailable ? "queue" : "front");
+				(queueHasItems
+					? "queue"
+					: frontPageAvailable
+						? "front"
+						: notedHasItems
+							? "collection"
+							: "queue");
 		}
 
 		const swap = () => {
@@ -8580,7 +8703,12 @@ button {
 		const out = direction > 0 ? "slide-out-left" : "slide-out-right";
 		const enter = direction > 0 ? "slide-in-right" : "slide-in-left";
 
-		list.classList.remove("slide-in-left", "slide-in-right");
+		list.classList.remove(
+			"slide-in-left",
+			"slide-in-right",
+			"slide-out-left",
+			"slide-out-right",
+		);
 		list.classList.add(out);
 
 		list._hnewhereSlideTimer = window.setTimeout(async () => {
@@ -8616,14 +8744,17 @@ button {
 		}, VIEW_SWAP_FADE_MS);
 	}
 
-	function openStoryFromRow(story, event, { openPanel = false } = {}) {
-		const record = save(STORAGE.last, {
-			url: story.url,
-			source: story.source || "hn",
-			ids: [String(story.id)],
-			timestamp: Date.now(),
-			...(openPanel ? { openPanel: true } : {}),
-		});
+	function openStoryFromRow(story, event, { openPanel = false, focus = "" } = {}) {
+		const records = Promise.allSettled([
+			save(STORAGE.last, {
+				url: story.url,
+				source: story.source || "",
+				ids: [String(story.id)],
+				timestamp: Date.now(),
+				...(openPanel ? { openPanel: true } : {}),
+			}),
+			focus ? rememberPendingFocus(story.url, focus) : null,
+		]);
 
 		if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
 			return;
@@ -8631,80 +8762,99 @@ button {
 
 		event.preventDefault();
 
-		record.catch(() => {}).then(() => {
+		records.then(() => {
 			location.href = story.url;
 		});
 	}
 
 	function renderBrowseRow(story, container, rank, options = {}) {
 		const isWriting = story.kind === "comment" || story.kind === "noted";
-		const discussions = [story, ...(options.also || [])];
-		const counted = discussions.some((each) => Number.isFinite(each.descendants));
-		const totalComments = discussions.reduce(
-			(sum, each) => sum + (each.descendants || 0),
-			0,
-		);
-		const totalWord = totalComments === 1 ? "comment" : "comments";
-
-		const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
-	title="Go to the page and read what was said about it">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalWord}</a>`;
-
-		const queueLink = options.watching
-			? ""
-			: `|
-	<button class="browse-save-link" type="button">queue</button>`;
-
-		const watchLink = options.watchable
-			? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
-			: "";
-
-		const actions = options.unfavorite
-			? `${watchLink ? `\n      |\n      ${watchLink}` : ""}
-      |
-      <button class="item-action-link browse-unfavorite-link" type="button">unfavorite</button>`
-			: itemActionLinksHTML(story.id, story.source, watchLink, {
-					key: favoriteKeyFor(story),
-					url: story.url,
-					title: story.title,
-					site: story.site,
-					kind: "discussion",
-				});
-
+		const age = `<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>`;
 		const inPost = story.context
 			? `in ${escapeHTML(story.context)}${story.site ? ` (${escapeHTML(story.site)})` : ""}`
 			: "";
 
-		const meta = story.kind === "comment"
-			? `${story.by ? `by ${escapeHTML(story.by)} ` : ""}${inPost}
-	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
-	${actions}`
-			: story.kind === "noted"
-			? `${inPost}
-	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
+		const rowQueueLink = () =>
+			options.watching
+				? ""
+				: `|
+	<button class="browse-save-link" type="button">queue</button>`;
+
+		const rowActions = () => {
+			const watchLink = options.watchable
+				? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
+				: "";
+
+			return options.unfavorite
+				? `${watchLink ? `\n      |\n      ${watchLink}` : ""}
+      |
+      <button class="item-action-link browse-unfavorite-link" type="button">unfavorite</button>`
+				: itemActionLinksHTML(story.id, story.source, watchLink, {
+						key: favoriteKeyFor(story),
+						url: story.url,
+						title: story.title,
+						site: story.site,
+						kind: "discussion",
+					});
+		};
+
+		const rowMeta = () => {
+			if (story.kind === "comment") {
+				return `${story.by ? `by ${escapeHTML(story.by)} ` : ""}${inPost}
+	${age}
+	${rowActions()}`;
+			}
+
+			if (story.kind === "noted") {
+				return `${inPost}
+	${age}
 	|
 	<button class="item-action-link browse-edit-note-link" type="button">edit</button>
 	|
-	<button class="item-action-link browse-delete-note-link" type="button">delete</button>`
-			: story.watchPlaceholder
-			? `<span class="item-age">watching since ${escapeHTML(timeAgo(story.time))}</span>
-	${queueLink}
-	${actions}`
-			: `${
+	<button class="item-action-link browse-delete-note-link" type="button">delete</button>`;
+			}
+
+			if (story.watchPlaceholder) {
+				return `<span class="item-age">watching since ${escapeHTML(timeAgo(story.time))}</span>
+	${rowQueueLink()}
+	${rowActions()}`;
+			}
+
+			const discussions = [story, ...(options.also || [])];
+			const totalComments = discussions.reduce(
+				(sum, each) => sum + (each.descendants || 0),
+				0,
+			);
+			const counted =
+				totalComments > 0 &&
+				discussions.some((each) => Number.isFinite(each.descendants));
+			const totalWord = totalComments === 1 ? "comment" : "comments";
+			const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
+	title="Go to the page and read what was said about it">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalWord}</a>`;
+
+			return `${
 				story.score || story.by
-					? `${escapeHTML(pluralize(story.score || 0, "point"))}${story.by ? ` by ${escapeHTML(story.by)}` : ""}`
+					? `${escapeHTML(pluralize(story.score || 0, "point"))}${story.by ? ` by ${authorLinkHTML(story.source, story.by)}` : ""}`
 					: ""
 			}
-	<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>
-	${queueLink}
-	${actions}
+	${age}
+	${rowQueueLink()}
+	${rowActions()}
 	${counted ? `|\n\t${commentTotal}` : ""}`;
+		};
+
+		const meta = rowMeta();
 
 		const row = document.createElement("div");
 		row.className =
 			"story browse-row" + (!rank && !options.bullet ? " browse-row-loose" : "");
 		row.dataset.storyId = String(story.id);
 		row.innerHTML = `
-	<div class="browse-rank">${
+	<div class="browse-rank"${
+		options.bullet
+			? ` title="${options.fresh ? "New since you last looked" : "Watching; nothing new yet"}"`
+			: ""
+	}>${
 		options.bullet ? (options.fresh ? "&#9679;" : "&#9675;") : rank ? `${rank}.` : ""
 	}</div>
 	<div class="browse-main">
@@ -8747,16 +8897,20 @@ button {
 
 		if (saveButton) {
 			const queuedLabel = options.inQueue ? "unqueue" : "queued";
-
 			const key = queueKey(story);
+			const paintQueued = (queued) => {
+				saveButton.textContent = queued ? queuedLabel : "queue";
+			};
 
-			loadQueue()
-				.then((entries) => {
-					saveButton.textContent = entries.some((e) => queueKey(e) === key)
-						? queuedLabel
-						: "queue";
-				})
-				.catch(console.error);
+			if (options.inQueue) {
+				paintQueued(true);
+			} else if (options.queuedKeys) {
+				paintQueued(options.queuedKeys.has(key));
+			} else {
+				loadQueue()
+					.then((entries) => paintQueued(entries.some((e) => queueKey(e) === key)))
+					.catch(console.error);
+			}
 
 			saveButton.onclick = async () => {
 				const entries = await loadQueue();
@@ -8829,6 +8983,8 @@ button {
 		if (!frontPageAvailable && browseTab === "front" && sidebarUI) {
 			if (queueHasItems) {
 				renderBrowseView(sidebarUI, { tab: "queue" }).catch(console.error);
+			} else if (notedHasItems) {
+				renderBrowseView(sidebarUI, { tab: "collection" }).catch(console.error);
 			} else {
 				setBrowseMode(sidebarUI, false);
 			}
@@ -8848,27 +9004,27 @@ button {
 	}
 
 	async function applyPendingFocus() {
-		const commentKey = await takePendingFocus();
-
-		if (commentKey && getCommentGraph().byId.has(commentKey)) {
-			applyCommentFocus(commentKey);
-		}
-	}
-
-	async function takePendingFocus() {
 		const pending = await load(STORAGE.pendingFocus, null);
 
 		if (!pending?.commentKey) {
-			return null;
+			return;
+		}
+
+		if (Date.now() - (pending.at || 0) > PENDING_FOCUS_TTL) {
+			await save(STORAGE.pendingFocus, null);
+			return;
+		}
+
+		if (pending.page !== normalizeURL(pageAddress())) {
+			return;
+		}
+
+		if (!getCommentGraph().byId.has(pending.commentKey)) {
+			return;
 		}
 
 		await save(STORAGE.pendingFocus, null);
-
-		const stale = Date.now() - (pending.at || 0) > PENDING_FOCUS_TTL;
-
-		return !stale && pending.page === normalizeURL(pageAddress())
-			? pending.commentKey
-			: null;
+		applyCommentFocus(pending.commentKey);
 	}
 
 	async function loadCollectedNotes() {
@@ -8896,6 +9052,24 @@ button {
 		);
 	}
 
+	function paintBrowseTab(tab, on, label, widthProperty, hasClass) {
+		if (on) {
+			tab.textContent = label;
+			tab.style.setProperty(widthProperty, tab.scrollWidth + "px");
+		}
+
+		tab.classList.toggle("is-collapsed", !on);
+		tab.setAttribute("aria-hidden", String(!on));
+		tab.tabIndex = on ? 0 : -1;
+		tab.parentElement?.classList.toggle(hasClass, on);
+
+		const tabs = tab.parentElement;
+
+		if (tabs && !tabs.classList.contains("is-ready")) {
+			requestAnimationFrame(() => tabs.classList.add("is-ready"));
+		}
+	}
+
 	async function refreshNotedCount(root) {
 		const tab = root?.querySelector?.("#browse-tab-collection");
 
@@ -8911,18 +9085,22 @@ button {
 
 		notedHasItems = entries > 0;
 
-		if (notedHasItems) {
-			tab.textContent = "collection";
-			tab.style.setProperty("--collection-tab-width", tab.scrollWidth + "px");
-		}
-
-		tab.classList.toggle("is-collapsed", !notedHasItems);
-		tab.setAttribute("aria-hidden", String(!notedHasItems));
-		tab.tabIndex = notedHasItems ? 0 : -1;
-		tab.parentElement?.classList.toggle("has-collection", notedHasItems);
+		paintBrowseTab(
+			tab,
+			notedHasItems,
+			"collection",
+			"--collection-tab-width",
+			"has-collection",
+		);
 
 		if (!notedHasItems && browseTab === "collection" && sidebarUI) {
-			renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+			if (frontPageAvailable) {
+				renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+			} else if (queueHasItems) {
+				renderBrowseView(sidebarUI, { tab: "queue" }).catch(console.error);
+			} else {
+				setBrowseMode(sidebarUI, false);
+			}
 		}
 	}
 
@@ -8930,11 +9108,11 @@ button {
 		const kind = entry.kind === "comment" ? "comment" : options.noted ? "noted" : "discussion";
 		const page = entry.title || entry.url || entry.id;
 
-		return renderBrowseRow(
+		const row = renderBrowseRow(
 			{
-				id: entry.key,
+				id: entry.id || entry.key,
 				key: entry.key,
-				source: "",
+				source: entry.source || "",
 				kind,
 				permalink: "",
 				url: entry.url || "",
@@ -8954,6 +9132,10 @@ button {
 				...options,
 			},
 		);
+
+		row.classList.add("browse-row-collected");
+
+		return row;
 	}
 
 	function noteCollectionRow({ note, document: page }, list, { onDelete, onEdit }) {
@@ -9010,13 +9192,11 @@ button {
 	}
 
 	async function collectedNotesFor(page) {
-		return keptNotes(
-			await load(page.key || noteStorageKey({ kind: page.kind, id: page.id }), null),
-		);
+		return keptNotes(await load(noteStorageKey(page), null));
 	}
 
 	async function saveCollectedNotes(page, notes) {
-		await saveNotes(notes, { kind: page.kind, id: page.id });
+		await saveNotes(notes, page);
 
 		if (sameURL(page.url || "", location.href)) {
 			await reopenForNotes();
@@ -9064,7 +9244,10 @@ button {
 			return;
 		}
 
-		const reload = () => renderCollectionView(ui, list);
+		const reload = async () => {
+			await renderCollectionView(ui, list);
+			await refreshNotedCount(ui.shadow);
+		};
 
 		if (saved.length) {
 			subhead(list, "favorite discussions");
@@ -9090,12 +9273,11 @@ button {
 
 				if (open && entry.focus && entry.url) {
 					open.onclick = (event) => {
-						event.preventDefault();
-						rememberPendingFocus(entry.url, entry.focus)
-							.catch(console.error)
-							.then(() => {
-								location.href = entry.url;
-							});
+						openStoryFromRow(
+							{ url: entry.url, source: entry.source || "", id: entry.id || "" },
+							event,
+							{ openPanel: true, focus: entry.focus },
+						);
 					};
 				}
 			}
@@ -9133,22 +9315,13 @@ button {
 
 		queueHasItems = entries.length > 0;
 
-		if (queueHasItems) {
-			tab.textContent = unread ? `queue (${unread})` : "queue";
-
-			tab.style.setProperty("--queue-tab-width", tab.scrollWidth + "px");
-		}
-
-		tab.classList.toggle("is-collapsed", !queueHasItems);
-		tab.setAttribute("aria-hidden", String(!queueHasItems));
-		tab.tabIndex = queueHasItems ? 0 : -1;
-		tab.parentElement?.classList.toggle("has-queue", queueHasItems);
-
-		const tabs = tab.parentElement;
-
-		if (tabs && !tabs.classList.contains("is-ready")) {
-			requestAnimationFrame(() => tabs.classList.add("is-ready"));
-		}
+		paintBrowseTab(
+			tab,
+			queueHasItems,
+			unread ? `queue (${unread})` : "queue",
+			"--queue-tab-width",
+			"has-queue",
+		);
 
 		await refreshNotedCount(root);
 		await refreshBrowseAffordances(root);
@@ -9156,6 +9329,8 @@ button {
 		if (!queueHasItems && browseTab === "queue" && sidebarUI) {
 			if (frontPageAvailable) {
 				renderBrowseView(sidebarUI, { tab: "front" }).catch(console.error);
+			} else if (notedHasItems) {
+				renderBrowseView(sidebarUI, { tab: "collection" }).catch(console.error);
 			} else {
 				setBrowseMode(sidebarUI, false);
 			}
@@ -9183,7 +9358,7 @@ button {
 
 		if (page <= 1) {
 			if (nextPage) {
-				nav.appendChild(link("More", nextPage));
+				nav.appendChild(link("more", nextPage));
 				view.appendChild(nav);
 			}
 
@@ -9236,7 +9411,7 @@ button {
 		title.onclick = (event) => {
 			const record = save(STORAGE.last, {
 				url: next.url,
-				source: next.source || "hn",
+				source: next.source || "",
 				ids: [String(next.id)],
 				timestamp: Date.now(),
 			});
@@ -9393,7 +9568,7 @@ button {
 	async function refreshQueueEntries(entries) {
 		const fetched = [];
 
-		const refreshable = (entry) => !entry.source || entry.source === "hn";
+		const refreshable = (entry) => entry.source === "hn";
 
 		for (let i = 0; i < entries.length; i += QUEUE_REFRESH_BATCH) {
 			fetched.push(
@@ -9407,17 +9582,16 @@ button {
 			);
 		}
 
-		let changed = false;
+		const updates = new Map();
 
-		const next = entries.map((entry, index) => {
+		entries.forEach((entry, index) => {
 			const item = fetched[index];
 
 			if (!item?.id) {
-				return entry;
+				return;
 			}
 
 			const fresh = {
-				...entry,
 				by: item.by || entry.by || "",
 				score: item.score ?? entry.score ?? 0,
 				time: item.time || entry.time || 0,
@@ -9432,17 +9606,21 @@ button {
 				fresh.title !== entry.title ||
 				fresh.time !== entry.time
 			) {
-				changed = true;
+				updates.set(queueKey(entry), fresh);
 			}
-
-			return fresh;
 		});
 
-		if (changed) {
-			await saveQueue(next);
+		if (updates.size) {
+			await saveQueue(
+				(await loadQueue()).map((entry) =>
+					updates.has(queueKey(entry))
+						? { ...entry, ...updates.get(queueKey(entry)) }
+						: entry,
+				),
+			);
 		}
 
-		return changed;
+		return updates.size > 0;
 	}
 
 	function subhead(list, text) {
@@ -9456,7 +9634,9 @@ button {
 	async function renderQueueView(ui, list) {
 		const entries = sortQueue(await loadQueue());
 		const watching = await loadWatches();
-		const watched = new Map(watching.map((entry) => [entry.key, entry]));
+		const watchFor = (entry) =>
+			watching.find((watch) => queueEntryMatchesWatch(entry, watch)) || null;
+		const watchKeys = new Set(watching.map((entry) => entry.key));
 
 		list.replaceChildren();
 
@@ -9470,19 +9650,34 @@ button {
 		}
 
 		const kept = sortWatchedEntries(
-			entries.filter((entry) => watched.has(queueKey(entry))),
-			(entry) => watched.get(queueKey(entry)),
+			entries.filter((entry) => watchFor(entry)),
+			watchFor,
 		);
-		const rest = entries.filter((entry) => !watched.has(queueKey(entry)));
+		const rest = entries.filter((entry) => !watchFor(entry));
 		const reload = () => renderQueueView(ui, list);
 		let rank = 0;
+
+		if (kept.length && rest.length) {
+			subhead(list, "queued");
+		}
+
+		for (const entry of rest) {
+			const row = renderBrowseRow(entry, list, (rank += 1), {
+				inQueue: true,
+				watchable: true,
+				watchKeys,
+				reload,
+			});
+
+			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
+		}
 
 		if (kept.length) {
 			subhead(list, "watching");
 		}
 
 		for (const entry of kept) {
-			const state = watched.get(queueKey(entry));
+			const state = watchFor(entry);
 			const fresh = watchIsFresh(state);
 			const row = renderBrowseRow(entry, list, 0, {
 				inQueue: true,
@@ -9496,31 +9691,7 @@ button {
 			row.classList.add("browse-row-watching");
 			row.classList.toggle("browse-row-fresh", fresh);
 
-			if (fresh) {
-				const pill = document.createElement("span");
-
-				pill.className = "browse-unread-pill";
-				pill.textContent = "UNREAD";
-				row.querySelector(".story-title")?.appendChild(pill);
-			}
-			row.classList.toggle(
-				"browse-row-stalled",
-				Boolean(!state?.foundAt && state?.misses >= WATCH_MISS_CEILING),
-			);
-		}
-
-		if (kept.length && rest.length) {
-			subhead(list, "queued");
-		}
-
-		for (const entry of rest) {
-			const row = renderBrowseRow(entry, list, (rank += 1), {
-				inQueue: true,
-				watchable: true,
-				reload,
-			});
-
-			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
+			row.classList.toggle("browse-row-stalled", watchIsStalled(state));
 		}
 
 		refreshFavoriteControls().catch(console.error);
@@ -9531,15 +9702,23 @@ button {
 			}
 		});
 
-		if (entries.some((entry) => entry.readAt && !watched.has(queueKey(entry)))) {
+		if (entries.some((entry) => entry.readAt && !watchFor(entry))) {
 			const clear = document.createElement("button");
 			clear.type = "button";
 			clear.className = "browse-nav-link browse-clear-read";
 			clear.textContent = "clear read";
 			clear.onclick = async () => {
-				const keep = new Set((await loadWatches()).map((entry) => entry.key));
+				const watches = await loadWatches();
+				const queued = await loadQueue();
+				const keep = new Set(
+					queued
+						.filter((entry) =>
+							watches.some((watch) => queueEntryMatchesWatch(entry, watch)),
+						)
+						.map(queueKey),
+				);
 
-				await saveQueue(clearReadFromQueue(await loadQueue(), keep));
+				await saveQueue(clearReadFromQueue(queued, keep));
 
 				await renderQueueView(ui, list);
 				refreshQueueCount(ui.shadow);
@@ -9575,11 +9754,16 @@ button {
 		}
 
 		const requested = browsePage;
-		const { rows, sources } = await loadFrontPages();
+		const [{ rows, sources }, queued] = await Promise.all([
+			loadFrontPages(),
+			loadQueue(),
+		]);
 
 		if (browsePage !== requested || browseTab !== "front") {
 			return;
 		}
+
+		const queuedKeys = new Set(queued.map(queueKey));
 
 		setBlendNote(ui, sources);
 
@@ -9598,7 +9782,10 @@ button {
 		rows
 			.slice(start, start + FRONT_PAGE_SIZE)
 			.forEach((row, index) =>
-				renderBrowseRow(row.story, list, start + index + 1, { also: row.also }),
+				renderBrowseRow(row.story, list, start + index + 1, {
+					also: row.also,
+					queuedKeys,
+				}),
 			);
 
 		refreshFavoriteControls().catch(console.error);
@@ -10488,9 +10675,23 @@ header {
 	outline-offset:2px;
 }
 
+#panel.has-trail .header-wordmark {
+	cursor:default;
+}
+
+#panel.has-trail:not(.trail-elsewhere) .wordmark-root,
+#panel.trail-elsewhere .wordmark-where {
+	cursor:pointer;
+}
+
 @media (hover: hover) {
-	.header-wordmark:hover {
+	#panel:not(.has-trail) .header-wordmark:hover {
 		opacity:.75;
+	}
+
+	#panel.has-trail:not(.trail-elsewhere) .wordmark-root:hover,
+	#panel.trail-elsewhere .wordmark-where:hover {
+		color:inherit;
 	}
 }
 
@@ -10571,18 +10772,6 @@ header {
 	color:var(--accent);
 }
 
-.browse-unread-pill {
-	margin-left:.5em;
-	padding:0 4px;
-	border-radius:3px;
-	background:var(--active-tint);
-	color:var(--muted);
-	font-size:9px;
-	font-weight:600;
-	letter-spacing:.04em;
-	vertical-align:1px;
-}
-
 .browse-row-stalled .story-title::before {
 	opacity:.3;
 }
@@ -10591,8 +10780,7 @@ header {
 	opacity:.55;
 }
 
-#browse-tab-front::after,
-#browse-tab-queue::after {
+#browse-tab-front::after {
 	content:none;
 	margin:0 .35em;
 	color:var(--meta);
@@ -10604,9 +10792,6 @@ header {
 
 #browse-tab-collection {
 	margin-left:auto;
-}
-
-#browse-tab-collection {
 	max-width:var(--collection-tab-width, 8em);
 	overflow:hidden;
 	white-space:nowrap;
@@ -10699,7 +10884,6 @@ header {
 	background:none;
 	font:inherit;
 	color:inherit;
-	text-decoration:none;
 	cursor:pointer;
 }
 
@@ -10806,6 +10990,10 @@ header {
 	color:var(--meta);
 }
 
+.browse-row-collected .browse-title-link:visited {
+	color:var(--text);
+}
+
 .browse-nav {
 	display:flex;
 	align-items:baseline;
@@ -10824,8 +11012,9 @@ header {
 	cursor:pointer;
 	font-family:inherit;
 	font-size:inherit;
-	text-decoration:none;
+	text-decoration:underline dotted;
 	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 }
 
 .item-action-link[hidden] {
@@ -10859,8 +11048,9 @@ header {
 	cursor:pointer;
 	font-family:inherit;
 	font-size:inherit;
-	text-decoration:none;
+	text-decoration:underline dotted;
 	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 }
 
 @media (hover: hover) {
@@ -10881,8 +11071,9 @@ header {
 	cursor:pointer;
 	font-family:inherit;
 	font-size:inherit;
-	text-decoration:none;
+	text-decoration:underline dotted;
 	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 }
 
 .browse-nav-link:disabled {
@@ -11115,24 +11306,12 @@ header button svg {
 	margin-top:8px;
 }
 
-.settings-suboptions + .settings-option,
-.settings-suboptions + .settings-option-row {
+.settings-suboptions + .settings-option {
 	margin-top:8px;
 }
 
-.settings-option-hint + .settings-option,
-.settings-option-hint + .settings-option-row {
+.settings-option-hint + .settings-option {
 	margin-top:8px;
-}
-
-.settings-option-row {
-	display:flex;
-	align-items:flex-start;
-	gap:8px;
-}
-
-.settings-option-row > .settings-option {
-	flex:1 1 auto;
 }
 
 .settings-option-byline {
@@ -11168,35 +11347,6 @@ header button svg {
 	.settings-reset:hover,
 	.settings-credits a:hover {
 		color:var(--text);
-	}
-}
-
-.settings-inline-action {
-	flex:0 0 auto;
-	max-width:0;
-	padding:0;
-	border:0;
-	overflow:hidden;
-	background:none;
-	color:var(--muted);
-	font:inherit;
-	font-size:11px;
-	line-height:1.35;
-	white-space:nowrap;
-	text-decoration:none;
-	opacity:0;
-	cursor:pointer;
-	transition:max-width .25s ease, opacity .2s ease;
-}
-
-.settings-option-row.is-checked .settings-inline-action {
-	max-width:120px;
-	opacity:1;
-}
-
-@media (hover: hover) {
-	.settings-inline-action:hover {
-		text-decoration:underline;
 	}
 }
 
@@ -13370,8 +13520,6 @@ ${SUBMIT_FORM_CSS}
 
 .children > .comment {
 	margin-left:0;
-	border-left:1px solid var(--border-soft);
-	padding-left:6px;
 }
 
 .notepad-section {
@@ -13601,26 +13749,12 @@ ${SUBMIT_FORM_CSS}
 
 
 
-.comment.new-comment {
-	border-left-color:rgba(var(--accent-rgb),.95);
-	transition:border-left-color .9s ease;
+.comment.new-comment > .comment-layout > .comment-vote-slot::after {
+	background:rgba(var(--accent-rgb),.95);
 }
 
-.top-level-comments > .comment.new-comment {
-	box-shadow:-1px 0 0 rgba(var(--accent-rgb),.95);
-	transition:box-shadow .9s ease;
-}
-
-.comment.new-comment.comment-new-seen {
-	border-left-color:transparent;
-}
-
-.top-level-comments > .comment.new-comment.comment-new-seen {
-	box-shadow:-1px 0 0 transparent;
-}
-
-.children > .comment.new-comment.comment-new-seen {
-	border-left-color:var(--border-soft);
+.comment.new-comment.comment-new-seen > .comment-layout > .comment-vote-slot::after {
+	background:var(--border-soft);
 }
 
 .comment.comment-filter-hidden {
@@ -13701,7 +13835,9 @@ ${SUBMIT_FORM_CSS}
 
 .meta a {
 	color:var(--meta);
-	text-decoration:none;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 }
 
 @media (hover: hover) {
@@ -13719,8 +13855,83 @@ ${SUBMIT_FORM_CSS}
 	transition:opacity .15s ease;
 }
 
-.vote-controls-arriving {
+.vote-controls-arriving:not(.vote-controls-expected) {
 	opacity:0;
+}
+
+.vote-controls-expected {
+	position:relative;
+}
+
+.vote-controls-expected.hidden {
+	display:flex;
+	width:17px;
+	height:20px;
+	transition:height .25s ease;
+}
+
+.vote-controls-expected.vote-controls-absent.hidden {
+	height:0;
+}
+
+.vote-controls-expected::before,
+.vote-controls-expected::after {
+	content:"";
+	position:absolute;
+	left:50%;
+	width:8px;
+	height:7px;
+	margin-left:-4px;
+	background:linear-gradient(
+		180deg,
+		var(--hover-tint) 0%,
+		var(--hover-tint) 40%,
+		var(--active-tint) 50%,
+		var(--hover-tint) 60%,
+		var(--hover-tint) 100%
+	);
+	background-size:100% 220%;
+	opacity:0;
+	transition:opacity .25s ease;
+	pointer-events:none;
+}
+
+.vote-controls-expected::before {
+	top:1px;
+	clip-path:polygon(50% 0, 0 100%, 100% 100%);
+}
+
+.vote-controls-expected::after {
+	top:12px;
+	clip-path:polygon(0 0, 100% 0, 50% 100%);
+}
+
+.vote-controls-expected.hidden:not(.vote-controls-absent)::before,
+.vote-controls-expected.hidden:not(.vote-controls-absent)::after,
+.vote-controls-expected.vote-controls-arriving::before,
+.vote-controls-expected.vote-controls-arriving::after {
+	opacity:1;
+	animation:hnewhere-vote-shimmer 1.6s linear infinite;
+}
+
+.vote-controls-expected .vote-button {
+	transition:opacity .25s ease;
+}
+
+.vote-controls-expected.vote-controls-arriving .vote-button {
+	opacity:0;
+}
+
+@keyframes hnewhere-vote-shimmer {
+	from { background-position:0 120%; }
+	to { background-position:0 -20%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.vote-controls-expected::before,
+	.vote-controls-expected::after {
+		animation:none;
+	}
 }
 
 .story-table {
@@ -13770,9 +13981,19 @@ ${SUBMIT_FORM_CSS}
 	flex:0 0 17px;
 	width:17px;
 	display:flex;
-	justify-content:center;
-	align-items:flex-start;
+	flex-direction:column;
+	align-items:center;
+	align-self:stretch;
 	padding-top:1px;
+}
+
+.comment-vote-slot::after {
+	content:"";
+	flex:1 0 0;
+	width:1px;
+	margin-top:3px;
+	background:var(--border-soft);
+	transition:background-color .9s ease;
 }
 
 .comment-main {
@@ -13996,11 +14217,14 @@ blockquote.comment-quote-redundant {
 
 .story-meta a {
 	color:var(--meta);
-	text-decoration:none;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 }
 
 @media (hover: hover) {
-	.story-meta a:hover {
+	.story-meta a:hover,
+	.browse-nav-link:hover {
 		text-decoration:underline;
 	}
 }
@@ -14433,13 +14657,23 @@ ${settingsPanelHTML()}
 		const browseToggle = shadow.querySelector("#browse-toggle");
 
 		if (browseToggle) {
-			browseToggle.onclick = () => {
+			browseToggle.onclick = (event) => {
 				if (isSubmitting(ui)) {
 					setBrowseMode(ui, true);
 					return;
 				}
 
-				setBrowseMode(ui, !isBrowsing(ui));
+				const browsing = isBrowsing(ui);
+
+				if (
+					event.detail &&
+					shadow.querySelector("#panel")?.classList.contains("has-trail") &&
+					!event.target?.closest?.(browsing ? ".wordmark-where" : ".wordmark-root")
+				) {
+					return;
+				}
+
+				setBrowseMode(ui, !browsing);
 			};
 		}
 
@@ -14502,6 +14736,7 @@ ${settingsPanelHTML()}
 
 		const storyID = String(story.id);
 		const hnURL = discussionURL(story);
+		const articleTarget = story.articleURL || story.url || hnURL || "";
 		const title = options.title ?? story.title;
 		const watchLink = options.watchable
 			? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
@@ -14516,7 +14751,8 @@ ${settingsPanelHTML()}
 		const storyCommentCount = story.commentCount ?? story.descendants ?? 0;
 		const storyBodyHTML = story.bodyHTML ?? story.text;
 
-		const voteControlsHTML = `<span class="story-vote-controls vote-controls hidden"
+		const canVote = Boolean(getSource(story.source)?.capabilities.vote);
+	const voteControlsHTML = `<span class="story-vote-controls vote-controls hidden${canVote ? " vote-controls-expected" : ""}"
 	data-hn-vote-source="${escapeHTML(String(story.source || "hn"))}"
 	data-hn-vote-story-id="${escapeHTML(storyID)}"
 	data-hn-vote-item-id="${escapeHTML(storyID)}"></span>`;
@@ -14563,10 +14799,10 @@ ${settingsPanelHTML()}
 		ageLabel ? escapeHTML(ageLabel) + " " : ""
 	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
 	${itemActionLinksHTML(storyID, story.source, watchLink, {
-		key: favoriteKeyFor({ ...story, id: storyID, url: hnURL || story.url || "" }),
-		url: hnURL || story.url || "",
+		key: favoriteKeyFor({ ...story, id: storyID, url: articleTarget }),
+		url: articleTarget,
 		title: title || "",
-		site: story.site || (story.url ? hostLabel(story.url) : ""),
+		site: story.site || (articleTarget ? hostLabel(articleTarget) : ""),
 		kind: "discussion",
 	})}
 	${
@@ -14612,7 +14848,7 @@ ${settingsPanelHTML()}
 			wireRowWatchLink(
 				storyElement.querySelector(".browse-watch-link"),
 				{ url: address, title: story.title || "", site: hostLabel(address) },
-				{},
+				{ discussions: [story] },
 			);
 		}
 
@@ -15350,7 +15586,7 @@ ${settingsPanelHTML()}
 		div.innerHTML = `
       <div class="comment-layout">
       <span class="comment-vote-slot${threadCanVote && !isLocalSource ? "" : " comment-vote-slot-empty"}">
-      <span class="comment-vote-controls vote-controls hidden"
+      <span class="comment-vote-controls vote-controls hidden${threadCanVote && !isLocalSource ? " vote-controls-expected" : ""}"
       data-hn-vote-source="${escapeHTML(String(comment.source || "hn"))}"
       data-hn-vote-story-id="${escapeHTML(String(storyID))}"
       data-hn-vote-item-id="${escapeHTML(commentID)}"></span>
@@ -15640,6 +15876,10 @@ ${settingsPanelHTML()}
 				context.parentKey,
 			);
 
+			refreshFavoriteControls().catch(console.error);
+			applyPendingFocus().catch(console.error);
+			ensureVoteControlsLoaded().catch(console.error);
+
 			pending = remaining;
 			remainingCount = Math.max(0, remainingCount - added.length);
 
@@ -15753,7 +15993,6 @@ ${settingsPanelHTML()}
 		const disambiguating = stories.length > 1;
 
 		for (const story of stories) {
-			const canVote = Boolean(getSource(story.source)?.capabilities.vote);
 			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
 			const resolved = storyTitle(story, page, disambiguating);
 			const block = renderStory(story, details, {
@@ -16620,41 +16859,7 @@ title="Show only this discussion">
 
 	// #region hnewhere-test-export
 
-	const ITEM_ACTION_PATHS = {
-		fave: { path: "fave", params: {} },
-		unfave: { path: "fave", params: { un: "t" } },
-	};
-
 	const VOTE_ACTIONS = ["up", "down", "un"];
-
-	const ITEM_ACTIONS = [...VOTE_ACTIONS, ...Object.keys(ITEM_ACTION_PATHS)];
-
-	function findItemActionAnchor(root, action, itemId) {
-		const shape = ITEM_ACTION_PATHS[action];
-
-		if (!shape) {
-			return null;
-		}
-
-		const wantsUndo = "un" in shape.params;
-
-		return (
-			[...root.querySelectorAll("a[href]")].find((anchor) => {
-				const href = anchor.getAttribute("href") || "";
-
-				if (!href.startsWith(shape.path + "?")) {
-					return false;
-				}
-
-				const params = new URL(href, HN_ORIGIN + "/").searchParams;
-
-				return (
-					params.get("id") === String(itemId) &&
-					(params.get("un") === "t") === wantsUndo
-				);
-			}) || null
-		);
-	}
 
 	// #endregion hnewhere-test-export
 
@@ -16671,40 +16876,16 @@ title="Show only this discussion">
 			return null;
 		}
 
-		if (!payload.item) {
+		if (!payload.item || !VOTE_ACTIONS.includes(payload.action)) {
 			clearBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY);
 			return null;
 		}
 
-		const isFave = Boolean(ITEM_ACTION_PATHS[payload.action]);
-
-		if (!isFave && location.pathname !== "/item") {
+		if (location.pathname !== "/item") {
 			return null;
 		}
 
 		clearBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY);
-
-		if (isFave) {
-			const base = payload.action.startsWith("un")
-				? payload.action.slice(2)
-				: payload.action;
-			const wanted = !payload.action.startsWith("un");
-
-			const onLink = findItemActionAnchor(root, "un" + base, payload.item);
-			const offLink = findItemActionAnchor(root, base, payload.item);
-
-			const applied = onLink ? true : offLink ? false : wanted;
-
-			return {
-				payload,
-				result: {
-					ok: applied === wanted,
-					reason: applied === wanted ? "updated" : "unchanged",
-					action: payload.action,
-					applied,
-				},
-			};
-		}
 
 		const voteInfo = currentVoteInfoFor(root, payload.item);
 		const changed = voteInfo?.state !== payload.beforeState;
@@ -16720,46 +16901,7 @@ title="Show only this discussion">
 		};
 	}
 
-	function actHNFaveFlag(payload, root) {
-		const anchor = findItemActionAnchor(root, payload.action, payload.item);
-
-		if (!anchor) {
-			const base = payload.action.startsWith("un")
-				? payload.action.slice(2)
-				: payload.action;
-			const opposite = payload.action.startsWith("un") ? base : "un" + base;
-
-			const already = findItemActionAnchor(root, opposite, payload.item);
-
-			return {
-				ok: Boolean(already),
-				reason: already ? "already" : "action-unavailable",
-				action: payload.action,
-				...(already ? { applied: !payload.action.startsWith("un") } : {}),
-			};
-		}
-
-		const target = new URL(anchor.getAttribute("href"), HN_ORIGIN + "/");
-
-		target.searchParams.set("goto", "item?id=" + payload.item);
-
-		if (!stageBridgeReload(ITEM_ACTION_BRIDGE_STORAGE_KEY, payload)) {
-			return {
-				ok: false,
-				reason: "storage-unavailable",
-				action: payload.action,
-			};
-		}
-
-		location.href = target.href;
-		return BRIDGE_NAVIGATED;
-	}
-
 	function actHNItemAction({ payload, root }) {
-		if (ITEM_ACTION_PATHS[payload.action]) {
-			return actHNFaveFlag(payload, root);
-		}
-
 		const before = currentVoteInfoFor(root, payload.item);
 
 		const anchor = root.getElementById(payload.action + "_" + payload.item);
@@ -17051,7 +17193,7 @@ title="Show only this discussion">
 				fields: ["item", "action", "voteURL"],
 				accepts: (payload) =>
 					Boolean(payload.storyID && payload.item) &&
-					ITEM_ACTIONS.includes(payload.action),
+					VOTE_ACTIONS.includes(payload.action),
 				echo: (payload) => ({
 					storyID: payload.storyID,
 					itemId: payload.item,
@@ -17061,7 +17203,6 @@ title="Show only this discussion">
 				url: ({ itemId }) => commentURL(itemId),
 				descriptors: hnVoteDescriptors,
 				voteLinks: loadVoteLinks,
-				itemActions: true,
 				act: actHNItemAction,
 				report: reportHNItemAction,
 			},
@@ -17343,6 +17484,7 @@ title="Show only this discussion">
 
 					await save(STORAGE.last, {
 						url: link.href,
+						source: "hn",
 						ids: [row.id],
 						timestamp: Date.now(),
 					});
@@ -20930,7 +21072,7 @@ title="Show only this discussion">
 				if (!discussions.length) {
 					sidebarHasDiscussion = false;
 
-					if (frontPageAvailable || queueHasItems) {
+					if (frontPageAvailable || queueHasItems || notedHasItems) {
 						setBrowseMode(ui, true);
 						return;
 					}
@@ -21191,6 +21333,7 @@ title="Show only this discussion">
 		sweepBridgePayloads().catch(console.error);
 
 		markQueueArrival().catch(console.error);
+		markWatchArrival().catch(console.error);
 
 		await ensurePdfReader(settings);
 		await loadPdfTitle(pdfViewerApp());
@@ -21237,7 +21380,7 @@ title="Show only this discussion">
 
 		scheduleWatchPoll(settings);
 
-		const recoverable = arrivedFromClick && (!last.source || last.source === "hn");
+		const recoverable = arrivedFromClick && last.source === "hn";
 
 		const stories =
 			found.length || !recoverable
