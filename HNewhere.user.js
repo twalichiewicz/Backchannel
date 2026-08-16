@@ -9192,7 +9192,10 @@ button {
 			return;
 		}
 
-		const reload = () => renderCollectionView(ui, list);
+		const reload = async () => {
+			await renderCollectionView(ui, list);
+			await refreshNotedCount(ui.shadow);
+		};
 
 		if (saved.length) {
 			subhead(list, "favorite discussions");
