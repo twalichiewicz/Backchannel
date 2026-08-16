@@ -6799,7 +6799,7 @@ button {
 			display: "flex",
 			alignItems: "center",
 			justifyContent: "center",
-			transition: "background .2s ease, box-shadow .2s ease",
+			transition: "background .2s ease, box-shadow .2s ease, transform .15s ease",
 			overflow: "hidden",
 			isolation: "isolate",
 		});
@@ -6811,6 +6811,13 @@ button {
 		);
 
 		setFloatingButtonVariant(button, variant);
+
+		button.addEventListener("mouseenter", () => {
+			pinButtonStyle(button, { transform: "scale(1.06)" });
+		});
+		button.addEventListener("mouseleave", () => {
+			pinButtonStyle(button, { transform: null });
+		});
 
 		const updateButtonStyle = () => {
 			applyButtonMobileStyle(button);
