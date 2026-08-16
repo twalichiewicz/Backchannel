@@ -567,6 +567,13 @@
 		return story.key || normalizeURL(story.url || "");
 	}
 
+	function queueEntryMatchesWatch(entry, watch) {
+		return (
+			queueKey(entry) === watch.key ||
+			normalizeURL(entry.url || "") === watch.key
+		);
+	}
+
 	function addToQueue(entries, story, now) {
 		const list = Array.isArray(entries) ? entries : [];
 		const key = queueKey(story);
@@ -5302,8 +5309,8 @@ button {
 					patch.count = found.length;
 
 					const queued = await loadQueue();
-					const placeholder = queued.find(
-						(item) => queueKey(item) === entry.key,
+					const placeholder = queued.find((item) =>
+						queueEntryMatchesWatch(item, entry),
 					);
 					const story = watchStory(entry, found[0]);
 
@@ -5317,7 +5324,9 @@ button {
 
 						await saveQueue(queued);
 					} else {
-						await saveQueue(addToQueue(queued, story, now));
+						await saveQueue(
+							addToQueue(queued, { ...story, key: entry.key }, now),
+						);
 					}
 
 					if (settings.notifyOnWatch && notificationsAllowed()) {
@@ -5396,7 +5405,7 @@ button {
 
 		const queued = await loadQueue();
 
-		if (!queued.some((entry) => queueKey(entry) === page.key)) {
+		if (!queued.some((entry) => queueEntryMatchesWatch(entry, page))) {
 			await saveQueue(
 				addToQueue(queued, watchQueueStory(page, discussions, now), now),
 			);
@@ -9587,7 +9596,8 @@ button {
 	async function renderQueueView(ui, list) {
 		const entries = sortQueue(await loadQueue());
 		const watching = await loadWatches();
-		const watched = new Map(watching.map((entry) => [entry.key, entry]));
+		const watchFor = (entry) =>
+			watching.find((watch) => queueEntryMatchesWatch(entry, watch)) || null;
 
 		list.replaceChildren();
 
@@ -9601,10 +9611,10 @@ button {
 		}
 
 		const kept = sortWatchedEntries(
-			entries.filter((entry) => watched.has(queueKey(entry))),
-			(entry) => watched.get(queueKey(entry)),
+			entries.filter((entry) => watchFor(entry)),
+			watchFor,
 		);
-		const rest = entries.filter((entry) => !watched.has(queueKey(entry)));
+		const rest = entries.filter((entry) => !watchFor(entry));
 		const reload = () => renderQueueView(ui, list);
 		let rank = 0;
 
@@ -9613,7 +9623,7 @@ button {
 		}
 
 		for (const entry of kept) {
-			const state = watched.get(queueKey(entry));
+			const state = watchFor(entry);
 			const fresh = watchIsFresh(state);
 			const row = renderBrowseRow(entry, list, 0, {
 				inQueue: true,
@@ -9662,15 +9672,23 @@ button {
 			}
 		});
 
-		if (entries.some((entry) => entry.readAt && !watched.has(queueKey(entry)))) {
+		if (entries.some((entry) => entry.readAt && !watchFor(entry))) {
 			const clear = document.createElement("button");
 			clear.type = "button";
 			clear.className = "browse-nav-link browse-clear-read";
 			clear.textContent = "clear read";
 			clear.onclick = async () => {
-				const keep = new Set((await loadWatches()).map((entry) => entry.key));
+				const watches = await loadWatches();
+				const queued = await loadQueue();
+				const keep = new Set(
+					queued
+						.filter((entry) =>
+							watches.some((watch) => queueEntryMatchesWatch(entry, watch)),
+						)
+						.map(queueKey),
+				);
 
-				await saveQueue(clearReadFromQueue(await loadQueue(), keep));
+				await saveQueue(clearReadFromQueue(queued, keep));
 
 				await renderQueueView(ui, list);
 				refreshQueueCount(ui.shadow);
