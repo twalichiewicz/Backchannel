@@ -8759,11 +8759,13 @@ button {
 	function renderBrowseRow(story, container, rank, options = {}) {
 		const isWriting = story.kind === "comment" || story.kind === "noted";
 		const discussions = [story, ...(options.also || [])];
-		const counted = discussions.some((each) => Number.isFinite(each.descendants));
 		const totalComments = discussions.reduce(
 			(sum, each) => sum + (each.descendants || 0),
 			0,
 		);
+		const counted =
+			totalComments > 0 &&
+			discussions.some((each) => Number.isFinite(each.descendants));
 		const totalWord = totalComments === 1 ? "comment" : "comments";
 
 		const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
