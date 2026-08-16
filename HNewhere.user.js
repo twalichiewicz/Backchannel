@@ -8691,7 +8691,12 @@ button {
 		const out = direction > 0 ? "slide-out-left" : "slide-out-right";
 		const enter = direction > 0 ? "slide-in-right" : "slide-in-left";
 
-		list.classList.remove("slide-in-left", "slide-in-right");
+		list.classList.remove(
+			"slide-in-left",
+			"slide-in-right",
+			"slide-out-left",
+			"slide-out-right",
+		);
 		list.classList.add(out);
 
 		list._hnewhereSlideTimer = window.setTimeout(async () => {
