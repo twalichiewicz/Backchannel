@@ -4545,7 +4545,7 @@ button {
 
 	function startNotepadDraft(section, body) {
 		const add = section.querySelector(".notepad-add");
-		const open = body.querySelector(".note-editor-draft");
+		const open = body.querySelector(".note-editor-draft:not([data-closing])");
 
 		if (open) {
 			closeNotepadDraft(section, body);
@@ -4605,6 +4605,7 @@ button {
 			return;
 		}
 
+		draft.dataset.closing = "1";
 		clampNotepadDraft(draft);
 		draft.style.maxHeight = "0px";
 		draft.classList.remove("is-open");
@@ -4678,6 +4679,11 @@ button {
 			(rendered) => !body.contains(rendered.element),
 		);
 		body.replaceChildren();
+
+		const add = section.querySelector(".notepad-add");
+
+		add?.classList.remove("is-open");
+		add?.setAttribute("aria-expanded", "false");
 
 		toggle.hidden = empty;
 		toggle.textContent = empty ? "show" : "hide";
