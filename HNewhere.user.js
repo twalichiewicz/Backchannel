@@ -3081,7 +3081,7 @@ ${
 				return null;
 			}
 
-			return { mark: total, changed: total > 0 };
+			return { mark: total, changed: watchMarkChanged(context.mark, total) };
 		},
 
 		async frontPage() {
