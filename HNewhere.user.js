@@ -8374,6 +8374,13 @@ button {
 			const itemId = container.dataset.hnVoteItemId;
 			renderVoteControls(container, storyID, itemId, voteLinks.get(String(itemId)));
 		}
+
+		for (const container of containers) {
+			container.classList.toggle(
+				"vote-controls-absent",
+				container.classList.contains("hidden"),
+			);
+		}
 	}
 
 	// -------------------------
@@ -13841,8 +13848,83 @@ ${SUBMIT_FORM_CSS}
 	transition:opacity .15s ease;
 }
 
-.vote-controls-arriving {
+.vote-controls-arriving:not(.vote-controls-expected) {
 	opacity:0;
+}
+
+.vote-controls-expected {
+	position:relative;
+}
+
+.vote-controls-expected.hidden {
+	display:flex;
+	width:17px;
+	height:20px;
+	transition:height .25s ease;
+}
+
+.vote-controls-expected.vote-controls-absent.hidden {
+	height:0;
+}
+
+.vote-controls-expected::before,
+.vote-controls-expected::after {
+	content:"";
+	position:absolute;
+	left:50%;
+	width:8px;
+	height:7px;
+	margin-left:-4px;
+	background:linear-gradient(
+		180deg,
+		var(--hover-tint) 0%,
+		var(--hover-tint) 40%,
+		var(--active-tint) 50%,
+		var(--hover-tint) 60%,
+		var(--hover-tint) 100%
+	);
+	background-size:100% 220%;
+	opacity:0;
+	transition:opacity .25s ease;
+	pointer-events:none;
+}
+
+.vote-controls-expected::before {
+	top:1px;
+	clip-path:polygon(50% 0, 0 100%, 100% 100%);
+}
+
+.vote-controls-expected::after {
+	top:12px;
+	clip-path:polygon(0 0, 100% 0, 50% 100%);
+}
+
+.vote-controls-expected.hidden:not(.vote-controls-absent)::before,
+.vote-controls-expected.hidden:not(.vote-controls-absent)::after,
+.vote-controls-expected.vote-controls-arriving::before,
+.vote-controls-expected.vote-controls-arriving::after {
+	opacity:1;
+	animation:hnewhere-vote-shimmer 1.6s linear infinite;
+}
+
+.vote-controls-expected .vote-button {
+	transition:opacity .25s ease;
+}
+
+.vote-controls-expected.vote-controls-arriving .vote-button {
+	opacity:0;
+}
+
+@keyframes hnewhere-vote-shimmer {
+	from { background-position:0 120%; }
+	to { background-position:0 -20%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.vote-controls-expected::before,
+	.vote-controls-expected::after {
+		animation:none;
+	}
 }
 
 .story-table {
@@ -14662,7 +14744,8 @@ ${settingsPanelHTML()}
 		const storyCommentCount = story.commentCount ?? story.descendants ?? 0;
 		const storyBodyHTML = story.bodyHTML ?? story.text;
 
-		const voteControlsHTML = `<span class="story-vote-controls vote-controls hidden"
+		const canVote = Boolean(getSource(story.source)?.capabilities.vote);
+	const voteControlsHTML = `<span class="story-vote-controls vote-controls hidden${canVote ? " vote-controls-expected" : ""}"
 	data-hn-vote-source="${escapeHTML(String(story.source || "hn"))}"
 	data-hn-vote-story-id="${escapeHTML(storyID)}"
 	data-hn-vote-item-id="${escapeHTML(storyID)}"></span>`;
@@ -15496,7 +15579,7 @@ ${settingsPanelHTML()}
 		div.innerHTML = `
       <div class="comment-layout">
       <span class="comment-vote-slot${threadCanVote && !isLocalSource ? "" : " comment-vote-slot-empty"}">
-      <span class="comment-vote-controls vote-controls hidden"
+      <span class="comment-vote-controls vote-controls hidden${threadCanVote && !isLocalSource ? " vote-controls-expected" : ""}"
       data-hn-vote-source="${escapeHTML(String(comment.source || "hn"))}"
       data-hn-vote-story-id="${escapeHTML(String(storyID))}"
       data-hn-vote-item-id="${escapeHTML(commentID)}"></span>
@@ -15788,6 +15871,7 @@ ${settingsPanelHTML()}
 
 			refreshFavoriteControls().catch(console.error);
 			applyPendingFocus().catch(console.error);
+			ensureVoteControlsLoaded().catch(console.error);
 
 			pending = remaining;
 			remainingCount = Math.max(0, remainingCount - added.length);
