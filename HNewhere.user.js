@@ -14651,6 +14651,7 @@ ${settingsPanelHTML()}
 
 		const storyID = String(story.id);
 		const hnURL = discussionURL(story);
+		const articleTarget = story.articleURL || story.url || hnURL || "";
 		const title = options.title ?? story.title;
 		const watchLink = options.watchable
 			? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
@@ -14712,10 +14713,10 @@ ${settingsPanelHTML()}
 		ageLabel ? escapeHTML(ageLabel) + " " : ""
 	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
 	${itemActionLinksHTML(storyID, story.source, watchLink, {
-		key: favoriteKeyFor({ ...story, id: storyID, url: hnURL || story.url || "" }),
-		url: hnURL || story.url || "",
+		key: favoriteKeyFor({ ...story, id: storyID, url: articleTarget }),
+		url: articleTarget,
 		title: title || "",
-		site: story.site || (story.url ? hostLabel(story.url) : ""),
+		site: story.site || (articleTarget ? hostLabel(articleTarget) : ""),
 		kind: "discussion",
 	})}
 	${
