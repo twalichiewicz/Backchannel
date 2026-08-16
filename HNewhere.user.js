@@ -5457,6 +5457,7 @@ button {
 		const paint = (on) => {
 			button.textContent = on ? "unwatch" : "watch";
 			button.classList.toggle("item-action-on", on);
+			button.setAttribute("aria-pressed", on ? "true" : "false");
 		};
 
 		paint(Boolean(options.watching));
@@ -5503,50 +5504,13 @@ button {
 	}
 
 	function wireWatchToggle(button, title, discussions) {
-		if (!button) {
-			return;
-		}
-
 		const url = pageAddress();
-		const key = normalizeURL(url);
 
-		if (!key) {
-			button.hidden = true;
-
-			return;
-		}
-
-		const paint = (watching) => {
-			button.textContent = watching ? "unwatch" : "watch";
-			button.setAttribute("aria-pressed", watching ? "true" : "false");
-		};
-
-		loadWatches()
-			.then((entries) => paint(entries.some((entry) => entry.key === key)))
-			.catch(console.error);
-
-		button.onclick = async () => {
-			const entries = await loadWatches();
-			const watching = entries.some((entry) => entry.key === key);
-
-			if (watching) {
-				await stopWatching(key);
-			} else {
-				await startWatching(
-					{
-						key,
-						url,
-						title: title || document.title || "",
-						site: hostLabel(url),
-					},
-					discussions,
-				);
-			}
-
-			paint(!watching);
-
-			refreshWatchSignal().catch(console.error);
-		};
+		wireRowWatchLink(
+			button,
+			{ url, title: title || document.title || "", site: hostLabel(url) },
+			{ discussions },
+		);
 	}
 
 	function scheduleWatchPoll(settings) {
