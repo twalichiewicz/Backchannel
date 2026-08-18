@@ -4628,29 +4628,79 @@ button {
 		await reopenForNotes();
 	}
 
-	async function refreshNotepadInPlace() {
-		const section = sidebarUI?.body?.querySelector("[data-notes-section]");
-		const body = section?.querySelector(".notepad-body");
+	function placeNotesSection(ui, section) {
+		const storyCell = ui.body?.querySelector(".submission-detail .story-body-cell");
 
-		if (!body) {
+		if (storyCell && !storyCell.closest("[hidden]")) {
+			section.classList.add("notepad-section-inline");
+			storyCell.insertBefore(section, storyCell.querySelector(".compose-box"));
+			return;
+		}
+
+		section.classList.remove("notepad-section-inline");
+		ui.body.insertBefore(
+			section,
+			ui.body.querySelector(".compose-box") ||
+				ui.body.querySelector(".page-sort") ||
+				ui.body.querySelector(".top-level-comments"),
+		);
+	}
+
+	function retireNotesSection(section) {
+		const body = section.querySelector(".notepad-body");
+
+		if (prefersReducedMotion()) {
+			section.remove();
+			return;
+		}
+
+		section.style.overflow = "hidden";
+		section.style.maxHeight = `${section.scrollHeight}px`;
+
+		if (body) {
+			body.style.maxHeight = "0px";
+		}
+
+		requestAnimationFrame(() => {
+			section.style.transition = "max-height .22s ease, opacity .18s ease";
+			section.style.maxHeight = "0px";
+			section.style.opacity = "0";
+			window.setTimeout(() => section.remove(), 260);
+		});
+	}
+
+	async function refreshNotepadInPlace() {
+		if (!sidebarUI?.body) {
 			return false;
 		}
 
-		const notes = await loadNotes();
+		const settings = await loadSettings();
+		const notes = settings.notepad ? await loadNotes() : [];
+		let section = sidebarUI.body.querySelector("[data-notes-section]");
+
+		if (!notes.length) {
+			if (section) {
+				renderedComments = renderedComments.filter(
+					(rendered) => !section.contains(rendered.element),
+				);
+				retireNotesSection(section);
+			}
+
+			return true;
+		}
+
+		if (!section) {
+			section = notesSection({ empty: false }).section;
+			placeNotesSection(sidebarUI, section);
+		}
+
+		const body = section.querySelector(".notepad-body");
 		const discussion = notesCollective(notes, pageAddress());
-		const toggle = section.querySelector(".notepad-toggle");
-		const empty = !notes.length;
 
 		renderedComments = renderedComments.filter(
 			(rendered) => !body.contains(rendered.element),
 		);
 		body.replaceChildren();
-
-		toggle.hidden = empty;
-		toggle.textContent = empty ? "show" : "hide";
-		toggle.setAttribute("aria-expanded", empty ? "false" : "true");
-		section.classList.toggle("is-collapsed", empty);
-		body.style.maxHeight = empty ? "0px" : "";
 
 		if (discussion) {
 			const thread = notesThread(discussion);
@@ -14218,11 +14268,6 @@ ${SUBMIT_FORM_CSS}
 	align-items:flex-start;
 }
 
-.comment-vote-slot-empty {
-	flex-basis:0;
-	width:0;
-}
-
 .comment-vote-slot {
 	flex:0 0 var(--vote-column);
 	width:var(--vote-column);
@@ -14231,6 +14276,15 @@ ${SUBMIT_FORM_CSS}
 	align-items:center;
 	align-self:stretch;
 	padding-top:1px;
+}
+
+.comment-vote-slot.comment-vote-slot-empty {
+	flex-basis:0;
+	width:0;
+}
+
+.comment-vote-slot.comment-vote-slot-empty::after {
+	display:none;
 }
 
 .comment-vote-slot::after {
@@ -16400,7 +16454,7 @@ ${settingsPanelHTML()}
       <div class="comment-main">
       <div class="meta">
 
-      ${authorLinkHTML(comment.source, comment.author, comment.authorName)}
+      ${isLocalSource ? "" : authorLinkHTML(comment.source, comment.author, comment.authorName)}
 
 		${comment.isOP ? `<span class="op-pill">OP</span>` : ""}
 
@@ -16839,24 +16893,7 @@ ${settingsPanelHTML()}
 		if (settings.notepad && notes.length) {
 			const held = notesSection({ empty: false });
 
-			const storyCell = disambiguating
-				? null
-				: ui.body.querySelector(".submission-detail .story-body-cell");
-
-			if (storyCell) {
-				held.section.classList.add("notepad-section-inline");
-				storyCell.insertBefore(
-					held.section,
-					storyCell.querySelector(".comment-composer"),
-				);
-			} else {
-				ui.body.insertBefore(
-					held.section,
-					ui.body.querySelector(".compose-box") ||
-						ui.body.querySelector(".page-sort") ||
-						comments,
-				);
-			}
+			placeNotesSection(ui, held.section);
 
 			if (notesDiscussion) {
 				const thread = notesThread(notesDiscussion);
@@ -17088,7 +17125,6 @@ ${settingsPanelHTML()}
 		const body = document.createElement("div");
 		const foot = document.createElement("div");
 		const toggle = document.createElement("button");
-		const add = document.createElement("button");
 
 		section.className = "notepad-section";
 		section.dataset.notesSection = "1";
@@ -17098,7 +17134,7 @@ ${settingsPanelHTML()}
 
 		toggle.type = "button";
 		toggle.className = "notepad-toggle";
-		toggle.textContent = empty ? "show" : "hide";
+		toggle.textContent = empty ? "[+]" : "[\u2013]";
 		toggle.hidden = empty;
 		toggle.setAttribute("aria-expanded", empty ? "false" : "true");
 
@@ -17115,7 +17151,7 @@ ${settingsPanelHTML()}
 				: body.scrollHeight
 					? `${body.scrollHeight}px`
 					: "";
-			toggle.textContent = collapsed ? "show" : "hide";
+			toggle.textContent = collapsed ? "[+]" : "[\u2013]";
 			toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
 			body.style.overflow = "hidden";
 

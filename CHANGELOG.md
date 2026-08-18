@@ -120,7 +120,22 @@ use to detect updates, so every release bumps it.
 - A note in the notepad is given the same room below it as above it. The last one
   used to sit on the rule beneath it.
 
+- **The notepad folds with a [–]**, the mark everything else in the panel that
+  folds already carries. Folded, it is a **[+]**.
+
+- **A note carries no author and no indent guide.** Every note in the notepad is
+  yours, so there was nothing for the name to tell you apart from and nothing to
+  nest under — only when it was written, and **edit** / **delete**.
+
+- **Delete the last note on a discussion and the notepad folds away**, instead of
+  leaving its heading and rule standing over nothing.
+
 ### Fixed
+
+- **Saving a note redrew the whole discussion.** On a page whose notepad was
+  still empty there was nothing on screen to add the note to, so the panel
+  rebuilt the page from scratch. It now puts the notepad in place and adds the
+  note to it, the way every note after the first was already handled.
 
 - **A Hacker News action on a phone reported a blocked popup and left nowhere to
   go.** Voting opened its window one step after the press rather than during it,
