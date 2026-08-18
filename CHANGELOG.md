@@ -63,6 +63,15 @@ use to detect updates, so every release bumps it.
   *All of your favorited discussions, comments, and notes*. The line slides with
   the list when you move between the three.
 
+- **The discussions on a blended page are chosen from a menu**, where they used
+  to be a strip of pills that unfolded under the header. It drops from the
+  **N discussions** link, lists **All sources** first, and then the discussions
+  themselves — the ones running now under a **LIVE** heading, the rest below it,
+  each group busiest first, with its comment count on the right. Choosing one
+  filters to it; choosing it again goes back to **All sources**, which is what
+  pressing a lit pill used to do. A long blend scrolls inside the menu instead of
+  wrapping into rows of pills.
+
 - **The collection's sections fold.** *favorite discussions*, *favorite comments*
   and *notes* each carry a **[–]**, so a long collection can be read a part at a
   time.

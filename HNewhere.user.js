@@ -2950,8 +2950,23 @@
 		return (disambiguating && story?.title) || page;
 	}
 
-	function stripCloseClearsFilter(opening, filter) {
-		return !opening && filter?.type === "discussion";
+	function sourceMenuGroups(stories, liveKeys) {
+		const live = new Set(liveKeys || []);
+		const busiest = (list) =>
+			[...list].sort((a, b) => (b.commentCount ?? 0) - (a.commentCount ?? 0));
+		const running = busiest((stories || []).filter((story) => live.has(story.key)));
+		const rest = busiest((stories || []).filter((story) => !live.has(story.key)));
+
+		if (!running.length) {
+			return rest.length ? [{ live: false, stories: rest }] : [];
+		}
+
+		return rest.length
+			? [
+					{ live: true, stories: running },
+					{ live: false, stories: rest },
+				]
+			: [{ live: true, stories: running }];
 	}
 
 	function newestCommentTime(comments, discussionKey) {
@@ -11656,24 +11671,101 @@ header button svg {
 	border-bottom:0;
 }
 
-.source-strip {
-	display:flex;
-	flex-wrap:wrap;
-	gap:6px;
-	overflow:hidden;
-	max-height:0;
-	opacity:0;
-	margin-top:0;
-	transition:max-height .22s ease, opacity .18s ease, margin-top .22s ease;
+.source-menu-anchor {
+	position:relative;
+	display:inline-flex;
 }
 
-.source-strip-single {
+.source-menu {
+	position:absolute;
+	left:0;
+	top:calc(100% + 4px);
+	z-index:4;
+	min-width:180px;
+	max-width:270px;
+	max-height:260px;
+	overflow-y:auto;
+	padding:8px;
+	border:1px solid var(--surface-border);
+	border-radius:8px;
+	background:var(--surface);
+	color:var(--surface-text);
+	box-shadow:0 8px 24px rgba(0,0,0,.16);
+	text-align:left;
+}
+
+.source-menu.hidden {
 	display:none;
 }
 
-.source-strip.is-open {
-	opacity:1;
+.source-menu-group + .source-menu-group {
 	margin-top:8px;
+	padding-top:8px;
+	border-top:1px solid var(--surface-divider);
+}
+
+.source-menu-head {
+	margin-bottom:6px;
+}
+
+.source-menu-head .live-pill {
+	margin-left:0;
+}
+
+.source-menu-option {
+	align-items:center;
+	padding:3px 4px;
+	border-radius:4px;
+	cursor:pointer;
+}
+
+.source-menu-option + .source-menu-option {
+	margin-top:2px;
+}
+
+.source-menu-option input[type="radio"] {
+	appearance:none;
+	-webkit-appearance:none;
+	box-sizing:border-box;
+	flex:0 0 auto;
+	width:13px;
+	height:13px;
+	margin:0;
+	border:1px solid var(--help-border);
+	border-radius:50%;
+	background:var(--help-bg);
+	cursor:pointer;
+	transition:border-color .14s ease, box-shadow .14s ease;
+}
+
+.source-menu-option input[type="radio"]:checked {
+	border-color:var(--accent);
+	box-shadow:inset 0 0 0 3px var(--surface);
+	background:var(--accent);
+}
+
+.source-menu-label {
+	min-width:0;
+	overflow:hidden;
+	text-overflow:ellipsis;
+	white-space:nowrap;
+}
+
+.source-menu-count {
+	margin-left:auto;
+	padding-left:8px;
+	color:var(--muted);
+	font-variant-numeric:tabular-nums;
+}
+
+.source-menu-option-active .source-menu-label {
+	font-weight:600;
+}
+
+@media (hover: hover) {
+	.source-menu-option:hover {
+		background:var(--hover-tint);
+	}
 }
 
 .page-header-disclosure,
@@ -11753,39 +11845,6 @@ header button svg {
 
 .list-filtered .page-sort {
 	display:none;
-}
-
-.source-strip-entry {
-	display:inline-flex;
-	align-items:baseline;
-	gap:5px;
-	padding:2px 7px;
-	border:0;
-	border-radius:999px;
-	background:var(--hover-tint);
-	color:inherit;
-	font:inherit;
-	font-size:11px;
-	cursor:pointer;
-}
-
-.source-strip-entry-active {
-	background:var(--active-tint);
-	font-weight:600;
-}
-
-.source-strip-label {
-	min-width:0;
-	max-width:16ch;
-	overflow:hidden;
-	text-overflow:ellipsis;
-	white-space:nowrap;
-}
-
-.source-strip-count {
-	flex:0 0 auto;
-	color:var(--muted);
-	font-variant-numeric:tabular-nums;
 }
 
 .more-replies {
@@ -17228,9 +17287,9 @@ ${settingsPanelHTML()}
 				}
 			}
 
-			for (const pill of body.querySelectorAll(".source-strip-entry")) {
-				if (pill.dataset.discussionKey === story.key) {
-					const shown = pill.querySelector(".source-strip-count");
+			for (const option of body.querySelectorAll(".source-menu-option")) {
+				if (option.dataset.discussionKey === story.key) {
+					const shown = option.querySelector(".source-menu-count");
 
 					if (shown) {
 						shown.textContent = String(count);
@@ -17504,7 +17563,7 @@ ${settingsPanelHTML()}
 <div class="page-header-title">${single ? "" : escapeHTML(page)}</div>
 <div class="page-header-meta">${
 	stories.length > 1
-		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button><span class="page-header-sep">|</span>`
+		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <span class="source-menu-anchor"><button type="button" class="page-header-disclosure" aria-expanded="false" aria-haspopup="true" aria-controls="source-menu">${escapeHTML(pluralize(stories.length, "discussion"))}</button>${sourceMenuHTML(stories)}</span><span class="page-header-sep">|</span>`
 		: ""
 }${
 	stories.length > 1
@@ -17513,23 +17572,8 @@ ${settingsPanelHTML()}
 		}`
 		: ""
 }</div>
-<div class="source-strip${stories.length > 1 ? "" : " source-strip-single"}" id="source-strip">
-${
-	stories
-	.map(
-		(story, index) => `
-<button type="button" class="source-strip-entry"
-data-discussion-key="${escapeHTML(story.key)}"
-title="Show only this discussion">
-<span class="source-strip-label">${escapeHTML(liveDiscussions.has(story.key) ? story.baseLabel || story.label : story.label)}</span>
-<span class="source-strip-count">${escapeHTML(String(story.commentCount ?? 0))}</span>${liveDiscussions.has(story.key) ? `<span class="live-pill">LIVE</span>` : ""}
-</button>`,
-	)
-	.join("")
-}
-</div>`;
+`;
 
-		const strip = wrapper.querySelector(".source-strip");
 		wireWatchToggle(wrapper.querySelector(".page-header-watch"), page, stories);
 
 		const disclosure = wrapper.querySelector(".page-header-disclosure");
@@ -17541,47 +17585,48 @@ title="Show only this discussion">
 			return wrapper;
 		}
 
-		const setStripOpen = (open) => {
-			strip.classList.toggle("is-open", open);
+		const menu = wrapper.querySelector(".source-menu");
+
+		const setMenuOpen = (open) => {
+			menu.classList.toggle("hidden", !open);
 			disclosure.setAttribute("aria-expanded", open ? "true" : "false");
-
-			strip.style.maxHeight = open ? `${strip.scrollHeight}px` : "0px";
-
-			for (const entry of strip.querySelectorAll(".source-strip-entry")) {
-				entry.tabIndex = open ? 0 : -1;
-			}
 		};
 
-		setStripOpen(false);
+		setMenuOpen(false);
 
-		disclosure.onclick = () => {
-			const opening = !strip.classList.contains("is-open");
+		disclosure.onclick = () => setMenuOpen(menu.classList.contains("hidden"));
 
-			if (stripCloseClearsFilter(opening, activeCommentFilter)) {
-				clearCommentFilter({ restore: true });
-				syncFilterAffordances();
-			}
+		menu.addEventListener("click", (event) => {
+			const option = event.target.closest("input")?.closest(".source-menu-option");
 
-			setStripOpen(opening);
-		};
-
-		wrapper.querySelector(".source-strip").addEventListener("click", (event) => {
-			const entry = event.target.closest(".source-strip-entry");
-
-			if (!entry) {
+			if (!option) {
 				return;
 			}
 
-			const key = entry.dataset.discussionKey;
+			const key = option.dataset.discussionKey || "";
+			const already =
+				activeCommentFilter?.type === "discussion" && activeCommentFilter.key === key;
 
-			if (activeCommentFilter?.type === "discussion" && activeCommentFilter.key === key) {
+			if (!key || already) {
 				clearCommentFilter({ restore: true });
 			} else {
 				applyDiscussionFilter(key);
 			}
 
 			syncFilterAffordances();
-			setStripOpen(true);
+		});
+
+		menu.addEventListener("keydown", (event) => {
+			if (event.key === "Escape") {
+				setMenuOpen(false);
+				disclosure.focus();
+			}
+		});
+
+		wrapper.addEventListener("focusout", (event) => {
+			if (!wrapper.contains(event.relatedTarget)) {
+				setMenuOpen(false);
+			}
 		});
 
 		container.appendChild(wrapper);
@@ -17630,10 +17675,10 @@ title="Show only this discussion">
 	}
 
 	function syncFilterAffordances() {
-		const wrapper = sidebarUI?.body?.querySelector(".source-strip");
+		const menu = sidebarUI?.body?.querySelector(".source-menu");
 
-		if (wrapper) {
-			syncSourceStripState(wrapper);
+		if (menu) {
+			syncSourceMenuState(menu);
 		}
 
 		syncSubmissionDetails();
@@ -17650,15 +17695,57 @@ title="Show only this discussion">
 		sidebarUI?.body?.classList.toggle("list-filtered", Boolean(activeCommentFilter));
 	}
 
-	function syncSourceStripState(wrapper) {
+	let sourceMenuSeq = 0;
+
+	function sourceMenuHTML(stories) {
+		const name = `source-menu-${(sourceMenuSeq += 1)}`;
+		const groups = sourceMenuGroups(stories, liveDiscussions.keys());
+		const option = (key, label, count, live) => `
+<label class="settings-option source-menu-option"${key ? ` data-discussion-key="${escapeHTML(key)}"` : ""}>
+<input type="radio" name="${name}"${key ? "" : " checked"}>
+<span class="source-menu-label">${escapeHTML(label)}</span>${
+	count === null
+		? ""
+		: `<span class="source-menu-count">${escapeHTML(String(count))}</span>`
+}${live ? `<span class="live-pill">LIVE</span>` : ""}
+</label>`;
+
+		return `<div class="source-menu hidden" id="source-menu" role="menu">
+<div class="source-menu-group">${option("", "All sources", null, false)}</div>
+${groups
+	.map(
+		(group) => `<div class="source-menu-group">${
+			group.live && groups.length > 1
+				? `<div class="source-menu-head"><span class="live-pill">LIVE</span></div>`
+				: ""
+		}${group.stories
+			.map((story) =>
+				option(
+					story.key,
+					(liveDiscussions.has(story.key) ? story.baseLabel || story.label : story.label) || story.source,
+					story.commentCount ?? 0,
+					group.live && groups.length === 1,
+				),
+			)
+			.join("")}</div>`,
+	)
+	.join("")}
+</div>`;
+	}
+
+	function syncSourceMenuState(menu) {
 		const active =
 			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
 
-		for (const entry of wrapper.querySelectorAll(".source-strip-entry")) {
-			entry.classList.toggle(
-				"source-strip-entry-active",
-				entry.dataset.discussionKey === active,
-			);
+		for (const option of menu.querySelectorAll(".source-menu-option")) {
+			const mine = (option.dataset.discussionKey || "") === (active || "");
+			const input = option.querySelector("input");
+
+			option.classList.toggle("source-menu-option-active", mine && Boolean(active));
+
+			if (input) {
+				input.checked = mine;
+			}
 		}
 	}
 
