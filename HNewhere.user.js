@@ -13802,7 +13802,7 @@ ${SUBMIT_FORM_CSS}
 }
 
 .notepad-section {
-	margin:0 0 6px;
+	margin:0 0 12px;
 }
 
 .notepad-rule {
@@ -13821,6 +13821,26 @@ ${SUBMIT_FORM_CSS}
 	flex:1 0 24px;
 	height:1px;
 	background:var(--surface-border);
+}
+
+.notepad-section-inline {
+	margin-top:14px;
+}
+
+.notepad-section-inline::before {
+	content:"";
+	display:block;
+	height:1px;
+	margin:0 0 0 calc(8px - var(--vote-column));
+	background:var(--surface-border);
+}
+
+.notepad-section-inline .notepad-rule {
+	margin-left:calc(-12px - var(--vote-column));
+}
+
+.notepad-section-inline .notepad-body {
+	margin-left:calc(8px - var(--vote-column));
 }
 
 .notepad-rule-close {
@@ -13850,7 +13870,8 @@ ${SUBMIT_FORM_CSS}
 	color:var(--meta);
 	font:inherit;
 	font-size:11px;
-	text-decoration:none;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
 	cursor:pointer;
 }
 
@@ -13885,6 +13906,7 @@ ${SUBMIT_FORM_CSS}
 }
 
 .notepad-body {
+	margin-left:8px;
 	overflow:hidden;
 	transition:max-height .22s ease, opacity .18s ease;
 }
@@ -16363,10 +16385,22 @@ ${settingsPanelHTML()}
 				onAdd: () => startNotepadDraft(held.section, held.body),
 			});
 
-			ui.body.insertBefore(
-				held.section,
-				ui.body.querySelector(".page-sort") || comments,
-			);
+			const storyCell = disambiguating
+				? null
+				: ui.body.querySelector(".submission-detail .story-body-cell");
+
+			if (storyCell) {
+				held.section.classList.add("notepad-section-inline");
+				storyCell.insertBefore(
+					held.section,
+					storyCell.querySelector(".comment-composer"),
+				);
+			} else {
+				ui.body.insertBefore(
+					held.section,
+					ui.body.querySelector(".page-sort") || comments,
+				);
+			}
 
 			if (notesDiscussion) {
 				const thread = notesThread(notesDiscussion);
