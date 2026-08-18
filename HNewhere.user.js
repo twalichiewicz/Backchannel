@@ -5240,8 +5240,15 @@ button {
 		);
 	}
 
+	function canNotify() {
+		return (
+			typeof Notification !== "undefined" &&
+			typeof Notification.requestPermission === "function"
+		);
+	}
+
 	async function grantNotifications() {
-		if (typeof Notification === "undefined") {
+		if (!canNotify()) {
 			return false;
 		}
 
@@ -11951,7 +11958,7 @@ header button svg {
 }
 
 .settings-option-hint {
-	margin:3px 0 0 21px;
+	margin:3px 0 0 23px;
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
@@ -11987,7 +11994,7 @@ header button svg {
 }
 
 .settings-option.sub-option + .settings-option-hint {
-	margin-left:41px;
+	margin-left:43px;
 }
 
 .op-pill {
@@ -13010,6 +13017,19 @@ ${[
 
 				if (notice) {
 					notice.hidden = false;
+				}
+			}
+
+			if (!canNotify()) {
+				const option = settingsInputs.notifyOnWatch?.closest(".settings-option");
+				const hint = option?.nextElementSibling;
+
+				if (option) {
+					option.hidden = true;
+				}
+
+				if (hint?.classList.contains("settings-option-hint")) {
+					hint.hidden = true;
 				}
 			}
 		};
