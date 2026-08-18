@@ -10849,7 +10849,7 @@ header {
 
 .browse-view {
 	display:none;
-	--browse-indent:28px;
+	--browse-indent:23px;
 }
 
 #comments-content,
@@ -10864,6 +10864,7 @@ header {
 }
 
 #browse-list {
+	padding-left:8px;
 	transition:opacity .16s ease, transform .16s ease;
 }
 
@@ -10913,7 +10914,6 @@ header {
 
 .browse-subhead {
 	margin:0 0 6px;
-	padding-left:8px;
 	color:var(--meta);
 	font-size:11px;
 	font-family:Verdana, Geneva, sans-serif;
@@ -11067,7 +11067,7 @@ header {
 }
 
 .browse-skeleton {
-	margin-left:8px;
+	margin-left:0;
 }
 
 .browse-skeleton-label {
@@ -11165,14 +11165,14 @@ header {
 
 .browse-rank {
 	flex:0 0 auto;
-	min-width:22px;
-	text-align:right;
+	min-width:17px;
+	text-align:left;
 	color:var(--meta);
 	font-size:11px;
 }
 
 .browse-row-loose {
-	padding:0 0 0 8px;
+	padding:0;
 }
 
 .browse-row-loose + .browse-row-loose {
@@ -11605,7 +11605,8 @@ header button svg {
 }
 
 .page-header {
-	padding:0 14px 10px;
+	margin-left:8px;
+	padding:0 14px 10px 0;
 	border-bottom:1px solid var(--border-soft);
 }
 
@@ -11678,7 +11679,7 @@ header button svg {
 	display:flex;
 	align-items:center;
 	gap:6px;
-	padding:8px 0 0;
+	padding:8px 0 0 8px;
 	font-size:11px;
 	color:var(--meta);
 }
@@ -11812,7 +11813,7 @@ header button svg {
 	align-items:center;
 	gap:6px;
 	margin:0 -12px;
-	padding:10px 12px 0;
+	padding:10px 12px 0 20px;
 	font-size:11px;
 	color:var(--meta);
 	line-height:13px;
@@ -13789,7 +13790,7 @@ ${SUBMIT_FORM_CSS}
 	align-items:center;
 	gap:6px;
 	margin:0 -12px;
-	padding:10px 12px 0;
+	padding:10px 12px 0 20px;
 	font-size:11px;
 	color:var(--meta);
 	line-height:13px;
@@ -14524,6 +14525,10 @@ blockquote.comment-quote-redundant {
 
 .story-text a {
 	color:var(--link);
+}
+
+.story-body-cell > .comment-composer {
+	margin-left:calc(8px - var(--vote-column));
 }
 
 .comment-composer {
