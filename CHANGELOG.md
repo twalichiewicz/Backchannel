@@ -67,7 +67,8 @@ use to detect updates, so every release bumps it.
   to be a strip of pills that unfolded under the header. It drops from the
   **N discussions** link, lists **All sources** first, and then the discussions
   themselves — the ones running now under a **LIVE** heading, the rest below it,
-  each group busiest first, with its comment count on the right. Choosing one
+  each band split by source in alphabetical order and each source's own threads
+  busiest first, with its comment count on the right. Choosing one
   filters to it; choosing it again goes back to **All sources**, which is what
   pressing a lit pill used to do. A long blend scrolls inside the menu instead of
   wrapping into rows of pills.
@@ -96,6 +97,14 @@ use to detect updates, so every release bumps it.
   panels use — and scrolls when the blend is a long one. While that list is open
   the button carries the same pressed tint the header's icons do. Filtered to one
   discussion the button is plain **comment** and goes straight there.
+
+  That list is the same shape as the **N discussions** menu above it: the ones
+  running now under a **LIVE** heading and the rest below, each band split by
+  source — **Hacker News**, **Reddit** — in alphabetical order, each source's own
+  threads busiest first, and a comment count on every row. Two threads in one subreddit used to be two
+  rows both reading *r/live* with nothing to choose between them; they now carry
+  the month they were posted, as they already did elsewhere in the panel. One
+  press on a row posts there.
 
   **Scroll the box out of sight and it follows you**, as a pill under the header.
   Pressing it opens the same box, still holding whatever you had half-written;

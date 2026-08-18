@@ -2950,23 +2950,44 @@
 		return (disambiguating && story?.title) || page;
 	}
 
-	function sourceMenuGroups(stories, liveKeys) {
+	function sourceMenuGroups(stories, liveKeys, labelFor = (id) => id) {
 		const live = new Set(liveKeys || []);
-		const busiest = (list) =>
-			[...list].sort((a, b) => (b.commentCount ?? 0) - (a.commentCount ?? 0));
-		const running = busiest((stories || []).filter((story) => live.has(story.key)));
-		const rest = busiest((stories || []).filter((story) => !live.has(story.key)));
 
-		if (!running.length) {
-			return rest.length ? [{ live: false, stories: rest }] : [];
+		const bySource = (list) => {
+			const held = new Map();
+
+			for (const story of list) {
+				if (!held.has(story.source)) {
+					held.set(story.source, []);
+				}
+
+				held.get(story.source).push(story);
+			}
+
+			return [...held]
+				.map(([id, own]) => ({
+					id,
+					label: labelFor(id) || id,
+					stories: own.sort(
+						(a, b) => (b.commentCount ?? 0) - (a.commentCount ?? 0),
+					),
+				}))
+				.sort((a, b) => a.label.localeCompare(b.label));
+		};
+
+		const band = (running) =>
+			(stories || []).filter((story) => live.has(story.key) === running);
+		const groups = [];
+
+		for (const running of [true, false]) {
+			const own = band(running);
+
+			if (own.length) {
+				groups.push({ live: running, sources: bySource(own) });
+			}
 		}
 
-		return rest.length
-			? [
-					{ live: true, stories: running },
-					{ live: false, stories: rest },
-				]
-			: [{ live: true, stories: running }];
+		return groups;
 	}
 
 	function newestCommentTime(comments, discussionKey) {
@@ -11698,18 +11719,31 @@ header button svg {
 	display:none;
 }
 
-.source-menu-group + .source-menu-group {
+.choice-group + .choice-group {
 	margin-top:8px;
 	padding-top:8px;
 	border-top:1px solid var(--surface-divider);
 }
 
-.source-menu-head {
+.choice-head {
 	margin-bottom:6px;
 }
 
-.source-menu-head .live-pill {
+.choice-head .live-pill {
 	margin-left:0;
+}
+
+.choice-sub + .choice-sub {
+	margin-top:7px;
+}
+
+.choice-sub-head {
+	margin:0 0 3px 2px;
+	color:var(--muted);
+	font-size:10px;
+	font-weight:600;
+	letter-spacing:.04em;
+	text-transform:uppercase;
 }
 
 .source-menu-option {
@@ -11744,21 +11778,21 @@ header button svg {
 	background:var(--accent);
 }
 
-.source-menu-label {
+.choice-label {
 	min-width:0;
 	overflow:hidden;
 	text-overflow:ellipsis;
 	white-space:nowrap;
 }
 
-.source-menu-count {
+.choice-count {
 	margin-left:auto;
 	padding-left:8px;
 	color:var(--muted);
 	font-variant-numeric:tabular-nums;
 }
 
-.source-menu-option-active .source-menu-label {
+.source-menu-option-active .choice-label {
 	font-weight:600;
 }
 
@@ -14836,6 +14870,7 @@ blockquote.comment-quote-redundant {
 	display:flex;
 	flex-direction:column;
 	min-width:132px;
+	max-width:270px;
 	padding:4px;
 	border:1px solid var(--surface-border);
 	border-radius:6px;
@@ -14848,7 +14883,11 @@ blockquote.comment-quote-redundant {
 }
 
 .compose-target {
-	padding:5px 8px;
+	display:flex;
+	align-items:center;
+	gap:8px;
+	width:100%;
+	padding:4px 6px;
 	border:0;
 	border-radius:4px;
 	background:none;
@@ -14857,6 +14896,10 @@ blockquote.comment-quote-redundant {
 	font-size:12px;
 	text-align:left;
 	cursor:pointer;
+}
+
+.compose-target + .compose-target {
+	margin-top:2px;
 }
 
 @media (hover: hover) {
@@ -15723,7 +15766,26 @@ ${settingsPanelHTML()}
 			commentButton.setAttribute("aria-expanded", "true");
 		};
 
+		let offered = [];
+
 		if (canComment) {
+			menu.addEventListener("click", (event) => {
+				const choice = event.target.closest(".compose-target");
+				const story = offered.find(
+					(candidate) => candidate.key === choice?.dataset.discussionKey,
+				);
+
+				if (!story) {
+					return;
+				}
+
+				closeMenu();
+				box._hnewhereDock?.undock();
+				held
+					.send({ source: story.source, storyID: story.id })
+					.finally(() => syncComposeSendable(box));
+			});
+
 			commentButton.onclick = () => {
 				const targets = replyTargets(stories);
 
@@ -15745,24 +15807,11 @@ ${settingsPanelHTML()}
 					return;
 				}
 
-				menu.replaceChildren(
-					...targets.map((story) => {
-						const choice = document.createElement("button");
-
-						choice.type = "button";
-						choice.className = "compose-target";
-						choice.textContent =
-							story.baseLabel || story.label || getSource(story.source)?.label || story.source;
-						choice.onclick = () => {
-							closeMenu();
-							box._hnewhereDock?.undock();
-							held
-								.send({ source: story.source, storyID: story.id })
-								.finally(() => syncComposeSendable(box));
-						};
-
-						return choice;
-					}),
+				offered = targets;
+				menu.innerHTML = discussionChoiceGroupsHTML(
+					targets,
+					(story, about) =>
+						`<button type="button" class="compose-target" data-discussion-key="${escapeHTML(story.key)}">${discussionChoiceHTML("", about)}</button>`,
 				);
 				openMenu();
 			};
@@ -17307,9 +17356,9 @@ ${settingsPanelHTML()}
 				}
 			}
 
-			for (const option of body.querySelectorAll(".source-menu-option")) {
-				if (option.dataset.discussionKey === story.key) {
-					const shown = option.querySelector(".source-menu-count");
+			for (const row of body.querySelectorAll("[data-discussion-key]")) {
+				if (row.dataset.discussionKey === story.key) {
+					const shown = row.querySelector(".choice-count");
 
 					if (shown) {
 						shown.textContent = String(count);
@@ -17717,39 +17766,63 @@ ${settingsPanelHTML()}
 
 	let sourceMenuSeq = 0;
 
+	function discussionChoiceLabel(story) {
+		return (
+			story.label || story.baseLabel || getSource(story.source)?.label || story.source
+		);
+	}
+
+	function discussionChoiceHTML(inner, { label, count = null, live = false }) {
+		return `${inner}<span class="choice-label">${escapeHTML(label)}</span>${
+			count === null ? "" : `<span class="choice-count">${escapeHTML(String(count))}</span>`
+		}${live ? `<span class="live-pill">LIVE</span>` : ""}`;
+	}
+
+	function discussionChoiceGroupsHTML(stories, row) {
+		const groups = sourceMenuGroups(
+			stories,
+			liveDiscussions.keys(),
+			(id) => getSource(id)?.label,
+		);
+
+		return groups
+			.map(
+				(group) => `<div class="choice-group">${
+					group.live && groups.length > 1
+						? `<div class="choice-head"><span class="live-pill">LIVE</span></div>`
+						: ""
+				}${group.sources
+					.map(
+						(source) => `<div class="choice-sub">${
+							group.sources.length > 1
+								? `<div class="choice-sub-head">${escapeHTML(source.label)}</div>`
+								: ""
+						}${source.stories
+							.map((story) =>
+								row(story, {
+									label: discussionChoiceLabel(story),
+									count: story.commentCount ?? 0,
+									live: group.live && groups.length === 1,
+								}),
+							)
+							.join("")}</div>`,
+					)
+					.join("")}</div>`,
+			)
+			.join("");
+	}
+
 	function sourceMenuHTML(stories) {
 		const name = `source-menu-${(sourceMenuSeq += 1)}`;
-		const groups = sourceMenuGroups(stories, liveDiscussions.keys());
-		const option = (key, label, count, live) => `
-<label class="settings-option source-menu-option"${key ? ` data-discussion-key="${escapeHTML(key)}"` : ""}>
-<input type="radio" name="${name}"${key ? "" : " checked"}>
-<span class="source-menu-label">${escapeHTML(label)}</span>${
-	count === null
-		? ""
-		: `<span class="source-menu-count">${escapeHTML(String(count))}</span>`
-}${live ? `<span class="live-pill">LIVE</span>` : ""}
-</label>`;
+		const option = (key, about) => `
+<label class="settings-option source-menu-option"${key ? ` data-discussion-key="${escapeHTML(key)}"` : ""}>${discussionChoiceHTML(
+			`<input type="radio" name="${name}"${key ? "" : " checked"}>`,
+			about,
+		)}</label>`;
 
 		return `<div class="source-menu hidden" id="source-menu" role="menu">
-<div class="source-menu-group">${option("", "All sources", null, false)}</div>
-${groups
-	.map(
-		(group) => `<div class="source-menu-group">${
-			group.live && groups.length > 1
-				? `<div class="source-menu-head"><span class="live-pill">LIVE</span></div>`
-				: ""
-		}${group.stories
-			.map((story) =>
-				option(
-					story.key,
-					(liveDiscussions.has(story.key) ? story.baseLabel || story.label : story.label) || story.source,
-					story.commentCount ?? 0,
-					group.live && groups.length === 1,
-				),
-			)
-			.join("")}</div>`,
-	)
-	.join("")}
+<div class="choice-group">${option("", { label: "All sources" })}</div>
+${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about))}
 </div>`;
 	}
 
