@@ -9365,10 +9365,10 @@ button {
 		};
 
 		if (saved.length) {
-			subhead(list, "favorite discussions");
+			const section = subhead(list, "favorite discussions", { collapsible: true });
 
 			for (const entry of saved) {
-				collectionRow(entry, list, null, {
+				collectionRow(entry, section, null, {
 					unfavorite: entry.key,
 					reload,
 				});
@@ -9376,10 +9376,10 @@ button {
 		}
 
 		if (comments.length) {
-			subhead(list, "favorite comments");
+			const section = subhead(list, "favorite comments", { collapsible: true });
 
 			for (const entry of comments) {
-				const row = collectionRow(entry, list, null, {
+				const row = collectionRow(entry, section, null, {
 					unfavorite: entry.key,
 					reload,
 				});
@@ -9399,10 +9399,10 @@ button {
 		}
 
 		if (noted.length) {
-			subhead(list, "notes");
+			const section = subhead(list, "notes", { collapsible: true });
 
 			for (const entry of noted) {
-				noteCollectionRow(entry, list, {
+				noteCollectionRow(entry, section, {
 					onDelete: async (page, note) => {
 						await deleteCollectedNote(page, note);
 						await reload();
@@ -9738,12 +9738,42 @@ button {
 		return updates.size > 0;
 	}
 
-	function subhead(list, text) {
+	function subhead(list, text, { collapsible = false } = {}) {
 		const heading = document.createElement("div");
 
 		heading.className = "browse-subhead";
 		heading.textContent = text;
-		list.appendChild(heading);
+
+		if (!collapsible) {
+			list.appendChild(heading);
+			return list;
+		}
+
+		const section = document.createElement("div");
+		const body = document.createElement("div");
+		const toggle = document.createElement("button");
+
+		section.className = "browse-section";
+		body.className = "browse-section-body";
+
+		toggle.type = "button";
+		toggle.className = "browse-subhead-toggle";
+
+		const paint = (collapsed) => {
+			toggle.textContent = collapsed ? "[+]" : "[–]";
+			toggle.setAttribute("aria-expanded", String(!collapsed));
+			toggle.setAttribute("aria-label", (collapsed ? "Expand " : "Collapse ") + text);
+		};
+
+		paint(false);
+
+		toggle.onclick = () => paint(section.classList.toggle("is-collapsed"));
+
+		heading.appendChild(toggle);
+		section.append(heading, body);
+		list.appendChild(section);
+
+		return body;
 	}
 
 	async function renderQueueView(ui, list) {
@@ -10926,10 +10956,29 @@ header {
 	font-family:Verdana, Geneva, sans-serif;
 }
 
-.browse-row + .browse-subhead {
+.browse-row + .browse-subhead,
+.browse-section + .browse-section > .browse-subhead {
 	margin-top:14px;
 	padding-top:14px;
 	border-top:1px solid var(--surface-divider);
+}
+
+.browse-subhead-toggle {
+	margin-left:6px;
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	font:inherit;
+	cursor:pointer;
+}
+
+.browse-section.is-collapsed > .browse-subhead {
+	margin-bottom:0;
+}
+
+.browse-section.is-collapsed > .browse-section-body {
+	display:none;
 }
 
 
