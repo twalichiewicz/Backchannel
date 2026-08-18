@@ -4629,19 +4629,18 @@ button {
 	}
 
 	function placeNotesSection(ui, section) {
-		const storyCell = ui.body?.querySelector(".submission-detail .story-body-cell");
+		const box =
+			ui.body.querySelector(".compose-box") ||
+			ui.body.querySelector(".compose-spacer");
 
-		if (storyCell && !storyCell.closest("[hidden]")) {
-			section.classList.add("notepad-section-inline");
-			storyCell.insertBefore(section, storyCell.querySelector(".compose-box"));
+		if (box) {
+			box.after(section);
 			return;
 		}
 
-		section.classList.remove("notepad-section-inline");
 		ui.body.insertBefore(
 			section,
-			ui.body.querySelector(".compose-box") ||
-				ui.body.querySelector(".page-sort") ||
+			ui.body.querySelector(".page-sort") ||
 				ui.body.querySelector(".top-level-comments"),
 		);
 	}
@@ -13839,26 +13838,6 @@ ${SUBMIT_FORM_CSS}
 	background:var(--surface-border);
 }
 
-.notepad-section-inline {
-	margin-top:14px;
-}
-
-.notepad-section-inline::before {
-	content:"";
-	display:block;
-	height:1px;
-	margin:0 0 0 calc(8px - var(--vote-column));
-	background:var(--surface-border);
-}
-
-.notepad-section-inline .notepad-rule {
-	margin-left:calc(-12px - var(--vote-column));
-}
-
-.notepad-section-inline .notepad-body {
-	margin-left:calc(8px - var(--vote-column));
-}
-
 .notepad-rule-close {
 	padding-top:8px;
 }
@@ -14575,7 +14554,7 @@ blockquote.comment-quote-redundant {
 
 .compose-box {
 	position:relative;
-	margin:0 0 14px 8px;
+	margin:14px 0 14px 8px;
 }
 
 .compose-anchor {
@@ -14617,17 +14596,23 @@ blockquote.comment-quote-redundant {
 	transition:max-height .22s ease;
 }
 
+.compose-dock.is-docked {
+	border-radius:6px;
+	box-shadow:0 6px 18px rgba(0,0,0,.22);
+}
+
 .compose-dock.is-docked .compose-dock-pill {
-	margin-bottom:6px;
-	border-radius:6px 6px 0 0;
 	width:100%;
+	padding:7px 12px;
+	border-radius:6px 6px 0 0;
+	box-shadow:none;
+	text-align:left;
 }
 
 .compose-dock.is-docked .compose-dock-slot {
-	padding:0 0 8px;
+	padding:8px 0;
 	border-radius:0 0 6px 6px;
 	background:var(--surface);
-	box-shadow:0 6px 18px rgba(0,0,0,.22);
 }
 
 .compose-dock .compose-box {
@@ -15478,8 +15463,14 @@ ${settingsPanelHTML()}
 		);
 	}
 
+	function composeDockLabel(canComment) {
+		return canComment ? "Add a comment" : "Keep a note";
+	}
+
 	function syncComposeBox() {
-		const box = sidebarUI?.body?.querySelector(".compose-box");
+		const box =
+			sidebarUI?.body?.querySelector(".compose-box") ||
+			sidebarUI?.shadow?.querySelector("#compose-dock-slot .compose-box");
 		const button = box?.querySelector(".compose-send-comment");
 
 		if (!box || !button) {
@@ -15488,8 +15479,13 @@ ${settingsPanelHTML()}
 
 		const targets = replyTargets();
 		const canNote = Boolean(box.querySelector(".compose-send-note"));
+		const pill = sidebarUI.shadow.querySelector("#compose-dock-pill");
 
 		button.hidden = targets.length === 0;
+
+		if (pill) {
+			pill.textContent = composeDockLabel(targets.length > 0);
+		}
 
 		if (!targets.length) {
 			box.querySelector(".compose-targets")?.classList.add("hidden");
@@ -15661,11 +15657,7 @@ ${settingsPanelHTML()}
 
 		syncComposeBox();
 
-		box._hnewhereDock = wireComposeDock(
-			ui,
-			box,
-			canComment ? "Add a comment" : "Keep a note",
-		);
+		box._hnewhereDock = wireComposeDock(ui, box, composeDockLabel(canComment));
 
 		return box;
 	}

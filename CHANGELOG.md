@@ -88,7 +88,9 @@ use to detect updates, so every release bumps it.
 
   **Scroll the box out of sight and it follows you**, as a pill under the header.
   Pressing it opens the same box, still holding whatever you had half-written;
-  scrolling back puts it home.
+  scrolling back puts it home. Opened, the pill becomes that box's header — one
+  card rather than a bar floating above a separate panel — and it says **Keep a
+  note** where the discussion you are filtered to takes no replies.
 
   The box is one line tall until you write in it, then keeps a spare line below
   whatever you have written, and falls back to one line when you press away from
@@ -111,11 +113,14 @@ use to detect updates, so every release bumps it.
   give**, which is most of them on a phone. It was a checkbox that could be
   pressed and would then quietly un-tick itself.
 
-- **On a discussion from a single source the notepad sits with the piece**, after
-  the story and above the box you write a comment in, rather than at the very top
-  of the panel. A rule above it keeps it from reading as part of the story's own
-  text. On a page carrying several discussions it stays where it was, above them
-  all.
+- **The notepad sits under the box you write in**, between it and the comments,
+  and in the same place whether the page carries one discussion or several. Its
+  **NOTEPAD [–]** is a rule across the panel, like the **LIVE** line further
+  down.
+
+- **The box keeps clear of the rule under the header.** On a page carrying
+  several discussions it sat flush against it, which read as a line the box had
+  drawn for itself.
 
 - A note in the notepad is given the same room below it as above it. The last one
   used to sit on the rule beneath it.
