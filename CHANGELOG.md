@@ -139,8 +139,11 @@ use to detect updates, so every release bumps it.
 - **The notepad sits under the box you write in**, between it and the comments,
   and in the same place whether the page carries one discussion or several. Its
   **NOTEPAD [–]** is a rule across the panel, like the **LIVE** line further
-  down. Its closing rule is spaced the way the section is: 12px above and
-  12px below.
+  down, and its closing rule is spaced the way the section is.
+
+- **Folded, the notepad is one line and nothing else.** It kept its closing rule
+  and its full padding over an empty body, so **NOTEPAD [+]** sat in more than
+  three times the room it needed.
 
 - **The box keeps clear of the rule under the header.** On a page carrying
   several discussions it sat flush against it, which read as a line the box had

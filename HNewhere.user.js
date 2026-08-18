@@ -13920,7 +13920,15 @@ ${SUBMIT_FORM_CSS}
 }
 
 .notepad-section {
-	margin:0 0 12px;
+	margin:0 0 15px;
+}
+
+.notepad-section.is-collapsed .notepad-rule {
+	padding-top:0;
+}
+
+.notepad-section.is-collapsed .notepad-rule-close {
+	display:none;
 }
 
 .notepad-rule {
@@ -13942,7 +13950,7 @@ ${SUBMIT_FORM_CSS}
 }
 
 .notepad-rule-close {
-	padding-top:12px;
+	padding-top:15px;
 }
 
 .notepad-mark {
@@ -14657,7 +14665,7 @@ blockquote.comment-quote-redundant {
 
 .compose-box {
 	position:relative;
-	margin:14px 0 14px 8px;
+	margin:15px 0 15px 8px;
 }
 
 .compose-anchor {
