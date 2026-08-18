@@ -63,6 +63,9 @@ use to detect updates, so every release bumps it.
   *All of your favorited discussions, comments, and notes*. The line slides with
   the list when you move between the three.
 
+- **Both dropdowns close on a press outside them**, the way the header's hide
+  menu already did — the discussions menu and the one the comment button opens.
+
 - **The discussions on a blended page are chosen from a menu**, where they used
   to be a strip of pills that unfolded under the header. It drops from the
   **N discussions** link, lists **All sources** first, and then the discussions

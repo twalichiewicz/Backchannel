@@ -13242,6 +13242,8 @@ ${[
 			});
 		}
 
+		shadow.addEventListener("click", (event) => closeMenusOutside(shadow, event));
+
 		const notesExport = shadow.querySelector("#settings-notes-export");
 		const notesCount = shadow.querySelector("#settings-notes-count");
 
@@ -15618,6 +15620,53 @@ ${settingsPanelHTML()}
 		return canComment ? "Add a comment" : "Keep a note";
 	}
 
+	function closeSourceMenu(shadow) {
+		const menu = shadow.querySelector(".source-menu");
+
+		menu?.classList.add("hidden");
+		shadow
+			.querySelector(".page-header-disclosure")
+			?.setAttribute("aria-expanded", "false");
+	}
+
+	function closeMenusOutside(shadow, event) {
+		const path = event.composedPath();
+		const outside = (node) => node && !path.includes(node);
+		const menu = shadow.querySelector(".source-menu");
+
+		if (
+			menu &&
+			outside(menu) &&
+			outside(shadow.querySelector(".page-header-disclosure"))
+		) {
+			closeSourceMenu(shadow);
+		}
+
+		const dock = shadow.querySelector("#compose-dock");
+
+		if (
+			dock &&
+			!dock.hidden &&
+			outside(dock) &&
+			outside(shadow.querySelector("#comment-toggle"))
+		) {
+			dock.querySelector(".compose-box")?._hnewhereDock?.undock();
+		}
+
+		for (const box of shadow.querySelectorAll(".comment-composer")) {
+			const targets = box.querySelector(".compose-targets");
+
+			if (
+				targets &&
+				!targets.classList.contains("hidden") &&
+				outside(targets) &&
+				outside(box.querySelector(".compose-send-comment"))
+			) {
+				closeComposeTargets(box);
+			}
+		}
+	}
+
 	function closeComposeTargets(box) {
 		const button = box.querySelector(".compose-send-comment");
 
@@ -17657,8 +17706,13 @@ ${settingsPanelHTML()}
 		const menu = wrapper.querySelector(".source-menu");
 
 		const setMenuOpen = (open) => {
-			menu.classList.toggle("hidden", !open);
-			disclosure.setAttribute("aria-expanded", open ? "true" : "false");
+			if (!open) {
+				closeSourceMenu(wrapper.getRootNode());
+				return;
+			}
+
+			menu.classList.remove("hidden");
+			disclosure.setAttribute("aria-expanded", "true");
 		};
 
 		setMenuOpen(false);
