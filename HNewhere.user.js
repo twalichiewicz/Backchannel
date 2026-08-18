@@ -7665,7 +7665,7 @@ button {
 	function voteFailureMessage(result, sourceLabel = "the source") {
 		switch (result?.reason) {
 			case "popup-blocked":
-				return "Your browser blocked the popup. Allow popups for this site and try again.";
+				return "Your browser blocked the popup.";
 			case "timeout":
 				return `${sourceLabel} did not respond in time.`;
 			case "not-logged-in":
@@ -7739,19 +7739,26 @@ button {
 				return;
 			}
 
-			const button = document.createElement("button");
+			const control = document.createElement(action.href ? "a" : "button");
 
-			button.type = "button";
-			button.className = "vote-unvote-link";
-			button.textContent = action.label;
-			button.onclick = (event) => {
-				event.preventDefault();
-				event.stopPropagation();
-				action.onPress();
-			};
+			control.className = "vote-unvote-link";
+			control.textContent = action.label;
+
+			if (action.href) {
+				control.href = action.href;
+				control.target = "_blank";
+				control.rel = "noreferrer noopener";
+			} else {
+				control.type = "button";
+				control.onclick = (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					action.onPress();
+				};
+			}
 
 			element.appendChild(document.createTextNode(" "));
-			element.appendChild(button);
+			element.appendChild(control);
 		});
 	}
 
@@ -8130,20 +8137,21 @@ button {
 
 		setupItemActionListener();
 
-		return new Promise((resolve) => {
-			const nonce = bridgeNonce();
-			const popup = window.open(
-				itemActionPageURL(voteAction, {
-					storyID,
-					itemId,
-					action,
-					voteURL,
-					nonce,
-				}),
-				"hnewhere_vote_bridge_" + nonce,
-				"width=420,height=320,resizable=yes,scrollbars=yes",
-			);
+		const nonce = bridgeNonce();
+		const url = itemActionPageURL(voteAction, {
+			storyID,
+			itemId,
+			action,
+			voteURL,
+			nonce,
+		});
+		const popup = window.open(
+			url,
+			"hnewhere_vote_bridge_" + nonce,
+			"width=420,height=320,resizable=yes,scrollbars=yes",
+		);
 
+		return new Promise((resolve) => {
 			if (!popup) {
 				itemActionRequests.set(nonce, {
 					resolve: () => {},
@@ -8156,7 +8164,7 @@ button {
 					onInterim,
 					stopWatching: watchBridgeResult(nonce, deliverItemAction),
 				});
-				resolve({ ok: false, reason: "popup-blocked" });
+				resolve({ ok: false, reason: "popup-blocked", url });
 				return;
 			}
 
@@ -8176,7 +8184,7 @@ button {
 		});
 	}
 
-	async function submitVote(
+	function submitVote(
 		sourceID,
 		storyID,
 		itemId,
@@ -8185,10 +8193,10 @@ button {
 		{ force = false } = {},
 	) {
 		if (!container || container.dataset.votePending === "1") {
-			return;
+			return Promise.resolve();
 		}
 
-		if (!force && shouldAskToSignIn(await readAuthVerdict(sourceID), Date.now())) {
+		if (!force && shouldAskToSignIn(rememberedAuthVerdict(sourceID), Date.now())) {
 			showVoteMessage(
 				itemId,
 				`Sign in to ${getSource(sourceID)?.label || "the source"} to vote.`,
@@ -8200,7 +8208,7 @@ button {
 						}),
 				},
 			);
-			return;
+			return Promise.resolve();
 		}
 
 		container.dataset.votePending = "1";
@@ -8211,36 +8219,45 @@ button {
 
 		const label = getSource(sourceID)?.label || "the source";
 
-		try {
-			const result = await openItemActionPopup(
-				sourceID,
-				storyID,
-				itemId,
-				descriptor.action,
-				descriptor.url,
-				() => showToast(`Waiting for sign-in on ${label}…`, { persist: true }),
-			);
+		const opened = openItemActionPopup(
+			sourceID,
+			storyID,
+			itemId,
+			descriptor.action,
+			descriptor.url,
+			() => showToast(`Waiting for sign-in on ${label}…`, { persist: true }),
+		);
 
-			if (result?.storyID && result?.itemId && result?.voteInfo) {
-				setVoteInfoForStoryItem(result.storyID, result.itemId, result.voteInfo);
+		return (async () => {
+			try {
+				const result = await opened;
+
+				if (result?.storyID && result?.itemId && result?.voteInfo) {
+					setVoteInfoForStoryItem(result.storyID, result.itemId, result.voteInfo);
+				}
+
+				if (result?.ok) {
+					showToast(null);
+				} else if (result?.reason === "popup-blocked" && result.url) {
+					showVoteMessage(itemId, voteFailureMessage(result, label), {
+						label: `open ${label}`,
+						href: result.url,
+					});
+				} else if (isSidebarLevelReason(result?.reason)) {
+					showToast(voteFailureMessage(result, label));
+				} else {
+					showVoteMessage(itemId, voteFailureMessage(result, label));
+				}
+
+				await rememberAuthFromResult(sourceID, result);
+			} finally {
+				delete container.dataset.votePending;
+				container.classList.remove("vote-controls-pending");
+				container.querySelectorAll(".vote-button").forEach((button) => {
+					button.disabled = false;
+				});
 			}
-
-			if (result?.ok) {
-				showToast(null);
-			} else if (isSidebarLevelReason(result?.reason)) {
-				showToast(voteFailureMessage(result, label));
-			} else {
-				showVoteMessage(itemId, voteFailureMessage(result, label));
-			}
-
-			await rememberAuthFromResult(sourceID, result);
-		} finally {
-			delete container.dataset.votePending;
-			container.classList.remove("vote-controls-pending");
-			container.querySelectorAll(".vote-button").forEach((button) => {
-				button.disabled = false;
-			});
-		}
+		})();
 	}
 
 	// -------------------------
@@ -8290,15 +8307,38 @@ button {
 
 	// #endregion hnewhere-test-export
 
-	function readAuthVerdict(sourceID) {
-		return load(AUTH_PREFIX + sourceID, null);
+	const rememberedAuthVerdicts = new Map();
+
+	function rememberedAuthVerdict(sourceID) {
+		return rememberedAuthVerdicts.get(sourceID) || null;
+	}
+
+	async function readAuthVerdict(sourceID) {
+		const verdict = await load(AUTH_PREFIX + sourceID, null);
+
+		rememberedAuthVerdicts.set(sourceID, verdict);
+
+		return verdict;
+	}
+
+	function warmAuthVerdict(sourceID) {
+		if (!sourceID || rememberedAuthVerdicts.has(sourceID)) {
+			return;
+		}
+
+		rememberedAuthVerdicts.set(sourceID, null);
+		readAuthVerdict(sourceID).catch(() => {});
 	}
 
 	async function rememberAuthFromResult(sourceID, result) {
 		const state = verdictFromResult(result);
 
 		if (state) {
-			await save(AUTH_PREFIX + sourceID, { state, at: Date.now() });
+			const verdict = { state, at: Date.now() };
+
+			rememberedAuthVerdicts.set(sourceID, verdict);
+
+			await save(AUTH_PREFIX + sourceID, verdict);
 		}
 	}
 
@@ -8309,6 +8349,7 @@ button {
 
 		const sourceID = container.dataset.hnVoteSource;
 
+		warmAuthVerdict(sourceID);
 		container.replaceChildren();
 
 		const descriptors = voteDescriptorsFor(sourceID, voteInfo);
@@ -14095,6 +14136,7 @@ ${SUBMIT_FORM_CSS}
 	margin:0;
 	color:inherit;
 	font:inherit;
+	text-decoration:none;
 	cursor:pointer;
 }
 
