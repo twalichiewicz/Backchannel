@@ -8,6 +8,169 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.11] — 2026-08-17
+
+### Added
+
+- **new first**, beside the Sort control at the top of a discussion. It appears
+  only when you are returning to something you have read before and there is
+  something new in it, and it is off until you press it. On a return visit the
+  comments posted since you were last here rise to the top, and the ones that
+  were already there follow. A live discussion still leads a quiet one, and the
+  order inside a thread is untouched. On a page with a single discussion — where
+  there is nothing to sort across and so no Sort control — it appears on its
+  own. (#112)
+
+### Changed
+
+- **The green mark clears once a comment has been on screen**, rather than only
+  after you scroll past it or press it. A comment you can see has been seen. It
+  takes about a second of being on screen, so a comment that flashes by while you
+  scroll somewhere else keeps its mark, and one below the fold keeps it until you
+  get there. This used to happen only on touch devices; it now happens
+  everywhere. (#112)
+
+- **Nothing is marked unread the first time you open a page.** A discussion you
+  have never read has nothing to be new against, and marking all of it green said
+  nothing. The visit is recorded, and the next time you open that page the mark
+  means what it says. (#112)
+
+- Changing the comment sort no longer clears every unread mark. The panel now
+  holds the time of your arrival for as long as you are on the page, instead of
+  re-reading a timestamp it had already moved forward.
+
+- **front pages**, **queue** and **collection** carry the dotted underline that
+  marks everything else you can press, and the one you are on is underlined
+  solid. They were told apart by color alone, which did not say they were
+  pressable.
+
+- **The front page loads as a skeleton of the page it is about to show**, rather
+  than a line of text where the first row goes. The line saying what is loading
+  now sits at the same left edge as the tabs and the blend note above it.
+
+- **Where a source has both arrows, the one you did not use dims** once a vote is
+  placed, instead of sitting at full strength beside the one you did. Hacker News
+  is unaffected — it replaces its arrow with **unvote**.
+
+- **Blended from …** is set at the size of the byline it sits above, rather than
+  a step larger.
+
+- The queue tab is **queue**, without a count after it. What is unread is already
+  said by the rows themselves.
+
+- **The queue and the collection each say what they hold**, the way the front page
+  says what it is blended from: *Discussions you've queued or are watching*, and
+  *All of your favorited discussions, comments, and notes*. The line slides with
+  the list when you move between the three.
+
+- **The collection's sections fold.** *favorite discussions*, *favorite comments*
+  and *notes* each carry a **[–]**, so a long collection can be read a part at a
+  time.
+
+- **new first** is **prioritize unread**, and sits with the comments it reorders
+  rather than at the top of the panel.
+
+- **Collapsing a comment takes its indent guide with it** rather than leaving a
+  stub of it behind holding the row open. Expanding draws the guide back down
+  from the top.
+
+- **The notifications option is hidden where the browser has no notifications to
+  give**, which is most of them on a phone. It was a checkbox that could be
+  pressed and would then quietly un-tick itself.
+
+- **On a discussion from a single source the notepad sits with the piece**, after
+  the story and above the box you write a comment in, rather than at the very top
+  of the panel. A rule above it keeps it from reading as part of the story's own
+  text. On a page carrying several discussions it stays where it was, above them
+  all.
+
+- A note in the notepad is given the same room below it as above it. The last one
+  used to sit on the rule beneath it.
+
+### Fixed
+
+- **A Hacker News action on a phone reported a blocked popup and left nowhere to
+  go.** Voting opened its window one step after the press rather than during it,
+  which is when browsers stop allowing it — measured across three engines, only
+  the synchronous case keeps the activation a popup blocker looks for. The window
+  is now opened while the press is still running. If it is blocked anyway, the
+  message no longer points at a setting that iOS does not have: it offers the
+  address, and pressing it does the same thing in a tab. (#109)
+
+- **A link underneath a highlight could not be pressed.** Each highlight was a
+  button laid over the article, so it took the press from anything beneath it.
+  The highlight is now drawn whole and made pressable only where nothing else is,
+  which leaves links, buttons and fields to the page. (#110)
+
+- **The panel's left edges did not line up.** The wordmark sits 8px further in
+  than everything below it, and only some of the things below it made up the
+  difference. A discussion's title and byline, **NOTEPAD**, the **Sort** row, and
+  the numbered rows on the front page and in the queue all start on the wordmark's
+  edge now. The numbers themselves were also set right-aligned in their column,
+  which pushed them off that edge whatever the column did; they read from the left.
+
+- **The LIVE bookend and the rule under a blended discussion's byline** started
+  8px left of everything else, for the same reason the rest did.
+
+- **The notepad's notes, and the box you write one in, started on the panel's
+  edge** while the NOTEPAD mark started on the wordmark's. They start together.
+
+- **The box you write a comment in, and the numbers on the front page and in the
+  queue**, both start on that same edge now. The numbers' column also held room
+  for four digits where two was the most it ever needed, which left the number
+  stranded away from the title beside it.
+
+- **The rule above the notepad ran wider than the one below it**, and **add a
+  note** carried no underline to say it could be pressed. The two rules match,
+  and it does.
+
+- **queue** and **collection** were losing their dotted underline to the
+  `overflow:hidden` that lets them slide open. They keep it.
+
+- **Returning to the front page from another tab showed the old rows** until the
+  new ones arrived, with no sign anything was loading. The list is cleared when
+  the tab changes, so the skeleton appears.
+
+- **A discussion's title was set larger than the header it stands in for**, so
+  narrowing a blended page to a single source made the title jump a size. Both
+  are set the same now.
+
+- **A source that cannot vote no longer holds a column open for arrows it will
+  never have.** Filtering a blended page down to Bluesky, Lemmy or Wikipedia used
+  to leave the title indented past an empty gutter; it starts where the rest of
+  the panel starts.
+
+- **A story's vote arrows sat on its title.** The column holding them was 14px
+  wide and the arrow inside it 10px, drawn centred — so it overhung its own cell
+  and touched the words. Both a story's arrows and a comment's now use one
+  column, so a title clears them by the same margin a comment's text does.
+
+- **A settings hint started two pixels left of the label it belongs to.** The
+  label clears a 15px box and an 8px gap, and the hint was indented 21px rather
+  than 23. Sub-options were out by the same two.
+
+- **The line down the left of a comment went missing on about half of them, with
+  no pattern to it.** The line hangs below the vote arrows and takes whatever
+  height is left over. A two-arrow pair is 22px, and with the padding above and
+  the gap below that is 26px — exactly the height of a one-line comment, leaving
+  the line nothing at all. Which comments lost it therefore depended on how many
+  arrows their source draws and how short they happened to be. Measured on a real
+  thread: 85 of 182 comments had no line. The line now has a minimum length, and
+  short comments give it the few pixels it needs.
+
+- **Vote arrows never finished loading on a page carrying more than one
+  source.** A comment was told to expect arrows whenever *any* source in the
+  panel could vote, but arrows are fetched one discussion at a time and only for
+  the sources that have them. Comments from Bluesky, Lobsters, Lemmy, Wikipedia
+  or Hypothes.is were left holding a placeholder nothing was ever going to fill.
+  A comment now expects arrows only where its own source can vote. The gutter is
+  still held across the whole thread, so the comment guides stay lined up.
+
+- **Highlights stayed where the text used to be** when the page reflowed —
+  changing text size, a font arriving late, anything above them growing. They
+  only followed the window being resized, so scrolling a page with images loading
+  appeared to fix them. They now follow the article itself. (#111)
+
 ## [1.6.9] — 2026-08-13
 
 ### Added
