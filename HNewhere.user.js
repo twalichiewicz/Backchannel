@@ -21114,9 +21114,70 @@ title="Show only this discussion">
 			});
 		};
 
+		const observedSizes = new WeakMap();
+
+		const geometryMoved = (entries) => {
+			let moved = false;
+
+			for (const entry of entries) {
+				const box = entry.contentRect;
+				const seen = observedSizes.get(entry.target);
+
+				if (
+					seen &&
+					Math.abs(seen.width - box.width) < 1 &&
+					Math.abs(seen.height - box.height) < 1
+				) {
+					continue;
+				}
+
+				observedSizes.set(entry.target, { width: box.width, height: box.height });
+				moved = true;
+			}
+
+			return moved;
+		};
+
+		const geometryObserver =
+			typeof ResizeObserver === "function"
+				? new ResizeObserver((entries) => {
+						if (geometryMoved(entries)) {
+							scheduleRender();
+						}
+					})
+				: null;
+
+		const watchGeometry = () => {
+			if (!geometryObserver) {
+				return;
+			}
+
+			const already = new Set();
+			const containers = groups.map((group) =>
+				nearestElement(group.range?.commonAncestorContainer),
+			);
+
+			for (const element of [overlayHost, ...containers]) {
+				if (!element || already.has(element) || overlay.contains(element)) {
+					continue;
+				}
+
+				already.add(element);
+
+				const box = element.getBoundingClientRect();
+
+				observedSizes.set(element, { width: box.width, height: box.height });
+				geometryObserver.observe(element);
+			}
+		};
+
+		const onFontsSettled = () => scheduleRender();
+
 		window.addEventListener("resize", scheduleRender);
 		window.addEventListener("load", scheduleRender, true);
+		document.fonts?.addEventListener?.("loadingdone", onFontsSettled);
 		render();
+		watchGeometry();
 
 		return {
 			groups,
@@ -21137,6 +21198,8 @@ title="Show only this discussion">
 			cleanup() {
 				window.removeEventListener("resize", scheduleRender);
 				window.removeEventListener("load", scheduleRender, true);
+				document.fonts?.removeEventListener?.("loadingdone", onFontsSettled);
+				geometryObserver?.disconnect();
 
 				if (renderFrame) {
 					cancelAnimationFrame(renderFrame);
