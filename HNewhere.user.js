@@ -8067,6 +8067,7 @@ button {
 
 	function buttonVoteDescriptors(voteInfo, label) {
 		const state = voteInfo?.state || "none";
+		const voted = state === "up" || state === "down";
 
 		return [
 			{
@@ -8075,6 +8076,7 @@ button {
 				action: state === "up" ? "un" : "up",
 				url: null,
 				active: state === "up",
+				muted: voted && state !== "up",
 				variant: "up",
 			},
 			{
@@ -8084,6 +8086,7 @@ button {
 				action: state === "down" ? "un" : "down",
 				url: null,
 				active: state === "down",
+				muted: voted && state !== "down",
 				variant: "down",
 			},
 		];
@@ -8444,6 +8447,10 @@ button {
 
 			if (descriptor.active) {
 				button.classList.add("vote-button-active");
+			}
+
+			if (descriptor.muted) {
+				button.classList.add("vote-button-muted");
 			}
 
 			if (descriptor.variant) {
@@ -13359,6 +13366,7 @@ ${[
 
 #panel {
 	all:initial;
+	--vote-column:17px;
 	line-height:1.4;
 	color-scheme:inherit;
 	-webkit-text-size-adjust:100%;
@@ -14066,7 +14074,7 @@ ${SUBMIT_FORM_CSS}
 
 .story-votelinks,
 .story-votespacer {
-	width:14px;
+	width:var(--vote-column);
 }
 
 .story-votelinks {
@@ -14097,8 +14105,8 @@ ${SUBMIT_FORM_CSS}
 }
 
 .comment-vote-slot {
-	flex:0 0 17px;
-	width:17px;
+	flex:0 0 var(--vote-column);
+	width:var(--vote-column);
 	display:flex;
 	flex-direction:column;
 	align-items:center;
@@ -14195,6 +14203,16 @@ ${SUBMIT_FORM_CSS}
 
 .vote-button-neutral::before {
 	content:none;
+}
+
+.vote-button-muted {
+	opacity:.33;
+}
+
+@media (hover: hover) {
+	.vote-button-muted:hover {
+		opacity:1;
+	}
 }
 
 .vote-button-neutral.vote-button-active {
