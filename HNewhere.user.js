@@ -15718,12 +15718,15 @@ ${settingsPanelHTML()}
 		const capabilities = getSource(comment.source)?.capabilities || {};
 		const isLocalSource = Boolean(comment.local);
 		const threadCanVote = renderedSourcesCanVote();
+		const voteSourceID = String(comment.source || "hn");
+		const commentCanVote =
+			!isLocalSource && Boolean(getSource(voteSourceID)?.capabilities.vote);
 
 		div.innerHTML = `
       <div class="comment-layout">
       <span class="comment-vote-slot${threadCanVote && !isLocalSource ? "" : " comment-vote-slot-empty"}">
-      <span class="comment-vote-controls vote-controls hidden${threadCanVote && !isLocalSource ? " vote-controls-expected" : ""}"
-      data-hn-vote-source="${escapeHTML(String(comment.source || "hn"))}"
+      <span class="comment-vote-controls vote-controls hidden${commentCanVote ? " vote-controls-expected" : ""}"
+      data-hn-vote-source="${escapeHTML(voteSourceID)}"
       data-hn-vote-story-id="${escapeHTML(String(storyID))}"
       data-hn-vote-item-id="${escapeHTML(commentID)}"></span>
       </span>
