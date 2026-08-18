@@ -82,9 +82,11 @@ use to detect updates, so every release bumps it.
 
   **A page carrying several discussions had no comment box at all** until now —
   every composer sat inside a per-discussion block that a blend keeps hidden.
-  There, the green button asks which discussion you meant, from a list that drops
-  below it and scrolls when the blend is a long one; filtered to one, it goes
-  straight there.
+  There, the green button reads **comment…** and asks which discussion you meant,
+  from a list that drops just under it — at the same offset the header's own
+  panels use — and scrolls when the blend is a long one. While that list is open
+  the button carries the same pressed tint the header's icons do. Filtered to one
+  discussion the button is plain **comment** and goes straight there.
 
   **Scroll the box out of sight and it follows you**, as a pill under the header.
   Pressing it opens the same box, still holding whatever you had half-written;
@@ -116,7 +118,8 @@ use to detect updates, so every release bumps it.
 - **The notepad sits under the box you write in**, between it and the comments,
   and in the same place whether the page carries one discussion or several. Its
   **NOTEPAD [–]** is a rule across the panel, like the **LIVE** line further
-  down.
+  down. Its closing rule is spaced the way the section is: 12px above and
+  12px below.
 
 - **The box keeps clear of the rule under the header.** On a page carrying
   several discussions it sat flush against it, which read as a line the box had

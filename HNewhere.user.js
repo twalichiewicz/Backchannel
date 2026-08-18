@@ -13847,7 +13847,7 @@ ${SUBMIT_FORM_CSS}
 }
 
 .notepad-rule-close {
-	padding-top:8px;
+	padding-top:12px;
 }
 
 .notepad-mark {
@@ -14669,6 +14669,7 @@ blockquote.comment-quote-redundant {
 }
 
 .compose-send-row {
+	position:relative;
 	display:inline-flex;
 	gap:6px;
 	margin-left:auto;
@@ -14749,6 +14750,10 @@ blockquote.comment-quote-redundant {
 .compose-send-comment {
 	color:var(--accent-ink);
 	background:var(--accent);
+}
+
+.compose-send.is-open {
+	background-image:linear-gradient(var(--active-tint), var(--active-tint));
 }
 
 @media (hover: hover) {
@@ -15511,6 +15516,14 @@ ${settingsPanelHTML()}
 		return canComment ? "Add a comment" : "Keep a note";
 	}
 
+	function closeComposeTargets(box) {
+		const button = box.querySelector(".compose-send-comment");
+
+		box.querySelector(".compose-targets")?.classList.add("hidden");
+		button?.classList.remove("is-open");
+		button?.setAttribute("aria-expanded", "false");
+	}
+
 	function syncComposeBox() {
 		const box =
 			sidebarUI?.body?.querySelector(".compose-box") ||
@@ -15524,15 +15537,21 @@ ${settingsPanelHTML()}
 		const targets = replyTargets();
 		const canNote = Boolean(box.querySelector(".compose-send-note"));
 		const pill = sidebarUI.shadow.querySelector("#compose-dock-pill");
+		const word = targets.length > 1 ? "comment\u2026" : "comment";
 
 		button.hidden = targets.length === 0;
+		composeSendRest.set(button, word);
+
+		if (!button.dataset.sending) {
+			composeSendLabel(button).textContent = word;
+		}
 
 		if (pill) {
 			pill.textContent = composeDockLabel(targets.length > 0);
 		}
 
 		if (!targets.length) {
-			box.querySelector(".compose-targets")?.classList.add("hidden");
+			closeComposeTargets(box);
 		}
 
 		const field = box.querySelector(".composer-text");
@@ -15623,11 +15642,16 @@ ${settingsPanelHTML()}
 			status.textContent = message || "";
 		};
 
-		const closeMenu = () => menu.classList.add("hidden");
+		const commentButton = box.querySelector(".compose-send-comment");
+		const closeMenu = () => closeComposeTargets(box);
+
+		const openMenu = () => {
+			menu.classList.remove("hidden");
+			commentButton.classList.add("is-open");
+			commentButton.setAttribute("aria-expanded", "true");
+		};
 
 		if (canComment) {
-			const commentButton = box.querySelector(".compose-send-comment");
-
 			commentButton.onclick = () => {
 				const targets = replyTargets(stories);
 
@@ -15714,6 +15738,7 @@ ${settingsPanelHTML()}
 
 		if (canComment) {
 			holdComposeSendWidth(box.querySelector(".compose-send-comment"), [
+				"comment\u2026",
 				"posting…",
 				"posted",
 			]);
@@ -15744,10 +15769,9 @@ ${settingsPanelHTML()}
 		canComment
 			? `<button type="submit" class="composer-submit compose-send compose-send-comment" title="Add this as a comment"><span class="compose-send-label">comment</span></button>`
 			: ""
-	}</span>
+	}<div class="compose-targets hidden" role="menu"></div></span>
 	</div>
 	</div>
-	<div class="compose-targets hidden" role="menu"></div>
 	<div class="composer-help hidden">
 	<p>Blank lines separate paragraphs.</p>
 	<p>Text surrounded by asterisks is italicized. To get a literal asterisk, use <code>\\*</code> or <code>**</code>.</p>
