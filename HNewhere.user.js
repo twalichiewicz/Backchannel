@@ -4782,15 +4782,8 @@ button {
 			return;
 		}
 
-		const unread = entries.some((entry) => entry.unread);
-		const row = control.closest(".page-sort");
-
-		control.hidden = !unread;
+		control.hidden = !entries.some((entry) => entry.unread);
 		control.classList.toggle("is-on", Boolean(settings.newCommentsFirst));
-
-		if (row?.classList.contains("page-sort-bare")) {
-			row.hidden = !unread;
-		}
 	}
 
 	function removeNoteAffordance() {
@@ -11761,8 +11754,7 @@ header button svg {
 	text-underline-offset:2px;
 }
 
-.page-sort-toggle[hidden],
-.page-sort[hidden] {
+.page-sort-toggle[hidden] {
 	display:none;
 }
 
@@ -16855,20 +16847,16 @@ ${settingsPanelHTML()}
 		liveBookendObservers.set(names, observer);
 	}
 
-	function mountSortRow(container, sort, options, withSort) {
+	function mountSortRow(container, sort, options) {
 		const sortRow = document.createElement("div");
 
-		sortRow.className = withSort ? "page-sort" : "page-sort page-sort-bare";
-		sortRow.innerHTML = `${
-			withSort
-				? `<label class="page-sort-label" for="comment-sort">Sort</label>
+		sortRow.className = "page-sort";
+		sortRow.innerHTML = `<label class="page-sort-label" for="comment-sort">Sort</label>
 <select class="page-sort-select" id="comment-sort">${SORT_MODES.map(
-						(mode) =>
-							`<option value="${mode.id}"${mode.id === sort ? " selected" : ""}>${mode.label}</option>`,
-					).join("")}</select>
-`
-				: ""
-		}<button id="sort-new-first" class="page-sort-toggle" type="button" hidden>prioritize unread</button>`;
+			(mode) =>
+				`<option value="${mode.id}"${mode.id === sort ? " selected" : ""}>${mode.label}</option>`,
+		).join("")}</select>
+<button id="sort-new-first" class="page-sort-toggle" type="button" hidden>prioritize unread</button>`;
 
 		sortRow.querySelector("#sort-new-first").onclick = async (event) => {
 			const control = event.currentTarget;
@@ -16882,25 +16870,19 @@ ${settingsPanelHTML()}
 			}
 		};
 
-		if (withSort) {
-			sortRow.querySelector(".page-sort-select").onchange = async (event) => {
-				const next = event.target.value;
+		sortRow.querySelector(".page-sort-select").onchange = async (event) => {
+			const next = event.target.value;
 
-				if (next === sort) {
-					return;
-				}
+			if (next === sort) {
+				return;
+			}
 
-				await saveSettings({ commentSort: next });
+			await saveSettings({ commentSort: next });
 
-				if (typeof options.onSortChange === "function") {
-					await options.onSortChange(next);
-				}
-			};
-		}
-
-		if (!withSort) {
-			sortRow.hidden = true;
-		}
+			if (typeof options.onSortChange === "function") {
+				await options.onSortChange(next);
+			}
+		};
 
 		container.appendChild(sortRow);
 	}
@@ -16964,7 +16946,7 @@ title="Show only this discussion">
 
 		if (!disclosure) {
 			container.appendChild(wrapper);
-			mountSortRow(container, sort, options, false);
+			mountSortRow(container, sort, options);
 
 			return wrapper;
 		}
@@ -17014,7 +16996,7 @@ title="Show only this discussion">
 
 		container.appendChild(wrapper);
 
-		mountSortRow(container, sort, options, true);
+		mountSortRow(container, sort, options);
 
 		return wrapper;
 	}

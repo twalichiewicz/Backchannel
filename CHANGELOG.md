@@ -70,6 +70,13 @@ use to detect updates, so every release bumps it.
 - **new first** is **prioritize unread**, and sits with the comments it reorders
   rather than at the top of the panel.
 
+- **Sort is offered on a single-source discussion too.** It used to appear only
+  where more than one discussion was being blended, on the grounds that Best is
+  a site's own order and there is nothing to choose. That holds for Best and not
+  for the other two: Newest and Oldest reorder a single discussion from times
+  the panel already has. Best is still there, and still means the order the site
+  gave.
+
 - **Collapsing a comment takes its indent guide with it** rather than leaving a
   stub of it behind holding the row open. Expanding draws the guide back down
   from the top.
