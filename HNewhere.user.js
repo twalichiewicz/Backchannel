@@ -14758,7 +14758,7 @@ blockquote.comment-quote-redundant {
 	cursor:default;
 }
 
-.compose-send:disabled.is-working {
+.compose-send:disabled.is-sending {
 	opacity:1;
 }
 
@@ -15583,6 +15583,18 @@ ${settingsPanelHTML()}
 		button?.setAttribute("aria-expanded", "false");
 	}
 
+	function syncComposeSendable(box) {
+		const written = Boolean(
+			box.querySelector(".composer-text")?.value.trim(),
+		);
+
+		for (const button of box.querySelectorAll(".compose-send")) {
+			if (!button.dataset.sending) {
+				button.disabled = !written;
+			}
+		}
+	}
+
 	function syncComposeBox() {
 		const box =
 			sidebarUI?.body?.querySelector(".compose-box") ||
@@ -15672,6 +15684,7 @@ ${settingsPanelHTML()}
 			grow();
 		});
 		textarea.addEventListener("input", grow);
+		textarea.addEventListener("input", () => syncComposeSendable(box));
 		textarea.addEventListener("blur", () => {
 			delete textarea.dataset.opened;
 
@@ -15721,7 +15734,9 @@ ${settingsPanelHTML()}
 				if (targets.length === 1) {
 					closeMenu();
 					box._hnewhereDock?.undock();
-					held.send({ source: targets[0].source, storyID: targets[0].id });
+					held
+						.send({ source: targets[0].source, storyID: targets[0].id })
+						.finally(() => syncComposeSendable(box));
 					return;
 				}
 
@@ -15741,13 +15756,15 @@ ${settingsPanelHTML()}
 						choice.onclick = () => {
 							closeMenu();
 							box._hnewhereDock?.undock();
-							held.send({ source: story.source, storyID: story.id });
+							held
+								.send({ source: story.source, storyID: story.id })
+								.finally(() => syncComposeSendable(box));
 						};
 
 						return choice;
 					}),
 				);
-				menu.classList.remove("hidden");
+				openMenu();
 			};
 		}
 
@@ -15779,12 +15796,14 @@ ${settingsPanelHTML()}
 				say("");
 				box._hnewhereDock?.undock();
 				startComposeSend(noteButton, "saving…", "saved");
+				syncComposeSendable(box);
 				writeNote(parsed)
 					.then(() => settleComposeSend(noteButton, "saved"))
 					.catch((error) => {
 						restComposeSend(noteButton);
 						console.error(error);
-					});
+					})
+					.finally(() => syncComposeSendable(box));
 			};
 		}
 
@@ -15804,6 +15823,7 @@ ${settingsPanelHTML()}
 		}
 
 		syncComposeBox();
+		syncComposeSendable(box);
 
 		box._hnewhereDock = wireComposeDock(ui, box, composeDockLabel(canComment));
 
@@ -15927,7 +15947,7 @@ ${settingsPanelHTML()}
 		button.dataset.sending = "1";
 		button.dataset.sendAt = String(Date.now());
 		button.classList.remove("is-fading");
-		button.classList.add("is-working");
+		button.classList.add("is-sending", "is-working");
 		label.textContent = working;
 	}
 
@@ -15962,7 +15982,7 @@ ${settingsPanelHTML()}
 		button.classList.remove("is-working");
 
 		if (rest === undefined || label.textContent === rest) {
-			button.classList.remove("is-fading");
+			button.classList.remove("is-fading", "is-sending");
 			return;
 		}
 
@@ -15971,7 +15991,7 @@ ${settingsPanelHTML()}
 			button,
 			window.setTimeout(() => {
 				label.textContent = rest;
-				button.classList.remove("is-fading");
+				button.classList.remove("is-fading", "is-sending");
 			}, 170),
 		);
 	}

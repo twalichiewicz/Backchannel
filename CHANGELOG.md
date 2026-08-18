@@ -134,6 +134,10 @@ use to detect updates, so every release bumps it.
   several discussions it sat flush against it, which read as a line the box had
   drawn for itself.
 
+- **Neither button can be pressed until something is written.** They used to sit
+  at full strength over an empty field and answer a press with *Write something
+  first.*
+
 - **The button you pressed says what it is doing.** **comment** becomes
   *posting…* and **note** becomes *saving…*, each glimmering the way **loading
   comments…** does under the wordmark and in the button's own color; then
