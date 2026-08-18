@@ -10539,6 +10539,10 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 	--header-text:#fff;
 	--subtitle-stage:#c2e0cd;
 	--subtitle-stage-peak:#ffffff;
+	--send-ink-stage:rgba(255,255,255,.5);
+	--send-ink-peak:#ffffff;
+	--send-note-stage:rgba(34,34,34,.38);
+	--send-note-peak:#222222;
 	--border:#ccc;
 	--border-soft:#ddd;
 	--link:#0000aa;
@@ -10587,6 +10591,10 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 	--header-text:#f0fff5;
 	--subtitle-stage:#8fbda2;
 	--subtitle-stage-peak:#e6fff0;
+	--send-ink-stage:rgba(0,0,0,.45);
+	--send-ink-peak:#000000;
+	--send-note-stage:rgba(220,220,220,.38);
+	--send-note-peak:#dcdcdc;
 	--border:#3d3d3d;
 	--border-soft:#383838;
 	--link:#8ab4f8;
@@ -14690,6 +14698,49 @@ blockquote.comment-quote-redundant {
 	cursor:default;
 }
 
+.compose-send:disabled.is-working {
+	opacity:1;
+}
+
+.compose-send-label {
+	display:inline-block;
+	--send-stage:var(--send-note-stage);
+	--send-peak:var(--send-note-peak);
+	transition:opacity .16s ease;
+}
+
+.is-fading > .compose-send-label {
+	opacity:0;
+}
+
+.is-working > .compose-send-label {
+	background-image:linear-gradient(
+		90deg,
+		var(--send-stage) 0%,
+		var(--send-stage) 40%,
+		var(--send-peak) 50%,
+		var(--send-stage) 60%,
+		var(--send-stage) 100%
+	);
+	background-size:220% 100%;
+	-webkit-background-clip:text;
+	background-clip:text;
+	-webkit-text-fill-color:transparent;
+	color:transparent;
+	animation:hnewhere-subtitle-shimmer 1.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.is-working > .compose-send-label {
+		animation:none;
+	}
+}
+
+.compose-send-comment > .compose-send-label {
+	--send-stage:var(--send-ink-stage);
+	--send-peak:var(--send-ink-peak);
+}
+
 .compose-send-note {
 	color:var(--surface-text);
 	background:var(--hover-tint);
@@ -14871,13 +14922,6 @@ blockquote.comment-quote-redundant {
 
 .composer-status.error {
 	color:var(--error);
-}
-
-.composer-spinner {
-	display:inline-block;
-	width:1em;
-	font-family:Menlo, Consolas, monospace;
-	color:var(--meta);
 }
 
 .composer-status a {
@@ -15649,10 +15693,30 @@ ${settingsPanelHTML()}
 				}
 
 				textarea.value = "";
-				say("Kept");
+				say("");
 				box._hnewhereDock?.undock();
-				writeNote(parsed).catch(console.error);
+				startComposeSend(noteButton, "saving…", "saved");
+				writeNote(parsed)
+					.then(() => settleComposeSend(noteButton, "saved"))
+					.catch((error) => {
+						restComposeSend(noteButton);
+						console.error(error);
+					});
 			};
+		}
+
+		if (canNote) {
+			holdComposeSendWidth(box.querySelector(".compose-send-note"), [
+				"saving…",
+				"saved",
+			]);
+		}
+
+		if (canComment) {
+			holdComposeSendWidth(box.querySelector(".compose-send-comment"), [
+				"posting…",
+				"posted",
+			]);
 		}
 
 		syncComposeBox();
@@ -15674,11 +15738,11 @@ ${settingsPanelHTML()}
 	<div class="composer-status hidden" role="status"></div>
 	<span class="compose-send-row">${
 		canNote
-			? `<button type="button" class="compose-send compose-send-note" title="Keep this as a note">note</button>`
+			? `<button type="button" class="compose-send compose-send-note" title="Keep this as a note"><span class="compose-send-label">note</span></button>`
 			: ""
 	}${
 		canComment
-			? `<button type="submit" class="composer-submit compose-send compose-send-comment" title="Add this as a comment">comment</button>`
+			? `<button type="submit" class="composer-submit compose-send compose-send-comment" title="Add this as a comment"><span class="compose-send-label">comment</span></button>`
 			: ""
 	}</span>
 	</div>
@@ -15727,19 +15791,106 @@ ${settingsPanelHTML()}
 		return "HNewhere:comment_draft:" + (parentId || storyID);
 	}
 
-	const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+	const composeSendRest = new WeakMap();
+	const composeSendTimers = new WeakMap();
 
-	function startSpinner(element) {
-		let frame = 0;
+	function composeSendLabel(button) {
+		let label = button.querySelector(".compose-send-label");
 
-		element.textContent = SPINNER_FRAMES[0];
+		if (!label) {
+			label = document.createElement("span");
+			label.className = "compose-send-label";
+			label.textContent = button.textContent;
+			button.replaceChildren(label);
+		}
 
-		const timer = window.setInterval(() => {
-			frame = (frame + 1) % SPINNER_FRAMES.length;
-			element.textContent = SPINNER_FRAMES[frame];
-		}, 90);
+		return label;
+	}
 
-		return () => window.clearInterval(timer);
+	const COMPOSE_SEND_HOLD = 450;
+
+	function holdComposeSendWidth(button, words) {
+		if (button.dataset.sized) {
+			return;
+		}
+
+		const label = composeSendLabel(button);
+		const rest = label.textContent;
+		let widest = button.getBoundingClientRect().width;
+
+		for (const word of words) {
+			label.textContent = word;
+			widest = Math.max(widest, button.getBoundingClientRect().width);
+		}
+
+		label.textContent = rest;
+
+		if (widest > 0) {
+			button.style.minWidth = `${Math.ceil(widest)}px`;
+			button.dataset.sized = "1";
+		}
+	}
+
+	function startComposeSend(button, working, done) {
+		const label = composeSendLabel(button);
+
+		window.clearTimeout(composeSendTimers.get(button));
+
+		if (!composeSendRest.has(button)) {
+			composeSendRest.set(button, label.textContent);
+		}
+
+		holdComposeSendWidth(button, [working, done]);
+		button.dataset.sending = "1";
+		button.dataset.sendAt = String(Date.now());
+		button.classList.remove("is-fading");
+		button.classList.add("is-working");
+		label.textContent = working;
+	}
+
+	function settleComposeSend(button, done) {
+		delete button.dataset.sending;
+
+		const held = Math.max(
+			0,
+			COMPOSE_SEND_HOLD - (Date.now() - Number(button.dataset.sendAt || 0)),
+		);
+
+		window.clearTimeout(composeSendTimers.get(button));
+		composeSendTimers.set(
+			button,
+			window.setTimeout(() => {
+				button.classList.remove("is-working");
+				composeSendLabel(button).textContent = done;
+				composeSendTimers.set(
+					button,
+					window.setTimeout(() => restComposeSend(button), 1100),
+				);
+			}, held),
+		);
+	}
+
+	function restComposeSend(button) {
+		const label = composeSendLabel(button);
+		const rest = composeSendRest.get(button);
+
+		delete button.dataset.sending;
+		window.clearTimeout(composeSendTimers.get(button));
+		button.classList.remove("is-working");
+
+		if (rest === undefined || label.textContent === rest) {
+			button.classList.remove("is-fading");
+			return;
+		}
+
+		button.classList.add("is-fading");
+		composeSendTimers.set(
+			button,
+			window.setTimeout(() => {
+				label.textContent = rest;
+				button.classList.remove("is-fading");
+			}, 170),
+		);
 	}
 
 	function wireComposer(
@@ -15753,18 +15904,13 @@ ${settingsPanelHTML()}
 		const draftKey = composerDraftKey({ storyID, parentId });
 		const textarea = composer.querySelector(".composer-text");
 		const submitButton = composer.querySelector(".composer-submit");
-		const submitLabel = submitButton.textContent;
 		const helpToggle = composer.querySelector(".composer-help-toggle");
 		const help = composer.querySelector(".composer-help");
 		const status = composer.querySelector(".composer-status");
 
-		let stopSpinner = null;
 		let swapTimer = 0;
 
 		const setStatus = (message, { error = false, html = false } = {}) => {
-			stopSpinner?.();
-			stopSpinner = null;
-
 			clearTimeout(swapTimer);
 
 			const write = () => {
@@ -15797,26 +15943,6 @@ ${settingsPanelHTML()}
 			}, 140);
 		};
 
-		const showSpinner = (label) => {
-			clearTimeout(swapTimer);
-			stopSpinner?.();
-
-			status.classList.remove("hidden", "error");
-			status.replaceChildren();
-
-			const spinner = document.createElement("span");
-
-			spinner.className = "composer-spinner";
-			status.appendChild(spinner);
-
-			if (label) {
-				status.appendChild(document.createTextNode(" " + label));
-			}
-
-			status.classList.remove("is-fading");
-			stopSpinner = startSpinner(spinner);
-		};
-
 		helpToggle.onclick = () => {
 			const hidden = help.classList.toggle("hidden");
 
@@ -15845,7 +15971,12 @@ ${settingsPanelHTML()}
 		const setBusy = (busy) => {
 			submitButton.disabled = busy;
 			textarea.disabled = busy;
-			submitButton.textContent = busy ? submitLabel + "…" : submitLabel;
+
+			if (busy) {
+				startComposeSend(submitButton, "posting…", "posted");
+			} else if (submitButton.dataset.sending) {
+				restComposeSend(submitButton);
+			}
 		};
 
 		const send = (aim = {}) => {
@@ -15861,7 +15992,6 @@ ${settingsPanelHTML()}
 			}
 
 			setBusy(true);
-			showSpinner();
 
 			const posting = submitCommentThroughBridge(toSource, toStory, text, parentId, () =>
 				setStatus(`Waiting for sign-in on ${label}…`),
@@ -15874,6 +16004,7 @@ ${settingsPanelHTML()}
 					await rememberAuthFromResult(toSource, result);
 
 					if (!result?.ok) {
+						restComposeSend(submitButton);
 						setStatus(commentFailureMessage(result, label), { error: true });
 						return;
 					}
@@ -15882,7 +16013,7 @@ ${settingsPanelHTML()}
 					clearTimeout(saveTimer);
 					await save(draftKey, null);
 
-					setStatus("Posted");
+					settleComposeSend(submitButton, "posted");
 
 					window.setTimeout(() => {
 						onPosted?.();

@@ -122,6 +122,14 @@ use to detect updates, so every release bumps it.
   several discussions it sat flush against it, which read as a line the box had
   drawn for itself.
 
+- **The button you pressed says what it is doing.** **comment** becomes
+  *posting…* and **note** becomes *saving…*, each glimmering the way **loading
+  comments…** does under the wordmark and in the button's own color; then
+  *posted* or *saved* for a moment, then back. Neither button changes width
+  doing it. The status line beside **formatting** is left for what actually
+  needs saying — an error, or that a source is waiting for you to sign in — and
+  no longer keeps **Kept** on screen for the rest of the visit.
+
 - A note in the notepad is given the same room below it as above it. The last one
   used to sit on the rule beneath it.
 
