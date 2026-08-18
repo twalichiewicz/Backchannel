@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.10
+// @version      1.6.11
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -362,6 +362,7 @@
 		buttonMark: BUTTON_MARK_DEFAULT,
 		accentColor: null,
 		commentSort: "best",
+		newCommentsFirst: false,
 	};
 
 	// #region hnewhere-test-export
@@ -462,6 +463,20 @@
 	async function getSeenTime(storyID) {
 		const seen = await load(STORAGE.seen, {});
 		return seen[storyID] || 0;
+	}
+
+	const visitSeenTimes = new Map();
+
+	async function visitSeenTime(storyID) {
+		if (!visitSeenTimes.has(storyID)) {
+			visitSeenTimes.set(storyID, await getSeenTime(storyID));
+		}
+
+		return visitSeenTimes.get(storyID);
+	}
+
+	function forgetVisitSeenTimes() {
+		visitSeenTimes.clear();
 	}
 
 	async function markSeen(storyID) {
@@ -2562,28 +2577,40 @@
 			const live = Boolean(group.story) && isDiscussionLive(group.thread, now);
 
 			group.rootKeys.forEach((key, index) => {
+				const createdAt = group.thread?.rootTimes?.get(key) || 0;
+
 				entries.push({
 					key,
 					discussionKey: group.discussionKey,
 					position: blendPosition(index, total) / weight,
-					createdAt: group.thread?.rootTimes?.get(key) || 0,
+					createdAt,
+					unread: isNewComment({ createdAt }, group.seenTime || 0),
 					live,
 					size: total,
 				});
 			});
 		}
 
+		const unreadFirst = options.unreadFirst
+			? (a, b) => Number(b.unread) - Number(a.unread)
+			: () => 0;
+
 		if (options.sort === "newest") {
-			return entries.sort((a, b) => b.createdAt - a.createdAt || b.size - a.size);
+			return entries.sort(
+				(a, b) => unreadFirst(a, b) || b.createdAt - a.createdAt || b.size - a.size,
+			);
 		}
 
 		if (options.sort === "oldest") {
-			return entries.sort((a, b) => a.createdAt - b.createdAt || b.size - a.size);
+			return entries.sort(
+				(a, b) => unreadFirst(a, b) || a.createdAt - b.createdAt || b.size - a.size,
+			);
 		}
 
 		return entries.sort(
 			(a, b) =>
 				Number(b.live) - Number(a.live) ||
+				unreadFirst(a, b) ||
 				a.position - b.position ||
 				b.size - a.size,
 		);
@@ -2923,8 +2950,44 @@
 		return (disambiguating && story?.title) || page;
 	}
 
-	function stripCloseClearsFilter(opening, filter) {
-		return !opening && filter?.type === "discussion";
+	function sourceMenuGroups(stories, liveKeys, labelFor = (id) => id) {
+		const live = new Set(liveKeys || []);
+
+		const bySource = (list) => {
+			const held = new Map();
+
+			for (const story of list) {
+				if (!held.has(story.source)) {
+					held.set(story.source, []);
+				}
+
+				held.get(story.source).push(story);
+			}
+
+			return [...held]
+				.map(([id, own]) => ({
+					id,
+					label: labelFor(id) || id,
+					stories: own.sort(
+						(a, b) => (b.commentCount ?? 0) - (a.commentCount ?? 0),
+					),
+				}))
+				.sort((a, b) => a.label.localeCompare(b.label));
+		};
+
+		const band = (running) =>
+			(stories || []).filter((story) => live.has(story.key) === running);
+		const groups = [];
+
+		for (const running of [true, false]) {
+			const own = band(running);
+
+			if (own.length) {
+				groups.push({ live: running, sources: bySource(own) });
+			}
+		}
+
+		return groups;
 	}
 
 	function newestCommentTime(comments, discussionKey) {
@@ -4523,23 +4586,6 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
-	function openNotepad(section) {
-		const body = section?.querySelector(".notepad-body");
-		const toggle = section?.querySelector(".notepad-toggle");
-
-		if (!section?.classList.contains("is-collapsed")) {
-			return;
-		}
-
-		section.classList.remove("is-collapsed");
-		toggle.textContent = "hide";
-		toggle.setAttribute("aria-expanded", "true");
-
-		if (body) {
-			body.style.maxHeight = body.scrollHeight ? `${body.scrollHeight}px` : "";
-		}
-	}
-
 	function startInlineNoteEdit(div, note) {
 		const text = div.querySelector(".text");
 
@@ -4566,77 +4612,10 @@ button {
 		settleNotepad(div);
 	}
 
-	function startNotepadDraft(section, body) {
-		const add = section.querySelector(".notepad-add");
-		const open = body.querySelector(".note-editor-draft:not([data-closing])");
-
-		if (open) {
-			closeNotepadDraft(section, body);
-			return;
-		}
-
-		openNotepad(section);
-
-		const held = inlineNoteEditor(null, {
-			canAnchor: (exact) => Boolean(anchorNoteQuote(exact)),
-
-			onSave: (parsed) => {
-				writeNote(parsed).catch(console.error);
-			},
-			onClose: () => closeNotepadDraft(section, body),
-		});
-
-		held.editor.classList.add("note-editor-draft");
-		body.prepend(held.editor);
-		add?.classList.add("is-open");
-		add?.setAttribute("aria-expanded", "true");
-
-		requestAnimationFrame(() => {
-			held.editor.classList.add("is-open");
-			held.editor.style.maxHeight = `${held.editor.scrollHeight}px`;
-			settleNotepad(held.editor);
-			held.field.focus({ preventScroll: true });
-
-			window.setTimeout(() => releaseNotepadDraft(held.editor), 240);
-		});
-	}
-
-	function releaseNotepadDraft(draft) {
-		if (!draft?.isConnected || !draft.classList.contains("is-open")) {
-			return;
-		}
-
-		draft.style.maxHeight = "none";
-		draft.style.overflow = "visible";
-		draft.scrollTop = 0;
-	}
-
 	function clampNotepadDraft(draft) {
 		draft.style.overflow = "";
 		draft.style.maxHeight = `${draft.scrollHeight}px`;
 		draft.getBoundingClientRect();
-	}
-
-	function closeNotepadDraft(section, body) {
-		const add = section.querySelector(".notepad-add");
-		const draft = body.querySelector(".note-editor-draft");
-
-		add?.classList.remove("is-open");
-		add?.setAttribute("aria-expanded", "false");
-
-		if (!draft) {
-			return;
-		}
-
-		draft.dataset.closing = "1";
-		clampNotepadDraft(draft);
-		draft.style.maxHeight = "0px";
-		draft.classList.remove("is-open");
-
-		window.setTimeout(() => {
-			draft.remove();
-			settleNotepad(body.firstElementChild || body);
-		}, 220);
 	}
 
 	async function writeNote(parsed) {
@@ -4685,34 +4664,78 @@ button {
 		await reopenForNotes();
 	}
 
-	async function refreshNotepadInPlace() {
-		const section = sidebarUI?.body?.querySelector("[data-notes-section]");
-		const body = section?.querySelector(".notepad-body");
+	function placeNotesSection(ui, section) {
+		const box =
+			ui.body.querySelector(".compose-box") ||
+			ui.body.querySelector(".compose-spacer");
 
-		if (!body) {
+		if (box) {
+			box.after(section);
+			return;
+		}
+
+		ui.body.insertBefore(
+			section,
+			ui.body.querySelector(".page-sort") ||
+				ui.body.querySelector(".top-level-comments"),
+		);
+	}
+
+	function retireNotesSection(section) {
+		const body = section.querySelector(".notepad-body");
+
+		if (prefersReducedMotion()) {
+			section.remove();
+			return;
+		}
+
+		section.style.overflow = "hidden";
+		section.style.maxHeight = `${section.scrollHeight}px`;
+
+		if (body) {
+			body.style.maxHeight = "0px";
+		}
+
+		requestAnimationFrame(() => {
+			section.style.transition = "max-height .22s ease, opacity .18s ease";
+			section.style.maxHeight = "0px";
+			section.style.opacity = "0";
+			window.setTimeout(() => section.remove(), 260);
+		});
+	}
+
+	async function refreshNotepadInPlace() {
+		if (!sidebarUI?.body) {
 			return false;
 		}
 
-		const notes = await loadNotes();
+		const settings = await loadSettings();
+		const notes = settings.notepad ? await loadNotes() : [];
+		let section = sidebarUI.body.querySelector("[data-notes-section]");
+
+		if (!notes.length) {
+			if (section) {
+				renderedComments = renderedComments.filter(
+					(rendered) => !section.contains(rendered.element),
+				);
+				retireNotesSection(section);
+			}
+
+			return true;
+		}
+
+		if (!section) {
+			section = notesSection({ empty: false }).section;
+			placeNotesSection(sidebarUI, section);
+		}
+
+		const body = section.querySelector(".notepad-body");
 		const discussion = notesCollective(notes, pageAddress());
-		const toggle = section.querySelector(".notepad-toggle");
-		const empty = !notes.length;
 
 		renderedComments = renderedComments.filter(
 			(rendered) => !body.contains(rendered.element),
 		);
 		body.replaceChildren();
-
-		const add = section.querySelector(".notepad-add");
-
-		add?.classList.remove("is-open");
-		add?.setAttribute("aria-expanded", "false");
-
-		toggle.hidden = empty;
-		toggle.textContent = empty ? "show" : "hide";
-		toggle.setAttribute("aria-expanded", empty ? "false" : "true");
-		section.classList.toggle("is-collapsed", empty);
-		body.style.maxHeight = empty ? "0px" : "";
 
 		if (discussion) {
 			const thread = notesThread(discussion);
@@ -4746,6 +4769,25 @@ button {
 		}
 
 		await refreshArticleAnnotations();
+	}
+
+	function syncNewCommentsFirstControl(ui, entries, settings) {
+		const control = ui?.shadow?.querySelector("#sort-new-first");
+
+		if (!control) {
+			return;
+		}
+
+		const unread = entries.some((entry) => entry.unread);
+
+		control.hidden = !unread;
+		control.classList.toggle("is-on", Boolean(settings.newCommentsFirst));
+
+		const separator = ui.shadow.querySelector("#sort-sep");
+
+		if (separator) {
+			separator.hidden = !unread;
+		}
 	}
 
 	function removeNoteAffordance() {
@@ -5195,8 +5237,15 @@ button {
 		);
 	}
 
+	function canNotify() {
+		return (
+			typeof Notification !== "undefined" &&
+			typeof Notification.requestPermission === "function"
+		);
+	}
+
 	async function grantNotifications() {
-		if (typeof Notification === "undefined") {
+		if (!canNotify()) {
 			return false;
 		}
 
@@ -6136,9 +6185,15 @@ button {
 		return pluralize(days, "day") + " ago";
 	}
 
+	// #region hnewhere-test-export
 	function isNewComment(comment, seenTimestamp) {
-		return comment.createdAt && comment.createdAt > seenTimestamp;
+		if (!seenTimestamp) {
+			return false;
+		}
+
+		return Boolean(comment.createdAt) && comment.createdAt > seenTimestamp;
 	}
+	// #endregion hnewhere-test-export
 
 	const PORTRAIT_SIDEBAR_GUTTER = 28;
 
@@ -7665,7 +7720,7 @@ button {
 	function voteFailureMessage(result, sourceLabel = "the source") {
 		switch (result?.reason) {
 			case "popup-blocked":
-				return "Your browser blocked the popup. Allow popups for this site and try again.";
+				return "Your browser blocked the popup.";
 			case "timeout":
 				return `${sourceLabel} did not respond in time.`;
 			case "not-logged-in":
@@ -7739,19 +7794,26 @@ button {
 				return;
 			}
 
-			const button = document.createElement("button");
+			const control = document.createElement(action.href ? "a" : "button");
 
-			button.type = "button";
-			button.className = "vote-unvote-link";
-			button.textContent = action.label;
-			button.onclick = (event) => {
-				event.preventDefault();
-				event.stopPropagation();
-				action.onPress();
-			};
+			control.className = "vote-unvote-link";
+			control.textContent = action.label;
+
+			if (action.href) {
+				control.href = action.href;
+				control.target = "_blank";
+				control.rel = "noreferrer noopener";
+			} else {
+				control.type = "button";
+				control.onclick = (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					action.onPress();
+				};
+			}
 
 			element.appendChild(document.createTextNode(" "));
-			element.appendChild(button);
+			element.appendChild(control);
 		});
 	}
 
@@ -8009,6 +8071,7 @@ button {
 
 	function buttonVoteDescriptors(voteInfo, label) {
 		const state = voteInfo?.state || "none";
+		const voted = state === "up" || state === "down";
 
 		return [
 			{
@@ -8017,6 +8080,7 @@ button {
 				action: state === "up" ? "un" : "up",
 				url: null,
 				active: state === "up",
+				muted: voted && state !== "up",
 				variant: "up",
 			},
 			{
@@ -8026,6 +8090,7 @@ button {
 				action: state === "down" ? "un" : "down",
 				url: null,
 				active: state === "down",
+				muted: voted && state !== "down",
 				variant: "down",
 			},
 		];
@@ -8130,20 +8195,21 @@ button {
 
 		setupItemActionListener();
 
-		return new Promise((resolve) => {
-			const nonce = bridgeNonce();
-			const popup = window.open(
-				itemActionPageURL(voteAction, {
-					storyID,
-					itemId,
-					action,
-					voteURL,
-					nonce,
-				}),
-				"hnewhere_vote_bridge_" + nonce,
-				"width=420,height=320,resizable=yes,scrollbars=yes",
-			);
+		const nonce = bridgeNonce();
+		const url = itemActionPageURL(voteAction, {
+			storyID,
+			itemId,
+			action,
+			voteURL,
+			nonce,
+		});
+		const popup = window.open(
+			url,
+			"hnewhere_vote_bridge_" + nonce,
+			"width=420,height=320,resizable=yes,scrollbars=yes",
+		);
 
+		return new Promise((resolve) => {
 			if (!popup) {
 				itemActionRequests.set(nonce, {
 					resolve: () => {},
@@ -8156,7 +8222,7 @@ button {
 					onInterim,
 					stopWatching: watchBridgeResult(nonce, deliverItemAction),
 				});
-				resolve({ ok: false, reason: "popup-blocked" });
+				resolve({ ok: false, reason: "popup-blocked", url });
 				return;
 			}
 
@@ -8176,7 +8242,7 @@ button {
 		});
 	}
 
-	async function submitVote(
+	function submitVote(
 		sourceID,
 		storyID,
 		itemId,
@@ -8185,10 +8251,10 @@ button {
 		{ force = false } = {},
 	) {
 		if (!container || container.dataset.votePending === "1") {
-			return;
+			return Promise.resolve();
 		}
 
-		if (!force && shouldAskToSignIn(await readAuthVerdict(sourceID), Date.now())) {
+		if (!force && shouldAskToSignIn(rememberedAuthVerdict(sourceID), Date.now())) {
 			showVoteMessage(
 				itemId,
 				`Sign in to ${getSource(sourceID)?.label || "the source"} to vote.`,
@@ -8200,7 +8266,7 @@ button {
 						}),
 				},
 			);
-			return;
+			return Promise.resolve();
 		}
 
 		container.dataset.votePending = "1";
@@ -8211,36 +8277,45 @@ button {
 
 		const label = getSource(sourceID)?.label || "the source";
 
-		try {
-			const result = await openItemActionPopup(
-				sourceID,
-				storyID,
-				itemId,
-				descriptor.action,
-				descriptor.url,
-				() => showToast(`Waiting for sign-in on ${label}…`, { persist: true }),
-			);
+		const opened = openItemActionPopup(
+			sourceID,
+			storyID,
+			itemId,
+			descriptor.action,
+			descriptor.url,
+			() => showToast(`Waiting for sign-in on ${label}…`, { persist: true }),
+		);
 
-			if (result?.storyID && result?.itemId && result?.voteInfo) {
-				setVoteInfoForStoryItem(result.storyID, result.itemId, result.voteInfo);
+		return (async () => {
+			try {
+				const result = await opened;
+
+				if (result?.storyID && result?.itemId && result?.voteInfo) {
+					setVoteInfoForStoryItem(result.storyID, result.itemId, result.voteInfo);
+				}
+
+				if (result?.ok) {
+					showToast(null);
+				} else if (result?.reason === "popup-blocked" && result.url) {
+					showVoteMessage(itemId, voteFailureMessage(result, label), {
+						label: `open ${label}`,
+						href: result.url,
+					});
+				} else if (isSidebarLevelReason(result?.reason)) {
+					showToast(voteFailureMessage(result, label));
+				} else {
+					showVoteMessage(itemId, voteFailureMessage(result, label));
+				}
+
+				await rememberAuthFromResult(sourceID, result);
+			} finally {
+				delete container.dataset.votePending;
+				container.classList.remove("vote-controls-pending");
+				container.querySelectorAll(".vote-button").forEach((button) => {
+					button.disabled = false;
+				});
 			}
-
-			if (result?.ok) {
-				showToast(null);
-			} else if (isSidebarLevelReason(result?.reason)) {
-				showToast(voteFailureMessage(result, label));
-			} else {
-				showVoteMessage(itemId, voteFailureMessage(result, label));
-			}
-
-			await rememberAuthFromResult(sourceID, result);
-		} finally {
-			delete container.dataset.votePending;
-			container.classList.remove("vote-controls-pending");
-			container.querySelectorAll(".vote-button").forEach((button) => {
-				button.disabled = false;
-			});
-		}
+		})();
 	}
 
 	// -------------------------
@@ -8290,15 +8365,38 @@ button {
 
 	// #endregion hnewhere-test-export
 
-	function readAuthVerdict(sourceID) {
-		return load(AUTH_PREFIX + sourceID, null);
+	const rememberedAuthVerdicts = new Map();
+
+	function rememberedAuthVerdict(sourceID) {
+		return rememberedAuthVerdicts.get(sourceID) || null;
+	}
+
+	async function readAuthVerdict(sourceID) {
+		const verdict = await load(AUTH_PREFIX + sourceID, null);
+
+		rememberedAuthVerdicts.set(sourceID, verdict);
+
+		return verdict;
+	}
+
+	function warmAuthVerdict(sourceID) {
+		if (!sourceID || rememberedAuthVerdicts.has(sourceID)) {
+			return;
+		}
+
+		rememberedAuthVerdicts.set(sourceID, null);
+		readAuthVerdict(sourceID).catch(() => {});
 	}
 
 	async function rememberAuthFromResult(sourceID, result) {
 		const state = verdictFromResult(result);
 
 		if (state) {
-			await save(AUTH_PREFIX + sourceID, { state, at: Date.now() });
+			const verdict = { state, at: Date.now() };
+
+			rememberedAuthVerdicts.set(sourceID, verdict);
+
+			await save(AUTH_PREFIX + sourceID, verdict);
 		}
 	}
 
@@ -8309,6 +8407,7 @@ button {
 
 		const sourceID = container.dataset.hnVoteSource;
 
+		warmAuthVerdict(sourceID);
 		container.replaceChildren();
 
 		const descriptors = voteDescriptorsFor(sourceID, voteInfo);
@@ -8352,6 +8451,10 @@ button {
 
 			if (descriptor.active) {
 				button.classList.add("vote-button-active");
+			}
+
+			if (descriptor.muted) {
+				button.classList.add("vote-button-muted");
 			}
 
 			if (descriptor.variant) {
@@ -8690,6 +8793,7 @@ button {
 
 	function slideBrowseList(ui, direction, render) {
 		const list = ui?.shadow?.querySelector("#browse-list");
+		const note = ui?.shadow?.querySelector("#browse-blend-note");
 
 		if (!list || prefersReducedMotion()) {
 			render().catch(console.error);
@@ -8703,13 +8807,15 @@ button {
 		const out = direction > 0 ? "slide-out-left" : "slide-out-right";
 		const enter = direction > 0 ? "slide-in-right" : "slide-in-left";
 
-		list.classList.remove(
-			"slide-in-left",
-			"slide-in-right",
-			"slide-out-left",
-			"slide-out-right",
-		);
-		list.classList.add(out);
+		for (const element of [list, note]) {
+			element?.classList.remove(
+				"slide-in-left",
+				"slide-in-right",
+				"slide-out-left",
+				"slide-out-right",
+			);
+			element?.classList.add(out);
+		}
 
 		list._hnewhereSlideTimer = window.setTimeout(async () => {
 			try {
@@ -8718,11 +8824,17 @@ button {
 				console.error(error);
 			}
 
-			list.classList.remove(out);
-			list.classList.add(enter);
+			for (const element of [list, note]) {
+				element?.classList.remove(out);
+				element?.classList.add(enter);
+			}
 
 			requestAnimationFrame(() => {
-				requestAnimationFrame(() => list.classList.remove(enter));
+				requestAnimationFrame(() => {
+					for (const element of [list, note]) {
+						element?.classList.remove(enter);
+					}
+				});
 			});
 
 			list._hnewhereSlideTimer = null;
@@ -9250,10 +9362,10 @@ button {
 		};
 
 		if (saved.length) {
-			subhead(list, "favorite discussions");
+			const section = subhead(list, "favorite discussions", { collapsible: true });
 
 			for (const entry of saved) {
-				collectionRow(entry, list, null, {
+				collectionRow(entry, section, null, {
 					unfavorite: entry.key,
 					reload,
 				});
@@ -9261,10 +9373,10 @@ button {
 		}
 
 		if (comments.length) {
-			subhead(list, "favorite comments");
+			const section = subhead(list, "favorite comments", { collapsible: true });
 
 			for (const entry of comments) {
-				const row = collectionRow(entry, list, null, {
+				const row = collectionRow(entry, section, null, {
 					unfavorite: entry.key,
 					reload,
 				});
@@ -9284,10 +9396,10 @@ button {
 		}
 
 		if (noted.length) {
-			subhead(list, "notes");
+			const section = subhead(list, "notes", { collapsible: true });
 
 			for (const entry of noted) {
-				noteCollectionRow(entry, list, {
+				noteCollectionRow(entry, section, {
 					onDelete: async (page, note) => {
 						await deleteCollectedNote(page, note);
 						await reload();
@@ -9318,7 +9430,7 @@ button {
 		paintBrowseTab(
 			tab,
 			queueHasItems,
-			unread ? `queue (${unread})` : "queue",
+			"queue",
 			"--queue-tab-width",
 			"has-queue",
 		);
@@ -9623,12 +9735,42 @@ button {
 		return updates.size > 0;
 	}
 
-	function subhead(list, text) {
+	function subhead(list, text, { collapsible = false } = {}) {
 		const heading = document.createElement("div");
 
 		heading.className = "browse-subhead";
 		heading.textContent = text;
-		list.appendChild(heading);
+
+		if (!collapsible) {
+			list.appendChild(heading);
+			return list;
+		}
+
+		const section = document.createElement("div");
+		const body = document.createElement("div");
+		const toggle = document.createElement("button");
+
+		section.className = "browse-section";
+		body.className = "browse-section-body";
+
+		toggle.type = "button";
+		toggle.className = "browse-subhead-toggle";
+
+		const paint = (collapsed) => {
+			toggle.textContent = collapsed ? "[+]" : "[–]";
+			toggle.setAttribute("aria-expanded", String(!collapsed));
+			toggle.setAttribute("aria-label", (collapsed ? "Expand " : "Collapse ") + text);
+		};
+
+		paint(false);
+
+		toggle.onclick = () => paint(section.classList.toggle("is-collapsed"));
+
+		heading.appendChild(toggle);
+		section.append(heading, body);
+		list.appendChild(section);
+
+		return body;
 	}
 
 	async function renderQueueView(ui, list) {
@@ -9732,25 +9874,64 @@ button {
 		}
 	}
 
-	function setBlendNote(ui, sources) {
+	const QUEUE_NOTE = "Discussions you've queued or are watching";
+
+	const COLLECTION_NOTE =
+		"All of your favorited discussions, comments, and notes";
+
+	function setBrowseNote(ui, text) {
 		const note = ui?.shadow?.querySelector("#browse-blend-note");
 
 		if (!note) {
 			return;
 		}
 
-		note.hidden = sources.length < 2;
+		note.hidden = !text;
 
-		if (!note.hidden) {
-			note.textContent =
-				"Blended from " +
-				joinWithAnd(sources.map((id) => getSource(id)?.label || id));
+		if (text) {
+			note.textContent = text;
 		}
+	}
+
+	function setBlendNote(ui, sources) {
+		setBrowseNote(
+			ui,
+			sources.length < 2
+				? ""
+				: "Blended from " +
+						joinWithAnd(sources.map((id) => getSource(id)?.label || id)),
+		);
+	}
+
+	const BROWSE_SKELETON_WIDTHS = ["92%", "74%", "86%", "63%", "81%", "70%", "88%", "58%"];
+
+	function renderBrowseSkeleton(list, label) {
+		const wrap = document.createElement("div");
+
+		wrap.className = "browse-skeleton";
+
+		const note = document.createElement("div");
+
+		note.className = "browse-skeleton-label";
+		note.textContent = label;
+		wrap.appendChild(note);
+
+		for (const width of BROWSE_SKELETON_WIDTHS) {
+			const row = document.createElement("div");
+
+			row.className = "browse-skeleton-row";
+			row.style.setProperty("--skeleton-title", width);
+			row.innerHTML = `<span class="browse-skeleton-rank"></span>
+<span class="browse-skeleton-lines"><span class="browse-skeleton-bar"></span><span class="browse-skeleton-bar"></span></span>`;
+			wrap.appendChild(row);
+		}
+
+		list.replaceChildren(wrap);
 	}
 
 	async function renderFrontPageView(ui, list) {
 		if (!list.childElementCount) {
-			list.textContent = "Loading front pages…";
+			renderBrowseSkeleton(list, "Loading front pages…");
 		}
 
 		const requested = browsePage;
@@ -9831,14 +10012,19 @@ button {
 
 		refreshQueueCount(ui.shadow);
 
+		if (list.dataset.browseTab !== browseTab) {
+			list.replaceChildren();
+			list.dataset.browseTab = browseTab;
+		}
+
 		if (browseTab === "queue") {
-			setBlendNote(ui, []);
+			setBrowseNote(ui, QUEUE_NOTE);
 			await renderQueueView(ui, list);
 			return;
 		}
 
 		if (browseTab === "collection") {
-			setBlendNote(ui, []);
+			setBrowseNote(ui, COLLECTION_NOTE);
 			await renderCollectionView(ui, list);
 			return;
 		}
@@ -10389,6 +10575,10 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 	--header-text:#fff;
 	--subtitle-stage:#c2e0cd;
 	--subtitle-stage-peak:#ffffff;
+	--send-ink-stage:rgba(255,255,255,.5);
+	--send-ink-peak:#ffffff;
+	--send-note-stage:rgba(34,34,34,.38);
+	--send-note-peak:#222222;
 	--border:#ccc;
 	--border-soft:#ddd;
 	--link:#0000aa;
@@ -10437,6 +10627,10 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 	--header-text:#f0fff5;
 	--subtitle-stage:#8fbda2;
 	--subtitle-stage-peak:#e6fff0;
+	--send-ink-stage:rgba(0,0,0,.45);
+	--send-ink-peak:#000000;
+	--send-note-stage:rgba(220,220,220,.38);
+	--send-note-peak:#dcdcdc;
 	--border:#3d3d3d;
 	--border-soft:#383838;
 	--link:#8ab4f8;
@@ -10697,7 +10891,7 @@ header {
 
 .browse-view {
 	display:none;
-	--browse-indent:28px;
+	--browse-indent:23px;
 }
 
 #comments-content,
@@ -10712,30 +10906,37 @@ header {
 }
 
 #browse-list {
+	padding-left:8px;
 	transition:opacity .16s ease, transform .16s ease;
 }
 
-#browse-list.slide-out-left {
+#browse-list.slide-out-left,
+#browse-blend-note.slide-out-left {
 	opacity:0;
 	transform:translateX(-14px);
 }
 
-#browse-list.slide-out-right {
+#browse-list.slide-out-right,
+#browse-blend-note.slide-out-right {
 	opacity:0;
 	transform:translateX(14px);
 }
 
 #browse-list.slide-in-right,
-#browse-list.slide-in-left {
+#browse-list.slide-in-left,
+#browse-blend-note.slide-in-right,
+#browse-blend-note.slide-in-left {
 	transition:none;
 	opacity:0;
 }
 
-#browse-list.slide-in-right {
+#browse-list.slide-in-right,
+#browse-blend-note.slide-in-right {
 	transform:translateX(14px);
 }
 
-#browse-list.slide-in-left {
+#browse-list.slide-in-left,
+#browse-blend-note.slide-in-left {
 	transform:translateX(-14px);
 }
 
@@ -10755,16 +10956,34 @@ header {
 
 .browse-subhead {
 	margin:0 0 6px;
-	padding-left:8px;
 	color:var(--meta);
 	font-size:11px;
 	font-family:Verdana, Geneva, sans-serif;
 }
 
-.browse-row + .browse-subhead {
+.browse-row + .browse-subhead,
+.browse-section + .browse-section > .browse-subhead {
 	margin-top:14px;
 	padding-top:14px;
 	border-top:1px solid var(--surface-divider);
+}
+
+.browse-subhead-toggle {
+	margin-left:6px;
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	font:inherit;
+	cursor:pointer;
+}
+
+.browse-section.is-collapsed > .browse-subhead {
+	margin-bottom:0;
+}
+
+.browse-section.is-collapsed > .browse-section-body {
+	display:none;
 }
 
 
@@ -10782,6 +11001,7 @@ header {
 
 #browse-tab-front::after {
 	content:none;
+	display:inline-block;
 	margin:0 .35em;
 	color:var(--meta);
 }
@@ -10843,22 +11063,24 @@ header {
 
 .browse-tab {
 	border:0;
-	padding:0;
+	padding:0 0 3px;
 	background:none;
 	color:var(--meta);
 	cursor:pointer;
 	font-family:inherit;
 	font-size:inherit;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
 }
 
 .browse-tab.is-current {
 	color:var(--text);
+	text-decoration:underline;
 }
 
 @media (hover: hover) {
 	.browse-tab:not(.is-current):hover {
 		text-decoration:underline;
-		text-underline-offset:2px;
 	}
 }
 
@@ -10900,8 +11122,77 @@ header {
 .browse-blend-note {
 	margin:-7px 0 10px 8px;
 	color:var(--meta);
-	font-size:11px;
+	font-size:10px;
 	font-family:Verdana, Geneva, sans-serif;
+	transition:opacity .16s ease, transform .16s ease;
+}
+
+.browse-skeleton {
+	margin-left:0;
+}
+
+.browse-skeleton-label {
+	margin:-7px 0 12px;
+	color:var(--meta);
+	font-size:10px;
+	font-family:Verdana, Geneva, sans-serif;
+}
+
+.browse-skeleton-row {
+	display:flex;
+	align-items:flex-start;
+	gap:8px;
+	margin-bottom:14px;
+}
+
+.browse-skeleton-lines {
+	flex:1 1 auto;
+	min-width:0;
+}
+
+.browse-skeleton-rank,
+.browse-skeleton-bar {
+	display:block;
+	border-radius:2px;
+	background:linear-gradient(
+		90deg,
+		var(--hover-tint) 0%,
+		var(--hover-tint) 40%,
+		var(--active-tint) 50%,
+		var(--hover-tint) 60%,
+		var(--hover-tint) 100%
+	);
+	background-size:220% 100%;
+	animation:hnewhere-browse-skeleton 1.6s linear infinite;
+}
+
+.browse-skeleton-rank {
+	flex:0 0 20px;
+	height:9px;
+	margin-top:2px;
+}
+
+.browse-skeleton-bar {
+	height:11px;
+	width:var(--skeleton-title, 80%);
+}
+
+.browse-skeleton-bar + .browse-skeleton-bar {
+	margin-top:6px;
+	height:9px;
+	width:38%;
+}
+
+@keyframes hnewhere-browse-skeleton {
+	from { background-position:120% 0; }
+	to { background-position:-20% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.browse-skeleton-rank,
+	.browse-skeleton-bar {
+		animation:none;
+	}
 }
 
 .browse-blend-note[hidden] {
@@ -10935,14 +11226,14 @@ header {
 
 .browse-rank {
 	flex:0 0 auto;
-	min-width:22px;
-	text-align:right;
+	min-width:17px;
+	text-align:left;
 	color:var(--meta);
 	font-size:11px;
 }
 
 .browse-row-loose {
-	padding:0 0 0 8px;
+	padding:0;
 }
 
 .browse-row-loose + .browse-row-loose {
@@ -11375,7 +11666,8 @@ header button svg {
 }
 
 .page-header {
-	padding:0 14px 10px;
+	margin-left:8px;
+	padding:0 14px 10px 0;
 	border-bottom:1px solid var(--border-soft);
 }
 
@@ -11400,24 +11692,114 @@ header button svg {
 	border-bottom:0;
 }
 
-.source-strip {
-	display:flex;
-	flex-wrap:wrap;
-	gap:6px;
-	overflow:hidden;
-	max-height:0;
-	opacity:0;
-	margin-top:0;
-	transition:max-height .22s ease, opacity .18s ease, margin-top .22s ease;
+.source-menu-anchor {
+	position:relative;
+	display:inline-flex;
 }
 
-.source-strip-single {
+.source-menu {
+	position:absolute;
+	left:0;
+	top:calc(100% + 4px);
+	z-index:4;
+	min-width:180px;
+	max-width:270px;
+	max-height:260px;
+	overflow-y:auto;
+	padding:8px;
+	border:1px solid var(--surface-border);
+	border-radius:8px;
+	background:var(--surface);
+	color:var(--surface-text);
+	box-shadow:0 8px 24px rgba(0,0,0,.16);
+	text-align:left;
+}
+
+.source-menu.hidden {
 	display:none;
 }
 
-.source-strip.is-open {
-	opacity:1;
+.choice-group + .choice-group {
 	margin-top:8px;
+	padding-top:8px;
+	border-top:1px solid var(--surface-divider);
+}
+
+.choice-head {
+	margin-bottom:6px;
+}
+
+.choice-head .live-pill {
+	margin-left:0;
+}
+
+.choice-sub + .choice-sub {
+	margin-top:7px;
+}
+
+.choice-sub-head {
+	margin:0 0 3px 2px;
+	color:var(--muted);
+	font-size:10px;
+	font-weight:600;
+	letter-spacing:.04em;
+	text-transform:uppercase;
+}
+
+.source-menu-option {
+	align-items:center;
+	padding:3px 4px;
+	border-radius:4px;
+	cursor:pointer;
+}
+
+.source-menu-option + .source-menu-option {
+	margin-top:2px;
+}
+
+.source-menu-option input[type="radio"] {
+	appearance:none;
+	-webkit-appearance:none;
+	box-sizing:border-box;
+	flex:0 0 auto;
+	width:13px;
+	height:13px;
+	margin:0;
+	border:1px solid var(--help-border);
+	border-radius:50%;
+	background:var(--help-bg);
+	cursor:pointer;
+	transition:border-color .14s ease, box-shadow .14s ease;
+}
+
+.source-menu-option input[type="radio"]:checked {
+	border-color:var(--accent);
+	box-shadow:inset 0 0 0 3px var(--surface);
+	background:var(--accent);
+}
+
+.choice-label {
+	min-width:0;
+	overflow:hidden;
+	text-overflow:ellipsis;
+	white-space:nowrap;
+}
+
+.choice-count {
+	margin-left:auto;
+	padding-left:8px;
+	color:var(--muted);
+	font-variant-numeric:tabular-nums;
+}
+
+.source-menu-option-active .choice-label {
+	font-weight:600;
+}
+
+@media (hover: hover) {
+	.source-menu-option:hover {
+		background:var(--hover-tint);
+	}
 }
 
 .page-header-disclosure,
@@ -11448,7 +11830,7 @@ header button svg {
 	display:flex;
 	align-items:center;
 	gap:6px;
-	padding:8px 0 0;
+	padding:8px 0 0 8px;
 	font-size:11px;
 	color:var(--meta);
 }
@@ -11463,41 +11845,40 @@ header button svg {
 	cursor:pointer;
 }
 
-.list-filtered .page-sort {
+.page-sort-toggle {
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+	font:inherit;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+}
+
+.page-sort-sep {
+	margin:0 .1em;
+	color:var(--meta);
+}
+
+.page-sort-toggle[hidden],
+.page-sort-sep[hidden] {
 	display:none;
 }
 
-.source-strip-entry {
-	display:inline-flex;
-	align-items:baseline;
-	gap:5px;
-	padding:2px 7px;
-	border:0;
-	border-radius:999px;
-	background:var(--hover-tint);
-	color:inherit;
-	font:inherit;
-	font-size:11px;
-	cursor:pointer;
+.page-sort-toggle.is-on {
+	color:var(--text);
+	text-decoration:underline;
 }
 
-.source-strip-entry-active {
-	background:var(--active-tint);
-	font-weight:600;
+@media (hover: hover) {
+	.page-sort-toggle:not(.is-on):hover {
+		text-decoration:underline;
+	}
 }
 
-.source-strip-label {
-	min-width:0;
-	max-width:16ch;
-	overflow:hidden;
-	text-overflow:ellipsis;
-	white-space:nowrap;
-}
-
-.source-strip-count {
-	flex:0 0 auto;
-	color:var(--muted);
-	font-variant-numeric:tabular-nums;
+.list-filtered .page-sort {
+	display:none;
 }
 
 .more-replies {
@@ -11555,7 +11936,7 @@ header button svg {
 	align-items:center;
 	gap:6px;
 	margin:0 -12px;
-	padding:10px 12px 0;
+	padding:10px 12px 0 20px;
 	font-size:11px;
 	color:var(--meta);
 	line-height:13px;
@@ -11693,7 +12074,7 @@ header button svg {
 }
 
 .settings-option-hint {
-	margin:3px 0 0 21px;
+	margin:3px 0 0 23px;
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
@@ -11729,7 +12110,7 @@ header button svg {
 }
 
 .settings-option.sub-option + .settings-option-hint {
-	margin-left:41px;
+	margin-left:43px;
 }
 
 .op-pill {
@@ -12294,6 +12675,11 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 <path d="M4.5 7.7 8 4.2l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
 </button>
+<button id="comment-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="compose-dock" aria-label="Add a comment" title="Add a comment" hidden>
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
+</svg>
+</button>
 <span class="hide-control">
 <button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Hide Backchannel here" title="Hide Backchannel here">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -12754,6 +13140,19 @@ ${[
 					notice.hidden = false;
 				}
 			}
+
+			if (!canNotify()) {
+				const option = settingsInputs.notifyOnWatch?.closest(".settings-option");
+				const hint = option?.nextElementSibling;
+
+				if (option) {
+					option.hidden = true;
+				}
+
+				if (hint?.classList.contains("settings-option-hint")) {
+					hint.hidden = true;
+				}
+			}
 		};
 
 		applySettingsPanelState(await loadSettings());
@@ -12847,6 +13246,8 @@ ${[
 				setHideMenuOpen(false);
 			});
 		}
+
+		shadow.addEventListener("click", (event) => closeMenusOutside(shadow, event));
 
 		const notesExport = shadow.querySelector("#settings-notes-export");
 		const notesCount = shadow.querySelector("#settings-notes-count");
@@ -13240,6 +13641,7 @@ ${[
 
 #panel {
 	all:initial;
+	--vote-column:17px;
 	line-height:1.4;
 	color-scheme:inherit;
 	-webkit-text-size-adjust:100%;
@@ -13523,7 +13925,15 @@ ${SUBMIT_FORM_CSS}
 }
 
 .notepad-section {
-	margin:0 0 6px;
+	margin:0 0 15px;
+}
+
+.notepad-section.is-collapsed .notepad-rule {
+	padding-top:0;
+}
+
+.notepad-section.is-collapsed .notepad-rule-close {
+	display:none;
 }
 
 .notepad-rule {
@@ -13531,7 +13941,7 @@ ${SUBMIT_FORM_CSS}
 	align-items:center;
 	gap:6px;
 	margin:0 -12px;
-	padding:10px 12px 0;
+	padding:10px 12px 0 20px;
 	font-size:11px;
 	color:var(--meta);
 	line-height:13px;
@@ -13545,7 +13955,7 @@ ${SUBMIT_FORM_CSS}
 }
 
 .notepad-rule-close {
-	padding-top:8px;
+	padding-top:15px;
 }
 
 .notepad-mark {
@@ -13564,19 +13974,7 @@ ${SUBMIT_FORM_CSS}
 	margin-left:auto;
 }
 
-.notepad-add {
-	padding:0;
-	border:0;
-	background:none;
-	color:var(--meta);
-	font:inherit;
-	font-size:11px;
-	text-decoration:none;
-	cursor:pointer;
-}
-
 @media (hover: hover) {
-	.notepad-add:hover,
 	.notepad-toggle:hover {
 		text-decoration:underline;
 	}
@@ -13597,21 +13995,10 @@ ${SUBMIT_FORM_CSS}
 	display:none;
 }
 
-.notepad-toggle::before {
-	content:"|";
-	margin:0 .35em;
-	color:var(--meta);
-	text-decoration:none;
-	display:inline-block;
-}
-
 .notepad-body {
+	margin-left:8px;
 	overflow:hidden;
 	transition:max-height .22s ease, opacity .18s ease;
-}
-
-.notepad-add.is-open {
-	text-decoration:underline;
 }
 
 .note-editor-draft {
@@ -13947,7 +14334,11 @@ ${SUBMIT_FORM_CSS}
 
 .story-votelinks,
 .story-votespacer {
-	width:14px;
+	width:var(--vote-column);
+}
+
+.story-vote-none {
+	width:8px;
 }
 
 .story-votelinks {
@@ -13972,14 +14363,9 @@ ${SUBMIT_FORM_CSS}
 	align-items:flex-start;
 }
 
-.comment-vote-slot-empty {
-	flex-basis:0;
-	width:0;
-}
-
 .comment-vote-slot {
-	flex:0 0 17px;
-	width:17px;
+	flex:0 0 var(--vote-column);
+	width:var(--vote-column);
 	display:flex;
 	flex-direction:column;
 	align-items:center;
@@ -13987,13 +14373,36 @@ ${SUBMIT_FORM_CSS}
 	padding-top:1px;
 }
 
+.comment-vote-slot.comment-vote-slot-empty {
+	flex-basis:0;
+	width:0;
+}
+
+.comment-vote-slot.comment-vote-slot-empty::after {
+	display:none;
+}
+
 .comment-vote-slot::after {
 	content:"";
 	flex:1 0 0;
 	width:1px;
+	min-height:7px;
 	margin-top:3px;
 	background:var(--border-soft);
-	transition:background-color .9s ease;
+	transform-origin:top;
+	transition:background-color .9s ease, transform .18s ease;
+}
+
+.comment:has(> .comment-layout > .comment-main > .comment-content.hidden)
+	> .comment-layout > .comment-vote-slot::after {
+	min-height:0;
+	transform:scaleY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.comment-vote-slot::after {
+		transition:background-color .9s ease;
+	}
 }
 
 .comment-main {
@@ -14064,6 +14473,16 @@ ${SUBMIT_FORM_CSS}
 	content:none;
 }
 
+.vote-button-muted {
+	opacity:.33;
+}
+
+@media (hover: hover) {
+	.vote-button-muted:hover {
+		opacity:1;
+	}
+}
+
 .vote-button-neutral.vote-button-active {
 	color:var(--accent);
 }
@@ -14095,6 +14514,7 @@ ${SUBMIT_FORM_CSS}
 	margin:0;
 	color:inherit;
 	font:inherit;
+	text-decoration:none;
 	cursor:pointer;
 }
 
@@ -14198,7 +14618,7 @@ blockquote.comment-quote-redundant {
 }
 
 .story-title {
-	font-size:15px;
+	font-size:13px;
 	line-height:1.25;
 }
 
@@ -14246,6 +14666,219 @@ blockquote.comment-quote-redundant {
 .comment-composer {
 	margin-top:10px;
 	max-width:720px;
+}
+
+.compose-box {
+	position:relative;
+	margin:15px 0 15px 8px;
+}
+
+.compose-dock {
+	position:absolute;
+	top:8px;
+	left:8px;
+	right:8px;
+	z-index:5;
+	padding:8px;
+	border:1px solid var(--surface-border);
+	border-radius:8px;
+	background:var(--surface);
+	box-shadow:0 8px 24px rgba(0,0,0,.18);
+	pointer-events:auto;
+}
+
+.compose-dock[hidden] {
+	display:none;
+}
+
+.compose-dock .compose-box {
+	margin:0;
+}
+
+#comment-toggle.is-open {
+	background:var(--active-tint);
+}
+
+.compose-field {
+	border:1px solid var(--field-border);
+	border-radius:6px;
+	background:var(--field-bg);
+}
+
+.compose-field:focus-within {
+	border-color:var(--accent);
+	box-shadow:0 0 0 2px rgba(var(--accent-rgb),.16);
+}
+
+.compose-field > .composer-text {
+	display:block;
+	width:100%;
+	min-height:0;
+	box-sizing:border-box;
+	padding:7px 9px 2px;
+	border:0;
+	border-radius:6px 6px 0 0;
+	background:none;
+	resize:vertical;
+}
+
+.compose-field > .composer-text:focus {
+	outline:none;
+	box-shadow:none;
+}
+
+.compose-field > .composer-actions {
+	display:flex;
+	align-items:center;
+	gap:8px;
+	padding:2px 7px 7px 9px;
+}
+
+.compose-send-row {
+	position:relative;
+	display:inline-flex;
+	gap:6px;
+	margin-left:auto;
+}
+
+.compose-send {
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	height:22px;
+	padding:0 10px;
+	border:0;
+	border-radius:999px;
+	font:inherit;
+	font-size:11px;
+	line-height:1;
+	cursor:pointer;
+	transition:opacity .15s ease, transform .15s ease;
+}
+
+.compose-send[hidden] {
+	display:none;
+}
+
+.compose-send:disabled {
+	opacity:.45;
+	cursor:default;
+}
+
+.compose-send:disabled.is-sending {
+	opacity:1;
+}
+
+.compose-send-label {
+	display:inline-block;
+	--send-stage:var(--send-note-stage);
+	--send-peak:var(--send-note-peak);
+	transition:opacity .16s ease;
+}
+
+.is-fading > .compose-send-label {
+	opacity:0;
+}
+
+.is-working > .compose-send-label {
+	background-image:linear-gradient(
+		90deg,
+		var(--send-stage) 0%,
+		var(--send-stage) 40%,
+		var(--send-peak) 50%,
+		var(--send-stage) 60%,
+		var(--send-stage) 100%
+	);
+	background-size:220% 100%;
+	-webkit-background-clip:text;
+	background-clip:text;
+	-webkit-text-fill-color:transparent;
+	color:transparent;
+	animation:hnewhere-subtitle-shimmer 1.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.is-working > .compose-send-label {
+		animation:none;
+	}
+}
+
+.compose-send-comment > .compose-send-label {
+	--send-stage:var(--send-ink-stage);
+	--send-peak:var(--send-ink-peak);
+}
+
+.compose-send-note {
+	color:var(--surface-text);
+	background:var(--hover-tint);
+}
+
+.compose-send-comment {
+	color:var(--accent-ink);
+	background:var(--accent);
+}
+
+.compose-send.is-open {
+	background-image:linear-gradient(var(--active-tint), var(--active-tint));
+}
+
+@media (hover: hover) {
+	.compose-send:not(:disabled):hover {
+		transform:translateY(-1px);
+	}
+}
+
+.compose-send:focus-visible {
+	outline:2px solid var(--link);
+	outline-offset:2px;
+}
+
+.compose-targets {
+	position:absolute;
+	right:0;
+	top:calc(100% + 4px);
+	max-height:180px;
+	overflow-y:auto;
+	z-index:2;
+	display:flex;
+	flex-direction:column;
+	min-width:132px;
+	max-width:270px;
+	padding:4px;
+	border:1px solid var(--surface-border);
+	border-radius:6px;
+	background:var(--surface);
+	box-shadow:0 4px 14px rgba(0,0,0,.18);
+}
+
+.compose-targets.hidden {
+	display:none;
+}
+
+.compose-target {
+	display:flex;
+	align-items:center;
+	gap:8px;
+	width:100%;
+	padding:4px 6px;
+	border:0;
+	border-radius:4px;
+	background:none;
+	color:var(--surface-text);
+	font:inherit;
+	font-size:12px;
+	text-align:left;
+	cursor:pointer;
+}
+
+.compose-target + .compose-target {
+	margin-top:2px;
+}
+
+@media (hover: hover) {
+	.compose-target:hover {
+		background:var(--hover-tint);
+	}
 }
 
 .reply-composer {
@@ -14371,13 +15004,6 @@ blockquote.comment-quote-redundant {
 	color:var(--error);
 }
 
-.composer-spinner {
-	display:inline-block;
-	width:1em;
-	font-family:Menlo, Consolas, monospace;
-	color:var(--meta);
-}
-
 .composer-status a {
 	color:var(--link);
 }
@@ -14421,7 +15047,7 @@ blockquote.comment-quote-redundant {
 <div id="resize-handle" aria-hidden="true"></div>
 
 ${headerHTML({ subtitle: true, minimize: true, browse: true })}
-<div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div></div>
+<div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
 ${settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
@@ -14766,7 +15392,7 @@ ${settingsPanelHTML()}
 	${
 		showTitle
 			? `<tr>
-	<td class="story-votelinks">
+	<td class="story-votelinks${canVote ? "" : " story-vote-none"}">
 	${voteControlsHTML}
 	</td>
 	<td class="story-title-cell">
@@ -14786,7 +15412,7 @@ ${settingsPanelHTML()}
 			: ""
 	}
 	<tr>
-	<td class="${showTitle ? "story-votespacer" : "story-votelinks story-votelinks-inline"}">${showTitle ? "" : voteControlsHTML}</td>
+	<td class="${showTitle ? "story-votespacer" : "story-votelinks story-votelinks-inline"}${canVote ? "" : " story-vote-none"}">${showTitle ? "" : voteControlsHTML}</td>
 	<td class="story-body-cell">
 	<div class="story-meta">
 	${
@@ -14870,6 +15496,439 @@ ${settingsPanelHTML()}
 		COMMENT_BRIDGE_MESSAGE_SOURCE,
 	);
 
+	function wireComposeDock(ui, box, label) {
+		const dock = ui.shadow.querySelector("#compose-dock");
+		const slot = ui.shadow.querySelector("#compose-dock-slot");
+		const control = ui.shadow.querySelector("#comment-toggle");
+
+		if (!dock || !slot || !control) {
+			return null;
+		}
+
+		const spacer = document.createElement("div");
+
+		spacer.className = "compose-spacer";
+		control.hidden = false;
+		control.title = label;
+		control.setAttribute("aria-label", label);
+
+		let docked = false;
+
+		const undock = () => {
+			if (!docked) {
+				return;
+			}
+
+			docked = false;
+			dock.hidden = true;
+			control.classList.remove("is-open");
+			control.setAttribute("aria-expanded", "false");
+			spacer.replaceWith(box);
+		};
+
+		const dockBox = () => {
+			if (docked) {
+				return;
+			}
+
+			docked = true;
+			spacer.style.height = `${box.getBoundingClientRect().height}px`;
+			box.replaceWith(spacer);
+			slot.appendChild(box);
+			dock.hidden = false;
+			control.classList.add("is-open");
+			control.setAttribute("aria-expanded", "true");
+			box.querySelector(".composer-text")?.focus({ preventScroll: true });
+		};
+
+		control.onclick = (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			return docked ? undock() : dockBox();
+		};
+
+		dock.addEventListener("keydown", (event) => {
+			if (event.key === "Escape") {
+				undock();
+				control.focus();
+			}
+		});
+
+		return { undock, stop: () => undock() };
+	}
+
+	function replyTargets(stories = renderedDiscussions || []) {
+		const filtered =
+			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
+
+		return stories.filter(
+			(story) =>
+				getSource(story.source)?.capabilities.reply &&
+				(!filtered || story.key === filtered),
+		);
+	}
+
+	function composeDockLabel(canComment) {
+		return canComment ? "Add a comment" : "Keep a note";
+	}
+
+	function closeSourceMenu(shadow) {
+		const menu = shadow.querySelector(".source-menu");
+
+		menu?.classList.add("hidden");
+		shadow
+			.querySelector(".page-header-disclosure")
+			?.setAttribute("aria-expanded", "false");
+	}
+
+	function closeMenusOutside(shadow, event) {
+		const path = event.composedPath();
+		const outside = (node) => node && !path.includes(node);
+		const menu = shadow.querySelector(".source-menu");
+
+		if (
+			menu &&
+			outside(menu) &&
+			outside(shadow.querySelector(".page-header-disclosure"))
+		) {
+			closeSourceMenu(shadow);
+		}
+
+		const dock = shadow.querySelector("#compose-dock");
+
+		if (
+			dock &&
+			!dock.hidden &&
+			outside(dock) &&
+			outside(shadow.querySelector("#comment-toggle"))
+		) {
+			dock.querySelector(".compose-box")?._hnewhereDock?.undock();
+		}
+
+		for (const box of shadow.querySelectorAll(".comment-composer")) {
+			const targets = box.querySelector(".compose-targets");
+
+			if (
+				targets &&
+				!targets.classList.contains("hidden") &&
+				outside(targets) &&
+				outside(box.querySelector(".compose-send-comment"))
+			) {
+				closeComposeTargets(box);
+			}
+		}
+	}
+
+	function closeComposeTargets(box) {
+		const button = box.querySelector(".compose-send-comment");
+
+		box.querySelector(".compose-targets")?.classList.add("hidden");
+		button?.classList.remove("is-open");
+		button?.setAttribute("aria-expanded", "false");
+	}
+
+	function syncComposeSendable(box) {
+		const written = Boolean(
+			box.querySelector(".composer-text")?.value.trim(),
+		);
+
+		for (const button of box.querySelectorAll(".compose-send")) {
+			if (!button.dataset.sending) {
+				button.disabled = !written;
+			}
+		}
+	}
+
+	function syncComposeBox() {
+		const box =
+			sidebarUI?.body?.querySelector(".compose-box") ||
+			sidebarUI?.shadow?.querySelector("#compose-dock-slot .compose-box");
+		const button = box?.querySelector(".compose-send-comment");
+
+		if (!box || !button) {
+			return;
+		}
+
+		const targets = replyTargets();
+		const canNote = Boolean(box.querySelector(".compose-send-note"));
+		const control = sidebarUI.shadow.querySelector("#comment-toggle");
+		const word = targets.length > 1 ? "comment\u2026" : "comment";
+
+		button.hidden = targets.length === 0;
+		composeSendRest.set(button, word);
+
+		if (!button.dataset.sending) {
+			composeSendLabel(button).textContent = word;
+		}
+
+		if (control) {
+			const label = composeDockLabel(targets.length > 0);
+
+			control.title = label;
+			control.setAttribute("aria-label", label);
+		}
+
+		if (!targets.length) {
+			closeComposeTargets(box);
+		}
+
+		const field = box.querySelector(".composer-text");
+		const placeholder = composePlaceholder(targets.length > 0, canNote);
+
+		field.placeholder = placeholder;
+		field.setAttribute("aria-label", placeholder);
+	}
+
+	function mountComposeBox(ui, stories, settings, before) {
+		const canNote = Boolean(settings.notepad);
+		const canComment = stories.some(
+			(story) => getSource(story.source)?.capabilities.reply,
+		);
+
+		if (!canComment && !canNote) {
+			const control = ui.shadow.querySelector("#comment-toggle");
+
+			if (control) {
+				control.hidden = true;
+			}
+
+			return null;
+		}
+
+		const holder = document.createElement("div");
+
+		holder.innerHTML = composeBoxHTML({
+			canComment,
+			canNote,
+			placeholder: composePlaceholder(canComment, canNote),
+		});
+
+		const box = holder.firstElementChild;
+
+		ui.body.insertBefore(box, before);
+
+		const textarea = box.querySelector(".composer-text");
+		const status = box.querySelector(".composer-status");
+
+		const grow = () => {
+			if (textarea.style.height) {
+				return;
+			}
+
+			const style = getComputedStyle(textarea);
+			const line = parseFloat(style.lineHeight) || 18;
+			const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+
+			textarea.rows = 1;
+
+			const used = Math.max(
+				1,
+				Math.round((textarea.scrollHeight - padding) / line),
+			);
+
+			textarea.rows = Math.min(
+				COMPOSE_MAX_ROWS,
+				Math.max(textarea.dataset.opened ? 2 : 1, used + 1),
+			);
+		};
+
+		textarea.addEventListener("focus", () => {
+			textarea.dataset.opened = "1";
+			grow();
+		});
+		textarea.addEventListener("input", grow);
+		textarea.addEventListener("input", () => syncComposeSendable(box));
+		textarea.addEventListener("blur", () => {
+			delete textarea.dataset.opened;
+
+			if (!textarea.style.height) {
+				textarea.rows = 1;
+			}
+		});
+		const menu = box.querySelector(".compose-targets");
+		const first = stories[0];
+
+		const held = canComment
+			? wireComposer(box, {
+					source: first?.source || "hn",
+					storyID: first?.id,
+					onPosted: () => {},
+				})
+			: null;
+
+		const say = (message, error = false) => {
+			if (held) {
+				held.setStatus(message, { error });
+				return;
+			}
+
+			status.classList.toggle("hidden", !message);
+			status.classList.toggle("error", Boolean(error));
+			status.textContent = message || "";
+		};
+
+		const commentButton = box.querySelector(".compose-send-comment");
+		const closeMenu = () => closeComposeTargets(box);
+
+		const openMenu = () => {
+			menu.classList.remove("hidden");
+			commentButton.classList.add("is-open");
+			commentButton.setAttribute("aria-expanded", "true");
+		};
+
+		let offered = [];
+
+		if (canComment) {
+			menu.addEventListener("click", (event) => {
+				const choice = event.target.closest(".compose-target");
+				const story = offered.find(
+					(candidate) => candidate.key === choice?.dataset.discussionKey,
+				);
+
+				if (!story) {
+					return;
+				}
+
+				closeMenu();
+				box._hnewhereDock?.undock();
+				held
+					.send({ source: story.source, storyID: story.id })
+					.finally(() => syncComposeSendable(box));
+			});
+
+			commentButton.onclick = () => {
+				const targets = replyTargets(stories);
+
+				if (!targets.length) {
+					return;
+				}
+
+				if (targets.length === 1) {
+					closeMenu();
+					box._hnewhereDock?.undock();
+					held
+						.send({ source: targets[0].source, storyID: targets[0].id })
+						.finally(() => syncComposeSendable(box));
+					return;
+				}
+
+				if (!menu.classList.contains("hidden")) {
+					closeMenu();
+					return;
+				}
+
+				offered = targets;
+				menu.innerHTML = discussionChoiceGroupsHTML(
+					targets,
+					(story, about) =>
+						`<button type="button" class="compose-target" data-discussion-key="${escapeHTML(story.key)}">${discussionChoiceHTML("", about)}</button>`,
+				);
+				openMenu();
+			};
+		}
+
+		if (canNote) {
+			const noteButton = box.querySelector(".compose-send-note");
+			let warnedFor = null;
+
+			noteButton.onclick = () => {
+				closeMenu();
+
+				const parsed = noteFromText(textarea.value);
+
+				if (!parsed.text && !parsed.exact) {
+					say("Write something first.", true);
+					textarea.focus();
+					return;
+				}
+
+				if (parsed.exact && warnedFor !== parsed.exact && !anchorNoteQuote(parsed.exact)) {
+					warnedFor = parsed.exact;
+					say(
+						"Your quoted text wasn't found in this document. Press again to keep it without a highlight.",
+						true,
+					);
+					return;
+				}
+
+				textarea.value = "";
+				say("");
+				box._hnewhereDock?.undock();
+				startComposeSend(noteButton, "saving…", "saved");
+				syncComposeSendable(box);
+				writeNote(parsed)
+					.then(() => settleComposeSend(noteButton, "saved"))
+					.catch((error) => {
+						restComposeSend(noteButton);
+						console.error(error);
+					})
+					.finally(() => syncComposeSendable(box));
+			};
+		}
+
+		if (canNote) {
+			holdComposeSendWidth(box.querySelector(".compose-send-note"), [
+				"saving…",
+				"saved",
+			]);
+		}
+
+		if (canComment) {
+			holdComposeSendWidth(box.querySelector(".compose-send-comment"), [
+				"comment\u2026",
+				"posting…",
+				"posted",
+			]);
+		}
+
+		syncComposeBox();
+		syncComposeSendable(box);
+
+		box._hnewhereDock = wireComposeDock(ui, box, composeDockLabel(canComment));
+
+		return box;
+	}
+
+	const COMPOSE_MAX_ROWS = 12;
+
+	function composeBoxHTML({ canComment, canNote, placeholder }) {
+		return `
+	<div class="comment-composer compose-box">
+	<div class="compose-field">
+	<textarea class="composer-text" rows="1" placeholder="${escapeHTML(placeholder)}" aria-label="${escapeHTML(placeholder)}"></textarea>
+	<div class="composer-actions">
+	${canComment ? `<button type="button" class="composer-help-toggle" aria-expanded="false">formatting</button>` : ""}
+	<div class="composer-status hidden" role="status"></div>
+	<span class="compose-send-row">${
+		canNote
+			? `<button type="button" class="compose-send compose-send-note" title="Keep this as a note"><span class="compose-send-label">note</span></button>`
+			: ""
+	}${
+		canComment
+			? `<button type="submit" class="composer-submit compose-send compose-send-comment" title="Add this as a comment"><span class="compose-send-label">comment</span></button>`
+			: ""
+	}<div class="compose-targets hidden" role="menu"></div></span>
+	</div>
+	</div>
+	<div class="composer-help hidden">
+	<p>Blank lines separate paragraphs.</p>
+	<p>Text surrounded by asterisks is italicized. To get a literal asterisk, use <code>\\*</code> or <code>**</code>.</p>
+	<p>Text after a blank line that is indented by two or more spaces is formatted as code.</p>
+	<p>Urls become links, except in the text field of a submission.</p>
+	<p>If your url gets linked incorrectly, put it in <code>&lt;angle brackets&gt;</code> and it should work.</p>
+	</div>
+	</div>
+`;
+	}
+
+	function composePlaceholder(canComment, canNote) {
+		if (canComment && canNote) {
+			return "Add a comment, or keep a note\u2026";
+		}
+
+		return canComment ? "Add a comment\u2026" : "Keep a note\u2026";
+	}
+
 	function composerHTML({ label, placeholder }) {
 		return `
 	<div class="comment-composer">
@@ -14894,19 +15953,106 @@ ${settingsPanelHTML()}
 		return "HNewhere:comment_draft:" + (parentId || storyID);
 	}
 
-	const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+	const composeSendRest = new WeakMap();
+	const composeSendTimers = new WeakMap();
 
-	function startSpinner(element) {
-		let frame = 0;
+	function composeSendLabel(button) {
+		let label = button.querySelector(".compose-send-label");
 
-		element.textContent = SPINNER_FRAMES[0];
+		if (!label) {
+			label = document.createElement("span");
+			label.className = "compose-send-label";
+			label.textContent = button.textContent;
+			button.replaceChildren(label);
+		}
 
-		const timer = window.setInterval(() => {
-			frame = (frame + 1) % SPINNER_FRAMES.length;
-			element.textContent = SPINNER_FRAMES[frame];
-		}, 90);
+		return label;
+	}
 
-		return () => window.clearInterval(timer);
+	const COMPOSE_SEND_HOLD = 450;
+
+	function holdComposeSendWidth(button, words) {
+		if (button.dataset.sized) {
+			return;
+		}
+
+		const label = composeSendLabel(button);
+		const rest = label.textContent;
+		let widest = button.getBoundingClientRect().width;
+
+		for (const word of words) {
+			label.textContent = word;
+			widest = Math.max(widest, button.getBoundingClientRect().width);
+		}
+
+		label.textContent = rest;
+
+		if (widest > 0) {
+			button.style.minWidth = `${Math.ceil(widest)}px`;
+			button.dataset.sized = "1";
+		}
+	}
+
+	function startComposeSend(button, working, done) {
+		const label = composeSendLabel(button);
+
+		window.clearTimeout(composeSendTimers.get(button));
+
+		if (!composeSendRest.has(button)) {
+			composeSendRest.set(button, label.textContent);
+		}
+
+		holdComposeSendWidth(button, [working, done]);
+		button.dataset.sending = "1";
+		button.dataset.sendAt = String(Date.now());
+		button.classList.remove("is-fading");
+		button.classList.add("is-sending", "is-working");
+		label.textContent = working;
+	}
+
+	function settleComposeSend(button, done) {
+		delete button.dataset.sending;
+
+		const held = Math.max(
+			0,
+			COMPOSE_SEND_HOLD - (Date.now() - Number(button.dataset.sendAt || 0)),
+		);
+
+		window.clearTimeout(composeSendTimers.get(button));
+		composeSendTimers.set(
+			button,
+			window.setTimeout(() => {
+				button.classList.remove("is-working");
+				composeSendLabel(button).textContent = done;
+				composeSendTimers.set(
+					button,
+					window.setTimeout(() => restComposeSend(button), 1100),
+				);
+			}, held),
+		);
+	}
+
+	function restComposeSend(button) {
+		const label = composeSendLabel(button);
+		const rest = composeSendRest.get(button);
+
+		delete button.dataset.sending;
+		window.clearTimeout(composeSendTimers.get(button));
+		button.classList.remove("is-working");
+
+		if (rest === undefined || label.textContent === rest) {
+			button.classList.remove("is-fading", "is-sending");
+			return;
+		}
+
+		button.classList.add("is-fading");
+		composeSendTimers.set(
+			button,
+			window.setTimeout(() => {
+				label.textContent = rest;
+				button.classList.remove("is-fading", "is-sending");
+			}, 170),
+		);
 	}
 
 	function wireComposer(
@@ -14920,18 +16066,13 @@ ${settingsPanelHTML()}
 		const draftKey = composerDraftKey({ storyID, parentId });
 		const textarea = composer.querySelector(".composer-text");
 		const submitButton = composer.querySelector(".composer-submit");
-		const submitLabel = submitButton.textContent;
 		const helpToggle = composer.querySelector(".composer-help-toggle");
 		const help = composer.querySelector(".composer-help");
 		const status = composer.querySelector(".composer-status");
 
-		let stopSpinner = null;
 		let swapTimer = 0;
 
 		const setStatus = (message, { error = false, html = false } = {}) => {
-			stopSpinner?.();
-			stopSpinner = null;
-
 			clearTimeout(swapTimer);
 
 			const write = () => {
@@ -14964,26 +16105,6 @@ ${settingsPanelHTML()}
 			}, 140);
 		};
 
-		const showSpinner = (label) => {
-			clearTimeout(swapTimer);
-			stopSpinner?.();
-
-			status.classList.remove("hidden", "error");
-			status.replaceChildren();
-
-			const spinner = document.createElement("span");
-
-			spinner.className = "composer-spinner";
-			status.appendChild(spinner);
-
-			if (label) {
-				status.appendChild(document.createTextNode(" " + label));
-			}
-
-			status.classList.remove("is-fading");
-			stopSpinner = startSpinner(spinner);
-		};
-
 		helpToggle.onclick = () => {
 			const hidden = help.classList.toggle("hidden");
 
@@ -15012,59 +16133,63 @@ ${settingsPanelHTML()}
 		const setBusy = (busy) => {
 			submitButton.disabled = busy;
 			textarea.disabled = busy;
-			submitButton.textContent = busy ? submitLabel + "…" : submitLabel;
+
+			if (busy) {
+				startComposeSend(submitButton, "posting…", "posted");
+			} else if (submitButton.dataset.sending) {
+				restComposeSend(submitButton);
+			}
 		};
 
-		submitButton.onclick = async () => {
+		const send = (aim = {}) => {
+			const toSource = aim.source || source;
+			const toStory = aim.storyID ?? storyID;
 			const text = textarea.value;
+			const label = getSource(toSource)?.label || "the source";
 
 			if (!text.trim()) {
 				setStatus("Write something first.", { error: true });
 				textarea.focus();
-				return;
+				return Promise.resolve();
 			}
 
 			setBusy(true);
-			showSpinner();
 
-			try {
-				const result = await submitCommentThroughBridge(
-					source,
-					storyID,
-					text,
-					parentId,
-					() =>
-						setStatus(
-							`Waiting for sign-in on ${getSource(source)?.label || "the source"}…`,
-						),
-				);
+			const posting = submitCommentThroughBridge(toSource, toStory, text, parentId, () =>
+				setStatus(`Waiting for sign-in on ${label}…`),
+			);
 
-				await rememberAuthFromResult(source, result);
+			return (async () => {
+				try {
+					const result = await posting;
 
-				if (!result?.ok) {
-					setStatus(
-						commentFailureMessage(result, getSource(source)?.label || "the source"),
-						{ error: true },
-					);
-					return;
+					await rememberAuthFromResult(toSource, result);
+
+					if (!result?.ok) {
+						restComposeSend(submitButton);
+						setStatus(commentFailureMessage(result, label), { error: true });
+						return;
+					}
+
+					textarea.value = "";
+					clearTimeout(saveTimer);
+					await save(draftKey, null);
+
+					settleComposeSend(submitButton, "posted");
+
+					window.setTimeout(() => {
+						onPosted?.();
+						reloadDiscussion(toStory);
+					}, 1400);
+				} finally {
+					setBusy(false);
 				}
-
-				textarea.value = "";
-				clearTimeout(saveTimer);
-				await save(draftKey, null);
-
-				setStatus("Posted");
-
-				window.setTimeout(() => {
-					onPosted?.();
-					reloadDiscussion(storyID);
-				}, 1400);
-			} finally {
-				setBusy(false);
-			}
+			})();
 		};
 
-		return { focus: () => textarea.focus() };
+		submitButton.onclick = () => send();
+
+		return { focus: () => textarea.focus(), send, setStatus, textarea };
 	}
 
 	function submitCommentThroughBridge(
@@ -15166,10 +16291,15 @@ ${settingsPanelHTML()}
 		}
 
 		element.classList.add("comment-new-seen");
+		cancelNewCommentDwell(element);
 		newCommentScrollObserver?.unobserve(element);
 	}
 
 	let newCommentScrollObserver = null;
+
+	const newCommentDwells = new Map();
+
+	const NEW_COMMENT_DWELL_MS = 900;
 
 	let suppressNewCommentAutoClearUntil = 0;
 
@@ -15177,16 +16307,33 @@ ${settingsPanelHTML()}
 		suppressNewCommentAutoClearUntil = Date.now() + duration;
 	}
 
-	function newCommentAutoClearEnabled() {
-		if (typeof window.matchMedia !== "function") {
-			return false;
+	function cancelNewCommentDwell(element) {
+		clearTimeout(newCommentDwells.get(element));
+		newCommentDwells.delete(element);
+	}
+
+	function startNewCommentDwell(element) {
+		if (newCommentDwells.has(element)) {
+			return;
 		}
 
-		return !window.matchMedia("(hover: hover)").matches;
+		newCommentDwells.set(
+			element,
+			window.setTimeout(() => {
+				newCommentDwells.delete(element);
+
+				if (Date.now() < suppressNewCommentAutoClearUntil) {
+					startNewCommentDwell(element);
+					return;
+				}
+
+				startNewCommentFade(element);
+			}, NEW_COMMENT_DWELL_MS),
+		);
 	}
 
 	function observeNewCommentForScroll(element) {
-		if (!newCommentAutoClearEnabled() || typeof IntersectionObserver !== "function") {
+		if (typeof IntersectionObserver !== "function") {
 			return;
 		}
 
@@ -15199,21 +16346,11 @@ ${settingsPanelHTML()}
 
 			newCommentScrollObserver = new IntersectionObserver(
 				(entries) => {
-					if (Date.now() < suppressNewCommentAutoClearUntil) {
-						return;
-					}
-
 					for (const entry of entries) {
-						if (entry.isIntersecting || !entry.rootBounds) {
-							continue;
-						}
-
-						if (!entry.boundingClientRect.height) {
-							continue;
-						}
-
-						if (entry.boundingClientRect.bottom <= entry.rootBounds.top) {
-							startNewCommentFade(entry.target);
+						if (entry.isIntersecting) {
+							startNewCommentDwell(entry.target);
+						} else {
+							cancelNewCommentDwell(entry.target);
 						}
 					}
 				},
@@ -15225,6 +16362,10 @@ ${settingsPanelHTML()}
 	}
 
 	function stopObservingNewComments() {
+		for (const element of [...newCommentDwells.keys()]) {
+			cancelNewCommentDwell(element);
+		}
+
 		newCommentScrollObserver?.disconnect();
 		newCommentScrollObserver = null;
 	}
@@ -15582,12 +16723,15 @@ ${settingsPanelHTML()}
 		const capabilities = getSource(comment.source)?.capabilities || {};
 		const isLocalSource = Boolean(comment.local);
 		const threadCanVote = renderedSourcesCanVote();
+		const voteSourceID = String(comment.source || "hn");
+		const commentCanVote =
+			!isLocalSource && Boolean(getSource(voteSourceID)?.capabilities.vote);
 
 		div.innerHTML = `
       <div class="comment-layout">
       <span class="comment-vote-slot${threadCanVote && !isLocalSource ? "" : " comment-vote-slot-empty"}">
-      <span class="comment-vote-controls vote-controls hidden${threadCanVote && !isLocalSource ? " vote-controls-expected" : ""}"
-      data-hn-vote-source="${escapeHTML(String(comment.source || "hn"))}"
+      <span class="comment-vote-controls vote-controls hidden${commentCanVote ? " vote-controls-expected" : ""}"
+      data-hn-vote-source="${escapeHTML(voteSourceID)}"
       data-hn-vote-story-id="${escapeHTML(String(storyID))}"
       data-hn-vote-item-id="${escapeHTML(commentID)}"></span>
       </span>
@@ -15595,7 +16739,7 @@ ${settingsPanelHTML()}
       <div class="comment-main">
       <div class="meta">
 
-      ${authorLinkHTML(comment.source, comment.author, comment.authorName)}
+      ${isLocalSource ? "" : authorLinkHTML(comment.source, comment.author, comment.authorName)}
 
 		${comment.isOP ? `<span class="op-pill">OP</span>` : ""}
 
@@ -15993,10 +17137,9 @@ ${settingsPanelHTML()}
 		const disambiguating = stories.length > 1;
 
 		for (const story of stories) {
-			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
 			const resolved = storyTitle(story, page, disambiguating);
 			const block = renderStory(story, details, {
-				compose: canReply,
+				compose: false,
 				title: resolved,
 				showTitle: true,
 				watchable: !disambiguating,
@@ -16014,26 +17157,28 @@ ${settingsPanelHTML()}
 		comments.className = "top-level-comments";
 		ui.body.appendChild(comments);
 
+		const sortRow = ui.body.querySelector(".page-sort");
+
+		if (sortRow) {
+			ui.body.insertBefore(sortRow, comments);
+		}
+
+		mountComposeBox(ui, stories, settings, sortRow || comments);
+
 		const collapsedKeys = await loadCollapsed();
 		const seenTimes = new Map(
 			await Promise.all(
-				stories.map(async (story) => [story.key, await getSeenTime(story.key)]),
+				stories.map(async (story) => [story.key, await visitSeenTime(story.key)]),
 			),
 		);
 
 		const notes = settings.notepad ? await loadNotes() : [];
 		const notesDiscussion = notesCollective(notes, pageAddress());
 
-		if (settings.notepad) {
-			const held = notesSection({
-				empty: !notes.length,
-				onAdd: () => startNotepadDraft(held.section, held.body),
-			});
+		if (settings.notepad && notes.length) {
+			const held = notesSection({ empty: false });
 
-			ui.body.insertBefore(
-				held.section,
-				ui.body.querySelector(".page-sort") || comments,
-			);
+			placeNotesSection(ui, held.section);
 
 			if (notesDiscussion) {
 				const thread = notesThread(notesDiscussion);
@@ -16071,12 +17216,16 @@ ${settingsPanelHTML()}
 				rootKeys: threads[index].rootKeys,
 				story,
 				thread: threads[index],
+				seenTime: seenTimes.get(story.key) || 0,
 			})),
 			{
 				sort: settings.commentSort,
 				arrivedFrom: arrivalSource(),
+				unreadFirst: Boolean(settings.newCommentsFirst),
 			},
 		);
+
+		syncNewCommentsFirstControl(ui, entries, settings);
 
 		const liveRunEnd =
 			(settings.commentSort || "best") === "best"
@@ -16217,9 +17366,9 @@ ${settingsPanelHTML()}
 				}
 			}
 
-			for (const pill of body.querySelectorAll(".source-strip-entry")) {
-				if (pill.dataset.discussionKey === story.key) {
-					const shown = pill.querySelector(".source-strip-count");
+			for (const row of body.querySelectorAll("[data-discussion-key]")) {
+				if (row.dataset.discussionKey === story.key) {
+					const shown = row.querySelector(".choice-count");
 
 					if (shown) {
 						shown.textContent = String(count);
@@ -16255,13 +17404,12 @@ ${settingsPanelHTML()}
 	}
 
 	// #region hnewhere-test-export
-	function notesSection({ onAdd, empty = false } = {}) {
+	function notesSection({ empty = false } = {}) {
 		const section = document.createElement("div");
 		const head = document.createElement("div");
 		const body = document.createElement("div");
 		const foot = document.createElement("div");
 		const toggle = document.createElement("button");
-		const add = document.createElement("button");
 
 		section.className = "notepad-section";
 		section.dataset.notesSection = "1";
@@ -16271,7 +17419,7 @@ ${settingsPanelHTML()}
 
 		toggle.type = "button";
 		toggle.className = "notepad-toggle";
-		toggle.textContent = empty ? "show" : "hide";
+		toggle.textContent = empty ? "[+]" : "[\u2013]";
 		toggle.hidden = empty;
 		toggle.setAttribute("aria-expanded", empty ? "false" : "true");
 
@@ -16288,7 +17436,7 @@ ${settingsPanelHTML()}
 				: body.scrollHeight
 					? `${body.scrollHeight}px`
 					: "";
-			toggle.textContent = collapsed ? "show" : "hide";
+			toggle.textContent = collapsed ? "[+]" : "[\u2013]";
 			toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
 			body.style.overflow = "hidden";
 
@@ -16301,15 +17449,10 @@ ${settingsPanelHTML()}
 			}
 		};
 
-		add.type = "button";
-		add.className = "notepad-add";
-		add.textContent = "add a note";
-		add.onclick = () => onAdd?.(add);
-
 		const actions = document.createElement("span");
 
 		actions.className = "notepad-actions";
-		actions.append(add, toggle);
+		actions.append(toggle);
 		head.append(actions);
 		body.className = "notepad-body";
 		foot.className = "notepad-rule notepad-rule-close";
@@ -16431,6 +17574,47 @@ ${settingsPanelHTML()}
 		liveBookendObservers.set(names, observer);
 	}
 
+	function mountSortRow(container, sort, options) {
+		const sortRow = document.createElement("div");
+
+		sortRow.className = "page-sort";
+		sortRow.innerHTML = `<label class="page-sort-label" for="comment-sort">Sort</label>
+<select class="page-sort-select" id="comment-sort">${SORT_MODES.map(
+			(mode) =>
+				`<option value="${mode.id}"${mode.id === sort ? " selected" : ""}>${mode.label}</option>`,
+		).join("")}</select>
+<span id="sort-sep" class="page-sort-sep" hidden>|</span>
+<button id="sort-new-first" class="page-sort-toggle" type="button" hidden>prioritize unread</button>`;
+
+		sortRow.querySelector("#sort-new-first").onclick = async (event) => {
+			const control = event.currentTarget;
+			const next = !(await loadSettings()).newCommentsFirst;
+
+			await saveSettings({ newCommentsFirst: next });
+			control.classList.toggle("is-on", next);
+
+			if (typeof options.onSortChange === "function") {
+				await options.onSortChange(sort);
+			}
+		};
+
+		sortRow.querySelector(".page-sort-select").onchange = async (event) => {
+			const next = event.target.value;
+
+			if (next === sort) {
+				return;
+			}
+
+			await saveSettings({ commentSort: next });
+
+			if (typeof options.onSortChange === "function") {
+				await options.onSortChange(next);
+			}
+		};
+
+		container.appendChild(sortRow);
+	}
+
 	function renderPageHeader(stories, container, options = {}) {
 		const sort = options.sort || "best";
 		const page = options.page ?? discussionsPageTitle(stories);
@@ -16458,7 +17642,7 @@ ${settingsPanelHTML()}
 <div class="page-header-title">${single ? "" : escapeHTML(page)}</div>
 <div class="page-header-meta">${
 	stories.length > 1
-		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-strip">${escapeHTML(pluralize(stories.length, "discussion"))}</button><span class="page-header-sep">|</span>`
+		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <span class="source-menu-anchor"><button type="button" class="page-header-disclosure" aria-expanded="false" aria-haspopup="true" aria-controls="source-menu">${escapeHTML(pluralize(stories.length, "discussion"))}</button>${sourceMenuHTML(stories)}</span><span class="page-header-sep">|</span>`
 		: ""
 }${
 	stories.length > 1
@@ -16467,103 +17651,71 @@ ${settingsPanelHTML()}
 		}`
 		: ""
 }</div>
-<div class="source-strip${stories.length > 1 ? "" : " source-strip-single"}" id="source-strip">
-${
-	stories
-	.map(
-		(story, index) => `
-<button type="button" class="source-strip-entry"
-data-discussion-key="${escapeHTML(story.key)}"
-title="Show only this discussion">
-<span class="source-strip-label">${escapeHTML(liveDiscussions.has(story.key) ? story.baseLabel || story.label : story.label)}</span>
-<span class="source-strip-count">${escapeHTML(String(story.commentCount ?? 0))}</span>${liveDiscussions.has(story.key) ? `<span class="live-pill">LIVE</span>` : ""}
-</button>`,
-	)
-	.join("")
-}
-</div>`;
+`;
 
-		const strip = wrapper.querySelector(".source-strip");
 		wireWatchToggle(wrapper.querySelector(".page-header-watch"), page, stories);
 
 		const disclosure = wrapper.querySelector(".page-header-disclosure");
 
 		if (!disclosure) {
 			container.appendChild(wrapper);
+			mountSortRow(container, sort, options);
 
 			return wrapper;
 		}
 
-		const setStripOpen = (open) => {
-			strip.classList.toggle("is-open", open);
-			disclosure.setAttribute("aria-expanded", open ? "true" : "false");
+		const menu = wrapper.querySelector(".source-menu");
 
-			strip.style.maxHeight = open ? `${strip.scrollHeight}px` : "0px";
-
-			for (const entry of strip.querySelectorAll(".source-strip-entry")) {
-				entry.tabIndex = open ? 0 : -1;
-			}
-		};
-
-		setStripOpen(false);
-
-		disclosure.onclick = () => {
-			const opening = !strip.classList.contains("is-open");
-
-			if (stripCloseClearsFilter(opening, activeCommentFilter)) {
-				clearCommentFilter({ restore: true });
-				syncFilterAffordances();
-			}
-
-			setStripOpen(opening);
-		};
-
-		wrapper.querySelector(".source-strip").addEventListener("click", (event) => {
-			const entry = event.target.closest(".source-strip-entry");
-
-			if (!entry) {
+		const setMenuOpen = (open) => {
+			if (!open) {
+				closeSourceMenu(wrapper.getRootNode());
 				return;
 			}
 
-			const key = entry.dataset.discussionKey;
+			menu.classList.remove("hidden");
+			disclosure.setAttribute("aria-expanded", "true");
+		};
 
-			if (activeCommentFilter?.type === "discussion" && activeCommentFilter.key === key) {
+		setMenuOpen(false);
+
+		disclosure.onclick = () => setMenuOpen(menu.classList.contains("hidden"));
+
+		menu.addEventListener("click", (event) => {
+			const option = event.target.closest("input")?.closest(".source-menu-option");
+
+			if (!option) {
+				return;
+			}
+
+			const key = option.dataset.discussionKey || "";
+			const already =
+				activeCommentFilter?.type === "discussion" && activeCommentFilter.key === key;
+
+			if (!key || already) {
 				clearCommentFilter({ restore: true });
 			} else {
 				applyDiscussionFilter(key);
 			}
 
 			syncFilterAffordances();
-			setStripOpen(true);
+		});
+
+		menu.addEventListener("keydown", (event) => {
+			if (event.key === "Escape") {
+				setMenuOpen(false);
+				disclosure.focus();
+			}
+		});
+
+		wrapper.addEventListener("focusout", (event) => {
+			if (!wrapper.contains(event.relatedTarget)) {
+				setMenuOpen(false);
+			}
 		});
 
 		container.appendChild(wrapper);
 
-		const sortRow = document.createElement("div");
-
-		sortRow.className = "page-sort";
-		sortRow.innerHTML = `
-<label class="page-sort-label" for="comment-sort">Sort</label>
-<select class="page-sort-select" id="comment-sort">${SORT_MODES.map(
-			(mode) =>
-				`<option value="${mode.id}"${mode.id === sort ? " selected" : ""}>${mode.label}</option>`,
-		).join("")}</select>`;
-
-		sortRow.querySelector(".page-sort-select").onchange = async (event) => {
-			const next = event.target.value;
-
-			if (next === sort) {
-				return;
-			}
-
-			await saveSettings({ commentSort: next });
-
-			if (typeof options.onSortChange === "function") {
-				await options.onSortChange(next);
-			}
-		};
-
-		container.appendChild(sortRow);
+		mountSortRow(container, sort, options);
 
 		return wrapper;
 	}
@@ -16607,14 +17759,15 @@ title="Show only this discussion">
 	}
 
 	function syncFilterAffordances() {
-		const wrapper = sidebarUI?.body?.querySelector(".source-strip");
+		const menu = sidebarUI?.body?.querySelector(".source-menu");
 
-		if (wrapper) {
-			syncSourceStripState(wrapper);
+		if (menu) {
+			syncSourceMenuState(menu);
 		}
 
 		syncSubmissionDetails();
 		syncSourceBadges();
+		syncComposeBox();
 	}
 
 	function syncSourceBadges() {
@@ -16626,15 +17779,81 @@ title="Show only this discussion">
 		sidebarUI?.body?.classList.toggle("list-filtered", Boolean(activeCommentFilter));
 	}
 
-	function syncSourceStripState(wrapper) {
+	let sourceMenuSeq = 0;
+
+	function discussionChoiceLabel(story) {
+		return (
+			story.label || story.baseLabel || getSource(story.source)?.label || story.source
+		);
+	}
+
+	function discussionChoiceHTML(inner, { label, count = null, live = false }) {
+		return `${inner}<span class="choice-label">${escapeHTML(label)}</span>${
+			count === null ? "" : `<span class="choice-count">${escapeHTML(String(count))}</span>`
+		}${live ? `<span class="live-pill">LIVE</span>` : ""}`;
+	}
+
+	function discussionChoiceGroupsHTML(stories, row) {
+		const groups = sourceMenuGroups(
+			stories,
+			liveDiscussions.keys(),
+			(id) => getSource(id)?.label,
+		);
+
+		return groups
+			.map(
+				(group) => `<div class="choice-group">${
+					group.live && groups.length > 1
+						? `<div class="choice-head"><span class="live-pill">LIVE</span></div>`
+						: ""
+				}${group.sources
+					.map(
+						(source) => `<div class="choice-sub">${
+							group.sources.length > 1
+								? `<div class="choice-sub-head">${escapeHTML(source.label)}</div>`
+								: ""
+						}${source.stories
+							.map((story) =>
+								row(story, {
+									label: discussionChoiceLabel(story),
+									count: story.commentCount ?? 0,
+									live: group.live && groups.length === 1,
+								}),
+							)
+							.join("")}</div>`,
+					)
+					.join("")}</div>`,
+			)
+			.join("");
+	}
+
+	function sourceMenuHTML(stories) {
+		const name = `source-menu-${(sourceMenuSeq += 1)}`;
+		const option = (key, about) => `
+<label class="settings-option source-menu-option"${key ? ` data-discussion-key="${escapeHTML(key)}"` : ""}>${discussionChoiceHTML(
+			`<input type="radio" name="${name}"${key ? "" : " checked"}>`,
+			about,
+		)}</label>`;
+
+		return `<div class="source-menu hidden" id="source-menu" role="menu">
+<div class="choice-group">${option("", { label: "All sources" })}</div>
+${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about))}
+</div>`;
+	}
+
+	function syncSourceMenuState(menu) {
 		const active =
 			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
 
-		for (const entry of wrapper.querySelectorAll(".source-strip-entry")) {
-			entry.classList.toggle(
-				"source-strip-entry-active",
-				entry.dataset.discussionKey === active,
-			);
+		for (const option of menu.querySelectorAll(".source-menu-option")) {
+			const mine = (option.dataset.discussionKey || "") === (active || "");
+			const input = option.querySelector("input");
+
+			option.classList.toggle("source-menu-option-active", mine && Boolean(active));
+
+			if (input) {
+				input.checked = mine;
+			}
 		}
 	}
 
@@ -20456,6 +21675,97 @@ title="Show only this discussion">
 		return node;
 	}
 
+	const PRESSABLE_SELECTOR = `a[href],button,input,select,textarea,summary,[role="button"],[role="link"],[contenteditable=""],[contenteditable="true"]`;
+
+	const MIN_HIT_WIDTH = 8;
+
+	function shareALine(rect, other) {
+		const overlap =
+			Math.min(rect.top + rect.height, other.top + other.height) -
+			Math.max(rect.top, other.top);
+
+		return overlap > Math.min(rect.height, other.height) / 2;
+	}
+
+	function subtractSpans(rect, blockers) {
+		let pieces = [rect];
+
+		for (const blocker of blockers) {
+			const next = [];
+
+			for (const piece of pieces) {
+				const right = piece.left + piece.width;
+				const blockerRight = blocker.left + blocker.width;
+
+				if (
+					!shareALine(piece, blocker) ||
+					blockerRight <= piece.left ||
+					blocker.left >= right
+				) {
+					next.push(piece);
+					continue;
+				}
+
+				if (blocker.left > piece.left) {
+					next.push({ ...piece, width: blocker.left - piece.left });
+				}
+
+				if (blockerRight < right) {
+					next.push({ ...piece, left: blockerRight, width: right - blockerRight });
+				}
+			}
+
+			pieces = next;
+		}
+
+		return pieces.filter((piece) => piece.width >= MIN_HIT_WIDTH);
+	}
+
+	function coversWholeRect(pieces, rect) {
+		return (
+			pieces.length === 1 &&
+			Math.round(pieces[0].left) === Math.round(rect.left) &&
+			Math.round(pieces[0].width) === Math.round(rect.width)
+		);
+	}
+
+	const OWN_SURFACE_SELECTOR = `[data-hnewhere-annotation-overlay],[data-hnewhere-sidebar],[data-hnewhere-note-composer],[data-hnewhere-note-add],[data-hnewhere-submit-popover]`;
+
+	function pressableRectsAround(range, source = documentSource()) {
+		const root = nearestElement(range?.commonAncestorContainer);
+
+		if (!root?.querySelectorAll) {
+			return [];
+		}
+
+		const candidates = [...root.querySelectorAll(PRESSABLE_SELECTOR)];
+		const enclosing = root.closest?.(PRESSABLE_SELECTOR);
+
+		if (enclosing) {
+			candidates.push(enclosing);
+		}
+
+		const rects = [];
+
+		for (const element of candidates) {
+			if (element.closest(OWN_SURFACE_SELECTOR)) {
+				continue;
+			}
+
+			const box = element.ownerDocument.createRange();
+
+			try {
+				box.selectNode(element);
+			} catch {
+				continue;
+			}
+
+			rects.push(...getPageRectsForRange(box, source));
+		}
+
+		return rects;
+	}
+
 	// #endregion hnewhere-test-export
 
 	// #region hnewhere-test-export
@@ -20866,6 +22176,43 @@ title="Show only this discussion">
 			paintActiveLayer();
 		};
 
+		const pressRect = (group, rect) => {
+			const node = createHighlightRect(rect, {
+				interactive: true,
+				title: "Show the comments quoting this",
+				onActivate: () => {
+					openFocusedDiscussion(group.key).catch(console.error);
+				},
+				variant: "highlight",
+			});
+
+			node.addEventListener("pointerenter", () => {
+				if (hoverQuery?.matches !== false) {
+					setActiveGroup(group.key);
+				}
+			});
+
+			node.addEventListener("pointerleave", () => {
+				if (activeGroupKey === group.key) {
+					setActiveGroup(null);
+				}
+			});
+
+			node.addEventListener("focus", () => {
+				if (node.matches(":focus-visible")) {
+					setActiveGroup(group.key);
+				}
+			});
+
+			node.addEventListener("blur", () => {
+				if (activeGroupKey === group.key) {
+					setActiveGroup(null);
+				}
+			});
+
+			return node;
+		};
+
 		const render = () => {
 			overlay.style.height = source.heightFor(overlayHost) + "px";
 			baseLayer.replaceChildren();
@@ -20901,43 +22248,30 @@ title="Show only this discussion">
 				}
 
 				const groupRects = [];
+				const blockers = pressableRectsAround(group.range);
 
 				for (const rect of rects) {
-					const node = createHighlightRect(rect, {
-						interactive: true,
-						title: "Show the comments quoting this",
-						onActivate: () => {
-							openFocusedDiscussion(group.key).catch(console.error);
-						},
+					const pieces = subtractSpans(rect, blockers);
+
+					if (coversWholeRect(pieces, rect)) {
+						const node = pressRect(group, rect);
+
+						groupRects.push(node);
+						baseLayer.appendChild(node);
+						continue;
+					}
+
+					const fill = createHighlightRect(rect, {
+						interactive: false,
 						variant: "highlight",
 					});
 
-					node.addEventListener("pointerenter", () => {
-						if (hoverQuery?.matches !== false) {
-							setActiveGroup(group.key);
-						}
-					});
+					groupRects.push(fill);
+					baseLayer.appendChild(fill);
 
-					node.addEventListener("pointerleave", () => {
-						if (activeGroupKey === group.key) {
-							setActiveGroup(null);
-						}
-					});
-
-					node.addEventListener("focus", () => {
-						if (node.matches(":focus-visible")) {
-							setActiveGroup(group.key);
-						}
-					});
-
-					node.addEventListener("blur", () => {
-						if (activeGroupKey === group.key) {
-							setActiveGroup(null);
-						}
-					});
-
-					groupRects.push(node);
-					baseLayer.appendChild(node);
+					for (const piece of pieces) {
+						baseLayer.appendChild(pressRect(group, piece));
+					}
 				}
 
 				rectsByGroup.set(group.key, groupRects);
@@ -20957,9 +22291,70 @@ title="Show only this discussion">
 			});
 		};
 
+		const observedSizes = new WeakMap();
+
+		const geometryMoved = (entries) => {
+			let moved = false;
+
+			for (const entry of entries) {
+				const box = entry.contentRect;
+				const seen = observedSizes.get(entry.target);
+
+				if (
+					seen &&
+					Math.abs(seen.width - box.width) < 1 &&
+					Math.abs(seen.height - box.height) < 1
+				) {
+					continue;
+				}
+
+				observedSizes.set(entry.target, { width: box.width, height: box.height });
+				moved = true;
+			}
+
+			return moved;
+		};
+
+		const geometryObserver =
+			typeof ResizeObserver === "function"
+				? new ResizeObserver((entries) => {
+						if (geometryMoved(entries)) {
+							scheduleRender();
+						}
+					})
+				: null;
+
+		const watchGeometry = () => {
+			if (!geometryObserver) {
+				return;
+			}
+
+			const already = new Set();
+			const containers = groups.map((group) =>
+				nearestElement(group.range?.commonAncestorContainer),
+			);
+
+			for (const element of [overlayHost, ...containers]) {
+				if (!element || already.has(element) || overlay.contains(element)) {
+					continue;
+				}
+
+				already.add(element);
+
+				const box = element.getBoundingClientRect();
+
+				observedSizes.set(element, { width: box.width, height: box.height });
+				geometryObserver.observe(element);
+			}
+		};
+
+		const onFontsSettled = () => scheduleRender();
+
 		window.addEventListener("resize", scheduleRender);
 		window.addEventListener("load", scheduleRender, true);
+		document.fonts?.addEventListener?.("loadingdone", onFontsSettled);
 		render();
+		watchGeometry();
 
 		return {
 			groups,
@@ -20980,6 +22375,8 @@ title="Show only this discussion">
 			cleanup() {
 				window.removeEventListener("resize", scheduleRender);
 				window.removeEventListener("load", scheduleRender, true);
+				document.fonts?.removeEventListener?.("loadingdone", onFontsSettled);
+				geometryObserver?.disconnect();
 
 				if (renderFrame) {
 					cancelAnimationFrame(renderFrame);
@@ -21194,6 +22591,7 @@ title="Show only this discussion">
 		teardownSurfaces();
 
 		stopObservingNewComments();
+		forgetVisitSeenTimes();
 		renderedComments = [];
 		activeCommentFilter = null;
 	}
