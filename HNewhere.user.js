@@ -20498,6 +20498,97 @@ title="Show only this discussion">
 		return node;
 	}
 
+	const PRESSABLE_SELECTOR = `a[href],button,input,select,textarea,summary,[role="button"],[role="link"],[contenteditable=""],[contenteditable="true"]`;
+
+	const MIN_HIT_WIDTH = 8;
+
+	function shareALine(rect, other) {
+		const overlap =
+			Math.min(rect.top + rect.height, other.top + other.height) -
+			Math.max(rect.top, other.top);
+
+		return overlap > Math.min(rect.height, other.height) / 2;
+	}
+
+	function subtractSpans(rect, blockers) {
+		let pieces = [rect];
+
+		for (const blocker of blockers) {
+			const next = [];
+
+			for (const piece of pieces) {
+				const right = piece.left + piece.width;
+				const blockerRight = blocker.left + blocker.width;
+
+				if (
+					!shareALine(piece, blocker) ||
+					blockerRight <= piece.left ||
+					blocker.left >= right
+				) {
+					next.push(piece);
+					continue;
+				}
+
+				if (blocker.left > piece.left) {
+					next.push({ ...piece, width: blocker.left - piece.left });
+				}
+
+				if (blockerRight < right) {
+					next.push({ ...piece, left: blockerRight, width: right - blockerRight });
+				}
+			}
+
+			pieces = next;
+		}
+
+		return pieces.filter((piece) => piece.width >= MIN_HIT_WIDTH);
+	}
+
+	function coversWholeRect(pieces, rect) {
+		return (
+			pieces.length === 1 &&
+			Math.round(pieces[0].left) === Math.round(rect.left) &&
+			Math.round(pieces[0].width) === Math.round(rect.width)
+		);
+	}
+
+	const OWN_SURFACE_SELECTOR = `[data-hnewhere-annotation-overlay],[data-hnewhere-sidebar],[data-hnewhere-note-composer],[data-hnewhere-note-add],[data-hnewhere-submit-popover]`;
+
+	function pressableRectsAround(range, source = documentSource()) {
+		const root = nearestElement(range?.commonAncestorContainer);
+
+		if (!root?.querySelectorAll) {
+			return [];
+		}
+
+		const candidates = [...root.querySelectorAll(PRESSABLE_SELECTOR)];
+		const enclosing = root.closest?.(PRESSABLE_SELECTOR);
+
+		if (enclosing) {
+			candidates.push(enclosing);
+		}
+
+		const rects = [];
+
+		for (const element of candidates) {
+			if (element.closest(OWN_SURFACE_SELECTOR)) {
+				continue;
+			}
+
+			const box = element.ownerDocument.createRange();
+
+			try {
+				box.selectNode(element);
+			} catch {
+				continue;
+			}
+
+			rects.push(...getPageRectsForRange(box, source));
+		}
+
+		return rects;
+	}
+
 	// #endregion hnewhere-test-export
 
 	// #region hnewhere-test-export
@@ -20908,6 +20999,43 @@ title="Show only this discussion">
 			paintActiveLayer();
 		};
 
+		const pressRect = (group, rect) => {
+			const node = createHighlightRect(rect, {
+				interactive: true,
+				title: "Show the comments quoting this",
+				onActivate: () => {
+					openFocusedDiscussion(group.key).catch(console.error);
+				},
+				variant: "highlight",
+			});
+
+			node.addEventListener("pointerenter", () => {
+				if (hoverQuery?.matches !== false) {
+					setActiveGroup(group.key);
+				}
+			});
+
+			node.addEventListener("pointerleave", () => {
+				if (activeGroupKey === group.key) {
+					setActiveGroup(null);
+				}
+			});
+
+			node.addEventListener("focus", () => {
+				if (node.matches(":focus-visible")) {
+					setActiveGroup(group.key);
+				}
+			});
+
+			node.addEventListener("blur", () => {
+				if (activeGroupKey === group.key) {
+					setActiveGroup(null);
+				}
+			});
+
+			return node;
+		};
+
 		const render = () => {
 			overlay.style.height = source.heightFor(overlayHost) + "px";
 			baseLayer.replaceChildren();
@@ -20943,43 +21071,30 @@ title="Show only this discussion">
 				}
 
 				const groupRects = [];
+				const blockers = pressableRectsAround(group.range);
 
 				for (const rect of rects) {
-					const node = createHighlightRect(rect, {
-						interactive: true,
-						title: "Show the comments quoting this",
-						onActivate: () => {
-							openFocusedDiscussion(group.key).catch(console.error);
-						},
+					const pieces = subtractSpans(rect, blockers);
+
+					if (coversWholeRect(pieces, rect)) {
+						const node = pressRect(group, rect);
+
+						groupRects.push(node);
+						baseLayer.appendChild(node);
+						continue;
+					}
+
+					const fill = createHighlightRect(rect, {
+						interactive: false,
 						variant: "highlight",
 					});
 
-					node.addEventListener("pointerenter", () => {
-						if (hoverQuery?.matches !== false) {
-							setActiveGroup(group.key);
-						}
-					});
+					groupRects.push(fill);
+					baseLayer.appendChild(fill);
 
-					node.addEventListener("pointerleave", () => {
-						if (activeGroupKey === group.key) {
-							setActiveGroup(null);
-						}
-					});
-
-					node.addEventListener("focus", () => {
-						if (node.matches(":focus-visible")) {
-							setActiveGroup(group.key);
-						}
-					});
-
-					node.addEventListener("blur", () => {
-						if (activeGroupKey === group.key) {
-							setActiveGroup(null);
-						}
-					});
-
-					groupRects.push(node);
-					baseLayer.appendChild(node);
+					for (const piece of pieces) {
+						baseLayer.appendChild(pressRect(group, piece));
+					}
 				}
 
 				rectsByGroup.set(group.key, groupRects);
