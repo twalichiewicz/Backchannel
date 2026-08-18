@@ -12675,6 +12675,11 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 <path d="M4.5 7.7 8 4.2l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
 </button>
+<button id="comment-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="compose-dock" aria-label="Add a comment" title="Add a comment" hidden>
+<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
+</svg>
+</button>
 <span class="hide-control">
 <button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Hide Backchannel here" title="Hide Backchannel here">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -14668,17 +14673,17 @@ blockquote.comment-quote-redundant {
 	margin:15px 0 15px 8px;
 }
 
-.compose-anchor {
-	height:0;
-}
-
 .compose-dock {
 	position:absolute;
 	top:8px;
-	left:50%;
-	transform:translateX(-50%);
-	width:calc(100% - 24px);
-	max-width:calc(100% - 24px);
+	left:8px;
+	right:8px;
+	z-index:5;
+	padding:8px;
+	border:1px solid var(--surface-border);
+	border-radius:8px;
+	background:var(--surface);
+	box-shadow:0 8px 24px rgba(0,0,0,.18);
 	pointer-events:auto;
 }
 
@@ -14686,54 +14691,12 @@ blockquote.comment-quote-redundant {
 	display:none;
 }
 
-.compose-dock-pill {
-	display:block;
-	margin:0 auto;
-	padding:6px 14px;
-	border:0;
-	border-radius:999px;
-	background:var(--accent);
-	color:var(--accent-ink);
-	box-shadow:0 4px 14px rgba(0,0,0,.22);
-	font:inherit;
-	font-size:12px;
-	line-height:1.4;
-	cursor:pointer;
-}
-
-.compose-dock-slot {
-	overflow:hidden;
-	max-height:0;
-	transition:max-height .22s ease;
-}
-
-.compose-dock.is-docked {
-	border-radius:6px;
-	box-shadow:0 6px 18px rgba(0,0,0,.22);
-}
-
-.compose-dock.is-docked .compose-dock-pill {
-	width:100%;
-	padding:7px 12px;
-	border-radius:6px 6px 0 0;
-	box-shadow:none;
-	text-align:left;
-}
-
-.compose-dock.is-docked .compose-dock-slot {
-	padding:8px 0;
-	border-radius:0 0 6px 6px;
-	background:var(--surface);
-}
-
 .compose-dock .compose-box {
-	margin:0 8px;
+	margin:0;
 }
 
-@media (prefers-reduced-motion: reduce) {
-	.compose-dock-slot {
-		transition:none;
-	}
+#comment-toggle.is-open {
+	background:var(--active-tint);
 }
 
 .compose-field {
@@ -15084,7 +15047,7 @@ blockquote.comment-quote-redundant {
 <div id="resize-handle" aria-hidden="true"></div>
 
 ${headerHTML({ subtitle: true, minimize: true, browse: true })}
-<div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><button type="button" id="compose-dock-pill" class="compose-dock-pill"></button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
+<div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
 ${settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
@@ -15535,23 +15498,19 @@ ${settingsPanelHTML()}
 
 	function wireComposeDock(ui, box, label) {
 		const dock = ui.shadow.querySelector("#compose-dock");
-		const pill = ui.shadow.querySelector("#compose-dock-pill");
 		const slot = ui.shadow.querySelector("#compose-dock-slot");
-		const root = ui.body?.closest("#comments");
+		const control = ui.shadow.querySelector("#comment-toggle");
 
-		if (!dock || !pill || !slot || !root || typeof IntersectionObserver !== "function") {
+		if (!dock || !slot || !control) {
 			return null;
 		}
-
-		const anchorNode = document.createElement("div");
-
-		anchorNode.className = "compose-anchor";
-		box.parentElement.insertBefore(anchorNode, box);
 
 		const spacer = document.createElement("div");
 
 		spacer.className = "compose-spacer";
-		pill.textContent = label;
+		control.hidden = false;
+		control.title = label;
+		control.setAttribute("aria-label", label);
 
 		let docked = false;
 
@@ -15561,10 +15520,10 @@ ${settingsPanelHTML()}
 			}
 
 			docked = false;
-			dock.classList.remove("is-open");
-			slot.style.maxHeight = "0px";
+			dock.hidden = true;
+			control.classList.remove("is-open");
+			control.setAttribute("aria-expanded", "false");
 			spacer.replaceWith(box);
-			dock.classList.remove("is-docked");
 		};
 
 		const dockBox = () => {
@@ -15576,41 +15535,26 @@ ${settingsPanelHTML()}
 			spacer.style.height = `${box.getBoundingClientRect().height}px`;
 			box.replaceWith(spacer);
 			slot.appendChild(box);
-			dock.classList.add("is-docked");
-
-			requestAnimationFrame(() => {
-				dock.classList.add("is-open");
-				slot.style.maxHeight = `${slot.scrollHeight}px`;
-				box.querySelector(".composer-text")?.focus({ preventScroll: true });
-			});
+			dock.hidden = false;
+			control.classList.add("is-open");
+			control.setAttribute("aria-expanded", "true");
+			box.querySelector(".composer-text")?.focus({ preventScroll: true });
 		};
 
-		pill.onclick = () => (docked ? undock() : dockBox());
+		control.onclick = (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			return docked ? undock() : dockBox();
+		};
 
 		dock.addEventListener("keydown", (event) => {
 			if (event.key === "Escape") {
 				undock();
+				control.focus();
 			}
 		});
 
-		const observer = new IntersectionObserver(
-			(entries) => {
-				for (const entry of entries) {
-					const gone = !entry.isIntersecting && entry.boundingClientRect.top < (entry.rootBounds?.top ?? 0);
-
-					dock.hidden = !gone;
-
-					if (!gone) {
-						undock();
-					}
-				}
-			},
-			{ root, threshold: 0 },
-		);
-
-		observer.observe(anchorNode);
-
-		return { undock, stop: () => observer.disconnect() };
+		return { undock, stop: () => undock() };
 	}
 
 	function replyTargets(stories = renderedDiscussions || []) {
@@ -15707,7 +15651,7 @@ ${settingsPanelHTML()}
 
 		const targets = replyTargets();
 		const canNote = Boolean(box.querySelector(".compose-send-note"));
-		const pill = sidebarUI.shadow.querySelector("#compose-dock-pill");
+		const control = sidebarUI.shadow.querySelector("#comment-toggle");
 		const word = targets.length > 1 ? "comment\u2026" : "comment";
 
 		button.hidden = targets.length === 0;
@@ -15717,8 +15661,11 @@ ${settingsPanelHTML()}
 			composeSendLabel(button).textContent = word;
 		}
 
-		if (pill) {
-			pill.textContent = composeDockLabel(targets.length > 0);
+		if (control) {
+			const label = composeDockLabel(targets.length > 0);
+
+			control.title = label;
+			control.setAttribute("aria-label", label);
 		}
 
 		if (!targets.length) {
@@ -15739,6 +15686,12 @@ ${settingsPanelHTML()}
 		);
 
 		if (!canComment && !canNote) {
+			const control = ui.shadow.querySelector("#comment-toggle");
+
+			if (control) {
+				control.hidden = true;
+			}
+
 			return null;
 		}
 

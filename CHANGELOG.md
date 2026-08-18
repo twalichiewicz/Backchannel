@@ -109,11 +109,11 @@ use to detect updates, so every release bumps it.
   the month they were posted, as they already did elsewhere in the panel. One
   press on a row posts there.
 
-  **Scroll the box out of sight and it follows you**, as a pill under the header.
-  Pressing it opens the same box, still holding whatever you had half-written;
-  scrolling back puts it home. Opened, the pill becomes that box's header — one
-  card rather than a bar floating above a separate panel — and it says **Keep a
-  note** where the discussion you are filtered to takes no replies.
+  **The header carries a comment control**, a speech bubble to the left of the
+  hide menu, and pressing it drops the same box under the header — still holding
+  whatever you had half-written, wherever you had scrolled to. A press outside
+  puts it back where it lives. It reads **Keep a note** where the discussion you
+  are filtered to takes no replies.
 
   The box is one line tall until you write in it, then keeps a spare line below
   whatever you have written, and falls back to one line when you press away from
