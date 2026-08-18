@@ -8789,6 +8789,7 @@ button {
 
 	function slideBrowseList(ui, direction, render) {
 		const list = ui?.shadow?.querySelector("#browse-list");
+		const note = ui?.shadow?.querySelector("#browse-blend-note");
 
 		if (!list || prefersReducedMotion()) {
 			render().catch(console.error);
@@ -8802,13 +8803,15 @@ button {
 		const out = direction > 0 ? "slide-out-left" : "slide-out-right";
 		const enter = direction > 0 ? "slide-in-right" : "slide-in-left";
 
-		list.classList.remove(
-			"slide-in-left",
-			"slide-in-right",
-			"slide-out-left",
-			"slide-out-right",
-		);
-		list.classList.add(out);
+		for (const element of [list, note]) {
+			element?.classList.remove(
+				"slide-in-left",
+				"slide-in-right",
+				"slide-out-left",
+				"slide-out-right",
+			);
+			element?.classList.add(out);
+		}
 
 		list._hnewhereSlideTimer = window.setTimeout(async () => {
 			try {
@@ -8817,11 +8820,17 @@ button {
 				console.error(error);
 			}
 
-			list.classList.remove(out);
-			list.classList.add(enter);
+			for (const element of [list, note]) {
+				element?.classList.remove(out);
+				element?.classList.add(enter);
+			}
 
 			requestAnimationFrame(() => {
-				requestAnimationFrame(() => list.classList.remove(enter));
+				requestAnimationFrame(() => {
+					for (const element of [list, note]) {
+						element?.classList.remove(enter);
+					}
+				});
 			});
 
 			list._hnewhereSlideTimer = null;
@@ -9417,7 +9426,7 @@ button {
 		paintBrowseTab(
 			tab,
 			queueHasItems,
-			unread ? `queue (${unread})` : "queue",
+			"queue",
 			"--queue-tab-width",
 			"has-queue",
 		);
@@ -9831,25 +9840,64 @@ button {
 		}
 	}
 
-	function setBlendNote(ui, sources) {
+	const QUEUE_NOTE = "Discussions you've queued or are watching";
+
+	const COLLECTION_NOTE =
+		"All of your favorited discussions, comments, and notes";
+
+	function setBrowseNote(ui, text) {
 		const note = ui?.shadow?.querySelector("#browse-blend-note");
 
 		if (!note) {
 			return;
 		}
 
-		note.hidden = sources.length < 2;
+		note.hidden = !text;
 
-		if (!note.hidden) {
-			note.textContent =
-				"Blended from " +
-				joinWithAnd(sources.map((id) => getSource(id)?.label || id));
+		if (text) {
+			note.textContent = text;
 		}
+	}
+
+	function setBlendNote(ui, sources) {
+		setBrowseNote(
+			ui,
+			sources.length < 2
+				? ""
+				: "Blended from " +
+						joinWithAnd(sources.map((id) => getSource(id)?.label || id)),
+		);
+	}
+
+	const BROWSE_SKELETON_WIDTHS = ["92%", "74%", "86%", "63%", "81%", "70%", "88%", "58%"];
+
+	function renderBrowseSkeleton(list, label) {
+		const wrap = document.createElement("div");
+
+		wrap.className = "browse-skeleton";
+
+		const note = document.createElement("div");
+
+		note.className = "browse-skeleton-label";
+		note.textContent = label;
+		wrap.appendChild(note);
+
+		for (const width of BROWSE_SKELETON_WIDTHS) {
+			const row = document.createElement("div");
+
+			row.className = "browse-skeleton-row";
+			row.style.setProperty("--skeleton-title", width);
+			row.innerHTML = `<span class="browse-skeleton-rank"></span>
+<span class="browse-skeleton-lines"><span class="browse-skeleton-bar"></span><span class="browse-skeleton-bar"></span></span>`;
+			wrap.appendChild(row);
+		}
+
+		list.replaceChildren(wrap);
 	}
 
 	async function renderFrontPageView(ui, list) {
 		if (!list.childElementCount) {
-			list.textContent = "Loading front pages…";
+			renderBrowseSkeleton(list, "Loading front pages…");
 		}
 
 		const requested = browsePage;
@@ -9930,14 +9978,19 @@ button {
 
 		refreshQueueCount(ui.shadow);
 
+		if (list.dataset.browseTab !== browseTab) {
+			list.replaceChildren();
+			list.dataset.browseTab = browseTab;
+		}
+
 		if (browseTab === "queue") {
-			setBlendNote(ui, []);
+			setBrowseNote(ui, QUEUE_NOTE);
 			await renderQueueView(ui, list);
 			return;
 		}
 
 		if (browseTab === "collection") {
-			setBlendNote(ui, []);
+			setBrowseNote(ui, COLLECTION_NOTE);
 			await renderCollectionView(ui, list);
 			return;
 		}
@@ -10814,27 +10867,33 @@ header {
 	transition:opacity .16s ease, transform .16s ease;
 }
 
-#browse-list.slide-out-left {
+#browse-list.slide-out-left,
+#browse-blend-note.slide-out-left {
 	opacity:0;
 	transform:translateX(-14px);
 }
 
-#browse-list.slide-out-right {
+#browse-list.slide-out-right,
+#browse-blend-note.slide-out-right {
 	opacity:0;
 	transform:translateX(14px);
 }
 
 #browse-list.slide-in-right,
-#browse-list.slide-in-left {
+#browse-list.slide-in-left,
+#browse-blend-note.slide-in-right,
+#browse-blend-note.slide-in-left {
 	transition:none;
 	opacity:0;
 }
 
-#browse-list.slide-in-right {
+#browse-list.slide-in-right,
+#browse-blend-note.slide-in-right {
 	transform:translateX(14px);
 }
 
-#browse-list.slide-in-left {
+#browse-list.slide-in-left,
+#browse-blend-note.slide-in-left {
 	transform:translateX(-14px);
 }
 
@@ -10881,6 +10940,7 @@ header {
 
 #browse-tab-front::after {
 	content:none;
+	display:inline-block;
 	margin:0 .35em;
 	color:var(--meta);
 }
@@ -10942,22 +11002,24 @@ header {
 
 .browse-tab {
 	border:0;
-	padding:0;
+	padding:0 0 3px;
 	background:none;
 	color:var(--meta);
 	cursor:pointer;
 	font-family:inherit;
 	font-size:inherit;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
 }
 
 .browse-tab.is-current {
 	color:var(--text);
+	text-decoration:underline;
 }
 
 @media (hover: hover) {
 	.browse-tab:not(.is-current):hover {
 		text-decoration:underline;
-		text-underline-offset:2px;
 	}
 }
 
@@ -10999,8 +11061,77 @@ header {
 .browse-blend-note {
 	margin:-7px 0 10px 8px;
 	color:var(--meta);
-	font-size:11px;
+	font-size:10px;
 	font-family:Verdana, Geneva, sans-serif;
+	transition:opacity .16s ease, transform .16s ease;
+}
+
+.browse-skeleton {
+	margin-left:8px;
+}
+
+.browse-skeleton-label {
+	margin:-7px 0 12px;
+	color:var(--meta);
+	font-size:10px;
+	font-family:Verdana, Geneva, sans-serif;
+}
+
+.browse-skeleton-row {
+	display:flex;
+	align-items:flex-start;
+	gap:8px;
+	margin-bottom:14px;
+}
+
+.browse-skeleton-lines {
+	flex:1 1 auto;
+	min-width:0;
+}
+
+.browse-skeleton-rank,
+.browse-skeleton-bar {
+	display:block;
+	border-radius:2px;
+	background:linear-gradient(
+		90deg,
+		var(--hover-tint) 0%,
+		var(--hover-tint) 40%,
+		var(--active-tint) 50%,
+		var(--hover-tint) 60%,
+		var(--hover-tint) 100%
+	);
+	background-size:220% 100%;
+	animation:hnewhere-browse-skeleton 1.6s linear infinite;
+}
+
+.browse-skeleton-rank {
+	flex:0 0 20px;
+	height:9px;
+	margin-top:2px;
+}
+
+.browse-skeleton-bar {
+	height:11px;
+	width:var(--skeleton-title, 80%);
+}
+
+.browse-skeleton-bar + .browse-skeleton-bar {
+	margin-top:6px;
+	height:9px;
+	width:38%;
+}
+
+@keyframes hnewhere-browse-skeleton {
+	from { background-position:120% 0; }
+	to { background-position:-20% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.browse-skeleton-rank,
+	.browse-skeleton-bar {
+		animation:none;
+	}
 }
 
 .browse-blend-note[hidden] {
