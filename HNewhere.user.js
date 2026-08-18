@@ -362,6 +362,7 @@
 		buttonMark: BUTTON_MARK_DEFAULT,
 		accentColor: null,
 		commentSort: "best",
+		newCommentsFirst: false,
 	};
 
 	// #region hnewhere-test-export
@@ -462,6 +463,20 @@
 	async function getSeenTime(storyID) {
 		const seen = await load(STORAGE.seen, {});
 		return seen[storyID] || 0;
+	}
+
+	const visitSeenTimes = new Map();
+
+	async function visitSeenTime(storyID) {
+		if (!visitSeenTimes.has(storyID)) {
+			visitSeenTimes.set(storyID, await getSeenTime(storyID));
+		}
+
+		return visitSeenTimes.get(storyID);
+	}
+
+	function forgetVisitSeenTimes() {
+		visitSeenTimes.clear();
 	}
 
 	async function markSeen(storyID) {
@@ -2562,28 +2577,40 @@
 			const live = Boolean(group.story) && isDiscussionLive(group.thread, now);
 
 			group.rootKeys.forEach((key, index) => {
+				const createdAt = group.thread?.rootTimes?.get(key) || 0;
+
 				entries.push({
 					key,
 					discussionKey: group.discussionKey,
 					position: blendPosition(index, total) / weight,
-					createdAt: group.thread?.rootTimes?.get(key) || 0,
+					createdAt,
+					unread: isNewComment({ createdAt }, group.seenTime || 0),
 					live,
 					size: total,
 				});
 			});
 		}
 
+		const unreadFirst = options.unreadFirst
+			? (a, b) => Number(b.unread) - Number(a.unread)
+			: () => 0;
+
 		if (options.sort === "newest") {
-			return entries.sort((a, b) => b.createdAt - a.createdAt || b.size - a.size);
+			return entries.sort(
+				(a, b) => unreadFirst(a, b) || b.createdAt - a.createdAt || b.size - a.size,
+			);
 		}
 
 		if (options.sort === "oldest") {
-			return entries.sort((a, b) => a.createdAt - b.createdAt || b.size - a.size);
+			return entries.sort(
+				(a, b) => unreadFirst(a, b) || a.createdAt - b.createdAt || b.size - a.size,
+			);
 		}
 
 		return entries.sort(
 			(a, b) =>
 				Number(b.live) - Number(a.live) ||
+				unreadFirst(a, b) ||
 				a.position - b.position ||
 				b.size - a.size,
 		);
@@ -4748,6 +4775,24 @@ button {
 		await refreshArticleAnnotations();
 	}
 
+	function syncNewCommentsFirstControl(ui, entries, settings) {
+		const control = ui?.shadow?.querySelector("#sort-new-first");
+
+		if (!control) {
+			return;
+		}
+
+		const unread = entries.some((entry) => entry.unread);
+		const row = control.closest(".page-sort");
+
+		control.hidden = !unread;
+		control.classList.toggle("is-on", Boolean(settings.newCommentsFirst));
+
+		if (row?.classList.contains("page-sort-bare")) {
+			row.hidden = !unread;
+		}
+	}
+
 	function removeNoteAffordance() {
 		document.querySelector("[data-hnewhere-note-add]")?.remove();
 	}
@@ -6136,9 +6181,15 @@ button {
 		return pluralize(days, "day") + " ago";
 	}
 
+	// #region hnewhere-test-export
 	function isNewComment(comment, seenTimestamp) {
-		return comment.createdAt && comment.createdAt > seenTimestamp;
+		if (!seenTimestamp) {
+			return false;
+		}
+
+		return Boolean(comment.createdAt) && comment.createdAt > seenTimestamp;
 	}
+	// #endregion hnewhere-test-export
 
 	const PORTRAIT_SIDEBAR_GUTTER = 28;
 
@@ -11504,6 +11555,33 @@ header button svg {
 	cursor:pointer;
 }
 
+.page-sort-toggle {
+	border:0;
+	padding:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+	font:inherit;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+}
+
+.page-sort-toggle[hidden],
+.page-sort[hidden] {
+	display:none;
+}
+
+.page-sort-toggle.is-on {
+	color:var(--text);
+	text-decoration:underline;
+}
+
+@media (hover: hover) {
+	.page-sort-toggle:not(.is-on):hover {
+		text-decoration:underline;
+	}
+}
+
 .list-filtered .page-sort {
 	display:none;
 }
@@ -15208,10 +15286,15 @@ ${settingsPanelHTML()}
 		}
 
 		element.classList.add("comment-new-seen");
+		cancelNewCommentDwell(element);
 		newCommentScrollObserver?.unobserve(element);
 	}
 
 	let newCommentScrollObserver = null;
+
+	const newCommentDwells = new Map();
+
+	const NEW_COMMENT_DWELL_MS = 900;
 
 	let suppressNewCommentAutoClearUntil = 0;
 
@@ -15219,16 +15302,33 @@ ${settingsPanelHTML()}
 		suppressNewCommentAutoClearUntil = Date.now() + duration;
 	}
 
-	function newCommentAutoClearEnabled() {
-		if (typeof window.matchMedia !== "function") {
-			return false;
+	function cancelNewCommentDwell(element) {
+		clearTimeout(newCommentDwells.get(element));
+		newCommentDwells.delete(element);
+	}
+
+	function startNewCommentDwell(element) {
+		if (newCommentDwells.has(element)) {
+			return;
 		}
 
-		return !window.matchMedia("(hover: hover)").matches;
+		newCommentDwells.set(
+			element,
+			window.setTimeout(() => {
+				newCommentDwells.delete(element);
+
+				if (Date.now() < suppressNewCommentAutoClearUntil) {
+					startNewCommentDwell(element);
+					return;
+				}
+
+				startNewCommentFade(element);
+			}, NEW_COMMENT_DWELL_MS),
+		);
 	}
 
 	function observeNewCommentForScroll(element) {
-		if (!newCommentAutoClearEnabled() || typeof IntersectionObserver !== "function") {
+		if (typeof IntersectionObserver !== "function") {
 			return;
 		}
 
@@ -15241,21 +15341,11 @@ ${settingsPanelHTML()}
 
 			newCommentScrollObserver = new IntersectionObserver(
 				(entries) => {
-					if (Date.now() < suppressNewCommentAutoClearUntil) {
-						return;
-					}
-
 					for (const entry of entries) {
-						if (entry.isIntersecting || !entry.rootBounds) {
-							continue;
-						}
-
-						if (!entry.boundingClientRect.height) {
-							continue;
-						}
-
-						if (entry.boundingClientRect.bottom <= entry.rootBounds.top) {
-							startNewCommentFade(entry.target);
+						if (entry.isIntersecting) {
+							startNewCommentDwell(entry.target);
+						} else {
+							cancelNewCommentDwell(entry.target);
 						}
 					}
 				},
@@ -15267,6 +15357,10 @@ ${settingsPanelHTML()}
 	}
 
 	function stopObservingNewComments() {
+		for (const element of [...newCommentDwells.keys()]) {
+			cancelNewCommentDwell(element);
+		}
+
 		newCommentScrollObserver?.disconnect();
 		newCommentScrollObserver = null;
 	}
@@ -16056,10 +16150,16 @@ ${settingsPanelHTML()}
 		comments.className = "top-level-comments";
 		ui.body.appendChild(comments);
 
+		const sortRow = ui.body.querySelector(".page-sort");
+
+		if (sortRow) {
+			ui.body.insertBefore(sortRow, comments);
+		}
+
 		const collapsedKeys = await loadCollapsed();
 		const seenTimes = new Map(
 			await Promise.all(
-				stories.map(async (story) => [story.key, await getSeenTime(story.key)]),
+				stories.map(async (story) => [story.key, await visitSeenTime(story.key)]),
 			),
 		);
 
@@ -16113,12 +16213,16 @@ ${settingsPanelHTML()}
 				rootKeys: threads[index].rootKeys,
 				story,
 				thread: threads[index],
+				seenTime: seenTimes.get(story.key) || 0,
 			})),
 			{
 				sort: settings.commentSort,
 				arrivedFrom: arrivalSource(),
+				unreadFirst: Boolean(settings.newCommentsFirst),
 			},
 		);
+
+		syncNewCommentsFirstControl(ui, entries, settings);
 
 		const liveRunEnd =
 			(settings.commentSort || "best") === "best"
@@ -16473,6 +16577,56 @@ ${settingsPanelHTML()}
 		liveBookendObservers.set(names, observer);
 	}
 
+	function mountSortRow(container, sort, options, withSort) {
+		const sortRow = document.createElement("div");
+
+		sortRow.className = withSort ? "page-sort" : "page-sort page-sort-bare";
+		sortRow.innerHTML = `${
+			withSort
+				? `<label class="page-sort-label" for="comment-sort">Sort</label>
+<select class="page-sort-select" id="comment-sort">${SORT_MODES.map(
+						(mode) =>
+							`<option value="${mode.id}"${mode.id === sort ? " selected" : ""}>${mode.label}</option>`,
+					).join("")}</select>
+`
+				: ""
+		}<button id="sort-new-first" class="page-sort-toggle" type="button" hidden>prioritize unread</button>`;
+
+		sortRow.querySelector("#sort-new-first").onclick = async (event) => {
+			const control = event.currentTarget;
+			const next = !(await loadSettings()).newCommentsFirst;
+
+			await saveSettings({ newCommentsFirst: next });
+			control.classList.toggle("is-on", next);
+
+			if (typeof options.onSortChange === "function") {
+				await options.onSortChange(sort);
+			}
+		};
+
+		if (withSort) {
+			sortRow.querySelector(".page-sort-select").onchange = async (event) => {
+				const next = event.target.value;
+
+				if (next === sort) {
+					return;
+				}
+
+				await saveSettings({ commentSort: next });
+
+				if (typeof options.onSortChange === "function") {
+					await options.onSortChange(next);
+				}
+			};
+		}
+
+		if (!withSort) {
+			sortRow.hidden = true;
+		}
+
+		container.appendChild(sortRow);
+	}
+
 	function renderPageHeader(stories, container, options = {}) {
 		const sort = options.sort || "best";
 		const page = options.page ?? discussionsPageTitle(stories);
@@ -16532,6 +16686,7 @@ title="Show only this discussion">
 
 		if (!disclosure) {
 			container.appendChild(wrapper);
+			mountSortRow(container, sort, options, false);
 
 			return wrapper;
 		}
@@ -16581,31 +16736,7 @@ title="Show only this discussion">
 
 		container.appendChild(wrapper);
 
-		const sortRow = document.createElement("div");
-
-		sortRow.className = "page-sort";
-		sortRow.innerHTML = `
-<label class="page-sort-label" for="comment-sort">Sort</label>
-<select class="page-sort-select" id="comment-sort">${SORT_MODES.map(
-			(mode) =>
-				`<option value="${mode.id}"${mode.id === sort ? " selected" : ""}>${mode.label}</option>`,
-		).join("")}</select>`;
-
-		sortRow.querySelector(".page-sort-select").onchange = async (event) => {
-			const next = event.target.value;
-
-			if (next === sort) {
-				return;
-			}
-
-			await saveSettings({ commentSort: next });
-
-			if (typeof options.onSortChange === "function") {
-				await options.onSortChange(next);
-			}
-		};
-
-		container.appendChild(sortRow);
+		mountSortRow(container, sort, options, true);
 
 		return wrapper;
 	}
@@ -21414,6 +21545,7 @@ title="Show only this discussion">
 		teardownSurfaces();
 
 		stopObservingNewComments();
+		forgetVisitSeenTimes();
 		renderedComments = [];
 		activeCommentFilter = null;
 	}
