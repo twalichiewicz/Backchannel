@@ -4550,23 +4550,6 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
-	function openNotepad(section) {
-		const body = section?.querySelector(".notepad-body");
-		const toggle = section?.querySelector(".notepad-toggle");
-
-		if (!section?.classList.contains("is-collapsed")) {
-			return;
-		}
-
-		section.classList.remove("is-collapsed");
-		toggle.textContent = "hide";
-		toggle.setAttribute("aria-expanded", "true");
-
-		if (body) {
-			body.style.maxHeight = body.scrollHeight ? `${body.scrollHeight}px` : "";
-		}
-	}
-
 	function startInlineNoteEdit(div, note) {
 		const text = div.querySelector(".text");
 
@@ -4593,77 +4576,10 @@ button {
 		settleNotepad(div);
 	}
 
-	function startNotepadDraft(section, body) {
-		const add = section.querySelector(".notepad-add");
-		const open = body.querySelector(".note-editor-draft:not([data-closing])");
-
-		if (open) {
-			closeNotepadDraft(section, body);
-			return;
-		}
-
-		openNotepad(section);
-
-		const held = inlineNoteEditor(null, {
-			canAnchor: (exact) => Boolean(anchorNoteQuote(exact)),
-
-			onSave: (parsed) => {
-				writeNote(parsed).catch(console.error);
-			},
-			onClose: () => closeNotepadDraft(section, body),
-		});
-
-		held.editor.classList.add("note-editor-draft");
-		body.prepend(held.editor);
-		add?.classList.add("is-open");
-		add?.setAttribute("aria-expanded", "true");
-
-		requestAnimationFrame(() => {
-			held.editor.classList.add("is-open");
-			held.editor.style.maxHeight = `${held.editor.scrollHeight}px`;
-			settleNotepad(held.editor);
-			held.field.focus({ preventScroll: true });
-
-			window.setTimeout(() => releaseNotepadDraft(held.editor), 240);
-		});
-	}
-
-	function releaseNotepadDraft(draft) {
-		if (!draft?.isConnected || !draft.classList.contains("is-open")) {
-			return;
-		}
-
-		draft.style.maxHeight = "none";
-		draft.style.overflow = "visible";
-		draft.scrollTop = 0;
-	}
-
 	function clampNotepadDraft(draft) {
 		draft.style.overflow = "";
 		draft.style.maxHeight = `${draft.scrollHeight}px`;
 		draft.getBoundingClientRect();
-	}
-
-	function closeNotepadDraft(section, body) {
-		const add = section.querySelector(".notepad-add");
-		const draft = body.querySelector(".note-editor-draft");
-
-		add?.classList.remove("is-open");
-		add?.setAttribute("aria-expanded", "false");
-
-		if (!draft) {
-			return;
-		}
-
-		draft.dataset.closing = "1";
-		clampNotepadDraft(draft);
-		draft.style.maxHeight = "0px";
-		draft.classList.remove("is-open");
-
-		window.setTimeout(() => {
-			draft.remove();
-			settleNotepad(body.firstElementChild || body);
-		}, 220);
 	}
 
 	async function writeNote(parsed) {
@@ -4730,11 +4646,6 @@ button {
 		);
 		body.replaceChildren();
 
-		const add = section.querySelector(".notepad-add");
-
-		add?.classList.remove("is-open");
-		add?.setAttribute("aria-expanded", "false");
-
 		toggle.hidden = empty;
 		toggle.textContent = empty ? "show" : "hide";
 		toggle.setAttribute("aria-expanded", empty ? "false" : "true");
@@ -4782,8 +4693,16 @@ button {
 			return;
 		}
 
-		control.hidden = !entries.some((entry) => entry.unread);
+		const unread = entries.some((entry) => entry.unread);
+
+		control.hidden = !unread;
 		control.classList.toggle("is-on", Boolean(settings.newCommentsFirst));
+
+		const separator = ui.shadow.querySelector("#sort-sep");
+
+		if (separator) {
+			separator.hidden = !unread;
+		}
 	}
 
 	function removeNoteAffordance() {
@@ -11754,7 +11673,13 @@ header button svg {
 	text-underline-offset:2px;
 }
 
-.page-sort-toggle[hidden] {
+.page-sort-sep {
+	margin:0 .1em;
+	color:var(--meta);
+}
+
+.page-sort-toggle[hidden],
+.page-sort-sep[hidden] {
 	display:none;
 }
 
@@ -13904,20 +13829,7 @@ ${SUBMIT_FORM_CSS}
 	margin-left:auto;
 }
 
-.notepad-add {
-	padding:0;
-	border:0;
-	background:none;
-	color:var(--meta);
-	font:inherit;
-	font-size:11px;
-	text-decoration:underline dotted;
-	text-underline-offset:2px;
-	cursor:pointer;
-}
-
 @media (hover: hover) {
-	.notepad-add:hover,
 	.notepad-toggle:hover {
 		text-decoration:underline;
 	}
@@ -13938,22 +13850,10 @@ ${SUBMIT_FORM_CSS}
 	display:none;
 }
 
-.notepad-toggle::before {
-	content:"|";
-	margin:0 .35em;
-	color:var(--meta);
-	text-decoration:none;
-	display:inline-block;
-}
-
 .notepad-body {
 	margin-left:8px;
 	overflow:hidden;
 	transition:max-height .22s ease, opacity .18s ease;
-}
-
-.notepad-add.is-open {
-	text-decoration:underline;
 }
 
 .note-editor-draft {
@@ -14614,13 +14514,201 @@ blockquote.comment-quote-redundant {
 	color:var(--link);
 }
 
-.story-body-cell > .comment-composer {
-	margin-left:calc(8px - var(--vote-column));
-}
-
 .comment-composer {
 	margin-top:10px;
 	max-width:720px;
+}
+
+.compose-box {
+	position:relative;
+	margin:0 0 14px 8px;
+}
+
+.compose-anchor {
+	height:0;
+}
+
+.compose-dock {
+	position:absolute;
+	top:8px;
+	left:50%;
+	transform:translateX(-50%);
+	width:calc(100% - 24px);
+	max-width:calc(100% - 24px);
+	pointer-events:auto;
+}
+
+.compose-dock[hidden] {
+	display:none;
+}
+
+.compose-dock-pill {
+	display:block;
+	margin:0 auto;
+	padding:6px 14px;
+	border:0;
+	border-radius:999px;
+	background:var(--accent);
+	color:var(--accent-ink);
+	box-shadow:0 4px 14px rgba(0,0,0,.22);
+	font:inherit;
+	font-size:12px;
+	line-height:1.4;
+	cursor:pointer;
+}
+
+.compose-dock-slot {
+	overflow:hidden;
+	max-height:0;
+	transition:max-height .22s ease;
+}
+
+.compose-dock.is-docked .compose-dock-pill {
+	margin-bottom:6px;
+	border-radius:6px 6px 0 0;
+	width:100%;
+}
+
+.compose-dock.is-docked .compose-dock-slot {
+	padding:0 0 8px;
+	border-radius:0 0 6px 6px;
+	background:var(--surface);
+	box-shadow:0 6px 18px rgba(0,0,0,.22);
+}
+
+.compose-dock .compose-box {
+	margin:0 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.compose-dock-slot {
+		transition:none;
+	}
+}
+
+.compose-field {
+	border:1px solid var(--field-border);
+	border-radius:6px;
+	background:var(--field-bg);
+}
+
+.compose-field:focus-within {
+	border-color:var(--accent);
+	box-shadow:0 0 0 2px rgba(var(--accent-rgb),.16);
+}
+
+.compose-field > .composer-text {
+	display:block;
+	width:100%;
+	min-height:0;
+	box-sizing:border-box;
+	padding:7px 9px 2px;
+	border:0;
+	border-radius:6px 6px 0 0;
+	background:none;
+	resize:vertical;
+}
+
+.compose-field > .composer-text:focus {
+	outline:none;
+	box-shadow:none;
+}
+
+.compose-field > .composer-actions {
+	display:flex;
+	align-items:center;
+	gap:8px;
+	padding:2px 7px 7px 9px;
+}
+
+.compose-send-row {
+	display:inline-flex;
+	gap:6px;
+	margin-left:auto;
+}
+
+.compose-send {
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	height:22px;
+	padding:0 10px;
+	border:0;
+	border-radius:999px;
+	font:inherit;
+	font-size:11px;
+	line-height:1;
+	cursor:pointer;
+	transition:opacity .15s ease, transform .15s ease;
+}
+
+.compose-send[hidden] {
+	display:none;
+}
+
+.compose-send:disabled {
+	opacity:.45;
+	cursor:default;
+}
+
+.compose-send-note {
+	color:var(--surface-text);
+	background:var(--hover-tint);
+}
+
+.compose-send-comment {
+	color:var(--accent-ink);
+	background:var(--accent);
+}
+
+@media (hover: hover) {
+	.compose-send:not(:disabled):hover {
+		transform:translateY(-1px);
+	}
+}
+
+.compose-send:focus-visible {
+	outline:2px solid var(--link);
+	outline-offset:2px;
+}
+
+.compose-targets {
+	position:absolute;
+	right:0;
+	top:calc(100% + 4px);
+	max-height:180px;
+	overflow-y:auto;
+	z-index:2;
+	display:flex;
+	flex-direction:column;
+	min-width:132px;
+	padding:4px;
+	border:1px solid var(--surface-border);
+	border-radius:6px;
+	background:var(--surface);
+	box-shadow:0 4px 14px rgba(0,0,0,.18);
+}
+
+.compose-targets.hidden {
+	display:none;
+}
+
+.compose-target {
+	padding:5px 8px;
+	border:0;
+	border-radius:4px;
+	background:none;
+	color:var(--surface-text);
+	font:inherit;
+	font-size:12px;
+	text-align:left;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.compose-target:hover {
+		background:var(--hover-tint);
+	}
 }
 
 .reply-composer {
@@ -14796,7 +14884,7 @@ blockquote.comment-quote-redundant {
 <div id="resize-handle" aria-hidden="true"></div>
 
 ${headerHTML({ subtitle: true, minimize: true, browse: true })}
-<div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div></div>
+<div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><button type="button" id="compose-dock-pill" class="compose-dock-pill"></button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
 ${settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
@@ -15245,6 +15333,330 @@ ${settingsPanelHTML()}
 		COMMENT_BRIDGE_MESSAGE_SOURCE,
 	);
 
+	function wireComposeDock(ui, box, label) {
+		const dock = ui.shadow.querySelector("#compose-dock");
+		const pill = ui.shadow.querySelector("#compose-dock-pill");
+		const slot = ui.shadow.querySelector("#compose-dock-slot");
+		const root = ui.body?.closest("#comments");
+
+		if (!dock || !pill || !slot || !root || typeof IntersectionObserver !== "function") {
+			return null;
+		}
+
+		const anchorNode = document.createElement("div");
+
+		anchorNode.className = "compose-anchor";
+		box.parentElement.insertBefore(anchorNode, box);
+
+		const spacer = document.createElement("div");
+
+		spacer.className = "compose-spacer";
+		pill.textContent = label;
+
+		let docked = false;
+
+		const undock = () => {
+			if (!docked) {
+				return;
+			}
+
+			docked = false;
+			dock.classList.remove("is-open");
+			slot.style.maxHeight = "0px";
+			spacer.replaceWith(box);
+			dock.classList.remove("is-docked");
+		};
+
+		const dockBox = () => {
+			if (docked) {
+				return;
+			}
+
+			docked = true;
+			spacer.style.height = `${box.getBoundingClientRect().height}px`;
+			box.replaceWith(spacer);
+			slot.appendChild(box);
+			dock.classList.add("is-docked");
+
+			requestAnimationFrame(() => {
+				dock.classList.add("is-open");
+				slot.style.maxHeight = `${slot.scrollHeight}px`;
+				box.querySelector(".composer-text")?.focus({ preventScroll: true });
+			});
+		};
+
+		pill.onclick = () => (docked ? undock() : dockBox());
+
+		dock.addEventListener("keydown", (event) => {
+			if (event.key === "Escape") {
+				undock();
+			}
+		});
+
+		const observer = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					const gone = !entry.isIntersecting && entry.boundingClientRect.top < (entry.rootBounds?.top ?? 0);
+
+					dock.hidden = !gone;
+
+					if (!gone) {
+						undock();
+					}
+				}
+			},
+			{ root, threshold: 0 },
+		);
+
+		observer.observe(anchorNode);
+
+		return { undock, stop: () => observer.disconnect() };
+	}
+
+	function replyTargets(stories = renderedDiscussions || []) {
+		const filtered =
+			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
+
+		return stories.filter(
+			(story) =>
+				getSource(story.source)?.capabilities.reply &&
+				(!filtered || story.key === filtered),
+		);
+	}
+
+	function syncComposeBox() {
+		const box = sidebarUI?.body?.querySelector(".compose-box");
+		const button = box?.querySelector(".compose-send-comment");
+
+		if (!box || !button) {
+			return;
+		}
+
+		const targets = replyTargets();
+		const canNote = Boolean(box.querySelector(".compose-send-note"));
+
+		button.hidden = targets.length === 0;
+
+		if (!targets.length) {
+			box.querySelector(".compose-targets")?.classList.add("hidden");
+		}
+
+		const field = box.querySelector(".composer-text");
+		const placeholder = composePlaceholder(targets.length > 0, canNote);
+
+		field.placeholder = placeholder;
+		field.setAttribute("aria-label", placeholder);
+	}
+
+	function mountComposeBox(ui, stories, settings, before) {
+		const canNote = Boolean(settings.notepad);
+		const canComment = stories.some(
+			(story) => getSource(story.source)?.capabilities.reply,
+		);
+
+		if (!canComment && !canNote) {
+			return null;
+		}
+
+		const holder = document.createElement("div");
+
+		holder.innerHTML = composeBoxHTML({
+			canComment,
+			canNote,
+			placeholder: composePlaceholder(canComment, canNote),
+		});
+
+		const box = holder.firstElementChild;
+
+		ui.body.insertBefore(box, before);
+
+		const textarea = box.querySelector(".composer-text");
+		const status = box.querySelector(".composer-status");
+
+		const grow = () => {
+			if (textarea.style.height) {
+				return;
+			}
+
+			const style = getComputedStyle(textarea);
+			const line = parseFloat(style.lineHeight) || 18;
+			const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+
+			textarea.rows = 1;
+
+			const used = Math.max(
+				1,
+				Math.round((textarea.scrollHeight - padding) / line),
+			);
+
+			textarea.rows = Math.min(
+				COMPOSE_MAX_ROWS,
+				Math.max(textarea.dataset.opened ? 2 : 1, used + 1),
+			);
+		};
+
+		textarea.addEventListener("focus", () => {
+			textarea.dataset.opened = "1";
+			grow();
+		});
+		textarea.addEventListener("input", grow);
+		textarea.addEventListener("blur", () => {
+			delete textarea.dataset.opened;
+
+			if (!textarea.style.height) {
+				textarea.rows = 1;
+			}
+		});
+		const menu = box.querySelector(".compose-targets");
+		const first = stories[0];
+
+		const held = canComment
+			? wireComposer(box, {
+					source: first?.source || "hn",
+					storyID: first?.id,
+					onPosted: () => {},
+				})
+			: null;
+
+		const say = (message, error = false) => {
+			if (held) {
+				held.setStatus(message, { error });
+				return;
+			}
+
+			status.classList.toggle("hidden", !message);
+			status.classList.toggle("error", Boolean(error));
+			status.textContent = message || "";
+		};
+
+		const closeMenu = () => menu.classList.add("hidden");
+
+		if (canComment) {
+			const commentButton = box.querySelector(".compose-send-comment");
+
+			commentButton.onclick = () => {
+				const targets = replyTargets(stories);
+
+				if (!targets.length) {
+					return;
+				}
+
+				if (targets.length === 1) {
+					closeMenu();
+					box._hnewhereDock?.undock();
+					held.send({ source: targets[0].source, storyID: targets[0].id });
+					return;
+				}
+
+				if (!menu.classList.contains("hidden")) {
+					closeMenu();
+					return;
+				}
+
+				menu.replaceChildren(
+					...targets.map((story) => {
+						const choice = document.createElement("button");
+
+						choice.type = "button";
+						choice.className = "compose-target";
+						choice.textContent =
+							story.baseLabel || story.label || getSource(story.source)?.label || story.source;
+						choice.onclick = () => {
+							closeMenu();
+							box._hnewhereDock?.undock();
+							held.send({ source: story.source, storyID: story.id });
+						};
+
+						return choice;
+					}),
+				);
+				menu.classList.remove("hidden");
+			};
+		}
+
+		if (canNote) {
+			const noteButton = box.querySelector(".compose-send-note");
+			let warnedFor = null;
+
+			noteButton.onclick = () => {
+				closeMenu();
+
+				const parsed = noteFromText(textarea.value);
+
+				if (!parsed.text && !parsed.exact) {
+					say("Write something first.", true);
+					textarea.focus();
+					return;
+				}
+
+				if (parsed.exact && warnedFor !== parsed.exact && !anchorNoteQuote(parsed.exact)) {
+					warnedFor = parsed.exact;
+					say(
+						"Your quoted text wasn't found in this document. Press again to keep it without a highlight.",
+						true,
+					);
+					return;
+				}
+
+				textarea.value = "";
+				say("Kept");
+				box._hnewhereDock?.undock();
+				writeNote(parsed).catch(console.error);
+			};
+		}
+
+		syncComposeBox();
+
+		box._hnewhereDock = wireComposeDock(
+			ui,
+			box,
+			canComment ? "Add a comment" : "Keep a note",
+		);
+
+		return box;
+	}
+
+	const COMPOSE_MAX_ROWS = 12;
+
+	function composeBoxHTML({ canComment, canNote, placeholder }) {
+		return `
+	<div class="comment-composer compose-box">
+	<div class="compose-field">
+	<textarea class="composer-text" rows="1" placeholder="${escapeHTML(placeholder)}" aria-label="${escapeHTML(placeholder)}"></textarea>
+	<div class="composer-actions">
+	${canComment ? `<button type="button" class="composer-help-toggle" aria-expanded="false">formatting</button>` : ""}
+	<div class="composer-status hidden" role="status"></div>
+	<span class="compose-send-row">${
+		canNote
+			? `<button type="button" class="compose-send compose-send-note" title="Keep this as a note">note</button>`
+			: ""
+	}${
+		canComment
+			? `<button type="submit" class="composer-submit compose-send compose-send-comment" title="Add this as a comment">comment</button>`
+			: ""
+	}</span>
+	</div>
+	</div>
+	<div class="compose-targets hidden" role="menu"></div>
+	<div class="composer-help hidden">
+	<p>Blank lines separate paragraphs.</p>
+	<p>Text surrounded by asterisks is italicized. To get a literal asterisk, use <code>\\*</code> or <code>**</code>.</p>
+	<p>Text after a blank line that is indented by two or more spaces is formatted as code.</p>
+	<p>Urls become links, except in the text field of a submission.</p>
+	<p>If your url gets linked incorrectly, put it in <code>&lt;angle brackets&gt;</code> and it should work.</p>
+	</div>
+	</div>
+`;
+	}
+
+	function composePlaceholder(canComment, canNote) {
+		if (canComment && canNote) {
+			return "Add a comment, or keep a note\u2026";
+		}
+
+		return canComment ? "Add a comment\u2026" : "Keep a note\u2026";
+	}
+
 	function composerHTML({ label, placeholder }) {
 		return `
 	<div class="comment-composer">
@@ -15390,56 +15802,55 @@ ${settingsPanelHTML()}
 			submitButton.textContent = busy ? submitLabel + "…" : submitLabel;
 		};
 
-		submitButton.onclick = async () => {
+		const send = (aim = {}) => {
+			const toSource = aim.source || source;
+			const toStory = aim.storyID ?? storyID;
 			const text = textarea.value;
+			const label = getSource(toSource)?.label || "the source";
 
 			if (!text.trim()) {
 				setStatus("Write something first.", { error: true });
 				textarea.focus();
-				return;
+				return Promise.resolve();
 			}
 
 			setBusy(true);
 			showSpinner();
 
-			try {
-				const result = await submitCommentThroughBridge(
-					source,
-					storyID,
-					text,
-					parentId,
-					() =>
-						setStatus(
-							`Waiting for sign-in on ${getSource(source)?.label || "the source"}…`,
-						),
-				);
+			const posting = submitCommentThroughBridge(toSource, toStory, text, parentId, () =>
+				setStatus(`Waiting for sign-in on ${label}…`),
+			);
 
-				await rememberAuthFromResult(source, result);
+			return (async () => {
+				try {
+					const result = await posting;
 
-				if (!result?.ok) {
-					setStatus(
-						commentFailureMessage(result, getSource(source)?.label || "the source"),
-						{ error: true },
-					);
-					return;
+					await rememberAuthFromResult(toSource, result);
+
+					if (!result?.ok) {
+						setStatus(commentFailureMessage(result, label), { error: true });
+						return;
+					}
+
+					textarea.value = "";
+					clearTimeout(saveTimer);
+					await save(draftKey, null);
+
+					setStatus("Posted");
+
+					window.setTimeout(() => {
+						onPosted?.();
+						reloadDiscussion(toStory);
+					}, 1400);
+				} finally {
+					setBusy(false);
 				}
-
-				textarea.value = "";
-				clearTimeout(saveTimer);
-				await save(draftKey, null);
-
-				setStatus("Posted");
-
-				window.setTimeout(() => {
-					onPosted?.();
-					reloadDiscussion(storyID);
-				}, 1400);
-			} finally {
-				setBusy(false);
-			}
+			})();
 		};
 
-		return { focus: () => textarea.focus() };
+		submitButton.onclick = () => send();
+
+		return { focus: () => textarea.focus(), send, setStatus, textarea };
 	}
 
 	function submitCommentThroughBridge(
@@ -16387,10 +16798,9 @@ ${settingsPanelHTML()}
 		const disambiguating = stories.length > 1;
 
 		for (const story of stories) {
-			const canReply = Boolean(getSource(story.source)?.capabilities.reply);
 			const resolved = storyTitle(story, page, disambiguating);
 			const block = renderStory(story, details, {
-				compose: canReply,
+				compose: false,
 				title: resolved,
 				showTitle: true,
 				watchable: !disambiguating,
@@ -16414,6 +16824,8 @@ ${settingsPanelHTML()}
 			ui.body.insertBefore(sortRow, comments);
 		}
 
+		mountComposeBox(ui, stories, settings, sortRow || comments);
+
 		const collapsedKeys = await loadCollapsed();
 		const seenTimes = new Map(
 			await Promise.all(
@@ -16424,11 +16836,8 @@ ${settingsPanelHTML()}
 		const notes = settings.notepad ? await loadNotes() : [];
 		const notesDiscussion = notesCollective(notes, pageAddress());
 
-		if (settings.notepad) {
-			const held = notesSection({
-				empty: !notes.length,
-				onAdd: () => startNotepadDraft(held.section, held.body),
-			});
+		if (settings.notepad && notes.length) {
+			const held = notesSection({ empty: false });
 
 			const storyCell = disambiguating
 				? null
@@ -16443,7 +16852,9 @@ ${settingsPanelHTML()}
 			} else {
 				ui.body.insertBefore(
 					held.section,
-					ui.body.querySelector(".page-sort") || comments,
+					ui.body.querySelector(".compose-box") ||
+						ui.body.querySelector(".page-sort") ||
+						comments,
 				);
 			}
 
@@ -16671,7 +17082,7 @@ ${settingsPanelHTML()}
 	}
 
 	// #region hnewhere-test-export
-	function notesSection({ onAdd, empty = false } = {}) {
+	function notesSection({ empty = false } = {}) {
 		const section = document.createElement("div");
 		const head = document.createElement("div");
 		const body = document.createElement("div");
@@ -16717,15 +17128,10 @@ ${settingsPanelHTML()}
 			}
 		};
 
-		add.type = "button";
-		add.className = "notepad-add";
-		add.textContent = "add a note";
-		add.onclick = () => onAdd?.(add);
-
 		const actions = document.createElement("span");
 
 		actions.className = "notepad-actions";
-		actions.append(add, toggle);
+		actions.append(toggle);
 		head.append(actions);
 		body.className = "notepad-body";
 		foot.className = "notepad-rule notepad-rule-close";
@@ -16856,6 +17262,7 @@ ${settingsPanelHTML()}
 			(mode) =>
 				`<option value="${mode.id}"${mode.id === sort ? " selected" : ""}>${mode.label}</option>`,
 		).join("")}</select>
+<span id="sort-sep" class="page-sort-sep" hidden>|</span>
 <button id="sort-new-first" class="page-sort-toggle" type="button" hidden>prioritize unread</button>`;
 
 		sortRow.querySelector("#sort-new-first").onclick = async (event) => {
@@ -17048,6 +17455,7 @@ title="Show only this discussion">
 
 		syncSubmissionDetails();
 		syncSourceBadges();
+		syncComposeBox();
 	}
 
 	function syncSourceBadges() {

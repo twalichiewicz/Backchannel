@@ -68,7 +68,33 @@ use to detect updates, so every release bumps it.
   time.
 
 - **new first** is **prioritize unread**, and sits with the comments it reorders
-  rather than at the top of the panel.
+  rather than at the top of the panel. A pipe separates it from Sort.
+
+- **One box writes both a comment and a note.** It carries two buttons that say
+  what they do: a green **comment** that sends what you wrote down to the
+  discussion, and a grey **note** that keeps it up in your notepad. Which buttons
+  it shows depends on what is possible — a source that takes no replies offers
+  only the note, a reader with the notepad off gets only the comment, and where
+  neither applies there is no box at all. Filtering a blend down to a source that
+  takes no replies takes the green button away with it. The notepad no longer
+  carries its own **add a note**, and a note written in the box still anchors to
+  a passage you quoted, as before.
+
+  **A page carrying several discussions had no comment box at all** until now —
+  every composer sat inside a per-discussion block that a blend keeps hidden.
+  There, the green button asks which discussion you meant, from a list that drops
+  below it and scrolls when the blend is a long one; filtered to one, it goes
+  straight there.
+
+  **Scroll the box out of sight and it follows you**, as a pill under the header.
+  Pressing it opens the same box, still holding whatever you had half-written;
+  scrolling back puts it home.
+
+  The box is one line tall until you write in it, then keeps a spare line below
+  whatever you have written, and falls back to one line when you press away from
+  it; dragging its corner still sets a height of your own. Its two buttons and
+  **formatting** share a row inside the same border as the text. The notepad,
+  where you have written one, sits above the box, and the comments below it.
 
 - **Sort is offered on a single-source discussion too.** It used to appear only
   where more than one discussion was being blended, on the grounds that Best is
