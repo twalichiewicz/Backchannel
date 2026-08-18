@@ -14110,9 +14110,23 @@ ${SUBMIT_FORM_CSS}
 	content:"";
 	flex:1 0 0;
 	width:1px;
+	min-height:7px;
 	margin-top:3px;
 	background:var(--border-soft);
-	transition:background-color .9s ease;
+	transform-origin:top;
+	transition:background-color .9s ease, transform .18s ease;
+}
+
+.comment:has(> .comment-layout > .comment-main > .comment-content.hidden)
+	> .comment-layout > .comment-vote-slot::after {
+	min-height:0;
+	transform:scaleY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.comment-vote-slot::after {
+		transition:background-color .9s ease;
+	}
 }
 
 .comment-main {
