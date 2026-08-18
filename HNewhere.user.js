@@ -14251,6 +14251,10 @@ ${SUBMIT_FORM_CSS}
 	width:var(--vote-column);
 }
 
+.story-vote-none {
+	width:8px;
+}
+
 .story-votelinks {
 	text-align:center;
 }
@@ -14524,7 +14528,7 @@ blockquote.comment-quote-redundant {
 }
 
 .story-title {
-	font-size:15px;
+	font-size:13px;
 	line-height:1.25;
 }
 
@@ -15096,7 +15100,7 @@ ${settingsPanelHTML()}
 	${
 		showTitle
 			? `<tr>
-	<td class="story-votelinks">
+	<td class="story-votelinks${canVote ? "" : " story-vote-none"}">
 	${voteControlsHTML}
 	</td>
 	<td class="story-title-cell">
@@ -15116,7 +15120,7 @@ ${settingsPanelHTML()}
 			: ""
 	}
 	<tr>
-	<td class="${showTitle ? "story-votespacer" : "story-votelinks story-votelinks-inline"}">${showTitle ? "" : voteControlsHTML}</td>
+	<td class="${showTitle ? "story-votespacer" : "story-votelinks story-votelinks-inline"}${canVote ? "" : " story-vote-none"}">${showTitle ? "" : voteControlsHTML}</td>
 	<td class="story-body-cell">
 	<div class="story-meta">
 	${
