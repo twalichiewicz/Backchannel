@@ -13812,7 +13812,7 @@ ${SUBMIT_FORM_CSS}
 
 .filter-banner {
 	max-width:720px;
-	margin:12px 0 16px 14px;
+	margin:12px 0 16px 8px;
 	color:var(--meta);
 }
 
