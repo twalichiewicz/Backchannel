@@ -9777,6 +9777,8 @@ button {
 		return updates.size > 0;
 	}
 
+	const collapsedBrowseSections = new Set();
+
 	function subhead(list, text, { collapsible = false } = {}) {
 		const heading = document.createElement("div");
 
@@ -9804,9 +9806,17 @@ button {
 			toggle.setAttribute("aria-label", (collapsed ? "Expand " : "Collapse ") + text);
 		};
 
-		paint(false);
+		const remembered = collapsedBrowseSections.has(text);
 
-		toggle.onclick = () => paint(section.classList.toggle("is-collapsed"));
+		section.classList.toggle("is-collapsed", remembered);
+		paint(remembered);
+
+		toggle.onclick = () => {
+			const collapsed = section.classList.toggle("is-collapsed");
+
+			collapsedBrowseSections[collapsed ? "add" : "delete"](text);
+			paint(collapsed);
+		};
 
 		heading.appendChild(toggle);
 		section.append(heading, body);
