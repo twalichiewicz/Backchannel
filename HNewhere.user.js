@@ -14453,6 +14453,14 @@ ${SUBMIT_FORM_CSS}
 	transform:scaleY(0);
 }
 
+.comment:has(> .comment-layout > .comment-main > .comment-content.hidden) {
+	margin-top:6px;
+}
+
+#comments .top-level-comments > .comment:not(.comment ~ .comment) {
+	margin-top:12px;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.comment-vote-slot::after {
 		transition:background-color .9s ease;
