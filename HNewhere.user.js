@@ -128,7 +128,7 @@
 		}
 
 		try {
-			await saveQueue(migrateQueueKeys(await loadQueue(), normalizeURL));
+			await mutateQueue((entries) => migrateQueueKeys(entries, normalizeURL));
 			await save(QUEUE_KEY_MIGRATION, 1);
 		} catch (e) {
 			console.error("Backchannel queue key migration failed:", e);
@@ -623,6 +623,30 @@
 		);
 	}
 
+	function serializeMutations(load, save) {
+		let chain = Promise.resolve();
+
+		return function (mutate) {
+			const turn = chain.then(async () => {
+				const entries = await load();
+				const next = await mutate(entries);
+
+				if (next !== undefined) {
+					await save(next);
+				}
+
+				return next;
+			});
+
+			chain = turn.then(
+				() => {},
+				() => {},
+			);
+
+			return turn;
+		};
+	}
+
 	const WATCH_MISS_CEILING = 5;
 
 	function addToWatchList(entries, page, now) {
@@ -820,19 +844,21 @@
 	// #endregion hnewhere-test-export
 
 	async function markQueueArrival(url = pageAddress(), now = Date.now()) {
-		const entries = await loadQueue();
+		const marked = await mutateQueue((entries) => {
+			if (!entries.length) {
+				return undefined;
+			}
 
-		if (!entries.length) {
+			const next = markQueueRead(entries, url, now);
+
+			return next.every((entry, index) => entry === entries[index])
+				? undefined
+				: next;
+		});
+
+		if (!marked) {
 			return false;
 		}
-
-		const marked = markQueueRead(entries, url, now);
-
-		if (marked.every((entry, index) => entry === entries[index])) {
-			return false;
-		}
-
-		await saveQueue(marked);
 
 		if (sidebarUI?.shadow) {
 			refreshQueueCount(sidebarUI.shadow).catch(console.error);
@@ -864,6 +890,8 @@
 		await save(STORAGE.queue, entries);
 		return entries;
 	}
+
+	const mutateQueue = serializeMutations(loadQueue, saveQueue);
 
 	async function loadFavoriteEntries() {
 		const stored = await load(STORAGE.favorites, []);
@@ -5378,13 +5406,17 @@ button {
 					patch.foundAt = now;
 					patch.count = found.length;
 
-					const queued = await loadQueue();
-					const placeholder = queued.find((item) =>
-						queueEntryMatchesWatch(item, entry),
-					);
 					const story = watchStory(entry, found[0]);
 
-					if (placeholder) {
+					await mutateQueue((queued) => {
+						const placeholder = queued.find((item) =>
+							queueEntryMatchesWatch(item, entry),
+						);
+
+						if (!placeholder) {
+							return addToQueue(queued, { ...story, key: entry.key }, now);
+						}
+
 						Object.assign(placeholder, story, {
 							key: entry.key,
 							title: story.title || placeholder.title,
@@ -5392,12 +5424,8 @@ button {
 							readAt: null,
 						});
 
-						await saveQueue(queued);
-					} else {
-						await saveQueue(
-							addToQueue(queued, { ...story, key: entry.key }, now),
-						);
-					}
+						return queued;
+					});
 
 					if (settings.notifyOnWatch && notificationsAllowed()) {
 						notifyWatch(entry, found.length);
@@ -5473,13 +5501,11 @@ button {
 
 		await saveWatches(addToWatchList(await loadWatches(), page, now));
 
-		const queued = await loadQueue();
-
-		if (!queued.some((entry) => queueEntryMatchesWatch(entry, page))) {
-			await saveQueue(
-				addToQueue(queued, watchQueueStory(page, discussions, now), now),
-			);
-		}
+		await mutateQueue((queued) =>
+			queued.some((entry) => queueEntryMatchesWatch(entry, page))
+				? undefined
+				: addToQueue(queued, watchQueueStory(page, discussions, now), now),
+		);
 
 		seedWatchMarks(page.key).catch(console.error);
 	}
@@ -9025,14 +9051,15 @@ button {
 			}
 
 			saveButton.onclick = async () => {
-				const entries = await loadQueue();
-				const already = entries.some((e) => queueKey(e) === key);
+				let already = false;
 
-				await saveQueue(
-					already
+				await mutateQueue((entries) => {
+					already = entries.some((e) => queueKey(e) === key);
+
+					return already
 						? removeFromQueue(entries, key)
-						: addToQueue(entries, story, Date.now()),
-				);
+						: addToQueue(entries, story, Date.now());
+				});
 
 				saveButton.textContent = already ? "queue" : queuedLabel;
 
@@ -9723,8 +9750,8 @@ button {
 		});
 
 		if (updates.size) {
-			await saveQueue(
-				(await loadQueue()).map((entry) =>
+			await mutateQueue((current) =>
+				current.map((entry) =>
 					updates.has(queueKey(entry))
 						? { ...entry, ...updates.get(queueKey(entry)) }
 						: entry,
@@ -9851,16 +9878,18 @@ button {
 			clear.textContent = "clear read";
 			clear.onclick = async () => {
 				const watches = await loadWatches();
-				const queued = await loadQueue();
-				const keep = new Set(
-					queued
-						.filter((entry) =>
-							watches.some((watch) => queueEntryMatchesWatch(entry, watch)),
-						)
-						.map(queueKey),
-				);
 
-				await saveQueue(clearReadFromQueue(queued, keep));
+				await mutateQueue((queued) => {
+					const keep = new Set(
+						queued
+							.filter((entry) =>
+								watches.some((watch) => queueEntryMatchesWatch(entry, watch)),
+							)
+							.map(queueKey),
+					);
+
+					return clearReadFromQueue(queued, keep);
+				});
 
 				await renderQueueView(ui, list);
 				refreshQueueCount(ui.shadow);
@@ -18743,14 +18772,15 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			link.onclick = async (event) => {
 				event.preventDefault();
 
-				const entries = await loadQueue();
-				const already = entries.some((entry) => queueKey(entry) === key);
+				let already = false;
 
-				const next = already
-					? removeFromQueue(entries, key)
-					: addToQueue(entries, story, Date.now());
+				const next = await mutateQueue((entries) => {
+					already = entries.some((entry) => queueKey(entry) === key);
 
-				await saveQueue(next);
+					return already
+						? removeFromQueue(entries, key)
+						: addToQueue(entries, story, Date.now());
+				});
 
 				link.textContent = already ? "queue" : "queued";
 
