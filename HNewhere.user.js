@@ -4284,6 +4284,8 @@ button {
 </div>
 </div>`;
 
+		adoptStyles(shadow);
+
 		const quote = shadow.querySelector("blockquote");
 
 		quote.textContent = chosen.exact || "";
@@ -5774,6 +5776,19 @@ button {
 	// -------------------------
 
 	// #region hnewhere-test-export
+	function adoptStyles(shadow) {
+		for (const style of shadow.querySelectorAll("style")) {
+			try {
+				const sheet = new CSSStyleSheet();
+
+				sheet.replaceSync(style.textContent);
+				shadow.adoptedStyleSheets = [...shadow.adoptedStyleSheets, sheet];
+				style.remove();
+			} catch {
+			}
+		}
+	}
+
 	const HOST_ALIASES = new Map([
 		["x.com", "twitter.com"],
 		["www.x.com", "twitter.com"],
@@ -15101,6 +15116,8 @@ ${settingsPanelHTML()}
 
 </div>
 `;
+
+		adoptStyles(shadow);
 
 		const panel = shadow.querySelector("#panel");
 
