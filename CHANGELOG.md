@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.11.1] — 2026-08-19
+
+### Fixed
+
+- **The panel renders on Mastodon.** Mastodon 4.3 tells the browser to refuse
+  any stylesheet added into the page, and the panel's arrived that way, so its
+  contents drew as bare unstyled text in a corner. The panel and the note
+  composer now hand the browser their rules directly, which that refusal does
+  not cover — the same fix holds on any site with the same policy. (#117)
+
+- **Queueing stories in quick succession keeps all of them.** Each queue press
+  rewrote the stored list from what it had read a moment earlier, so presses in
+  flight together each saved a list missing the others' stories — queueing your
+  way down the Hacker News front page kept almost none of them. Writes to the
+  queue now take turns. (#116)
+
+- **The Focused discussion banner sits on the page header's edge.** It kept
+  the indent of a column the comments no longer use, and lined up with nothing
+  around it. (#114)
+
+- **The Collection's sections stay as you left them.** Deleting or editing a
+  note redraws the whole list, and the redraw reopened every section you had
+  folded shut. What is folded is now remembered for as long as the page is
+  open. (#118)
+
+- **A composer with writing in it holds its shape.** Pressing note or comment
+  first takes focus off the field, and the field answered by shrinking to one
+  line — so the button moved before the press landed on it, and nothing was
+  sent. A field with something written in it now stays at its size; only an
+  empty one folds away. (#119)
+
+- **A collapsed comment takes less room.** Half the usual gap sits above a
+  comment folded to its one meta line, instead of the full spacing an open
+  comment gets. The first thread keeps its full distance from whatever sits
+  above it. (#120)
+
 ## [1.6.11] — 2026-08-17
 
 ### Added
