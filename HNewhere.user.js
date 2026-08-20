@@ -15797,7 +15797,7 @@ ${settingsPanelHTML()}
 		textarea.addEventListener("blur", () => {
 			delete textarea.dataset.opened;
 
-			if (!textarea.style.height) {
+			if (!textarea.style.height && !textarea.value.trim()) {
 				textarea.rows = 1;
 			}
 		});
