@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Backchannel</title>
+
+<style>
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: system-ui, sans-serif;
+    background: rgb(35, 113, 64);
+    color: white;
+  }
+
+  .demo {
+    width: 620px;
+    text-align: center;
+  }
+
+  .birds {
+    display: flex;
+    gap: 16px;
+  }
+
+  .bird {
+    position: relative;
+    flex: 1;
+    height: 220px;
+    border: none;
+    background: transparent;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /*
+   * One shared speech bubble image.
+   * It is invisible until the bird is hovered or playing.
+   */
+  .bubble {
+    position: absolute;
+    left: 50%;
+    bottom: 132px;
+    width: 64px;
+    height: 64px;
+    object-fit: contain;
+    transform: translateX(-50%);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .1s;
+  }
+
+  .bird:hover .bubble,
+  .bird.is-open .bubble {
+    opacity: 1;
+  }
+
+  .bird-image {
+    width: 120px;
+    height: 120px;
+    object-fit: contain;
+    pointer-events: none;
+  }
+
+  .bird-image.open {
+    display: none;
+  }
+
+  .bird.is-open .bird-image.closed {
+    display: none;
+  }
+
+  .bird.is-open .bird-image.open {
+    display: block;
+  }
+
+  .tagline {
+    margin: 24px 0;
+    font-size: 18px;
+  }
+
+  .byline {
+    text-align: center;
+    margin: 6px 0;
+    font-size: 12px;
+    a {
+      text-decoration: underline dotted;
+      color: white;
+      opacity: 66%;
+    }
+    a:hover {
+      opacity: 100%;
+      text-decoration: underline;
+    }
+  }
+
+  .song-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    max-width: 300px;
+    height: 54px;
+    border: 0;
+    border-radius: 50px;
+    background: white;
+    color: rgb(35, 113, 64);
+    font: inherit;
+    font-size: 18px;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all .15s;
+    outline: 3px solid transparent;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .song-button:hover {
+    background: #f9f9f9;
+    outline: 1px solid white;
+    outline-offset: 3px;
+    transition: all .15s;
+  }
+
+  @media (max-width: 640px) {
+    .demo {
+      width: calc(100% - 32px);
+    }
+
+    .birds {
+      gap: 4px;
+    }
+
+    .bird {
+      height: 190px;
+    }
+
+    .bird-image {
+      width: 100px;
+      height: 100px;
+    }
+
+    .bubble {
+      bottom: 108px;
+      width: 85px;
+      height: 85px;
+    }
+  }
+</style>
+</head>
+
+<body>
+
+<div class="demo">
+
+  <div class="birds">
+
+    <div class="bird" data-part="melody">
+      <img class="bubble" src="src/bubble.png" alt="">
+      <img class="bird-image closed" src="src/birb-1.png" alt="">
+      <img class="bird-image open" src="src/birb-1-open.png" alt="">
+    </div>
+
+    <div class="bird" data-part="harmony">
+      <img class="bubble" src="src/bubble.png" alt="">
+      <img class="bird-image closed" src="src/birb-2.png" alt="">
+      <img class="bird-image open" src="src/birb-2-open.png" alt="">
+    </div>
+
+    <div class="bird" data-part="bass">
+      <img class="bubble" src="src/bubble.png" alt="">
+      <img class="bird-image closed" src="src/birb-3.png" alt="">
+      <img class="bird-image open" src="src/birb-3-open.png" alt="">
+    </div>
+
+  </div>
+
+  <div class="tagline">
+    The internet's commentary track.
+  </div>
+
+  <a
+    class="song-button"
+    id="songButton"
+    href="https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js"
+  >
+    Install Backchannel
+  </a>
+  <div class="byline">
+    <a
+      class="github-button"
+      id="githubButton"
+      href="https://github.com/twalichiewicz/Backchannel"
+    >
+        Learn more
+    </a>
+  </div>
+
+</div>
+
+<script>
+  let audioContext = null;
+  let activeSources = [];
+  let songLoop = null;
+  let songPlaying = false;
+
+  /*
+   * Everything is built around one exact 4-beat / 2-second bar.
+   *
+   * The three birds use different rhythms, but every note lands
+   * on the same underlying grid. This makes the combined version
+   * feel intentional rather than like three independent loops.
+   *
+   * The complete song is two bars = 4 seconds.
+   */
+  const BAR = 2.0;
+  const LOOP_LENGTH = 4.0;
+
+  function initAudio() {
+    if (!audioContext) {
+      audioContext = new (
+        window.AudioContext ||
+        window.webkitAudioContext
+      )();
+    }
+
+    if (audioContext.state === "suspended") {
+      audioContext.resume();
+    }
+  }
+
+  /*
+   * Melody — the recognizable part.
+   * Quarter-note-ish phrasing with a little space.
+   */
+  const melody = [
+    ["C5", 0.00, 0.32],
+    ["D5", 0.50, 0.32],
+    ["E5", 1.00, 0.32],
+    ["G5", 1.50, 0.42],
+
+    ["E5", 2.00, 0.32],
+    ["D5", 2.50, 0.32],
+    ["C5", 3.00, 0.32],
+    ["G4", 3.50, 0.35]
+  ];
+
+  /*
+   * Harmony — deliberately more syncopated.
+   * These land BETWEEN the main melody notes.
+   */
+  const harmony = [
+    ["E4", 0.25, 0.16],
+    ["G4", 0.75, 0.16],
+    ["B4", 1.25, 0.16],
+    ["E5", 1.75, 0.16],
+
+    ["C5", 2.25, 0.16],
+    ["G4", 2.75, 0.16],
+    ["B4", 3.25, 0.16],
+    ["E4", 3.75, 0.16]
+  ];
+
+  /*
+   * Bass — a completely different rhythmic role.
+   * Long notes establish the harmonic foundation.
+   *
+   * All starts fall on the same 0.25 / 0.5 beat grid.
+   */
+  const bass = [
+    ["C3", 0.00, 0.70],
+    ["G2", 1.00, 0.45],
+    ["C3", 2.00, 0.70],
+    ["G2", 3.00, 0.45]
+  ];
+
+  const noteFrequencies = {
+    G2: 98.00,
+
+    C3: 130.81,
+    D3: 146.83,
+    E3: 164.81,
+    F3: 174.61,
+    G3: 196.00,
+
+    C4: 261.63,
+    D4: 293.66,
+    E4: 329.63,
+    F4: 349.23,
+    G4: 392.00,
+    A4: 440.00,
+    B4: 493.88,
+
+    C5: 523.25,
+    D5: 587.33,
+    E5: 659.25,
+    F5: 698.46,
+    G5: 783.99,
+    A5: 880.00,
+    B5: 987.77
+  };
+
+  /*
+   * Every bird gets a generation number.
+   *
+   * This prevents an old "finish" timer from closing a bird
+   * after the user has already started it again.
+   */
+  const birdGenerations = new WeakMap();
+
+  function getNextGeneration(bird) {
+    const generation = (birdGenerations.get(bird) || 0) + 1;
+    birdGenerations.set(bird, generation);
+    return generation;
+  }
+
+  function closeBird(bird) {
+    bird.classList.remove("is-open");
+  }
+
+  function closeAllBirds() {
+    document.querySelectorAll(".bird").forEach(bird => {
+      closeBird(bird);
+    });
+  }
+
+  function stopAudio() {
+    if (songLoop !== null) {
+      clearTimeout(songLoop);
+      songLoop = null;
+    }
+
+    songPlaying = false;
+
+    activeSources.forEach(source => {
+      try {
+        source.oscillator.stop();
+      } catch {}
+    });
+
+    activeSources = [];
+  }
+
+  function playNote(note, start, duration, type, volume) {
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+
+    oscillator.type = type;
+    oscillator.frequency.value = noteFrequencies[note];
+
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(
+      volume,
+      start + 0.012
+    );
+
+    gain.gain.exponentialRampToValueAtTime(
+      0.001,
+      start + duration
+    );
+
+    oscillator.connect(gain);
+    gain.connect(audioContext.destination);
+
+    const source = {
+      oscillator,
+      gain
+    };
+
+    activeSources.push(source);
+
+    oscillator.addEventListener("ended", () => {
+      const index = activeSources.indexOf(source);
+
+      if (index !== -1) {
+        activeSources.splice(index, 1);
+      }
+    });
+
+    oscillator.start(start);
+    oscillator.stop(start + duration + 0.02);
+  }
+
+  function playPart(part, bird) {
+    initAudio();
+
+    /*
+     * Stop anything currently playing. A bird is always
+     * playing its part from the beginning when triggered.
+     */
+    stopAudio();
+    closeAllBirds();
+
+    const generation = getNextGeneration(bird);
+
+    bird.classList.add("is-open");
+
+    const now = audioContext.currentTime + 0.03;
+
+    let partLength = 0;
+
+    if (part === "melody") {
+      melody.forEach(([note, time, duration]) => {
+        playNote(
+          note,
+          now + time,
+          duration,
+          "triangle",
+          0.18
+        );
+
+        partLength = Math.max(
+          partLength,
+          time + duration
+        );
+      });
+    }
+
+    if (part === "harmony") {
+      harmony.forEach(([note, time, duration]) => {
+        playNote(
+          note,
+          now + time,
+          duration,
+          "sine",
+          0.13
+        );
+
+        partLength = Math.max(
+          partLength,
+          time + duration
+        );
+      });
+    }
+
+    if (part === "bass") {
+      bass.forEach(([note, time, duration]) => {
+        playNote(
+          note,
+          now + time,
+          duration,
+          "sine",
+          0.20
+        );
+
+        partLength = Math.max(
+          partLength,
+          time + duration
+        );
+      });
+    }
+
+    /*
+     * Close the mouth exactly when this bird's musical
+     * phrase finishes.
+     */
+    setTimeout(() => {
+      if (birdGenerations.get(bird) === generation) {
+        closeBird(bird);
+      }
+    }, (partLength + 0.03) * 1000);
+  }
+
+  function playSongOnce() {
+    const now = audioContext.currentTime + 0.03;
+
+    melody.forEach(([note, time, duration]) => {
+      playNote(
+        note,
+        now + time,
+        duration,
+        "triangle",
+        0.18
+      );
+    });
+
+    harmony.forEach(([note, time, duration]) => {
+      playNote(
+        note,
+        now + time,
+        duration,
+        "sine",
+        0.13
+      );
+    });
+
+    bass.forEach(([note, time, duration]) => {
+      playNote(
+        note,
+        now + time,
+        duration,
+        "sine",
+        0.20
+      );
+    });
+  }
+
+  function playSongLoop() {
+    initAudio();
+
+    if (songPlaying) {
+      return;
+    }
+
+    stopAudio();
+    openAllBirds();
+
+    songPlaying = true;
+
+    /*
+     * The song is exactly four seconds long.
+     *
+     * Every loop begins from the exact same musical position.
+     * No setTimeout is used to determine individual note timing;
+     * Web Audio schedules all notes against the same audio clock.
+     */
+    function playNext() {
+      if (!songPlaying) {
+        return;
+      }
+
+      playSongOnce();
+
+      songLoop = setTimeout(
+        playNext,
+        LOOP_LENGTH * 1000
+      );
+    }
+
+    playNext();
+  }
+
+  function openAllBirds() {
+    document.querySelectorAll(".bird").forEach(bird => {
+      bird.classList.add("is-open");
+    });
+  }
+
+  /*
+   * Desktop bird interaction.
+   *
+   * Re-entering the bird starts it again.
+   * Leaving immediately cuts the sound and closes the mouth.
+   */
+  document.querySelectorAll(".bird").forEach(bird => {
+
+    bird.addEventListener("mouseenter", () => {
+      playPart(
+        bird.dataset.part,
+        bird
+      );
+    });
+
+    bird.addEventListener("mouseleave", () => {
+      getNextGeneration(bird);
+      stopAudio();
+      closeBird(bird);
+    });
+
+    /*
+     * Mobile/touch interaction.
+     *
+     * Every tap starts the bird from the beginning, even if
+     * it is already playing.
+     */
+    bird.addEventListener("pointerdown", event => {
+      if (event.pointerType === "touch") {
+        event.preventDefault();
+
+        playPart(
+          bird.dataset.part,
+          bird
+        );
+      }
+    });
+  });
+
+  const songButton = document.getElementById("songButton");
+
+  /*
+   * Desktop:
+   * hovering Install makes all three birds play together.
+   */
+  songButton.addEventListener("mouseenter", () => {
+    playSongLoop();
+  });
+
+  songButton.addEventListener("mouseleave", () => {
+    stopAudio();
+    closeAllBirds();
+  });
+
+  /*
+   * Initialize Web Audio after the first user interaction.
+   */
+  document.addEventListener(
+    "click",
+    initAudio,
+    { once: true }
+  );
+</script>
+
+</body>
+</html>
