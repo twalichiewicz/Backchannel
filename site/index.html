@@ -24,6 +24,7 @@
   .demo {
     width: 620px;
     text-align: center;
+    margin-bottom: 15dvh;
   }
 
   .birds {
@@ -46,7 +47,10 @@
 
   /*
    * One shared speech bubble image.
-   * It is invisible until the bird is hovered or playing.
+   *
+   * The bubble is controlled entirely by .is-open so that
+   * it disappears at exactly the same time as the bird's
+   * open-mouth image.
    */
   .bubble {
     position: absolute;
@@ -61,7 +65,6 @@
     transition: opacity .1s;
   }
 
-  .bird:hover .bubble,
   .bird.is-open .bubble {
     opacity: 1;
   }
@@ -92,17 +95,19 @@
 
   .byline {
     text-align: center;
-    margin: 6px 0;
+    margin: 9px 0;
     font-size: 12px;
-    a {
-      text-decoration: underline dotted;
-      color: white;
-      opacity: 66%;
-    }
-    a:hover {
-      opacity: 100%;
-      text-decoration: underline;
-    }
+  }
+
+  .byline a {
+    text-decoration: underline dotted;
+    color: white;
+    opacity: 66%;
+  }
+
+  .byline a:hover {
+    opacity: 100%;
+    text-decoration: underline;
   }
 
   .song-button {
@@ -111,7 +116,7 @@
     justify-content: center;
     width: 100%;
     max-width: 300px;
-    height: 54px;
+    height: 45px;
     border: 0;
     border-radius: 50px;
     background: white;
@@ -197,13 +202,14 @@
   >
     Install Backchannel
   </a>
+
   <div class="byline">
     <a
       class="github-button"
       id="githubButton"
       href="https://github.com/twalichiewicz/Backchannel"
     >
-        Learn more
+      Learn more
     </a>
   </div>
 
@@ -216,15 +222,15 @@
   let songPlaying = false;
 
   /*
-   * Everything is built around one exact 4-beat / 2-second bar.
+   * Mobile install state.
    *
-   * The three birds use different rhythms, but every note lands
-   * on the same underlying grid. This makes the combined version
-   * feel intentional rather than like three independent loops.
-   *
-   * The complete song is two bars = 4 seconds.
+   * This is deliberately separate from songPlaying so that
+   * clicking Install can play exactly one complete song before
+   * navigating away.
    */
-  const BAR = 2.0;
+  let installPending = false;
+  let installTimer = null;
+
   const LOOP_LENGTH = 4.0;
 
   function initAudio() {
@@ -240,10 +246,6 @@
     }
   }
 
-  /*
-   * Melody — the recognizable part.
-   * Quarter-note-ish phrasing with a little space.
-   */
   const melody = [
     ["C5", 0.00, 0.32],
     ["D5", 0.50, 0.32],
@@ -256,10 +258,6 @@
     ["G4", 3.50, 0.35]
   ];
 
-  /*
-   * Harmony — deliberately more syncopated.
-   * These land BETWEEN the main melody notes.
-   */
   const harmony = [
     ["E4", 0.25, 0.16],
     ["G4", 0.75, 0.16],
@@ -272,12 +270,6 @@
     ["E4", 3.75, 0.16]
   ];
 
-  /*
-   * Bass — a completely different rhythmic role.
-   * Long notes establish the harmonic foundation.
-   *
-   * All starts fall on the same 0.25 / 0.5 beat grid.
-   */
   const bass = [
     ["C3", 0.00, 0.70],
     ["G2", 1.00, 0.45],
@@ -312,10 +304,10 @@
   };
 
   /*
-   * Every bird gets a generation number.
+   * Each bird gets a generation number.
    *
-   * This prevents an old "finish" timer from closing a bird
-   * after the user has already started it again.
+   * This prevents an old finish timer from closing a bird
+   * after it has been triggered again.
    */
   const birdGenerations = new WeakMap();
 
@@ -360,6 +352,7 @@
     oscillator.frequency.value = noteFrequencies[note];
 
     gain.gain.setValueAtTime(0, start);
+
     gain.gain.linearRampToValueAtTime(
       volume,
       start + 0.012
@@ -395,10 +388,6 @@
   function playPart(part, bird) {
     initAudio();
 
-    /*
-     * Stop anything currently playing. A bird is always
-     * playing its part from the beginning when triggered.
-     */
     stopAudio();
     closeAllBirds();
 
@@ -462,8 +451,8 @@
     }
 
     /*
-     * Close the mouth exactly when this bird's musical
-     * phrase finishes.
+     * Close the mouth AND hide the bubble when the
+     * musical phrase finishes.
      */
     setTimeout(() => {
       if (birdGenerations.get(bird) === generation) {
@@ -506,6 +495,12 @@
     });
   }
 
+  function openAllBirds() {
+    document.querySelectorAll(".bird").forEach(bird => {
+      bird.classList.add("is-open");
+    });
+  }
+
   function playSongLoop() {
     initAudio();
 
@@ -518,13 +513,6 @@
 
     songPlaying = true;
 
-    /*
-     * The song is exactly four seconds long.
-     *
-     * Every loop begins from the exact same musical position.
-     * No setTimeout is used to determine individual note timing;
-     * Web Audio schedules all notes against the same audio clock.
-     */
     function playNext() {
       if (!songPlaying) {
         return;
@@ -541,17 +529,8 @@
     playNext();
   }
 
-  function openAllBirds() {
-    document.querySelectorAll(".bird").forEach(bird => {
-      bird.classList.add("is-open");
-    });
-  }
-
   /*
-   * Desktop bird interaction.
-   *
-   * Re-entering the bird starts it again.
-   * Leaving immediately cuts the sound and closes the mouth.
+   * Individual birds.
    */
   document.querySelectorAll(".bird").forEach(bird => {
 
@@ -569,10 +548,8 @@
     });
 
     /*
-     * Mobile/touch interaction.
-     *
-     * Every tap starts the bird from the beginning, even if
-     * it is already playing.
+     * Mobile:
+     * Every tap starts the bird's part from the beginning.
      */
     bird.addEventListener("pointerdown", event => {
       if (event.pointerType === "touch") {
@@ -590,13 +567,87 @@
 
   /*
    * Desktop:
-   * hovering Install makes all three birds play together.
+   * Hovering the button plays the complete song.
    */
   songButton.addEventListener("mouseenter", () => {
     playSongLoop();
   });
 
   songButton.addEventListener("mouseleave", () => {
+    stopAudio();
+    closeAllBirds();
+  });
+
+  /*
+   * Mobile:
+   *
+   * Use the click event rather than pointerdown. This lets us
+   * cancel the link's default navigation before the browser
+   * follows it.
+   *
+   * The song plays once, then navigation happens exactly once.
+   */
+  songButton.addEventListener("click", event => {
+
+    /*
+     * Only intercept the button on touch/mobile devices.
+     * Desktop keeps the normal immediate link behavior.
+     */
+    const isTouchDevice =
+      window.matchMedia("(pointer: coarse)").matches ||
+      navigator.maxTouchPoints > 0;
+
+    if (!isTouchDevice) {
+      return;
+    }
+
+    event.preventDefault();
+
+    /*
+     * Ignore any duplicate click while the song is already
+     * waiting to navigate.
+     */
+    if (installPending) {
+      return;
+    }
+
+    installPending = true;
+
+    initAudio();
+    stopAudio();
+    closeAllBirds();
+    openAllBirds();
+
+    playSongOnce();
+
+    installTimer = setTimeout(() => {
+      /*
+       * Do nothing if the page has been restored/cancelled.
+       */
+      if (!installPending) {
+        return;
+      }
+
+      installPending = false;
+      installTimer = null;
+
+      window.location.assign(songButton.href);
+    }, LOOP_LENGTH * 1000);
+  });
+
+  /*
+   * If the user navigates back to this page, browsers can restore
+   * the page from the back/forward cache. Cancel any pending
+   * navigation so the old timer cannot fire again.
+   */
+  window.addEventListener("pageshow", () => {
+    if (installTimer !== null) {
+      clearTimeout(installTimer);
+      installTimer = null;
+    }
+
+    installPending = false;
+
     stopAudio();
     closeAllBirds();
   });
