@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.11.2] — 2026-08-23
+
+### Security
+
+- **Discussion text can no longer run code on the page you are reading.** Every
+  story and comment is cleaned against a short list of allowed tags before it is
+  shown. Meeting a tag outside that list, the cleaner lifted its contents into
+  its place — but it had already taken stock of what there was to check, so what
+  it lifted arrived too late to be checked and went out as it came. One wrapper
+  was enough: an image or a frame nested in a `<div>` or a `<span>` kept its
+  event handlers, and a link kept a `javascript:` address. The panel opens on
+  nearly every site, so anything that ran did so on whatever site you had open
+  rather than on the discussion's own. Contents are now checked wherever they
+  land, however deeply they were wrapped. This affected every version through
+  1.6.11.1. Reported by @shahzadhussain786700. (GHSA-46p3-549m-2hhv)
+
 ## [1.6.11.1] — 2026-08-19
 
 ### Fixed

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.11.1
+// @version      1.6.11.2
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -6079,6 +6079,8 @@ button {
 		const template = document.createElement("template");
 		template.innerHTML = html || "";
 
+		const inertDocument = template.content.ownerDocument;
+
 		const allowedTags = new Set([
 			"A",
 			"P",
@@ -6104,12 +6106,13 @@ button {
 				}
 
 				if (!allowedTags.has(child.tagName)) {
-					const fragment = document.createDocumentFragment();
+					const fragment = inertDocument.createDocumentFragment();
 
 					while (child.firstChild) {
 						fragment.appendChild(child.firstChild);
 					}
 
+					cleanNode(fragment);
 					child.replaceWith(fragment);
 					continue;
 				}
