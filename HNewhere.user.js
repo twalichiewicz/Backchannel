@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.11.2
+// @version      1.6.12
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -370,6 +370,29 @@
 	// #endregion hnewhere-test-export
 
 	const REPO_URL = "https://github.com/twalichiewicz/Backchannel";
+
+	// #region hnewhere-test-export
+	const START_PAGE_HOST = "twalichiewicz.github.io";
+	const START_PAGE_PATH = "/Backchannel";
+
+	function isStartPageAddress(href) {
+		try {
+			const parsed = new URL(href);
+
+			return (
+				parsed.hostname === START_PAGE_HOST &&
+				(parsed.pathname === START_PAGE_PATH ||
+					parsed.pathname.startsWith(START_PAGE_PATH + "/"))
+			);
+		} catch {
+			return false;
+		}
+	}
+
+	function onStartPage() {
+		return isStartPageAddress(location.href);
+	}
+	// #endregion hnewhere-test-export
 
 	const SCRIPT_VERSION = (() => {
 		try {
@@ -13673,7 +13696,7 @@ ${[
 	// Sidebar
 	// -------------------------
 
-	async function createSidebar() {
+	async function createSidebar({ pageMode = false } = {}) {
 		if (sidebar) {
 			sidebar._cleanup?.();
 			sidebar.remove();
@@ -13686,6 +13709,11 @@ ${[
 
 		const host = document.createElement("div");
 		host.setAttribute("data-hnewhere-sidebar", "1");
+
+		if (pageMode) {
+			host.setAttribute("data-hnewhere-page-mode", "1");
+		}
+
 		guardHostKeyboard(host);
 		document.body.appendChild(host);
 
@@ -13723,6 +13751,35 @@ ${[
 	font-size:13px;
 	overflow:visible;
 	--measure:1215px;
+}
+
+#panel.page-mode {
+	position:static;
+	height:auto;
+	min-height:100vh;
+	min-height:100dvh;
+	width:auto;
+	max-width:none;
+	border-left:0;
+	box-shadow:none;
+}
+
+#panel.page-mode > header {
+	position:sticky;
+	top:0;
+}
+
+#panel.page-mode #resize-handle {
+	display:none;
+}
+
+#panel.page-mode #comments,
+#panel.page-mode .browse-view {
+	box-sizing:border-box;
+	max-width:640px;
+	margin-left:auto;
+	margin-right:auto;
+	width:100%;
 }
 
 ${THEME_CSS}
@@ -15107,11 +15164,11 @@ blockquote.comment-quote-redundant {
 
 </style>
 
-<div id="panel">
+<div id="panel"${pageMode ? ' class="page-mode"' : ""}>
 
 <div id="resize-handle" aria-hidden="true"></div>
 
-${headerHTML({ subtitle: true, minimize: true, browse: true })}
+${headerHTML({ subtitle: true, minimize: !pageMode, browse: true })}
 <div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
 ${settingsPanelHTML()}
 <div id="comments">
@@ -15314,22 +15371,26 @@ ${settingsPanelHTML()}
 			}
 		};
 
-		shadow.querySelector("#minimize").onclick = async () => {
-			host.style.display = "none";
-			clearArticleAnnotations();
-			setSettingsOpen(false);
+		const minimizeButton = shadow.querySelector("#minimize");
 
-			if (sidebarHasDiscussion) {
-				await saveSidebarState("collapsed");
-				await createRestoreButton();
-			} else if (location.hostname === "news.ycombinator.com") {
-				await offerQueueOnHN();
-			} else {
-				await createSubmitButton();
-			}
+		if (minimizeButton) {
+			minimizeButton.onclick = async () => {
+				host.style.display = "none";
+				clearArticleAnnotations();
+				setSettingsOpen(false);
 
-			await refreshArticleAnnotations();
-		};
+				if (sidebarHasDiscussion) {
+					await saveSidebarState("collapsed");
+					await createRestoreButton();
+				} else if (location.hostname === "news.ycombinator.com") {
+					await offerQueueOnHN();
+				} else {
+					await createSubmitButton();
+				}
+
+				await refreshArticleAnnotations();
+			};
+		}
 
 		document
 			.querySelectorAll(
@@ -18059,7 +18120,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		try {
 			const generation = ++sidebarGeneration;
 
-			const ui = await createSidebar();
+			const ui = await createSidebar({ pageMode: options.pageMode });
 			sidebarUI = ui;
 
 			if (generation !== sidebarGeneration) {
@@ -18091,7 +18152,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 					animate: false,
 					tab: options.queueOnly ? "queue" : undefined,
 				});
-				slidePanelIn(ui);
+
+				if (!options.pageMode) {
+					slidePanelIn(ui);
+				}
+
 				return;
 			}
 
@@ -22773,9 +22838,40 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			return;
 		}
 
+		if (onStartPage()) {
+			await runStartPagePass();
+			return;
+		}
+
 		watchSoftNavigation();
 
 		await runPagePass();
+	}
+
+	async function runStartPagePass() {
+		await documentReady();
+
+		await markQueueArrival().catch(console.error);
+		await markWatchArrival().catch(console.error);
+
+		const settings = await loadSettings();
+		const setupOnly = !enabledSourceIds(settings, registeredSourceIds()).length;
+
+		await openSidebar([], {
+			pageMode: true,
+			setupOnly,
+			browseOnly: !setupOnly,
+		});
+
+		if (!sidebar) {
+			return;
+		}
+
+		document.documentElement.setAttribute("data-backchannel-installed", "1");
+
+		for (const node of document.querySelectorAll("[data-backchannel-promo]")) {
+			node.hidden = true;
+		}
 	}
 
 	async function runPagePass() {
