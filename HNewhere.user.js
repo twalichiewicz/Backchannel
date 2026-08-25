@@ -15813,6 +15813,10 @@ ${settingsPanelHTML()}
 		let wasPortrait = isPortraitPhone();
 
 		const clampSidebarWidth = () => {
+			if (pageMode) {
+				return;
+			}
+
 			const maxWidth = maxSidebarWidth();
 			const portrait = isPortraitPhone();
 
