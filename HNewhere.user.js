@@ -10772,8 +10772,8 @@ header {
 	color:var(--header-text);
 	cursor:pointer;
 	font-size:20px;
-	width:36px;
-	height:36px;
+	width:30px;
+	height:30px;
 	display:flex;
 	align-items:center;
 	justify-content:center;
@@ -10793,12 +10793,32 @@ header {
 }
 
 .hide-caret {
-	margin-left:1px;
-	font-size:18px;
-	line-height:1;
+	position:absolute;
+	right:6px;
+	bottom:6px;
+	width:9px;
+	height:9px;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	border-radius:50%;
+	background-color:var(--header-bg);
+	font-size:12px;
+	line-height:100%;
+}
+
+@media (hover: hover) {
+	#hide-site:hover .hide-caret {
+		background-image:linear-gradient(var(--hover-tint), var(--hover-tint));
+	}
+}
+
+#hide-site.is-open .hide-caret {
+	background-image:linear-gradient(var(--active-tint), var(--active-tint));
 }
 
 #hide-site.has-scope {
+	position:relative;
 	gap:0;
 }
 
@@ -12750,28 +12770,21 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 
 <div class="header-actions">
 <button id="header-submit" type="button" aria-label="Submit this page" title="Submit this page" hidden>
-<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
-<path d="M8 12.7V4.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-<path d="M4.5 7.7 8 4.2l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" focusable="false">
+<path d="M8 12.7V4.2" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round"/>
+<path d="M4.5 7.7 8 4.2l3.5 3.5" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
 </button>
 <button id="comment-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="compose-dock" aria-label="Add a comment" title="Add a comment" hidden>
-<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
 </svg>
 </button>
 <span class="hide-control">
-<button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Hide Backchannel here" title="Hide Backchannel here">
+<button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Disable Backchannel here" title="Disable Backchannel here">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
-<!-- Filled rather than outlined. White on the header's green, a 1.25px stroke
-     is most of the way to invisible at 15px; a solid shape holds its detail.
-     The pupil is a hole punched with evenodd rather than a circle painted in
-     the background colour, so it survives whatever the header is behind it. -->
-<path fill="currentColor" fill-rule="evenodd" d="M1.4 8S3.9 3.9 8 3.9 14.6 8 14.6 8 12.1 12.1 8 12.1 1.4 8 1.4 8ZM8 6.15a1.85 1.85 0 1 0 0 3.7 1.85 1.85 0 1 0 0-3.7Z"/>
-<!-- The slash needs to read across a filled shape, so it is cut into it: a wide
-     line in the header's own colour, and the mark itself drawn on top. -->
-<line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="var(--header-bg)" stroke-width="3.4" stroke-linecap="round"/>
-<line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<circle cx="8" cy="8" r="6.15" fill="none" stroke="currentColor" stroke-width="2"/>
+<line x1="3.65" y1="12.35" x2="12.35" y2="3.65" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 </svg>
 <span class="hide-caret" aria-hidden="true">&#9662;</span>
 </button>
@@ -12785,7 +12798,7 @@ ${
 	minimize
 		? `<button id="minimize" aria-label="Minimize Backchannel" title="Minimize">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
-<line x1="3.4" y1="8" x2="12.6" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<line x1="3.4" y1="8" x2="12.6" y2="8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
 </svg>
 </button>`
 		: ""
