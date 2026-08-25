@@ -6381,6 +6381,12 @@ button {
 		return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
 	}
 
+	let pageModeActive = false;
+
+	function setPageModeActive(active) {
+		pageModeActive = Boolean(active);
+	}
+
 	function detectDarkMode() {
 		if (themePreference === "dark") {
 			return true;
@@ -6390,15 +6396,17 @@ button {
 			return false;
 		}
 
-		for (const element of [document.body, document.documentElement]) {
-			if (!element) {
-				continue;
-			}
+		if (!pageModeActive) {
+			for (const element of [document.body, document.documentElement]) {
+				if (!element) {
+					continue;
+				}
 
-			const dark = isDarkColor(getComputedStyle(element).backgroundColor);
+				const dark = isDarkColor(getComputedStyle(element).backgroundColor);
 
-			if (dark !== null) {
-				return dark;
+				if (dark !== null) {
+					return dark;
+				}
 			}
 		}
 
@@ -6479,6 +6487,17 @@ button {
 		await refreshArticleAnnotations();
 	}
 
+	function paintPageCanvas(host) {
+		const panel = host.shadowRoot?.getElementById("panel");
+
+		if (!panel) {
+			return;
+		}
+
+		document.documentElement.style.backgroundColor =
+			getComputedStyle(panel).backgroundColor;
+	}
+
 	function applyThemeToHost(host) {
 		const dark = detectDarkMode();
 
@@ -6510,6 +6529,10 @@ button {
 			} else {
 				host.style.removeProperty(name);
 			}
+		}
+
+		if (host.hasAttribute("data-hnewhere-page-mode")) {
+			paintPageCanvas(host);
 		}
 	}
 
@@ -14153,6 +14176,8 @@ ${[
 			sidebar.remove();
 			sidebar = null;
 		}
+
+		setPageModeActive(pageMode);
 
 		const savedWidth = await loadSiteWidth();
 
