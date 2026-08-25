@@ -17,8 +17,19 @@
     align-items: center;
     justify-content: center;
     font-family: system-ui, sans-serif;
-    background: rgb(35, 113, 64);
     color: white;
+  }
+
+  /*
+   * The green is painted here rather than on body. Backchannel reads the page's
+   * own background to decide whether to draw itself light or dark, and this page
+   * is not a page it should match — with Theme: Detect it follows the system.
+   */
+  .promo-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background: rgb(35, 113, 64);
   }
 
   /*
@@ -28,7 +39,6 @@
   html[data-backchannel-installed] body {
     display: block;
     min-height: 0;
-    background: transparent;
   }
 
   .demo {
@@ -181,6 +191,8 @@
 </head>
 
 <body>
+
+<div class="promo-backdrop" data-backchannel-promo></div>
 
 <div class="demo" data-backchannel-promo>
 
