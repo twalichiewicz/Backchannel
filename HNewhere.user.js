@@ -13764,6 +13764,7 @@ ${[
 	font-size:13px;
 	overflow:visible;
 	--measure:1215px;
+	--column-max:640px;
 }
 
 #panel.page-mode {
@@ -13789,7 +13790,7 @@ ${[
 #panel.page-mode #comments,
 #panel.page-mode .browse-view {
 	box-sizing:border-box;
-	max-width:640px;
+	max-width:var(--column-max);
 	margin-left:auto;
 	margin-right:auto;
 	width:100%;
@@ -14818,8 +14819,11 @@ blockquote.comment-quote-redundant {
 .compose-dock {
 	position:absolute;
 	top:8px;
-	left:8px;
-	right:8px;
+	left:50%;
+	transform:translateX(-50%);
+	width:calc(100% - 16px);
+	max-width:var(--column-max);
+	box-sizing:border-box;
 	z-index:5;
 	padding:8px;
 	border:1px solid var(--surface-border);
