@@ -198,6 +198,7 @@
 		favorites: "HNewhere:favorites",
 		pendingFocus: "HNewhere:pending_focus",
 		watches: "HNewhere:watches",
+		hiddenStories: "HNewhere:hidden_stories",
 	};
 
 	// #region hnewhere-test-export
@@ -915,6 +916,62 @@
 	}
 
 	const mutateQueue = serializeMutations(loadQueue, saveQueue);
+
+	// #region hnewhere-test-export
+	function hiddenStoryKey(story) {
+		return story?.key || normalizeURL(story?.url || "") || "";
+	}
+
+	function isStoryHidden(story, hidden) {
+		const key = hiddenStoryKey(story);
+
+		return Boolean(key) && hidden.has(key);
+	}
+
+	function addHiddenStory(entries, story) {
+		const key = hiddenStoryKey(story);
+
+		if (!key || entries.some((entry) => entry.key === key)) {
+			return entries;
+		}
+
+		return [
+			{
+				key,
+				title: story.title || "",
+				url: story.url || "",
+				site: story.site || "",
+				source: story.source || "",
+				hiddenAt: Date.now(),
+			},
+			...entries,
+		];
+	}
+
+	function removeHiddenStory(entries, key) {
+		return entries.filter((entry) => entry.key !== key);
+	}
+	// #endregion hnewhere-test-export
+
+	async function loadHiddenStories() {
+		const stored = await load(STORAGE.hiddenStories, []);
+
+		return Array.isArray(stored) ? stored.filter((entry) => entry?.key) : [];
+	}
+
+	async function saveHiddenStories(entries) {
+		await save(STORAGE.hiddenStories, entries);
+		return entries;
+	}
+
+	const mutateHiddenStories = serializeMutations(
+		loadHiddenStories,
+		saveHiddenStories,
+	);
+
+	async function loadHiddenStoryKeys() {
+		return new Set((await loadHiddenStories()).map((entry) => entry.key));
+	}
 
 	async function loadFavoriteEntries() {
 		const stored = await load(STORAGE.favorites, []);
@@ -7805,7 +7862,9 @@ button {
 
 	let toastTimer = 0;
 
-	function showToast(message, { persist = false } = {}) {
+	const TOAST_DISMISS_MS = 5200;
+
+	function showToast(message, { persist = false, action = null } = {}) {
 		const toast = sidebarUI?.shadow?.getElementById("toast");
 
 		if (!toast) {
@@ -7815,18 +7874,47 @@ button {
 		clearTimeout(toastTimer);
 
 		if (!message) {
-			toast.classList.remove("is-showing");
+			toast.classList.remove("is-showing", "has-action");
 			return;
 		}
 
 		toast.textContent = message;
+		toast.classList.toggle("has-action", Boolean(action));
+		toast.onmouseenter = null;
+		toast.onmouseleave = null;
+
+		if (action) {
+			const trailer = document.createElement("span");
+			const button = document.createElement("button");
+
+			button.type = "button";
+			button.className = "item-action-link toast-action";
+			button.textContent = action.label;
+			button.onclick = () => {
+				showToast("");
+				action.onAct();
+			};
+
+			trailer.className = "toast-trailer";
+			trailer.append(" | ", button);
+			toast.appendChild(trailer);
+		}
+
 		toast.classList.add("is-showing");
 
 		if (!persist) {
-			toastTimer = window.setTimeout(
-				() => toast.classList.remove("is-showing"),
-				5200,
-			);
+			const dismiss = () =>
+				toast.classList.remove("is-showing", "has-action");
+
+			toastTimer = window.setTimeout(dismiss, TOAST_DISMISS_MS);
+
+			if (action) {
+				toast.onmouseenter = () => clearTimeout(toastTimer);
+				toast.onmouseleave = () => {
+					clearTimeout(toastTimer);
+					toastTimer = window.setTimeout(dismiss, TOAST_DISMISS_MS);
+				};
+			}
 		}
 	}
 
@@ -8959,6 +9047,12 @@ button {
 				: `|
 	<button class="browse-save-link" type="button">queue</button>`;
 
+		const rowHideLink = () =>
+			options.hideable
+				? `|
+	<button class="item-action-link browse-hide-link" type="button">hide</button>`
+				: "";
+
 		const rowActions = () => {
 			const watchLink = options.watchable
 				? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
@@ -9019,6 +9113,7 @@ button {
 	${age}
 	${rowQueueLink()}
 	${rowActions()}
+	${rowHideLink()}
 	${counted ? `|\n\t${commentTotal}` : ""}`;
 		};
 
@@ -9057,6 +9152,30 @@ button {
 		}
 
 		wireRowWatchLink(row.querySelector(".browse-watch-link"), story, options);
+
+		const hide = row.querySelector(".browse-hide-link");
+
+		if (hide) {
+			hide.onclick = async (event) => {
+				event.stopPropagation();
+
+				const key = hiddenStoryKey(story);
+
+				await mutateHiddenStories((entries) => addHiddenStory(entries, story));
+				await options.reload?.();
+
+				showToast("Article hidden from front pages", {
+					action: {
+						label: "undo",
+						onAct: () => {
+							mutateHiddenStories((entries) => removeHiddenStory(entries, key))
+								.then(() => options.reload?.())
+								.catch(console.error);
+						},
+					},
+				});
+			};
+		}
 
 		if (options.unfavorite) {
 			const drop = row.querySelector(".browse-unfavorite-link");
@@ -10015,9 +10134,10 @@ button {
 		}
 
 		const requested = browsePage;
-		const [{ rows, sources }, queued] = await Promise.all([
+		const [{ rows: allRows, sources }, queued, hiddenKeys] = await Promise.all([
 			loadFrontPages(),
 			loadQueue(),
+			loadHiddenStoryKeys(),
 		]);
 
 		if (browsePage !== requested || browseTab !== "front") {
@@ -10025,11 +10145,17 @@ button {
 		}
 
 		const queuedKeys = new Set(queued.map(queueKey));
+		const rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
 
 		setBlendNote(ui, sources);
 
-		if (!rows.length) {
+		if (!allRows.length) {
 			list.textContent = "Could not reach any front page.";
+			return;
+		}
+
+		if (!rows.length) {
+			list.textContent = "Everything on the front pages is hidden.";
 			return;
 		}
 
@@ -10046,6 +10172,8 @@ button {
 				renderBrowseRow(row.story, list, start + index + 1, {
 					also: row.also,
 					queuedKeys,
+					hideable: true,
+					reload: () => renderBrowseView(ui),
 				}),
 			);
 
@@ -11608,6 +11736,12 @@ header {
 	border-top:1px solid var(--surface-divider);
 }
 
+.settings-group + .settings-group.settings-group-tight {
+	margin-top:9px;
+	padding-top:0;
+	border-top:0;
+}
+
 header button svg {
 	display:block;
 }
@@ -12726,6 +12860,14 @@ header button svg {
 	margin-top:4px;
 }
 
+.settings-hidden-section[hidden] {
+	display:none;
+}
+
+.settings-blocked-site {
+	color:var(--muted);
+}
+
 .settings-blocked-entry {
 	display:flex;
 	align-items:center;
@@ -12806,8 +12948,8 @@ ${
 </div>
 ${
 	`<div id="hide-menu" class="hide-menu" role="menu" hidden>
-<button type="button" role="menuitem" data-hide-scope="page">Hide on this page only</button>
-<button type="button" role="menuitem" data-hide-scope="site">Hide on all ${escapeHTML(siteKey())} pages</button>
+<button type="button" role="menuitem" data-hide-scope="page">Disable on this page only</button>
+<button type="button" role="menuitem" data-hide-scope="site">Disable on all ${escapeHTML(siteKey())} pages</button>
 <div class="hide-menu-rule" data-pdf-reader-only hidden></div>
 <button id="close-pdf-reader" type="button" role="menuitem" data-pdf-reader-only hidden>Close the PDF reader</button>
 </div>`
@@ -12823,7 +12965,7 @@ ${
 <div id="settings-head" class="settings-head">
 <button id="settings-blocked-back" class="settings-back" type="button" aria-label="Back to settings" disabled>&lsaquo;</button>
 <button id="settings-crumb-root" class="settings-crumb-root" type="button" disabled>Settings</button>
-<span id="settings-crumb-tail" class="settings-crumb-tail" aria-hidden="true"><span class="settings-crumb-sep">/</span><span id="settings-crumb-name">Hidden sites</span></span>
+<span id="settings-crumb-tail" class="settings-crumb-tail" aria-hidden="true"><span class="settings-crumb-sep">/</span><span id="settings-crumb-name">Manage disabled/hidden</span></span>
 </div>
 <div id="settings-panes" class="settings-panes">
 
@@ -12948,13 +13090,24 @@ title="Type a hex colour">#237140</span></div>
 <button id="settings-manage-sources" class="settings-link-button" type="button" data-pane="sources" data-pane-name="Sources">Sources<span class="settings-link-chevron">&rsaquo;</span></button>
 </div>
 
-<div class="settings-group">
-<button id="settings-manage-blocked" class="settings-link-button" type="button" data-pane="blocked" data-pane-name="Hidden sites">Manage hidden sites<span class="settings-link-chevron">&rsaquo;</span></button>
+<div class="settings-group settings-group-tight">
+<button id="settings-manage-blocked" class="settings-link-button" type="button" data-pane="blocked" data-pane-name="Manage disabled/hidden">Manage disabled/hidden<span class="settings-link-chevron">&rsaquo;</span></button>
 </div>
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="blocked">
+<div class="segmented">
+<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="disabled" checked><span>Disabled</span></label>
+<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="hidden"><span>Hidden</span></label>
+</div>
+<div id="settings-blocked-section" class="settings-hidden-section">
+<div class="settings-option-hint settings-option-hint-slow">Backchannel will not appear on these sites</div>
 <div id="settings-blocked-list" class="settings-blocked-list"></div>
+</div>
+<div id="settings-hidden-section" class="settings-hidden-section" hidden>
+<div class="settings-option-hint settings-option-hint-slow">Articles you've hidden from the front pages</div>
+<div id="settings-hidden-list" class="settings-blocked-list"></div>
+</div>
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
@@ -13647,7 +13800,7 @@ ${[
 				const empty = document.createElement("div");
 
 				empty.className = "settings-blocked-empty";
-				empty.textContent = "No sites hidden yet.";
+				empty.textContent = "No sites disabled yet.";
 				blockedList.appendChild(empty);
 				syncPanesHeight();
 
@@ -13666,7 +13819,7 @@ ${[
 				remove.type = "button";
 				remove.className = "settings-blocked-remove";
 				remove.textContent = "×";
-				remove.setAttribute("aria-label", `Stop hiding Backchannel on ${label}`);
+				remove.setAttribute("aria-label", `Stop disabling Backchannel on ${label}`);
 				remove.onclick = async () => {
 					const next = await loadBlockedSites();
 
@@ -13682,7 +13835,82 @@ ${[
 			syncPanesHeight();
 		};
 
+		const hiddenList = shadow.querySelector("#settings-hidden-list");
+
+		const renderHiddenList = async () => {
+			if (!hiddenList) {
+				return;
+			}
+
+			const entries = await loadHiddenStories();
+
+			hiddenList.replaceChildren();
+
+			if (!entries.length) {
+				const empty = document.createElement("div");
+
+				empty.className = "settings-blocked-empty";
+				empty.textContent = "Nothing hidden yet.";
+				hiddenList.appendChild(empty);
+				syncPanesHeight();
+
+				return;
+			}
+
+			for (const entry of entries) {
+				const row = document.createElement("div");
+				const name = document.createElement("span");
+				const remove = document.createElement("button");
+				const label = entry.title || entry.url || entry.key;
+				const site = entry.site || hostLabel(entry.url);
+
+				row.className = "settings-blocked-entry";
+				name.textContent = label;
+				name.title = entry.url || label;
+
+				if (site) {
+					const where = document.createElement("span");
+
+					where.className = "settings-blocked-site";
+					where.textContent = ` (${site})`;
+					name.appendChild(where);
+				}
+
+				remove.type = "button";
+				remove.className = "settings-blocked-remove";
+				remove.textContent = "×";
+				remove.setAttribute("aria-label", `Stop hiding ${label}`);
+				remove.onclick = async () => {
+					await mutateHiddenStories((current) =>
+						removeHiddenStory(current, entry.key),
+					);
+					await renderHiddenList();
+				};
+
+				row.append(name, remove);
+				hiddenList.appendChild(row);
+			}
+
+			syncPanesHeight();
+		};
+
+		const blockedSection = shadow.querySelector("#settings-blocked-section");
+		const hiddenSection = shadow.querySelector("#settings-hidden-section");
+
+		for (const input of shadow.querySelectorAll(
+			'input[name="hnewhere-hidden-kind"]',
+		)) {
+			input.onchange = () => {
+				const showHidden = input.value === "hidden";
+
+				blockedSection.hidden = showHidden;
+				hiddenSection.hidden = !showHidden;
+				syncPanesHeight();
+			};
+		}
+
 		await renderBlockedList();
+		await renderHiddenList();
 
 		for (const entry of settingsPanel.querySelectorAll(
 			".settings-link-button[data-pane]",
@@ -13690,6 +13918,7 @@ ${[
 			entry.onclick = async () => {
 				if (entry.dataset.pane === "blocked") {
 					await renderBlockedList();
+					await renderHiddenList();
 				}
 
 				showSecondaryPane(entry.dataset.pane);
@@ -15184,6 +15413,20 @@ blockquote.comment-quote-redundant {
 	opacity:1;
 	visibility:visible;
 	transform:translate(-50%,0);
+}
+
+.toast.has-action.is-showing {
+	pointer-events:auto;
+}
+
+.toast-trailer {
+	opacity:.65;
+}
+
+.toast .toast-action {
+	color:inherit;
+	font-size:inherit;
+	text-decoration-color:currentColor;
 }
 
 </style>
