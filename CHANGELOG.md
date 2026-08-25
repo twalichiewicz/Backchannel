@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.12.1] — 2026-08-25
+
+### Fixed
+
+- **The Backchannel page fills the screen on a phone.** With Backchannel
+  installed, that page shows the front pages in place of what it says to
+  someone who has not installed it yet. The panel there took the width a phone
+  leaves a sidebar — a gutter to reach the page behind it — but on that page
+  the panel is the page and there is nothing behind. So the first scroll, which
+  collapses Safari's address bar and counts as a resize, pulled the panel
+  narrow and left a bar down the right. The panel now takes the whole width.
+
+- **Nothing shows through beneath that page.** Its green is painted on a
+  backdrop that Backchannel hides when it takes the page over, which left the
+  page itself unpainted, and an unpainted page is white. Safari tints its
+  toolbars from a page's background and shows it wherever the panel cannot
+  reach, so a white band sat beneath everything however far it scrolled. The
+  page now carries the panel's own background, and Theme: Detect goes on
+  following the system there rather than reading back what Backchannel painted.
+
+- **Settings and the offer to undo stay with the header there.** Both are
+  placed against the panel, which on that page sits in the flow of the document
+  rather than over it, so both fell back to the top of the document instead.
+  Opening settings and scrolling left it behind, and hiding a story further
+  down the front pages raised its offer to undo above the top of the screen.
+
 ## [1.6.11.2] — 2026-08-23
 
 ### Security
