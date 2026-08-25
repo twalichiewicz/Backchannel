@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.11.2
+// @version      1.6.12
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -198,6 +198,7 @@
 		favorites: "HNewhere:favorites",
 		pendingFocus: "HNewhere:pending_focus",
 		watches: "HNewhere:watches",
+		hiddenStories: "HNewhere:hidden_stories",
 	};
 
 	// #region hnewhere-test-export
@@ -371,6 +372,29 @@
 
 	const REPO_URL = "https://github.com/twalichiewicz/Backchannel";
 
+	// #region hnewhere-test-export
+	const START_PAGE_HOST = "twalichiewicz.github.io";
+	const START_PAGE_PATH = "/Backchannel";
+
+	function isStartPageAddress(href) {
+		try {
+			const parsed = new URL(href);
+
+			return (
+				parsed.hostname === START_PAGE_HOST &&
+				(parsed.pathname === START_PAGE_PATH ||
+					parsed.pathname.startsWith(START_PAGE_PATH + "/"))
+			);
+		} catch {
+			return false;
+		}
+	}
+
+	function onStartPage() {
+		return isStartPageAddress(location.href);
+	}
+	// #endregion hnewhere-test-export
+
 	const SCRIPT_VERSION = (() => {
 		try {
 			return GM?.info?.script?.version || "";
@@ -384,6 +408,7 @@
 	const COMMENT_BRIDGE_MESSAGE_SOURCE = "HNewhereCommentBridge";
 
 	const HN_TITLE_LIMIT = 80;
+	const REDDIT_TITLE_LIMIT = 300;
 
 	const ITEM_ACTION_BRIDGE_STORAGE_KEY = "hnewhere-vote-bridge";
 	const SUBMIT_BRIDGE_STORAGE_KEY = "hnewhere-submit-bridge";
@@ -892,6 +917,62 @@
 	}
 
 	const mutateQueue = serializeMutations(loadQueue, saveQueue);
+
+	// #region hnewhere-test-export
+	function hiddenStoryKey(story) {
+		return story?.key || normalizeURL(story?.url || "") || "";
+	}
+
+	function isStoryHidden(story, hidden) {
+		const key = hiddenStoryKey(story);
+
+		return Boolean(key) && hidden.has(key);
+	}
+
+	function addHiddenStory(entries, story) {
+		const key = hiddenStoryKey(story);
+
+		if (!key || entries.some((entry) => entry.key === key)) {
+			return entries;
+		}
+
+		return [
+			{
+				key,
+				title: story.title || "",
+				url: story.url || "",
+				site: story.site || "",
+				source: story.source || "",
+				hiddenAt: Date.now(),
+			},
+			...entries,
+		];
+	}
+
+	function removeHiddenStory(entries, key) {
+		return entries.filter((entry) => entry.key !== key);
+	}
+	// #endregion hnewhere-test-export
+
+	async function loadHiddenStories() {
+		const stored = await load(STORAGE.hiddenStories, []);
+
+		return Array.isArray(stored) ? stored.filter((entry) => entry?.key) : [];
+	}
+
+	async function saveHiddenStories(entries) {
+		await save(STORAGE.hiddenStories, entries);
+		return entries;
+	}
+
+	const mutateHiddenStories = serializeMutations(
+		loadHiddenStories,
+		saveHiddenStories,
+	);
+
+	async function loadHiddenStoryKeys() {
+		return new Set((await loadHiddenStories()).map((entry) => entry.key));
+	}
 
 	async function loadFavoriteEntries() {
 		const stored = await load(STORAGE.favorites, []);
@@ -3155,6 +3236,12 @@ ${
 			"Will send each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
 		capabilities: { vote: true, reply: true, submit: true },
 
+		submitForm: {
+			titleLimit: HN_TITLE_LIMIT,
+			note: "Leave url blank to submit a question for discussion. If there is no url, text will appear at the top of the thread. If there is a url, text is optional.",
+			newestURL: HN_ORIGIN + "/newest",
+		},
+
 		profileURL: (author) =>
 			"https://news.ycombinator.com/user?id=" + encodeURIComponent(author),
 
@@ -3342,8 +3429,23 @@ ${
 		label: "Reddit",
 		shortLabel: "Reddit",
 		caveat:
-			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds. Vote and reply through your existing Reddit session.",
-		capabilities: { vote: true, reply: true, submit: false },
+			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds. Vote, reply and submit through your existing Reddit session.",
+		capabilities: { vote: true, reply: true, submit: true },
+
+		submitForm: {
+			titleLimit: REDDIT_TITLE_LIMIT,
+			note: "Choose the subreddit you want to post to. Leave url blank to post text instead of a link.",
+			fields: [
+				{
+					id: "subreddit",
+					label: "subreddit",
+					required: true,
+					placeholder: "r/somewhere",
+					spellcheck: false,
+				},
+			],
+			newestURL: "https://www.reddit.com/submit",
+		},
 
 		profileURL: (author) =>
 			"https://www.reddit.com/user/" + encodeURIComponent(author) + "/",
@@ -7303,10 +7405,51 @@ button {
 
 	const BRIDGE_AWAITING_SIGN_IN = { awaitingSignIn: true };
 
+	const BRIDGE_AWAITING_READER = { awaitingReader: true };
+
 	function resumeShouldWait(result) {
 		return (
 			result === BRIDGE_AWAITING_SIGN_IN || result?.reason === "item-missing"
 		);
+	}
+
+	const READER_NOTE_ID = "hnewhere-reader-note";
+
+	function showReaderNote(action) {
+		if (document.getElementById(READER_NOTE_ID)) {
+			return;
+		}
+
+		const bridge = writeBridgeForHost(writeBridges(), location.hostname);
+		const note = document.createElement("div");
+
+		note.id = READER_NOTE_ID;
+		note.textContent = readerNoteText(
+			getSource(bridge?.id)?.label || "this site",
+			action.noun || "action",
+		);
+		note.setAttribute(
+			"style",
+			[
+				"position:fixed",
+				"top:0",
+				"left:0",
+				"right:0",
+				"z-index:2147483647",
+				"margin:0",
+				"padding:10px 14px",
+				"background:#237140",
+				"color:#fff",
+				"font:600 13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+				"text-align:center",
+			].join(";"),
+		);
+
+		document.body?.appendChild(note);
+	}
+
+	function readerNoteText(sourceLabel, noun) {
+		return `Your ${noun} is filled in. Post it here and ${sourceLabel} will tell Backchannel how it went.`;
 	}
 
 	function signInNoteText(sourceLabel, noun) {
@@ -7462,6 +7605,16 @@ button {
 
 	async function finishWriteAction(action, payload, result) {
 		if (result === BRIDGE_NAVIGATED) {
+			return;
+		}
+
+		if (result === BRIDGE_AWAITING_READER) {
+			showReaderNote(action);
+			await postWriteResult(action, payload, {
+				ok: false,
+				reason: "awaiting-reader",
+				interim: true,
+			});
 			return;
 		}
 
@@ -7782,7 +7935,9 @@ button {
 
 	let toastTimer = 0;
 
-	function showToast(message, { persist = false } = {}) {
+	const TOAST_DISMISS_MS = 5200;
+
+	function showToast(message, { persist = false, action = null } = {}) {
 		const toast = sidebarUI?.shadow?.getElementById("toast");
 
 		if (!toast) {
@@ -7792,18 +7947,47 @@ button {
 		clearTimeout(toastTimer);
 
 		if (!message) {
-			toast.classList.remove("is-showing");
+			toast.classList.remove("is-showing", "has-action");
 			return;
 		}
 
 		toast.textContent = message;
+		toast.classList.toggle("has-action", Boolean(action));
+		toast.onmouseenter = null;
+		toast.onmouseleave = null;
+
+		if (action) {
+			const trailer = document.createElement("span");
+			const button = document.createElement("button");
+
+			button.type = "button";
+			button.className = "item-action-link toast-action";
+			button.textContent = action.label;
+			button.onclick = () => {
+				showToast("");
+				action.onAct();
+			};
+
+			trailer.className = "toast-trailer";
+			trailer.append(" | ", button);
+			toast.appendChild(trailer);
+		}
+
 		toast.classList.add("is-showing");
 
 		if (!persist) {
-			toastTimer = window.setTimeout(
-				() => toast.classList.remove("is-showing"),
-				5200,
-			);
+			const dismiss = () =>
+				toast.classList.remove("is-showing", "has-action");
+
+			toastTimer = window.setTimeout(dismiss, TOAST_DISMISS_MS);
+
+			if (action) {
+				toast.onmouseenter = () => clearTimeout(toastTimer);
+				toast.onmouseleave = () => {
+					clearTimeout(toastTimer);
+					toastTimer = window.setTimeout(dismiss, TOAST_DISMISS_MS);
+				};
+			}
 		}
 	}
 
@@ -8722,10 +8906,12 @@ button {
 		}
 
 		const settings = await loadSettings();
-		const submitTarget = submitTargetFor(settings);
+		const targets = submitTargetsFor(settings);
+		const submitTarget = targets[0] ?? null;
 
 		view.innerHTML = submitFormHTML({
 			submitTarget,
+			targets,
 			message: submitTarget ? "" : unsubmittableMessage(settings),
 		});
 
@@ -8734,32 +8920,43 @@ button {
 
 		wireSubmitForm(view, {
 			submitTarget,
+			targets,
 			onCancel: () => {
 				setSubmitMode(ui, false).catch(console.error);
 				setBrowseMode(ui, true);
 			},
 			onSubmit: async (fields, form) => {
-				const result = await submitPageThroughBridge(submitTarget.id, fields);
+				const target = fields.target || submitTarget;
+				const result = await submitPageThroughBridge(target.id, fields, {
+					onInterim: (data) => {
+						if (data?.reason === "awaiting-reader") {
+							form.setStatus(
+								`Filled in on ${target.label}. Post it in the window that opened.`,
+							);
+						}
+					},
+				});
 
 				if (!result?.ok) {
-					form.setStatus(
-						submitFailureMessage(result, submitTarget.label),
-						{ error: true },
-					);
+					form.setStatus(submitFailureMessage(result, target.label), {
+						error: true,
+					});
 
-					return;
+					return false;
 				}
 
+				const seeURL = result.permalink || submittedFallbackURL(target);
+
 				form.setStatus(
-					result.storyID
-						? `Submitted. <a href="${escapeHTML(HN_ORIGIN)}/item?id=${encodeURIComponent(
-								result.storyID,
-							)}" target="_blank" rel="noopener noreferrer">See the discussion</a>`
-						: `Submitted. <a href="${escapeHTML(
-								HN_ORIGIN,
-							)}/newest" target="_blank" rel="noopener noreferrer">See it on HN</a>`,
+					seeURL
+						? `Submitted. <a href="${escapeHTML(seeURL)}" target="_blank" rel="noopener noreferrer">${
+								result.permalink ? "See the discussion" : "See it on " + escapeHTML(target.label)
+							}</a>`
+						: "Submitted.",
 					{ html: true },
 				);
+
+				return true;
 			},
 		});
 	}
@@ -8936,6 +9133,12 @@ button {
 				: `|
 	<button class="browse-save-link" type="button">queue</button>`;
 
+		const rowHideLink = () =>
+			options.hideable
+				? `|
+	<button class="item-action-link browse-hide-link" type="button">hide</button>`
+				: "";
+
 		const rowActions = () => {
 			const watchLink = options.watchable
 				? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
@@ -8996,6 +9199,7 @@ button {
 	${age}
 	${rowQueueLink()}
 	${rowActions()}
+	${rowHideLink()}
 	${counted ? `|\n\t${commentTotal}` : ""}`;
 		};
 
@@ -9034,6 +9238,30 @@ button {
 		}
 
 		wireRowWatchLink(row.querySelector(".browse-watch-link"), story, options);
+
+		const hide = row.querySelector(".browse-hide-link");
+
+		if (hide) {
+			hide.onclick = async (event) => {
+				event.stopPropagation();
+
+				const key = hiddenStoryKey(story);
+
+				await mutateHiddenStories((entries) => addHiddenStory(entries, story));
+				await options.reload?.();
+
+				showToast("Article hidden from front pages", {
+					action: {
+						label: "undo",
+						onAct: () => {
+							mutateHiddenStories((entries) => removeHiddenStory(entries, key))
+								.then(() => options.reload?.())
+								.catch(console.error);
+						},
+					},
+				});
+			};
+		}
 
 		if (options.unfavorite) {
 			const drop = row.querySelector(".browse-unfavorite-link");
@@ -9992,9 +10220,10 @@ button {
 		}
 
 		const requested = browsePage;
-		const [{ rows, sources }, queued] = await Promise.all([
+		const [{ rows: allRows, sources }, queued, hiddenKeys] = await Promise.all([
 			loadFrontPages(),
 			loadQueue(),
+			loadHiddenStoryKeys(),
 		]);
 
 		if (browsePage !== requested || browseTab !== "front") {
@@ -10002,11 +10231,17 @@ button {
 		}
 
 		const queuedKeys = new Set(queued.map(queueKey));
+		const rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
 
 		setBlendNote(ui, sources);
 
-		if (!rows.length) {
+		if (!allRows.length) {
 			list.textContent = "Could not reach any front page.";
+			return;
+		}
+
+		if (!rows.length) {
+			list.textContent = "Everything on the front pages is hidden.";
 			return;
 		}
 
@@ -10023,6 +10258,8 @@ button {
 				renderBrowseRow(row.story, list, start + index + 1, {
 					also: row.also,
 					queuedKeys,
+					hideable: true,
+					reload: () => renderBrowseView(ui),
 				}),
 			);
 
@@ -10212,12 +10449,30 @@ button {
 		SUBMIT_BRIDGE_MESSAGE_SOURCE,
 	);
 
+	function submitTargetsFor(settings) {
+		return enabledSourceIds(settings, registeredSourceIds())
+			.map(getSource)
+			.filter((source) => source?.capabilities.submit);
+	}
+
 	function submitTargetFor(settings) {
-		return (
-			enabledSourceIds(settings, registeredSourceIds())
-				.map(getSource)
-				.find((source) => source?.capabilities.submit) ?? null
-		);
+		return submitTargetsFor(settings)[0] ?? null;
+	}
+
+	function submitFormFor(target) {
+		return target?.submitForm || {};
+	}
+
+	function submittedFallbackURL(target) {
+		return submitFormFor(target).newestURL || "";
+	}
+
+	function submitTitleLimit(target) {
+		return submitFormFor(target).titleLimit || HN_TITLE_LIMIT;
+	}
+
+	function submitExtraFields(target) {
+		return submitFormFor(target).fields || [];
 	}
 
 	function unsubmittableMessage(settings) {
@@ -10349,20 +10604,40 @@ button {
 }
 `;
 
-	function submitFormHTML({ submitTarget, message = "" }) {
-		return `
-<div class="submit-title">${
-			submitTarget ? "Submit to " + escapeHTML(submitTarget.label) : "Submit"
-		}</div>
-${
-	submitTarget
-		? `
+	function submitTargetChooserHTML(submitTarget, targets) {
+		if (targets.length < 2) {
+			return escapeHTML(submitTarget.label);
+		}
+
+		return `<select id="submit-target" class="submit-target" aria-label="Where to submit">${targets
+			.map(
+				(target) =>
+					`<option value="${escapeHTML(target.id)}"${
+						target.id === submitTarget.id ? " selected" : ""
+					}>${escapeHTML(target.label)}</option>`,
+			)
+			.join("")}</select>`;
+	}
+
+	function submitFieldsHTML(submitTarget) {
+		return `${submitExtraFields(submitTarget)
+			.map(
+				(field) => `
+<div class="submit-field">
+<label for="submit-extra-${escapeHTML(field.id)}">${escapeHTML(field.label)}</label>
+<input id="submit-extra-${escapeHTML(field.id)}" class="submit-extra" type="text"
+data-field-id="${escapeHTML(field.id)}"${field.required ? " data-required=\"1\"" : ""}
+spellcheck="${field.spellcheck === false ? "false" : "true"}"
+placeholder="${escapeHTML(field.placeholder || "")}">
+</div>`,
+			)
+			.join("")}
 <div class="submit-field">
 <div class="submit-field-head">
 <label for="submit-title">title</label>
 <span id="submit-count" class="submit-count"></span>
 </div>
-<input id="submit-title" type="text" maxlength="${HN_TITLE_LIMIT}" spellcheck="true">
+<input id="submit-title" type="text" maxlength="${submitTitleLimit(submitTarget)}" spellcheck="true">
 </div>
 
 <div class="submit-field">
@@ -10376,8 +10651,20 @@ ${
 </div>
 
 <div class="submit-note">
-Leave url blank to submit a question for discussion. If there is no url, text will appear at the top of the thread. If there is a url, text is optional.
-</div>`
+${escapeHTML(submitFormFor(submitTarget).note || "")}
+</div>`;
+	}
+
+	function submitFormHTML({ submitTarget, targets = [], message = "" }) {
+		return `
+<div class="submit-title">${
+			submitTarget
+				? "Submit to " + submitTargetChooserHTML(submitTarget, targets)
+				: "Submit"
+		}</div>
+${
+	submitTarget
+		? `<div id="submit-fields">${submitFieldsHTML(submitTarget)}</div>`
 		: `
 <div class="submit-note">
 ${escapeHTML(message)}
@@ -10393,11 +10680,32 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 `;
 	}
 
-	function wireSubmitForm(root, { submitTarget, onSubmit, onCancel }) {
+	function wireSubmitForm(root, { submitTarget, targets = [], onSubmit, onCancel }) {
+		const chooser = root.querySelector("#submit-target");
+
+		if (chooser) {
+			chooser.onchange = () => {
+				const next = targets.find((each) => each.id === chooser.value);
+
+				if (!next) {
+					return;
+				}
+
+				const fields = root.querySelector("#submit-fields");
+
+				if (fields) {
+					fields.innerHTML = submitFieldsHTML(next);
+				}
+
+				wireSubmitForm(root, { submitTarget: next, targets, onSubmit, onCancel });
+			};
+		}
+
 		const titleInput = root.querySelector("#submit-title");
 		const countLabel = root.querySelector("#submit-count");
 		const urlInput = root.querySelector("#submit-url");
 		const textInput = root.querySelector("#submit-text");
+		const extraInputs = [...root.querySelectorAll(".submit-extra")];
 		const goButton = root.querySelector("#submit-go");
 		const cancelButton = root.querySelector("#submit-cancel");
 		const statusLine = root.querySelector("#submit-status");
@@ -10426,14 +10734,20 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		titleInput.value = suggestedSubmissionTitle();
 		urlInput.value = pageAddress();
 
+		const missingExtra = () =>
+			extraInputs.some(
+				(input) => input.dataset.required && !input.value.trim(),
+			);
+
 		const updateCount = () => {
-			const remaining = HN_TITLE_LIMIT - titleInput.value.length;
+			const remaining = submitTitleLimit(submitTarget) - titleInput.value.length;
 
 			countLabel.textContent = remaining + " left";
 			countLabel.classList.toggle("over", remaining < 0);
 
 			goButton.disabled =
 				!titleInput.value.trim() ||
+				missingExtra() ||
 				(!urlInput.value.trim() && !textInput.value.trim());
 		};
 
@@ -10442,12 +10756,19 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		urlInput.addEventListener("input", updateCount);
 		textInput.addEventListener("input", updateCount);
 
+		for (const input of extraInputs) {
+			input.addEventListener("input", updateCount);
+		}
+
 		goButton.onclick = async () => {
 			const title = titleInput.value.trim();
 			const url = urlInput.value.trim();
 			const text = textInput.value;
+			const extra = Object.fromEntries(
+				extraInputs.map((input) => [input.dataset.fieldId, input.value.trim()]),
+			);
 
-			if (!title || (!url && !text.trim())) {
+			if (!title || missingExtra() || (!url && !text.trim())) {
 				return;
 			}
 
@@ -10456,12 +10777,41 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			titleInput.disabled = true;
 			urlInput.disabled = true;
 			textInput.disabled = true;
-			setStatus("Opening Hacker News…");
+
+			for (const input of extraInputs) {
+				input.disabled = true;
+			}
+
+			if (chooser) {
+				chooser.disabled = true;
+			}
+			setStatus(`Opening ${submitTarget.label}\u2026`);
+
+			let posted = false;
 
 			try {
-				await onSubmit({ title, url, text }, { setStatus });
+				posted = await onSubmit(
+					{ title, url, text, extra, target: submitTarget },
+					{ setStatus },
+				);
 			} finally {
 				cancelButton.disabled = false;
+
+				if (!posted) {
+					titleInput.disabled = false;
+					urlInput.disabled = false;
+					textInput.disabled = false;
+
+					for (const input of extraInputs) {
+						input.disabled = false;
+					}
+
+					if (chooser) {
+						chooser.disabled = false;
+					}
+
+					updateCount();
+				}
 			}
 		};
 
@@ -10480,7 +10830,11 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		return { setStatus };
 	}
 
-	function submitPageThroughBridge(sourceID, { title, url, text }) {
+	function submitPageThroughBridge(
+		sourceID,
+		{ title, url, text, extra = {} },
+		{ onInterim } = {},
+	) {
 		const bridge = getWriteBridge(sourceID);
 		const action = bridge?.actions?.submit;
 
@@ -10489,7 +10843,10 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		}
 
 		const nonce = bridgeNonce();
-		const session = openSubmitBridgePopup(nonce, { origin: bridge.origin });
+		const session = openSubmitBridgePopup(nonce, {
+			origin: bridge.origin,
+			onInterim: onInterim || undefined,
+		});
 
 		if (session.blocked) {
 			return session.result;
@@ -10502,13 +10859,14 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 					url,
 					title,
 					text,
+					extra,
 					normalized: url ? normalizeURL(url) : "",
 					origin: location.origin,
 				});
 				await indexBridgePayload(nonce);
 
 				session.navigate(
-					action.url({ url, title }) + "#" + bridgeHash(action, nonce),
+					action.url({ url, title, extra }) + "#" + bridgeHash(action, nonce),
 				);
 
 				return await session.result;
@@ -10610,6 +10968,8 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 				return `${sourceLabel} did not respond in time. Check the popup window.`;
 			case "not-logged-in":
 				return `Log in to ${sourceLabel} in the popup, then try again.`;
+			case "awaiting-reader":
+				return `The ${sourceLabel} window is still open. Post it there, or close it to give up.`;
 			case "dupe":
 				return `${sourceLabel} already has this URL. Reload the page to see the discussion.`;
 			case "no-form":
@@ -10749,8 +11109,8 @@ header {
 	color:var(--header-text);
 	cursor:pointer;
 	font-size:20px;
-	width:36px;
-	height:36px;
+	width:30px;
+	height:30px;
 	display:flex;
 	align-items:center;
 	justify-content:center;
@@ -10770,12 +11130,32 @@ header {
 }
 
 .hide-caret {
-	margin-left:1px;
-	font-size:18px;
-	line-height:1;
+	position:absolute;
+	right:6px;
+	bottom:6px;
+	width:9px;
+	height:9px;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	border-radius:50%;
+	background-color:var(--header-bg);
+	font-size:12px;
+	line-height:100%;
+}
+
+@media (hover: hover) {
+	#hide-site:hover .hide-caret {
+		background-image:linear-gradient(var(--hover-tint), var(--hover-tint));
+	}
+}
+
+#hide-site.is-open .hide-caret {
+	background-image:linear-gradient(var(--active-tint), var(--active-tint));
 }
 
 #hide-site.has-scope {
+	position:relative;
 	gap:0;
 }
 
@@ -11563,6 +11943,12 @@ header {
 	margin-top:10px;
 	padding-top:10px;
 	border-top:1px solid var(--surface-divider);
+}
+
+.settings-group + .settings-group.settings-group-tight {
+	margin-top:9px;
+	padding-top:0;
+	border-top:0;
 }
 
 header button svg {
@@ -12683,6 +13069,14 @@ header button svg {
 	margin-top:4px;
 }
 
+.settings-hidden-section[hidden] {
+	display:none;
+}
+
+.settings-blocked-site {
+	color:var(--muted);
+}
+
 .settings-blocked-entry {
 	display:flex;
 	align-items:center;
@@ -12727,28 +13121,21 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 
 <div class="header-actions">
 <button id="header-submit" type="button" aria-label="Submit this page" title="Submit this page" hidden>
-<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
-<path d="M8 12.7V4.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-<path d="M4.5 7.7 8 4.2l3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+<svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" focusable="false">
+<path d="M8 12.7V4.2" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round"/>
+<path d="M4.5 7.7 8 4.2l3.5 3.5" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
 </button>
 <button id="comment-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="compose-dock" aria-label="Add a comment" title="Add a comment" hidden>
-<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+<svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
 </svg>
 </button>
 <span class="hide-control">
-<button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Hide Backchannel here" title="Hide Backchannel here">
+<button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Disable Backchannel here" title="Disable Backchannel here">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
-<!-- Filled rather than outlined. White on the header's green, a 1.25px stroke
-     is most of the way to invisible at 15px; a solid shape holds its detail.
-     The pupil is a hole punched with evenodd rather than a circle painted in
-     the background colour, so it survives whatever the header is behind it. -->
-<path fill="currentColor" fill-rule="evenodd" d="M1.4 8S3.9 3.9 8 3.9 14.6 8 14.6 8 12.1 12.1 8 12.1 1.4 8 1.4 8ZM8 6.15a1.85 1.85 0 1 0 0 3.7 1.85 1.85 0 1 0 0-3.7Z"/>
-<!-- The slash needs to read across a filled shape, so it is cut into it: a wide
-     line in the header's own colour, and the mark itself drawn on top. -->
-<line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="var(--header-bg)" stroke-width="3.4" stroke-linecap="round"/>
-<line x1="3.1" y1="12.9" x2="12.9" y2="3.1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<circle cx="8" cy="8" r="6.15" fill="none" stroke="currentColor" stroke-width="2"/>
+<line x1="3.65" y1="12.35" x2="12.35" y2="3.65" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 </svg>
 <span class="hide-caret" aria-hidden="true">&#9662;</span>
 </button>
@@ -12762,7 +13149,7 @@ ${
 	minimize
 		? `<button id="minimize" aria-label="Minimize Backchannel" title="Minimize">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
-<line x1="3.4" y1="8" x2="12.6" y2="8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<line x1="3.4" y1="8" x2="12.6" y2="8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
 </svg>
 </button>`
 		: ""
@@ -12770,8 +13157,8 @@ ${
 </div>
 ${
 	`<div id="hide-menu" class="hide-menu" role="menu" hidden>
-<button type="button" role="menuitem" data-hide-scope="page">Hide on this page only</button>
-<button type="button" role="menuitem" data-hide-scope="site">Hide on all ${escapeHTML(siteKey())} pages</button>
+<button type="button" role="menuitem" data-hide-scope="page">Disable on this page only</button>
+<button type="button" role="menuitem" data-hide-scope="site">Disable on all ${escapeHTML(siteKey())} pages</button>
 <div class="hide-menu-rule" data-pdf-reader-only hidden></div>
 <button id="close-pdf-reader" type="button" role="menuitem" data-pdf-reader-only hidden>Close the PDF reader</button>
 </div>`
@@ -12787,7 +13174,7 @@ ${
 <div id="settings-head" class="settings-head">
 <button id="settings-blocked-back" class="settings-back" type="button" aria-label="Back to settings" disabled>&lsaquo;</button>
 <button id="settings-crumb-root" class="settings-crumb-root" type="button" disabled>Settings</button>
-<span id="settings-crumb-tail" class="settings-crumb-tail" aria-hidden="true"><span class="settings-crumb-sep">/</span><span id="settings-crumb-name">Hidden sites</span></span>
+<span id="settings-crumb-tail" class="settings-crumb-tail" aria-hidden="true"><span class="settings-crumb-sep">/</span><span id="settings-crumb-name">Manage disabled/hidden</span></span>
 </div>
 <div id="settings-panes" class="settings-panes">
 
@@ -12912,13 +13299,24 @@ title="Type a hex colour">#237140</span></div>
 <button id="settings-manage-sources" class="settings-link-button" type="button" data-pane="sources" data-pane-name="Sources">Sources<span class="settings-link-chevron">&rsaquo;</span></button>
 </div>
 
-<div class="settings-group">
-<button id="settings-manage-blocked" class="settings-link-button" type="button" data-pane="blocked" data-pane-name="Hidden sites">Manage hidden sites<span class="settings-link-chevron">&rsaquo;</span></button>
+<div class="settings-group settings-group-tight">
+<button id="settings-manage-blocked" class="settings-link-button" type="button" data-pane="blocked" data-pane-name="Manage disabled/hidden">Manage disabled/hidden<span class="settings-link-chevron">&rsaquo;</span></button>
 </div>
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="blocked">
+<div class="segmented">
+<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="disabled" checked><span>Disabled</span></label>
+<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="hidden"><span>Hidden</span></label>
+</div>
+<div id="settings-blocked-section" class="settings-hidden-section">
+<div class="settings-option-hint settings-option-hint-slow">Backchannel will not appear on these sites</div>
 <div id="settings-blocked-list" class="settings-blocked-list"></div>
+</div>
+<div id="settings-hidden-section" class="settings-hidden-section" hidden>
+<div class="settings-option-hint settings-option-hint-slow">Articles you've hidden from the front pages</div>
+<div id="settings-hidden-list" class="settings-blocked-list"></div>
+</div>
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
@@ -13611,7 +14009,7 @@ ${[
 				const empty = document.createElement("div");
 
 				empty.className = "settings-blocked-empty";
-				empty.textContent = "No sites hidden yet.";
+				empty.textContent = "No sites disabled yet.";
 				blockedList.appendChild(empty);
 				syncPanesHeight();
 
@@ -13630,7 +14028,7 @@ ${[
 				remove.type = "button";
 				remove.className = "settings-blocked-remove";
 				remove.textContent = "×";
-				remove.setAttribute("aria-label", `Stop hiding Backchannel on ${label}`);
+				remove.setAttribute("aria-label", `Stop disabling Backchannel on ${label}`);
 				remove.onclick = async () => {
 					const next = await loadBlockedSites();
 
@@ -13646,7 +14044,82 @@ ${[
 			syncPanesHeight();
 		};
 
+		const hiddenList = shadow.querySelector("#settings-hidden-list");
+
+		const renderHiddenList = async () => {
+			if (!hiddenList) {
+				return;
+			}
+
+			const entries = await loadHiddenStories();
+
+			hiddenList.replaceChildren();
+
+			if (!entries.length) {
+				const empty = document.createElement("div");
+
+				empty.className = "settings-blocked-empty";
+				empty.textContent = "Nothing hidden yet.";
+				hiddenList.appendChild(empty);
+				syncPanesHeight();
+
+				return;
+			}
+
+			for (const entry of entries) {
+				const row = document.createElement("div");
+				const name = document.createElement("span");
+				const remove = document.createElement("button");
+				const label = entry.title || entry.url || entry.key;
+				const site = entry.site || hostLabel(entry.url);
+
+				row.className = "settings-blocked-entry";
+				name.textContent = label;
+				name.title = entry.url || label;
+
+				if (site) {
+					const where = document.createElement("span");
+
+					where.className = "settings-blocked-site";
+					where.textContent = ` (${site})`;
+					name.appendChild(where);
+				}
+
+				remove.type = "button";
+				remove.className = "settings-blocked-remove";
+				remove.textContent = "×";
+				remove.setAttribute("aria-label", `Stop hiding ${label}`);
+				remove.onclick = async () => {
+					await mutateHiddenStories((current) =>
+						removeHiddenStory(current, entry.key),
+					);
+					await renderHiddenList();
+				};
+
+				row.append(name, remove);
+				hiddenList.appendChild(row);
+			}
+
+			syncPanesHeight();
+		};
+
+		const blockedSection = shadow.querySelector("#settings-blocked-section");
+		const hiddenSection = shadow.querySelector("#settings-hidden-section");
+
+		for (const input of shadow.querySelectorAll(
+			'input[name="hnewhere-hidden-kind"]',
+		)) {
+			input.onchange = () => {
+				const showHidden = input.value === "hidden";
+
+				blockedSection.hidden = showHidden;
+				hiddenSection.hidden = !showHidden;
+				syncPanesHeight();
+			};
+		}
+
 		await renderBlockedList();
+		await renderHiddenList();
 
 		for (const entry of settingsPanel.querySelectorAll(
 			".settings-link-button[data-pane]",
@@ -13654,6 +14127,7 @@ ${[
 			entry.onclick = async () => {
 				if (entry.dataset.pane === "blocked") {
 					await renderBlockedList();
+					await renderHiddenList();
 				}
 
 				showSecondaryPane(entry.dataset.pane);
@@ -13673,7 +14147,7 @@ ${[
 	// Sidebar
 	// -------------------------
 
-	async function createSidebar() {
+	async function createSidebar({ pageMode = false } = {}) {
 		if (sidebar) {
 			sidebar._cleanup?.();
 			sidebar.remove();
@@ -13686,6 +14160,11 @@ ${[
 
 		const host = document.createElement("div");
 		host.setAttribute("data-hnewhere-sidebar", "1");
+
+		if (pageMode) {
+			host.setAttribute("data-hnewhere-page-mode", "1");
+		}
+
 		guardHostKeyboard(host);
 		document.body.appendChild(host);
 
@@ -13723,6 +14202,36 @@ ${[
 	font-size:13px;
 	overflow:visible;
 	--measure:1215px;
+	--column-max:640px;
+}
+
+#panel.page-mode {
+	position:static;
+	height:auto;
+	min-height:100vh;
+	min-height:100dvh;
+	width:auto;
+	max-width:none;
+	border-left:0;
+	box-shadow:none;
+}
+
+#panel.page-mode > header {
+	position:sticky;
+	top:0;
+}
+
+#panel.page-mode #resize-handle {
+	display:none;
+}
+
+#panel.page-mode #comments,
+#panel.page-mode .browse-view {
+	box-sizing:border-box;
+	max-width:var(--column-max);
+	margin-left:auto;
+	margin-right:auto;
+	width:100%;
 }
 
 ${THEME_CSS}
@@ -13742,6 +14251,13 @@ ${SUBMIT_FORM_CSS}
 #panel.submitting .browse-view,
 #panel.submitting .filter-banner,
 #panel.submitting .next-up {
+	display:none;
+}
+
+#panel.browsing #comment-toggle,
+#panel.submitting #comment-toggle,
+#panel.browsing #compose-dock,
+#panel.submitting #compose-dock {
 	display:none;
 }
 
@@ -14741,8 +15257,11 @@ blockquote.comment-quote-redundant {
 .compose-dock {
 	position:absolute;
 	top:8px;
-	left:8px;
-	right:8px;
+	left:50%;
+	transform:translateX(-50%);
+	width:calc(100% - 16px);
+	max-width:var(--column-max);
+	box-sizing:border-box;
 	z-index:5;
 	padding:8px;
 	border:1px solid var(--surface-border);
@@ -15105,13 +15624,27 @@ blockquote.comment-quote-redundant {
 	transform:translate(-50%,0);
 }
 
+.toast.has-action.is-showing {
+	pointer-events:auto;
+}
+
+.toast-trailer {
+	opacity:.65;
+}
+
+.toast .toast-action {
+	color:inherit;
+	font-size:inherit;
+	text-decoration-color:currentColor;
+}
+
 </style>
 
-<div id="panel">
+<div id="panel"${pageMode ? ' class="page-mode"' : ""}>
 
 <div id="resize-handle" aria-hidden="true"></div>
 
-${headerHTML({ subtitle: true, minimize: true, browse: true })}
+${headerHTML({ subtitle: true, minimize: !pageMode, browse: true })}
 <div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
 ${settingsPanelHTML()}
 <div id="comments">
@@ -15314,22 +15847,26 @@ ${settingsPanelHTML()}
 			}
 		};
 
-		shadow.querySelector("#minimize").onclick = async () => {
-			host.style.display = "none";
-			clearArticleAnnotations();
-			setSettingsOpen(false);
+		const minimizeButton = shadow.querySelector("#minimize");
 
-			if (sidebarHasDiscussion) {
-				await saveSidebarState("collapsed");
-				await createRestoreButton();
-			} else if (location.hostname === "news.ycombinator.com") {
-				await offerQueueOnHN();
-			} else {
-				await createSubmitButton();
-			}
+		if (minimizeButton) {
+			minimizeButton.onclick = async () => {
+				host.style.display = "none";
+				clearArticleAnnotations();
+				setSettingsOpen(false);
 
-			await refreshArticleAnnotations();
-		};
+				if (sidebarHasDiscussion) {
+					await saveSidebarState("collapsed");
+					await createRestoreButton();
+				} else if (location.hostname === "news.ycombinator.com") {
+					await offerQueueOnHN();
+				} else {
+					await createSubmitButton();
+				}
+
+				await refreshArticleAnnotations();
+			};
+		}
 
 		document
 			.querySelectorAll(
@@ -18059,7 +18596,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		try {
 			const generation = ++sidebarGeneration;
 
-			const ui = await createSidebar();
+			const ui = await createSidebar({ pageMode: options.pageMode });
 			sidebarUI = ui;
 
 			if (generation !== sidebarGeneration) {
@@ -18091,7 +18628,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 					animate: false,
 					tab: options.queueOnly ? "queue" : undefined,
 				});
-				slidePanelIn(ui);
+
+				if (!options.pageMode) {
+					slidePanelIn(ui);
+				}
+
 				return;
 			}
 
@@ -18271,17 +18812,21 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				result: {
 					ok: Boolean(id),
 					storyID: id,
+					permalink: id ? commentURL(id) : "",
 					reason: id ? "existing" : "dupe",
 				},
 			};
 		}
 
 		if (location.pathname === "/newest") {
+			const id = findSubmittedStoryID(root, payload.normalized);
+
 			return {
 				payload,
 				result: {
 					ok: true,
-					storyID: findSubmittedStoryID(root, payload.normalized),
+					storyID: id,
+					permalink: id ? commentURL(id) : "",
 					reason: "submitted",
 				},
 			};
@@ -18752,8 +19297,119 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				url: ({ storyID, parentId }) => redditPermalink(storyID, parentId),
 				act: actRedditReply,
 			},
+			submit: {
+				marker: "hnewhere-submit",
+				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
+				noun: "submission",
+				stagesDraft: true,
+				url: ({ url, title, extra }) => redditSubmitURL(url, title, extra),
+				act: actRedditSubmit,
+				report: reportRedditSubmit,
+			},
 		},
 	});
+
+	function normalizeSubredditName(value) {
+		return String(value || "")
+			.trim()
+			.replace(/^\/?r\//i, "")
+			.replace(/\/+$/, "");
+	}
+
+	function redditSubmitURL(url, title, extra) {
+		const subreddit = normalizeSubredditName(extra?.subreddit);
+		const query =
+			"?url=" + encodeURIComponent(url) + "&title=" + encodeURIComponent(title);
+
+		return (
+			REDDIT_WRITE_ORIGIN +
+			(subreddit ? "/r/" + encodeURIComponent(subreddit) : "") +
+			"/submit" +
+			query
+		);
+	}
+
+	function actRedditSubmit({ payload, staged, root }) {
+		const form =
+			root.querySelector("form#newlink") ||
+			root.querySelector('form[action*="submit"]');
+
+		if (!form) {
+			return {
+				ok: false,
+				reason: root.querySelector('form[action*="login"], #login_login-main')
+					? "not-logged-in"
+					: "no-form",
+			};
+		}
+
+		const titleInput = form.querySelector('textarea[name="title"], input[name="title"]');
+		const urlInput = form.querySelector('input[name="url"]');
+		const textInput = form.querySelector('textarea[name="text"]');
+		const subredditInput = form.querySelector(
+			'input[name="sr"], #sr-autocomplete',
+		);
+
+		if (titleInput && staged?.title) {
+			titleInput.value = staged.title.slice(0, REDDIT_TITLE_LIMIT);
+		}
+
+		if (urlInput) {
+			urlInput.value = staged?.url || "";
+		}
+
+		if (textInput) {
+			textInput.value = staged?.text || "";
+		}
+
+		const subreddit = normalizeSubredditName(staged?.extra?.subreddit);
+
+		if (subredditInput && subreddit) {
+			subredditInput.value = subreddit;
+		}
+
+		if (
+			!stageBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY, {
+				...payload,
+				normalized: staged?.normalized || null,
+			})
+		) {
+			return { ok: false, reason: "storage-unavailable" };
+		}
+
+		return BRIDGE_AWAITING_READER;
+	}
+
+	function reportRedditSubmit(root) {
+		const payload = takeBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY);
+
+		if (!payload) {
+			return null;
+		}
+
+		const posted = /\/comments\//.test(location.pathname);
+
+		if (posted) {
+			return {
+				payload,
+				result: {
+					ok: true,
+					permalink: location.origin + location.pathname,
+					reason: "submitted",
+				},
+			};
+		}
+
+		const error = root.querySelector(".error, .status.error");
+
+		return {
+			payload,
+			result: {
+				ok: false,
+				reason: error?.textContent?.trim() || "unknown",
+			},
+		};
+	}
 
 	function setupHNListener() {
 		document.addEventListener(
@@ -22773,9 +23429,40 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			return;
 		}
 
+		if (onStartPage()) {
+			await runStartPagePass();
+			return;
+		}
+
 		watchSoftNavigation();
 
 		await runPagePass();
+	}
+
+	async function runStartPagePass() {
+		await documentReady();
+
+		await markQueueArrival().catch(console.error);
+		await markWatchArrival().catch(console.error);
+
+		const settings = await loadSettings();
+		const setupOnly = !enabledSourceIds(settings, registeredSourceIds()).length;
+
+		await openSidebar([], {
+			pageMode: true,
+			setupOnly,
+			browseOnly: !setupOnly,
+		});
+
+		if (!sidebar) {
+			return;
+		}
+
+		document.documentElement.setAttribute("data-backchannel-installed", "1");
+
+		for (const node of document.querySelectorAll("[data-backchannel-promo]")) {
+			node.hidden = true;
+		}
 	}
 
 	async function runPagePass() {
