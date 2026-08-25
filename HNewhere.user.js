@@ -14250,6 +14250,19 @@ ${[
 	display:none;
 }
 
+#panel.page-mode .settings-panel {
+	position:fixed;
+	top:46px;
+	right:8px;
+}
+
+#panel.page-mode .toast-layer {
+	position:fixed;
+	top:42px;
+	left:0;
+	right:0;
+}
+
 #panel.page-mode #comments,
 #panel.page-mode .browse-view {
 	box-sizing:border-box;
