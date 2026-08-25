@@ -13802,6 +13802,13 @@ ${SUBMIT_FORM_CSS}
 	display:none;
 }
 
+#panel.browsing #comment-toggle,
+#panel.submitting #comment-toggle,
+#panel.browsing #compose-dock,
+#panel.submitting #compose-dock {
+	display:none;
+}
+
 #comments.views-swapping > .submit-view {
 	opacity:0;
 }
