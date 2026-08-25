@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.12
+// @version      1.6.12.1
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -6381,6 +6381,12 @@ button {
 		return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128;
 	}
 
+	let pageModeActive = false;
+
+	function setPageModeActive(active) {
+		pageModeActive = Boolean(active);
+	}
+
 	function detectDarkMode() {
 		if (themePreference === "dark") {
 			return true;
@@ -6390,15 +6396,17 @@ button {
 			return false;
 		}
 
-		for (const element of [document.body, document.documentElement]) {
-			if (!element) {
-				continue;
-			}
+		if (!pageModeActive) {
+			for (const element of [document.body, document.documentElement]) {
+				if (!element) {
+					continue;
+				}
 
-			const dark = isDarkColor(getComputedStyle(element).backgroundColor);
+				const dark = isDarkColor(getComputedStyle(element).backgroundColor);
 
-			if (dark !== null) {
-				return dark;
+				if (dark !== null) {
+					return dark;
+				}
 			}
 		}
 
@@ -6479,6 +6487,17 @@ button {
 		await refreshArticleAnnotations();
 	}
 
+	function paintPageCanvas(host) {
+		const panel = host.shadowRoot?.getElementById("panel");
+
+		if (!panel) {
+			return;
+		}
+
+		document.documentElement.style.backgroundColor =
+			getComputedStyle(panel).backgroundColor;
+	}
+
 	function applyThemeToHost(host) {
 		const dark = detectDarkMode();
 
@@ -6510,6 +6529,10 @@ button {
 			} else {
 				host.style.removeProperty(name);
 			}
+		}
+
+		if (host.hasAttribute("data-hnewhere-page-mode")) {
+			paintPageCanvas(host);
 		}
 	}
 
@@ -14154,6 +14177,8 @@ ${[
 			sidebar = null;
 		}
 
+		setPageModeActive(pageMode);
+
 		const savedWidth = await loadSiteWidth();
 
 		const width = Math.min(Math.max(savedWidth, 280), maxSidebarWidth());
@@ -14223,6 +14248,19 @@ ${[
 
 #panel.page-mode #resize-handle {
 	display:none;
+}
+
+#panel.page-mode .settings-panel {
+	position:fixed;
+	top:46px;
+	right:8px;
+}
+
+#panel.page-mode .toast-layer {
+	position:fixed;
+	top:42px;
+	left:0;
+	right:0;
 }
 
 #panel.page-mode #comments,
@@ -15813,6 +15851,10 @@ ${settingsPanelHTML()}
 		let wasPortrait = isPortraitPhone();
 
 		const clampSidebarWidth = () => {
+			if (pageMode) {
+				return;
+			}
+
 			const maxWidth = maxSidebarWidth();
 			const portrait = isPortraitPhone();
 
