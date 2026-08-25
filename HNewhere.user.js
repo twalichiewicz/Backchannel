@@ -408,6 +408,7 @@
 	const COMMENT_BRIDGE_MESSAGE_SOURCE = "HNewhereCommentBridge";
 
 	const HN_TITLE_LIMIT = 80;
+	const REDDIT_TITLE_LIMIT = 300;
 
 	const ITEM_ACTION_BRIDGE_STORAGE_KEY = "hnewhere-vote-bridge";
 	const SUBMIT_BRIDGE_STORAGE_KEY = "hnewhere-submit-bridge";
@@ -3235,6 +3236,12 @@ ${
 			"Will send each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
 		capabilities: { vote: true, reply: true, submit: true },
 
+		submitForm: {
+			titleLimit: HN_TITLE_LIMIT,
+			note: "Leave url blank to submit a question for discussion. If there is no url, text will appear at the top of the thread. If there is a url, text is optional.",
+			newestURL: HN_ORIGIN + "/newest",
+		},
+
 		profileURL: (author) =>
 			"https://news.ycombinator.com/user?id=" + encodeURIComponent(author),
 
@@ -3422,8 +3429,23 @@ ${
 		label: "Reddit",
 		shortLabel: "Reddit",
 		caveat:
-			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds. Vote and reply through your existing Reddit session.",
-		capabilities: { vote: true, reply: true, submit: false },
+			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds. Vote, reply and submit through your existing Reddit session.",
+		capabilities: { vote: true, reply: true, submit: true },
+
+		submitForm: {
+			titleLimit: REDDIT_TITLE_LIMIT,
+			note: "Choose the subreddit you want to post to. Leave url blank to post text instead of a link.",
+			fields: [
+				{
+					id: "subreddit",
+					label: "subreddit",
+					required: true,
+					placeholder: "r/somewhere",
+					spellcheck: false,
+				},
+			],
+			newestURL: "https://www.reddit.com/submit",
+		},
 
 		profileURL: (author) =>
 			"https://www.reddit.com/user/" + encodeURIComponent(author) + "/",
@@ -7383,10 +7405,51 @@ button {
 
 	const BRIDGE_AWAITING_SIGN_IN = { awaitingSignIn: true };
 
+	const BRIDGE_AWAITING_READER = { awaitingReader: true };
+
 	function resumeShouldWait(result) {
 		return (
 			result === BRIDGE_AWAITING_SIGN_IN || result?.reason === "item-missing"
 		);
+	}
+
+	const READER_NOTE_ID = "hnewhere-reader-note";
+
+	function showReaderNote(action) {
+		if (document.getElementById(READER_NOTE_ID)) {
+			return;
+		}
+
+		const bridge = writeBridgeForHost(writeBridges(), location.hostname);
+		const note = document.createElement("div");
+
+		note.id = READER_NOTE_ID;
+		note.textContent = readerNoteText(
+			getSource(bridge?.id)?.label || "this site",
+			action.noun || "action",
+		);
+		note.setAttribute(
+			"style",
+			[
+				"position:fixed",
+				"top:0",
+				"left:0",
+				"right:0",
+				"z-index:2147483647",
+				"margin:0",
+				"padding:10px 14px",
+				"background:#237140",
+				"color:#fff",
+				"font:600 13px/1.4 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+				"text-align:center",
+			].join(";"),
+		);
+
+		document.body?.appendChild(note);
+	}
+
+	function readerNoteText(sourceLabel, noun) {
+		return `Your ${noun} is filled in. Post it here and ${sourceLabel} will tell Backchannel how it went.`;
 	}
 
 	function signInNoteText(sourceLabel, noun) {
@@ -7542,6 +7605,16 @@ button {
 
 	async function finishWriteAction(action, payload, result) {
 		if (result === BRIDGE_NAVIGATED) {
+			return;
+		}
+
+		if (result === BRIDGE_AWAITING_READER) {
+			showReaderNote(action);
+			await postWriteResult(action, payload, {
+				ok: false,
+				reason: "awaiting-reader",
+				interim: true,
+			});
 			return;
 		}
 
@@ -8833,10 +8906,12 @@ button {
 		}
 
 		const settings = await loadSettings();
-		const submitTarget = submitTargetFor(settings);
+		const targets = submitTargetsFor(settings);
+		const submitTarget = targets[0] ?? null;
 
 		view.innerHTML = submitFormHTML({
 			submitTarget,
+			targets,
 			message: submitTarget ? "" : unsubmittableMessage(settings),
 		});
 
@@ -8845,32 +8920,43 @@ button {
 
 		wireSubmitForm(view, {
 			submitTarget,
+			targets,
 			onCancel: () => {
 				setSubmitMode(ui, false).catch(console.error);
 				setBrowseMode(ui, true);
 			},
 			onSubmit: async (fields, form) => {
-				const result = await submitPageThroughBridge(submitTarget.id, fields);
+				const target = fields.target || submitTarget;
+				const result = await submitPageThroughBridge(target.id, fields, {
+					onInterim: (data) => {
+						if (data?.reason === "awaiting-reader") {
+							form.setStatus(
+								`Filled in on ${target.label}. Post it in the window that opened.`,
+							);
+						}
+					},
+				});
 
 				if (!result?.ok) {
-					form.setStatus(
-						submitFailureMessage(result, submitTarget.label),
-						{ error: true },
-					);
+					form.setStatus(submitFailureMessage(result, target.label), {
+						error: true,
+					});
 
-					return;
+					return false;
 				}
 
+				const seeURL = result.permalink || submittedFallbackURL(target);
+
 				form.setStatus(
-					result.storyID
-						? `Submitted. <a href="${escapeHTML(HN_ORIGIN)}/item?id=${encodeURIComponent(
-								result.storyID,
-							)}" target="_blank" rel="noopener noreferrer">See the discussion</a>`
-						: `Submitted. <a href="${escapeHTML(
-								HN_ORIGIN,
-							)}/newest" target="_blank" rel="noopener noreferrer">See it on HN</a>`,
+					seeURL
+						? `Submitted. <a href="${escapeHTML(seeURL)}" target="_blank" rel="noopener noreferrer">${
+								result.permalink ? "See the discussion" : "See it on " + escapeHTML(target.label)
+							}</a>`
+						: "Submitted.",
 					{ html: true },
 				);
+
+				return true;
 			},
 		});
 	}
@@ -10363,12 +10449,30 @@ button {
 		SUBMIT_BRIDGE_MESSAGE_SOURCE,
 	);
 
+	function submitTargetsFor(settings) {
+		return enabledSourceIds(settings, registeredSourceIds())
+			.map(getSource)
+			.filter((source) => source?.capabilities.submit);
+	}
+
 	function submitTargetFor(settings) {
-		return (
-			enabledSourceIds(settings, registeredSourceIds())
-				.map(getSource)
-				.find((source) => source?.capabilities.submit) ?? null
-		);
+		return submitTargetsFor(settings)[0] ?? null;
+	}
+
+	function submitFormFor(target) {
+		return target?.submitForm || {};
+	}
+
+	function submittedFallbackURL(target) {
+		return submitFormFor(target).newestURL || "";
+	}
+
+	function submitTitleLimit(target) {
+		return submitFormFor(target).titleLimit || HN_TITLE_LIMIT;
+	}
+
+	function submitExtraFields(target) {
+		return submitFormFor(target).fields || [];
 	}
 
 	function unsubmittableMessage(settings) {
@@ -10500,20 +10604,40 @@ button {
 }
 `;
 
-	function submitFormHTML({ submitTarget, message = "" }) {
-		return `
-<div class="submit-title">${
-			submitTarget ? "Submit to " + escapeHTML(submitTarget.label) : "Submit"
-		}</div>
-${
-	submitTarget
-		? `
+	function submitTargetChooserHTML(submitTarget, targets) {
+		if (targets.length < 2) {
+			return escapeHTML(submitTarget.label);
+		}
+
+		return `<select id="submit-target" class="submit-target" aria-label="Where to submit">${targets
+			.map(
+				(target) =>
+					`<option value="${escapeHTML(target.id)}"${
+						target.id === submitTarget.id ? " selected" : ""
+					}>${escapeHTML(target.label)}</option>`,
+			)
+			.join("")}</select>`;
+	}
+
+	function submitFieldsHTML(submitTarget) {
+		return `${submitExtraFields(submitTarget)
+			.map(
+				(field) => `
+<div class="submit-field">
+<label for="submit-extra-${escapeHTML(field.id)}">${escapeHTML(field.label)}</label>
+<input id="submit-extra-${escapeHTML(field.id)}" class="submit-extra" type="text"
+data-field-id="${escapeHTML(field.id)}"${field.required ? " data-required=\"1\"" : ""}
+spellcheck="${field.spellcheck === false ? "false" : "true"}"
+placeholder="${escapeHTML(field.placeholder || "")}">
+</div>`,
+			)
+			.join("")}
 <div class="submit-field">
 <div class="submit-field-head">
 <label for="submit-title">title</label>
 <span id="submit-count" class="submit-count"></span>
 </div>
-<input id="submit-title" type="text" maxlength="${HN_TITLE_LIMIT}" spellcheck="true">
+<input id="submit-title" type="text" maxlength="${submitTitleLimit(submitTarget)}" spellcheck="true">
 </div>
 
 <div class="submit-field">
@@ -10527,8 +10651,20 @@ ${
 </div>
 
 <div class="submit-note">
-Leave url blank to submit a question for discussion. If there is no url, text will appear at the top of the thread. If there is a url, text is optional.
-</div>`
+${escapeHTML(submitFormFor(submitTarget).note || "")}
+</div>`;
+	}
+
+	function submitFormHTML({ submitTarget, targets = [], message = "" }) {
+		return `
+<div class="submit-title">${
+			submitTarget
+				? "Submit to " + submitTargetChooserHTML(submitTarget, targets)
+				: "Submit"
+		}</div>
+${
+	submitTarget
+		? `<div id="submit-fields">${submitFieldsHTML(submitTarget)}</div>`
 		: `
 <div class="submit-note">
 ${escapeHTML(message)}
@@ -10544,11 +10680,32 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 `;
 	}
 
-	function wireSubmitForm(root, { submitTarget, onSubmit, onCancel }) {
+	function wireSubmitForm(root, { submitTarget, targets = [], onSubmit, onCancel }) {
+		const chooser = root.querySelector("#submit-target");
+
+		if (chooser) {
+			chooser.onchange = () => {
+				const next = targets.find((each) => each.id === chooser.value);
+
+				if (!next) {
+					return;
+				}
+
+				const fields = root.querySelector("#submit-fields");
+
+				if (fields) {
+					fields.innerHTML = submitFieldsHTML(next);
+				}
+
+				wireSubmitForm(root, { submitTarget: next, targets, onSubmit, onCancel });
+			};
+		}
+
 		const titleInput = root.querySelector("#submit-title");
 		const countLabel = root.querySelector("#submit-count");
 		const urlInput = root.querySelector("#submit-url");
 		const textInput = root.querySelector("#submit-text");
+		const extraInputs = [...root.querySelectorAll(".submit-extra")];
 		const goButton = root.querySelector("#submit-go");
 		const cancelButton = root.querySelector("#submit-cancel");
 		const statusLine = root.querySelector("#submit-status");
@@ -10577,14 +10734,20 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		titleInput.value = suggestedSubmissionTitle();
 		urlInput.value = pageAddress();
 
+		const missingExtra = () =>
+			extraInputs.some(
+				(input) => input.dataset.required && !input.value.trim(),
+			);
+
 		const updateCount = () => {
-			const remaining = HN_TITLE_LIMIT - titleInput.value.length;
+			const remaining = submitTitleLimit(submitTarget) - titleInput.value.length;
 
 			countLabel.textContent = remaining + " left";
 			countLabel.classList.toggle("over", remaining < 0);
 
 			goButton.disabled =
 				!titleInput.value.trim() ||
+				missingExtra() ||
 				(!urlInput.value.trim() && !textInput.value.trim());
 		};
 
@@ -10593,12 +10756,19 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		urlInput.addEventListener("input", updateCount);
 		textInput.addEventListener("input", updateCount);
 
+		for (const input of extraInputs) {
+			input.addEventListener("input", updateCount);
+		}
+
 		goButton.onclick = async () => {
 			const title = titleInput.value.trim();
 			const url = urlInput.value.trim();
 			const text = textInput.value;
+			const extra = Object.fromEntries(
+				extraInputs.map((input) => [input.dataset.fieldId, input.value.trim()]),
+			);
 
-			if (!title || (!url && !text.trim())) {
+			if (!title || missingExtra() || (!url && !text.trim())) {
 				return;
 			}
 
@@ -10607,12 +10777,41 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			titleInput.disabled = true;
 			urlInput.disabled = true;
 			textInput.disabled = true;
-			setStatus("Opening Hacker News…");
+
+			for (const input of extraInputs) {
+				input.disabled = true;
+			}
+
+			if (chooser) {
+				chooser.disabled = true;
+			}
+			setStatus(`Opening ${submitTarget.label}\u2026`);
+
+			let posted = false;
 
 			try {
-				await onSubmit({ title, url, text }, { setStatus });
+				posted = await onSubmit(
+					{ title, url, text, extra, target: submitTarget },
+					{ setStatus },
+				);
 			} finally {
 				cancelButton.disabled = false;
+
+				if (!posted) {
+					titleInput.disabled = false;
+					urlInput.disabled = false;
+					textInput.disabled = false;
+
+					for (const input of extraInputs) {
+						input.disabled = false;
+					}
+
+					if (chooser) {
+						chooser.disabled = false;
+					}
+
+					updateCount();
+				}
 			}
 		};
 
@@ -10631,7 +10830,11 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		return { setStatus };
 	}
 
-	function submitPageThroughBridge(sourceID, { title, url, text }) {
+	function submitPageThroughBridge(
+		sourceID,
+		{ title, url, text, extra = {} },
+		{ onInterim } = {},
+	) {
 		const bridge = getWriteBridge(sourceID);
 		const action = bridge?.actions?.submit;
 
@@ -10640,7 +10843,10 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		}
 
 		const nonce = bridgeNonce();
-		const session = openSubmitBridgePopup(nonce, { origin: bridge.origin });
+		const session = openSubmitBridgePopup(nonce, {
+			origin: bridge.origin,
+			onInterim: onInterim || undefined,
+		});
 
 		if (session.blocked) {
 			return session.result;
@@ -10653,13 +10859,14 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 					url,
 					title,
 					text,
+					extra,
 					normalized: url ? normalizeURL(url) : "",
 					origin: location.origin,
 				});
 				await indexBridgePayload(nonce);
 
 				session.navigate(
-					action.url({ url, title }) + "#" + bridgeHash(action, nonce),
+					action.url({ url, title, extra }) + "#" + bridgeHash(action, nonce),
 				);
 
 				return await session.result;
@@ -10761,6 +10968,8 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 				return `${sourceLabel} did not respond in time. Check the popup window.`;
 			case "not-logged-in":
 				return `Log in to ${sourceLabel} in the popup, then try again.`;
+			case "awaiting-reader":
+				return `The ${sourceLabel} window is still open. Post it there, or close it to give up.`;
 			case "dupe":
 				return `${sourceLabel} already has this URL. Reload the page to see the discussion.`;
 			case "no-form":
@@ -18603,17 +18812,21 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				result: {
 					ok: Boolean(id),
 					storyID: id,
+					permalink: id ? commentURL(id) : "",
 					reason: id ? "existing" : "dupe",
 				},
 			};
 		}
 
 		if (location.pathname === "/newest") {
+			const id = findSubmittedStoryID(root, payload.normalized);
+
 			return {
 				payload,
 				result: {
 					ok: true,
-					storyID: findSubmittedStoryID(root, payload.normalized),
+					storyID: id,
+					permalink: id ? commentURL(id) : "",
 					reason: "submitted",
 				},
 			};
@@ -19084,8 +19297,119 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				url: ({ storyID, parentId }) => redditPermalink(storyID, parentId),
 				act: actRedditReply,
 			},
+			submit: {
+				marker: "hnewhere-submit",
+				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
+				noun: "submission",
+				stagesDraft: true,
+				url: ({ url, title, extra }) => redditSubmitURL(url, title, extra),
+				act: actRedditSubmit,
+				report: reportRedditSubmit,
+			},
 		},
 	});
+
+	function normalizeSubredditName(value) {
+		return String(value || "")
+			.trim()
+			.replace(/^\/?r\//i, "")
+			.replace(/\/+$/, "");
+	}
+
+	function redditSubmitURL(url, title, extra) {
+		const subreddit = normalizeSubredditName(extra?.subreddit);
+		const query =
+			"?url=" + encodeURIComponent(url) + "&title=" + encodeURIComponent(title);
+
+		return (
+			REDDIT_WRITE_ORIGIN +
+			(subreddit ? "/r/" + encodeURIComponent(subreddit) : "") +
+			"/submit" +
+			query
+		);
+	}
+
+	function actRedditSubmit({ payload, staged, root }) {
+		const form =
+			root.querySelector("form#newlink") ||
+			root.querySelector('form[action*="submit"]');
+
+		if (!form) {
+			return {
+				ok: false,
+				reason: root.querySelector('form[action*="login"], #login_login-main')
+					? "not-logged-in"
+					: "no-form",
+			};
+		}
+
+		const titleInput = form.querySelector('textarea[name="title"], input[name="title"]');
+		const urlInput = form.querySelector('input[name="url"]');
+		const textInput = form.querySelector('textarea[name="text"]');
+		const subredditInput = form.querySelector(
+			'input[name="sr"], #sr-autocomplete',
+		);
+
+		if (titleInput && staged?.title) {
+			titleInput.value = staged.title.slice(0, REDDIT_TITLE_LIMIT);
+		}
+
+		if (urlInput) {
+			urlInput.value = staged?.url || "";
+		}
+
+		if (textInput) {
+			textInput.value = staged?.text || "";
+		}
+
+		const subreddit = normalizeSubredditName(staged?.extra?.subreddit);
+
+		if (subredditInput && subreddit) {
+			subredditInput.value = subreddit;
+		}
+
+		if (
+			!stageBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY, {
+				...payload,
+				normalized: staged?.normalized || null,
+			})
+		) {
+			return { ok: false, reason: "storage-unavailable" };
+		}
+
+		return BRIDGE_AWAITING_READER;
+	}
+
+	function reportRedditSubmit(root) {
+		const payload = takeBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY);
+
+		if (!payload) {
+			return null;
+		}
+
+		const posted = /\/comments\//.test(location.pathname);
+
+		if (posted) {
+			return {
+				payload,
+				result: {
+					ok: true,
+					permalink: location.origin + location.pathname,
+					reason: "submitted",
+				},
+			};
+		}
+
+		const error = root.querySelector(".error, .status.error");
+
+		return {
+			payload,
+			result: {
+				ok: false,
+				reason: error?.textContent?.trim() || "unknown",
+			},
+		};
+	}
 
 	function setupHNListener() {
 		document.addEventListener(
