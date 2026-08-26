@@ -1,19 +1,14 @@
-<pre style="font-family:'Courier New',Courier,monospace;font-size:12px;line-height:1.17;white-space:pre;background-color:#000;color:#fff;padding:8px;margin:0;"><span style="color:#FFFFFF">▀▀▀▀▄</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">▀▀▀▄</span><span style="color:#AAAAAA">  </span><span style="color:#FFFFFF">▀▀▀▀▀</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█  ▄▀</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">▀▀▀▀▀</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">▀▀▀▄</span><span style="color:#AAAAAA">  </span><span style="color:#FFFFFF">▀▀▀▄</span><span style="color:#AAAAAA">  </span><span style="color:#FFFFFF">▀▀▀▄</span><span style="color:#AAAAAA">  </span><span style="color:#FFFFFF">▀▀▀▀▀</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█</span><span style="color:#AAAAAA">   </span>
-<span style="color:#FFFFFF">█ ▀▀▄</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█ ▀▀█</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█</span><span style="color:#AAAAAA">     </span><span style="color:#FFFFFF">█ ▀█</span><span style="color:#AAAAAA">  </span><span style="color:#FFFFFF">█</span><span style="color:#AAAAAA">     </span><span style="color:#FFFFFF">█ ▀▀█</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█ ▀▀█</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█ ▀</span><span style="color:#AAAAAA">   </span><span style="color:#FFFFFF">█</span><span style="color:#AAAAAA">   </span>
-<span style="color:#FFFFFF">█ ▄▄█</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█▄▄▄▄</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█▄▄▄▄</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█   █</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF"> ▀▄▄▄</span><span style="color:#AAAAAA"> </span><span style="color:#FFFFFF">█▄▄▄</span></pre>
+<p align="center">
+<picture>
+  <img width="120" height="120" alt="backchannel-birb" src="https://github.com/user-attachments/assets/1419b9a3-6172-4d13-b634-0a8fa2cba84f" />
+</picture>
+</p>
 
-```
-The internet's commentary track.  
-```
-
-<a href="https://trendshift.io/repositories/95983?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-95983" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/95983/daily?language=JavaScript" alt="twalichiewicz%2FBackchannel | Trendshift" width="250" height="55"/></a> <a href="https://www.producthunt.com/products/backchannel-4?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-backchannel-4" target="_blank" rel="noopener noreferrer"><img alt="Backchannel - The internet's commentary track. | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1222392&amp;theme=light&amp;t=1786733251041"></a>
-                                               
 <img width="1305" height="887" alt="A screenshot of Safari on macOS opened to https://www.seangoedecke.com/llms-reward-expertise/, with the HNewhere side bar open viewing the comments. The settings dropdown in the sidebar is also open, showing which settings the user currently has enabled." src="https://github.com/user-attachments/assets/f50131fc-fa6b-4e25-a5dd-9c44ceae1bc5" />
 
+# Backchannel
 
-## What it does
-
-- **The web's commentary track:** Avoid the two-tab-tango and conveniently read the community's comments in-context.
+- **The internet's commentary track:** Avoid the two-tab-tango and conveniently read the community's comments in-context.
 - **Never miss a thread:** Every page you land on gets checked against the sources you've picked, so you find out a discussion exists without going hunting for one.
 - **What the internet is saying, in one thread:** Every source you've switched on, merged into a single conversation, each comment quietly noting where it came from. Pick them with a checkbox.
 - **See what they're talking about:** Quotes in the comments get matched back to the article and lit as annotations in articles. Click a highlight to filter the thread to the people discussing that passage.
@@ -26,6 +21,8 @@ The internet's commentary track.
 - **Yours to adjust:** Button shape and size, sidebar width, theme, which annotation layers show, and a per-site off switch. It's one file with no build step, so if the settings don't cover it, the source is right there.
 
 ## Install
+
+<a href="https://trendshift.io/repositories/95983?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-95983" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/95983/daily?language=JavaScript" alt="twalichiewicz%2FBackchannel | Trendshift" width="250" height="55"/></a> <a href="https://www.producthunt.com/products/backchannel-4?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-backchannel-4" target="_blank" rel="noopener noreferrer"><img alt="Backchannel - The internet's commentary track. | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1222392&amp;theme=light&amp;t=1786733251041"></a>
 
 1. Install a userscript manager:
    - [Tampermonkey](https://www.tampermonkey.net/)
