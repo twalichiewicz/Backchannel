@@ -32,7 +32,11 @@
 2. [Install Backchannel](https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js)
    - *Upgrading from HNewhere?* Let it auto-update and it renames itself. If you
      install from this link instead, delete the old **HNewhere** entry afterwards.
-3. Browse the web as usual. If a thread exists for that page the (BC) button lights up, letting you know people are discussing this site. You can also visit https://twalichiewicz.github.io/Backchannel/ once you have the script installed to have a front page you can bookmark.
+
+## Usage
+1. Browse the web as usual. If a thread exists for that page the (BC) button lights up, letting you know people are discussing this site. 
+2. You can visit https://twalichiewicz.github.io/Backchannel/ once you have the script installed to have a customizable front page you can bookmark.
+3. You can directly upload to Hacker News and Reddit using the **↑** button.
 
 ## FAQ
 
