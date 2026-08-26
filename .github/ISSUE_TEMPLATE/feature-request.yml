@@ -1,0 +1,44 @@
+name: 🚀 Feature request
+description: Request a new feature.
+labels: [feature request]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting an idea!
+
+        Please provide as much information as you can in the form below.
+  - type: dropdown
+    id: type
+    validations:
+      required: true
+    attributes:
+      label: Type of change
+      description: |
+        Please specify whether this is a substantial change.
+      options:
+        - Yes
+        - No
+      default: 1
+  - type: textarea
+    id: description
+    validations:
+      required: true
+    attributes:
+      label: Description
+      description: |
+        Please describe the feature request in as much detail as possible, including examples of how you would use the new feature.
+  - type: textarea
+    id: problem_to_solve
+    validations:
+      required: true
+    attributes:
+      label: What is the problem this feature will solve?
+  - type: textarea
+    id: alternatives
+    validations:
+      required: true
+    attributes:
+      label: What alternatives have you considered?
+      description: |
+        Please describe any alternatives or workarounds you have considered that could be used instead of this feature.

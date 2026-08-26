@@ -1,0 +1,72 @@
+name: 🐛 Bug report
+description: Create a report to help us improve.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We appreciate you reporting a bug!
+
+        Please provide as much detail as you can in the form below.
+  - type: textarea
+    id: description
+    validations:
+      required: true
+    attributes:
+      label: Description
+      description: |
+        Please describe the bug in as much detail as possible. Include what occurred. If you have an error message, please include as much of the error message as possible.
+  - type: textarea
+    id: steps_to_reproduce
+    validations:
+      required: true
+    attributes:
+      label: What steps will reproduce the bug?
+      description: >
+        Enter details on how to reproduce your bug, preferably a simple code snippet. If textual output included and if possible, please provide numbered steps or bullet points.
+  - type: textarea
+    id: frequency
+    validations:
+      required: true
+    attributes:
+      label: How frequently does this occur? Are there any specific conditions needed?
+  - type: textarea
+    id: expected_behavior
+    validations:
+      required: true
+    attributes:
+      label: What is the expected behavior? Why do you consider this the expected outcome?
+      description: If possible please provide textual output instead of screenshots.
+  - type: textarea
+    id: actual_behavior
+    validations:
+      required: true
+    attributes:
+      label: What do you see instead?
+      description: If possible please provide textual output instead of screenshots.
+  - type: input
+    id: browser
+    validations:
+      required: true
+    attributes:
+      label: Browser
+      description: |
+        What browser are you using?
+        Run the following in the browser console and provide the output:
+        ```javascript
+        console.log(navigator.userAgent);
+        ```
+  - type: textarea
+    id: platform
+    validations:
+      required: true
+    attributes:
+      label: Platform
+      render: text
+      description: |
+        UNIX: output of `uname -srm`
+        Windows: output of `"$([Environment]::OSVersion.VersionString) $(('x86', 'x64')[[Environment]::Is64BitOperatingSystem])"` in PowerShell console
+  - type: textarea
+    id: additional_info
+    attributes:
+      label: Additional information
+      description: Tell us anything else you think we should know.
