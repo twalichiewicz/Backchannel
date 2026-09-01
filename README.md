@@ -2,6 +2,7 @@
 <picture>
   <img width="120" height="120" alt="backchannel-birb" src="https://github.com/user-attachments/assets/1419b9a3-6172-4d13-b634-0a8fa2cba84f" />
 </picture>
+  <br/>The internet's commentary track
 </p>
 
 <img width="1305" height="887" alt="A screenshot of Safari on macOS opened to https://www.seangoedecke.com/llms-reward-expertise/, with the HNewhere side bar open viewing the comments. The settings dropdown in the sidebar is also open, showing which settings the user currently has enabled." src="https://github.com/user-attachments/assets/f50131fc-fa6b-4e25-a5dd-9c44ceae1bc5" />
