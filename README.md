@@ -30,9 +30,7 @@
    - [Violentmonkey](https://violentmonkey.github.io/)
    - [Userscripts (Safari)](https://apps.apple.com/us/app/userscripts/id1463298887)
 
-2. [Install Backchannel](https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js)
-   - *Upgrading from HNewhere?* Let it auto-update and it renames itself. If you
-     install from this link instead, delete the old **HNewhere** entry afterwards.
+2. **[Install Backchannel](https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js)**
 
 ## Usage
 1. Browse the web as usual. If a thread exists for that page the (BC) button lights up, letting you know people are discussing this site. 
