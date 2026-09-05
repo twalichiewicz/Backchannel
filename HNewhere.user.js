@@ -358,7 +358,6 @@
 		autoOpenSidebarOnlyFromHN: false,
 		hideWithoutDiscussion: false,
 		showButtonWithQueue: false,
-		notifyOnWatch: false,
 		sources: undefined,
 		theme: "auto",
 		buttonShape: "circle",
@@ -3200,7 +3199,6 @@ ${
 		"annotations",
 		"pdfReader",
 		"notepad",
-		"notifyOnWatch",
 	]);
 
 	function pdfViewerRefusesExtensions() {
@@ -5372,73 +5370,6 @@ button {
 	const WATCH_BATCH = 4;
 	const WATCH_POLL_DELAY_MS = 5000;
 
-	function notificationsAllowed() {
-		return (
-			typeof Notification !== "undefined" && Notification.permission === "granted"
-		);
-	}
-
-	function canNotify() {
-		return (
-			typeof Notification !== "undefined" &&
-			typeof Notification.requestPermission === "function"
-		);
-	}
-
-	async function grantNotifications() {
-		if (!canNotify()) {
-			return false;
-		}
-
-		try {
-			return (await Notification.requestPermission()) === "granted";
-		} catch (error) {
-			console.error("Backchannel notification permission failed:", error);
-
-			return false;
-		}
-	}
-
-	function notifyWatch(entry, count) {
-		const text =
-			pluralize(count, "discussion") +
-			" on " +
-			(entry.title || entry.site || entry.url);
-
-		if (typeof GM === "undefined" || typeof GM.notification !== "function") {
-			try {
-				if (
-					typeof Notification !== "undefined" &&
-					Notification.permission === "granted"
-				) {
-					new Notification("Backchannel", { body: text }).onclick = () => {
-						window.open(entry.url, "_blank");
-					};
-				}
-			} catch (error) {
-				console.error("Backchannel notification failed:", error);
-			}
-
-			return;
-		}
-
-		try {
-			GM.notification({
-				title: "Backchannel",
-				text:
-					pluralize(count, "discussion") +
-					" on " +
-					(entry.title || entry.site || entry.url),
-				timeout: 8000,
-				onclick: () => {
-					window.open(entry.url, "_blank");
-				},
-			});
-		} catch (error) {
-			console.error("Backchannel notification failed:", error);
-		}
-	}
-
 	function watchStory(entry, discussion) {
 		return {
 			id: discussion.id,
@@ -5539,10 +5470,6 @@ button {
 
 						return queued;
 					});
-
-					if (settings.notifyOnWatch && notificationsAllowed()) {
-						notifyWatch(entry, found.length);
-					}
 				}
 			}
 		}
@@ -13491,13 +13418,6 @@ All stored locally.
 <span class="settings-byline-sep">|</span>
 <button id="settings-notes-export" class="settings-byline-action" type="button">export</button>
 </div>
-<label class="settings-option">
-<input id="setting-notify-on-watch" data-setting="notifyOnWatch" type="checkbox">
-<span>Enable notifications for updates to watched discussions</span>
-</label>
-<div class="settings-option-hint">
-Sends a system notification when a watched page has new comments
-</div>
 </div>
 
 <div class="settings-group">
@@ -13654,7 +13574,6 @@ ${[
 				"#setting-hide-without-discussion",
 			),
 			showButtonWithQueue: shadow.querySelector("#setting-show-button-with-queue"),
-			notifyOnWatch: shadow.querySelector("#setting-notify-on-watch"),
 			annotations: shadow.querySelector("#setting-annotations"),
 			annotationsWhenSidebarClosed: shadow.querySelector(
 				"#setting-annotations-closed",
@@ -13783,16 +13702,6 @@ ${[
 				if (input) {
 					input.checked = Boolean(settings[key]);
 
-					if (
-						key === "notifyOnWatch" &&
-						input.checked &&
-						typeof Notification !== "undefined" &&
-						Notification.permission === "denied"
-					) {
-						input.checked = false;
-						saveSettings({ notifyOnWatch: false }).catch(console.error);
-					}
-
 					if (HINTED_SETTINGS.has(key)) {
 						syncOptionHint(input);
 					}
@@ -13844,19 +13753,6 @@ ${[
 
 				if (notice) {
 					notice.hidden = false;
-				}
-			}
-
-			if (!canNotify()) {
-				const option = settingsInputs.notifyOnWatch?.closest(".settings-option");
-				const hint = option?.nextElementSibling;
-
-				if (option) {
-					option.hidden = true;
-				}
-
-				if (hint?.classList.contains("settings-option-hint")) {
-					hint.hidden = true;
 				}
 			}
 		};
@@ -14038,19 +13934,6 @@ ${[
 			const input = event.target.closest("input[data-setting]");
 
 			if (!input) {
-				return;
-			}
-
-			if (input.dataset.setting === "notifyOnWatch") {
-				const allowed = input.checked ? await grantNotifications() : false;
-
-				input.checked = input.checked && allowed;
-
-				applySettingsPanelState(
-					await saveSettings({ notifyOnWatch: input.checked }),
-				);
-				settlePanesHeight();
-
 				return;
 			}
 
