@@ -199,6 +199,7 @@
 		pendingFocus: "HNewhere:pending_focus",
 		watches: "HNewhere:watches",
 		hiddenStories: "HNewhere:hidden_stories",
+		zoomBySite: "HNewhere:zoom_by_site",
 	};
 
 	// #region hnewhere-test-export
@@ -333,6 +334,7 @@
 	let buttonSizePreference = BUTTON_SIZE_DEFAULT;
 	let buttonMarkPreference = BUTTON_MARK_DEFAULT;
 	let accentPreference = null;
+	let keepSidebarSizePreference = true;
 
 	function syncAppearancePreferences(settings) {
 		themePreference = settings.theme || "auto";
@@ -343,6 +345,7 @@
 		buttonMarkPreference = normalizeButtonMark(settings.buttonMark);
 		accentPreference =
 			typeof settings.accentColor === "string" ? settings.accentColor : null;
+		keepSidebarSizePreference = settings.keepSidebarSize !== false;
 	}
 	// #endregion hnewhere-test-export
 
@@ -364,6 +367,7 @@
 		accentColor: null,
 		commentSort: "best",
 		newCommentsFirst: false,
+		keepSidebarSize: true,
 	};
 
 	// #region hnewhere-test-export
@@ -6442,6 +6446,39 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
+	function applySidebarZoom(panel = sidebarUI?.shadow?.querySelector("#panel")) {
+		sidebarZoom =
+			keepSidebarSizePreference && !pageModeActive && zoomBaselineValue
+				? sidebarZoomFactor(zoomBaselineValue, pageZoom())
+				: 1;
+
+		if (panel) {
+			if (sidebarZoom === 1) {
+				panel.style.removeProperty("zoom");
+				panel.style.removeProperty("--panel-zoom");
+			} else {
+				panel.style.setProperty("zoom", String(sidebarZoom));
+				panel.style.setProperty("--panel-zoom", String(sidebarZoom));
+			}
+		}
+
+		return sidebarZoom;
+	}
+
+	async function rememberZoomForSite() {
+		const zoom = pageZoom();
+		const stored = await load(STORAGE.zoomBySite, {});
+		const byHost =
+			stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+		const next = rememberZoom(byHost, siteKey(), zoom);
+
+		if (byHost[siteKey()] !== zoom) {
+			await save(STORAGE.zoomBySite, next);
+		}
+
+		return zoomBaseline(next, zoom);
+	}
+
 	// -------------------------
 	// Theme detection
 	// -------------------------
@@ -6468,6 +6505,8 @@ button {
 	}
 
 	let pageModeActive = false;
+	let sidebarZoom = 1;
+	let zoomBaselineValue = null;
 
 	function setPageModeActive(active) {
 		pageModeActive = Boolean(active);
@@ -14236,9 +14275,10 @@ ${[
 
 		setPageModeActive(pageMode);
 
+		const zoom = applySidebarZoom(null);
 		const savedWidth = await loadSiteWidth();
 
-		const width = Math.min(Math.max(savedWidth, 280), maxSidebarWidth());
+		const width = Math.min(Math.max(savedWidth, 280), maxSidebarWidth() / zoom);
 
 		const host = document.createElement("div");
 		host.setAttribute("data-hnewhere-sidebar", "1");
@@ -14267,11 +14307,11 @@ ${[
 	position:fixed;
 	right:0;
 	top:0;
-	height:100vh;
-	height:100dvh;
+	height:calc(100vh / var(--panel-zoom, 1));
+	height:calc(100dvh / var(--panel-zoom, 1));
 	width:${width}px;
 	min-width:${isPortraitPhone() ? "0" : "280px"};
-	max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "80vw"};
+	max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "calc(80vw / var(--panel-zoom, 1))"};
 	box-sizing:border-box;
 	background:var(--bg);
 	color:var(--text);
@@ -14720,7 +14760,7 @@ ${SUBMIT_FORM_CSS}
 	left:0;
 	z-index:5;
 	width:max-content;
-	max-width:min(280px, 72vw);
+	max-width:min(280px, calc(72vw / var(--panel-zoom, 1)));
 	padding:7px 9px;
 	border:1px solid var(--surface-border);
 	border-radius:6px;
@@ -15772,6 +15812,8 @@ ${settingsPanelHTML()}
 
 		const panel = shadow.querySelector("#panel");
 
+		applySidebarZoom(panel);
+
 		const stopWatchingTheme = watchTheme(host);
 		const filterBanner = shadow.querySelector("#filter-banner");
 		const filterBannerQuote = shadow.querySelector("#filter-banner-quote");
@@ -15818,11 +15860,11 @@ ${settingsPanelHTML()}
 		const onMouseMove = (e) => {
 			if (!resizing) return;
 
-			const delta = startX - e.clientX;
+			const delta = (startX - e.clientX) / sidebarZoom;
 
 			const newWidth = Math.min(
 				Math.max(startWidth + delta, 280),
-				maxSidebarWidth(),
+				maxSidebarWidth() / sidebarZoom,
 			);
 
 			panel.style.width = newWidth + "px";
@@ -15874,8 +15916,8 @@ ${settingsPanelHTML()}
 			}
 
 			const newWidth = Math.min(
-				Math.max(startWidth + (startX - touch.clientX), 280),
-				maxSidebarWidth(),
+				Math.max(startWidth + (startX - touch.clientX) / sidebarZoom, 280),
+				maxSidebarWidth() / sidebarZoom,
 			);
 
 			panel.style.width = newWidth + "px";
@@ -15914,7 +15956,9 @@ ${settingsPanelHTML()}
 				return;
 			}
 
-			const maxWidth = maxSidebarWidth();
+			applySidebarZoom(panel);
+
+			const maxWidth = maxSidebarWidth() / sidebarZoom;
 			const portrait = isPortraitPhone();
 
 			if (portrait !== wasPortrait) {
@@ -23583,6 +23627,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		if (blocked) {
 			return;
 		}
+
+		zoomBaselineValue = await rememberZoomForSite();
 
 		sweepBridgePayloads().catch(console.error);
 
