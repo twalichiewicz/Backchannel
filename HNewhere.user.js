@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.12.1
+// @version      1.6.13
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -199,6 +199,7 @@
 		pendingFocus: "HNewhere:pending_focus",
 		watches: "HNewhere:watches",
 		hiddenStories: "HNewhere:hidden_stories",
+		zoomBySite: "HNewhere:zoom_by_site",
 	};
 
 	// #region hnewhere-test-export
@@ -333,6 +334,7 @@
 	let buttonSizePreference = BUTTON_SIZE_DEFAULT;
 	let buttonMarkPreference = BUTTON_MARK_DEFAULT;
 	let accentPreference = null;
+	let keepSidebarSizePreference = true;
 
 	function syncAppearancePreferences(settings) {
 		themePreference = settings.theme || "auto";
@@ -343,6 +345,7 @@
 		buttonMarkPreference = normalizeButtonMark(settings.buttonMark);
 		accentPreference =
 			typeof settings.accentColor === "string" ? settings.accentColor : null;
+		keepSidebarSizePreference = settings.keepSidebarSize !== false;
 	}
 	// #endregion hnewhere-test-export
 
@@ -355,7 +358,6 @@
 		autoOpenSidebarOnlyFromHN: false,
 		hideWithoutDiscussion: false,
 		showButtonWithQueue: false,
-		notifyOnWatch: false,
 		sources: undefined,
 		theme: "auto",
 		buttonShape: "circle",
@@ -364,6 +366,7 @@
 		accentColor: null,
 		commentSort: "best",
 		newCommentsFirst: false,
+		keepSidebarSize: true,
 	};
 
 	// #region hnewhere-test-export
@@ -3135,8 +3138,13 @@
 	}
 
 	// #region hnewhere-test-export
+	const JUNK_DISPLAY_NAMES = new Set(["[object Object]", "undefined"]);
+
 	function authorDisplay(author, authorName = "") {
-		const shown = authorName || author || "";
+		const display = JUNK_DISPLAY_NAMES.has(String(authorName || "").trim())
+			? ""
+			: authorName;
+		const shown = display || author || "";
 
 		return {
 			shown,
@@ -3191,7 +3199,6 @@ ${
 		"annotations",
 		"pdfReader",
 		"notepad",
-		"notifyOnWatch",
 	]);
 
 	function pdfViewerRefusesExtensions() {
@@ -5363,73 +5370,6 @@ button {
 	const WATCH_BATCH = 4;
 	const WATCH_POLL_DELAY_MS = 5000;
 
-	function notificationsAllowed() {
-		return (
-			typeof Notification !== "undefined" && Notification.permission === "granted"
-		);
-	}
-
-	function canNotify() {
-		return (
-			typeof Notification !== "undefined" &&
-			typeof Notification.requestPermission === "function"
-		);
-	}
-
-	async function grantNotifications() {
-		if (!canNotify()) {
-			return false;
-		}
-
-		try {
-			return (await Notification.requestPermission()) === "granted";
-		} catch (error) {
-			console.error("Backchannel notification permission failed:", error);
-
-			return false;
-		}
-	}
-
-	function notifyWatch(entry, count) {
-		const text =
-			pluralize(count, "discussion") +
-			" on " +
-			(entry.title || entry.site || entry.url);
-
-		if (typeof GM === "undefined" || typeof GM.notification !== "function") {
-			try {
-				if (
-					typeof Notification !== "undefined" &&
-					Notification.permission === "granted"
-				) {
-					new Notification("Backchannel", { body: text }).onclick = () => {
-						window.open(entry.url, "_blank");
-					};
-				}
-			} catch (error) {
-				console.error("Backchannel notification failed:", error);
-			}
-
-			return;
-		}
-
-		try {
-			GM.notification({
-				title: "Backchannel",
-				text:
-					pluralize(count, "discussion") +
-					" on " +
-					(entry.title || entry.site || entry.url),
-				timeout: 8000,
-				onclick: () => {
-					window.open(entry.url, "_blank");
-				},
-			});
-		} catch (error) {
-			console.error("Backchannel notification failed:", error);
-		}
-	}
-
 	function watchStory(entry, discussion) {
 		return {
 			id: discussion.id,
@@ -5530,10 +5470,6 @@ button {
 
 						return queued;
 					});
-
-					if (settings.notifyOnWatch && notificationsAllowed()) {
-						notifyWatch(entry, found.length);
-					}
 				}
 			}
 		}
@@ -5736,8 +5672,81 @@ button {
 
 	const THREAD_CEILING_MS = 20000;
 
+	// #region hnewhere-test-export
+	const THREAD_TTL = 5 * 60 * 1000;
+	const THREAD_CACHE_MAX = 20;
+
+	function cachedThread(cache, key, now) {
+		const entry = cache.get(key);
+
+		if (!entry) {
+			return null;
+		}
+
+		if (now - entry.at >= THREAD_TTL) {
+			cache.delete(key);
+			return null;
+		}
+
+		cache.delete(key);
+		cache.set(key, entry);
+
+		return entry;
+	}
+
+	function rememberThread(cache, key, reader, now) {
+		cache.delete(key);
+		cache.set(key, { reader, at: now });
+
+		while (cache.size > THREAD_CACHE_MAX) {
+			cache.delete(cache.keys().next().value);
+		}
+
+		return cache;
+	}
+
+	function threadsCheckedAt(cache, keys, now) {
+		let oldest = now;
+
+		for (const key of keys) {
+			const at = cache.get(key)?.at;
+
+			if (typeof at === "number" && at < oldest) {
+				oldest = at;
+			}
+		}
+
+		return oldest;
+	}
+	// #endregion hnewhere-test-export
+
+	const threadCache = new Map();
+
+	async function loadThread(story) {
+		const hit = story.local ? null : cachedThread(threadCache, story.key, Date.now());
+
+		if (hit) {
+			return hit.reader;
+		}
+
+		const reader = await loadThreadWithCeiling(story);
+
+		if (!story.local && !reader.empty) {
+			rememberThread(threadCache, story.key, reader, Date.now());
+		}
+
+		return reader;
+	}
+
+	function forgetThreads(stories) {
+		for (const story of stories) {
+			threadCache.delete(story.key);
+		}
+	}
+
 	function emptyThreadReader() {
 		return {
+			empty: true,
 			rootKeys: [],
 			rootTimes: new Map(),
 			async getComment() {
@@ -6356,6 +6365,120 @@ button {
 			: window.innerWidth * 0.8;
 	}
 
+	// #region hnewhere-test-export
+	const ZOOM_HOSTS_MAX = 40;
+	const ZOOM_HOSTS_MIN = 5;
+	const ZOOM_DEAD_ZONE = 0.12;
+
+	function pageZoom(
+		{ outerWidth, innerWidth, outerHeight, innerHeight } = window,
+		mobile = isMobile(),
+	) {
+		if (
+			mobile ||
+			!(outerWidth > 0 && innerWidth > 0 && outerHeight > 0 && innerHeight > 0)
+		) {
+			return 1;
+		}
+
+		const zoom = Math.min(outerWidth / innerWidth, outerHeight / innerHeight);
+
+		return Number.isFinite(zoom) && zoom > 0 ? Math.round(zoom * 100) / 100 : 1;
+	}
+
+	function rememberZoom(byHost, host, zoom) {
+		const next = {};
+
+		for (const [key, value] of Object.entries(byHost || {})) {
+			if (key !== host && typeof value === "number" && value > 0) {
+				next[key] = value;
+			}
+		}
+
+		next[host] = zoom;
+
+		for (const key of Object.keys(next).slice(0, -ZOOM_HOSTS_MAX)) {
+			delete next[key];
+		}
+
+		return next;
+	}
+
+	function zoomBaseline(byHost, fallback) {
+		const counts = new Map();
+		let total = 0;
+
+		for (const zoom of Object.values(byHost || {})) {
+			if (typeof zoom === "number" && zoom > 0) {
+				counts.set(zoom, (counts.get(zoom) || 0) + 1);
+				total += 1;
+			}
+		}
+
+		if (total < ZOOM_HOSTS_MIN) {
+			return fallback;
+		}
+
+		let best = fallback;
+		let bestCount = 0;
+
+		for (const [zoom, count] of counts) {
+			if (
+				count > bestCount ||
+				(count === bestCount && Math.abs(zoom - 1) < Math.abs(best - 1))
+			) {
+				best = zoom;
+				bestCount = count;
+			}
+		}
+
+		return best;
+	}
+
+	function sidebarZoomFactor(baseline, zoom) {
+		if (!(baseline > 0 && zoom > 0)) {
+			return 1;
+		}
+
+		const factor = Math.round((baseline / zoom) * 100) / 100;
+
+		return Math.abs(factor - 1) < ZOOM_DEAD_ZONE ? 1 : factor;
+	}
+	// #endregion hnewhere-test-export
+
+	function applySidebarZoom(panel = sidebarUI?.shadow?.querySelector("#panel")) {
+		sidebarZoom =
+			keepSidebarSizePreference && !pageModeActive && zoomBaselineValue
+				? sidebarZoomFactor(zoomBaselineValue, pageZoom())
+				: 1;
+
+		if (panel) {
+			if (sidebarZoom === 1) {
+				panel.style.removeProperty("zoom");
+				panel.style.removeProperty("--panel-zoom");
+			} else {
+				panel.style.setProperty("zoom", String(sidebarZoom));
+				panel.style.setProperty("--panel-zoom", String(sidebarZoom));
+			}
+		}
+
+		return sidebarZoom;
+	}
+
+	async function rememberZoomForSite() {
+		const zoom = pageZoom();
+		const stored = await load(STORAGE.zoomBySite, {});
+		const byHost =
+			stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+		const next = rememberZoom(byHost, siteKey(), zoom);
+
+		if (byHost[siteKey()] !== zoom) {
+			await save(STORAGE.zoomBySite, next);
+		}
+
+		return zoomBaseline(next, zoom);
+	}
+
 	// -------------------------
 	// Theme detection
 	// -------------------------
@@ -6382,6 +6505,8 @@ button {
 	}
 
 	let pageModeActive = false;
+	let sidebarZoom = 1;
+	let zoomBaselineValue = null;
 
 	function setPageModeActive(active) {
 		pageModeActive = Boolean(active);
@@ -8047,7 +8172,7 @@ button {
 
 			const control = document.createElement(action.href ? "a" : "button");
 
-			control.className = "vote-unvote-link";
+			control.className = "vote-note-action";
 			control.textContent = action.label;
 
 			if (action.href) {
@@ -8065,39 +8190,6 @@ button {
 
 			element.appendChild(document.createTextNode(" "));
 			element.appendChild(control);
-		});
-	}
-
-	function updateVoteStatus(itemId, state, onUnvote) {
-		const label =
-			state === "up" ? "unvote" : state === "down" ? "undown" : null;
-
-		const escapedId = CSS.escape(String(itemId));
-		const selector =
-			`.story-vote-status[data-vote-status-id="${escapedId}"],` +
-			`.comment-vote-status[data-vote-status-id="${escapedId}"]`;
-
-		(sidebarUI?.body?.querySelectorAll(selector) || []).forEach((element) => {
-			element.replaceChildren();
-
-			if (!label) {
-				return;
-			}
-
-			element.appendChild(document.createTextNode(" | "));
-
-			const button = document.createElement("button");
-			button.type = "button";
-			button.className = "vote-unvote-link";
-			button.textContent = label;
-
-			button.onclick = (event) => {
-				event.preventDefault();
-				event.stopPropagation();
-				onUnvote?.();
-			};
-
-			element.appendChild(button);
 		});
 	}
 
@@ -8278,8 +8370,23 @@ button {
 	// #region hnewhere-test-export
 
 	function hnVoteDescriptors(voteInfo, label) {
-		if (!voteInfo || voteInfo.state === "up" || voteInfo.state === "down") {
+		if (!voteInfo) {
 			return [];
+		}
+
+		if (voteInfo.state === "up" || voteInfo.state === "down") {
+			const up = voteInfo.state === "up";
+
+			return [
+				{
+					label: up ? "▲" : "▼",
+					title: (up ? "Remove upvote on " : "Remove downvote on ") + label,
+					action: "un",
+					url: voteInfo.unUrl || null,
+					active: true,
+					variant: up ? "up" : "down",
+				},
+			];
 		}
 
 		const descriptors = [];
@@ -8662,17 +8769,6 @@ button {
 		container.replaceChildren();
 
 		const descriptors = voteDescriptorsFor(sourceID, voteInfo);
-		const state = voteInfo?.state;
-
-		updateVoteStatus(itemId, voteInfo?.unUrl ? state : null, () => {
-			submitVote(
-				sourceID,
-				storyID,
-				itemId,
-				{ action: "un", url: voteInfo.unUrl },
-				container,
-			);
-		});
 
 		if (!descriptors.length) {
 			container.classList.add("hidden");
@@ -9015,6 +9111,7 @@ button {
 
 		const swap = () => {
 			panel.classList.toggle("browsing", on);
+			refreshSidebarSubtitle(ui);
 
 			const stranded = on && !sidebarHasDiscussion;
 
@@ -11919,7 +12016,8 @@ header {
 }
 
 .header-subtitle-visible {
-	max-height:16px;
+	max-height:18px;
+	padding-bottom:2px;
 	opacity:.85;
 }
 
@@ -11946,6 +12044,58 @@ header {
 @keyframes hnewhere-subtitle-shimmer {
     from { background-position:120% 0; }
     to { background-position:-20% 0; }
+}
+
+.header-subtitle-quiet {
+	color:var(--subtitle-stage);
+}
+
+.header-sync-sep {
+	margin:0 .35em;
+	opacity:.5;
+}
+
+.header-sync {
+	border:0;
+	padding:0;
+	margin:0;
+	background:none;
+	color:inherit;
+	font:inherit;
+	cursor:pointer;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+}
+
+@media (hover: hover) {
+	.header-sync:hover {
+		text-decoration:underline;
+	}
+}
+
+.wordmark-where-done {
+	animation:hnewhere-crumb-settle .9s ease-out;
+}
+
+@keyframes hnewhere-crumb-settle {
+	0%, 30% { color:var(--subtitle-stage-peak); }
+	100% { color:var(--subtitle-stage); }
+}
+
+.wordmark-where-loading {
+	background:linear-gradient(
+		90deg,
+		var(--subtitle-stage) 0%,
+		var(--subtitle-stage) 40%,
+		var(--subtitle-stage-peak) 50%,
+		var(--subtitle-stage) 60%,
+		var(--subtitle-stage) 100%
+	);
+	background-size:220% 100%;
+	-webkit-background-clip:text;
+	background-clip:text;
+	-webkit-text-fill-color:transparent;
+	animation:hnewhere-subtitle-shimmer 1.6s linear infinite;
 }
 
 .settings-panel {
@@ -13218,7 +13368,7 @@ ${
 </div>
 <label class="settings-option">
 <input id="setting-hide-without-discussion" data-setting="hideWithoutDiscussion" type="checkbox">
-<span>Only show the button when a discussion exists</span>
+<span>Only show the Backchannel toggle when a discussion exists</span>
 </label>
 <div class="settings-suboptions" data-suboptions-of="hideWithoutDiscussion">
 <label class="settings-option sub-option">
@@ -13226,6 +13376,10 @@ ${
 <span>Unless there are unread items in the queue</span>
 </label>
 </div>
+<label class="settings-option">
+<input id="setting-keep-sidebar-size" data-setting="keepSidebarSize" type="checkbox">
+<span>Keep the sidebar the same size when a page is zoomed</span>
+</label>
 </div>
 
 <div class="settings-group">
@@ -13263,13 +13417,6 @@ All stored locally.
 <span id="settings-notes-count">0 notes</span>
 <span class="settings-byline-sep">|</span>
 <button id="settings-notes-export" class="settings-byline-action" type="button">export</button>
-</div>
-<label class="settings-option">
-<input id="setting-notify-on-watch" data-setting="notifyOnWatch" type="checkbox">
-<span>Enable notifications for updates to watched discussions</span>
-</label>
-<div class="settings-option-hint">
-Sends a system notification when a watched page has new comments
 </div>
 </div>
 
@@ -13427,7 +13574,6 @@ ${[
 				"#setting-hide-without-discussion",
 			),
 			showButtonWithQueue: shadow.querySelector("#setting-show-button-with-queue"),
-			notifyOnWatch: shadow.querySelector("#setting-notify-on-watch"),
 			annotations: shadow.querySelector("#setting-annotations"),
 			annotationsWhenSidebarClosed: shadow.querySelector(
 				"#setting-annotations-closed",
@@ -13437,6 +13583,7 @@ ${[
 			autoOpenSidebarOnlyFromHN: shadow.querySelector(
 				"#setting-auto-open-only-from-hn",
 			),
+			keepSidebarSize: shadow.querySelector("#setting-keep-sidebar-size"),
 		};
 
 		const settingsRadios = {
@@ -13555,16 +13702,6 @@ ${[
 				if (input) {
 					input.checked = Boolean(settings[key]);
 
-					if (
-						key === "notifyOnWatch" &&
-						input.checked &&
-						typeof Notification !== "undefined" &&
-						Notification.permission === "denied"
-					) {
-						input.checked = false;
-						saveSettings({ notifyOnWatch: false }).catch(console.error);
-					}
-
 					if (HINTED_SETTINGS.has(key)) {
 						syncOptionHint(input);
 					}
@@ -13616,19 +13753,6 @@ ${[
 
 				if (notice) {
 					notice.hidden = false;
-				}
-			}
-
-			if (!canNotify()) {
-				const option = settingsInputs.notifyOnWatch?.closest(".settings-option");
-				const hint = option?.nextElementSibling;
-
-				if (option) {
-					option.hidden = true;
-				}
-
-				if (hint?.classList.contains("settings-option-hint")) {
-					hint.hidden = true;
 				}
 			}
 		};
@@ -13813,19 +13937,6 @@ ${[
 				return;
 			}
 
-			if (input.dataset.setting === "notifyOnWatch") {
-				const allowed = input.checked ? await grantNotifications() : false;
-
-				input.checked = input.checked && allowed;
-
-				applySettingsPanelState(
-					await saveSettings({ notifyOnWatch: input.checked }),
-				);
-				settlePanesHeight();
-
-				return;
-			}
-
 			const settings = await saveSettings({
 				[input.dataset.setting]:
 					input.type === "radio" ? input.value : input.checked,
@@ -13849,6 +13960,11 @@ ${[
 
 			if (setting === "notepad") {
 				await reopenForNotes();
+				return;
+			}
+
+			if (setting === "keepSidebarSize") {
+				applySidebarZoom();
 				return;
 			}
 
@@ -14179,9 +14295,10 @@ ${[
 
 		setPageModeActive(pageMode);
 
+		const zoom = applySidebarZoom(null);
 		const savedWidth = await loadSiteWidth();
 
-		const width = Math.min(Math.max(savedWidth, 280), maxSidebarWidth());
+		const width = Math.min(Math.max(savedWidth, 280), maxSidebarWidth() / zoom);
 
 		const host = document.createElement("div");
 		host.setAttribute("data-hnewhere-sidebar", "1");
@@ -14210,11 +14327,11 @@ ${[
 	position:fixed;
 	right:0;
 	top:0;
-	height:100vh;
-	height:100dvh;
+	height:calc(100vh / var(--panel-zoom, 1));
+	height:calc(100dvh / var(--panel-zoom, 1));
 	width:${width}px;
 	min-width:${isPortraitPhone() ? "0" : "280px"};
-	max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "80vw"};
+	max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "calc(80vw / var(--panel-zoom, 1))"};
 	box-sizing:border-box;
 	background:var(--bg);
 	color:var(--text);
@@ -14663,7 +14780,7 @@ ${SUBMIT_FORM_CSS}
 	left:0;
 	z-index:5;
 	width:max-content;
-	max-width:min(280px, 72vw);
+	max-width:min(280px, calc(72vw / var(--panel-zoom, 1)));
 	padding:7px 9px;
 	border:1px solid var(--surface-border);
 	border-radius:6px;
@@ -15126,19 +15243,21 @@ ${SUBMIT_FORM_CSS}
 	color:var(--meta);
 }
 
-.vote-unvote-link {
+.vote-note-action {
 	background:none;
 	border:0;
 	padding:0;
 	margin:0;
 	color:inherit;
 	font:inherit;
-	text-decoration:none;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 	cursor:pointer;
 }
 
 @media (hover: hover) {
-	.vote-unvote-link:hover {
+	.vote-note-action:hover {
 		text-decoration:underline;
 	}
 }
@@ -15713,6 +15832,8 @@ ${settingsPanelHTML()}
 
 		const panel = shadow.querySelector("#panel");
 
+		applySidebarZoom(panel);
+
 		const stopWatchingTheme = watchTheme(host);
 		const filterBanner = shadow.querySelector("#filter-banner");
 		const filterBannerQuote = shadow.querySelector("#filter-banner-quote");
@@ -15759,11 +15880,11 @@ ${settingsPanelHTML()}
 		const onMouseMove = (e) => {
 			if (!resizing) return;
 
-			const delta = startX - e.clientX;
+			const delta = (startX - e.clientX) / sidebarZoom;
 
 			const newWidth = Math.min(
 				Math.max(startWidth + delta, 280),
-				maxSidebarWidth(),
+				maxSidebarWidth() / sidebarZoom,
 			);
 
 			panel.style.width = newWidth + "px";
@@ -15815,8 +15936,8 @@ ${settingsPanelHTML()}
 			}
 
 			const newWidth = Math.min(
-				Math.max(startWidth + (startX - touch.clientX), 280),
-				maxSidebarWidth(),
+				Math.max(startWidth + (startX - touch.clientX) / sidebarZoom, 280),
+				maxSidebarWidth() / sidebarZoom,
 			);
 
 			panel.style.width = newWidth + "px";
@@ -15855,7 +15976,9 @@ ${settingsPanelHTML()}
 				return;
 			}
 
-			const maxWidth = maxSidebarWidth();
+			applySidebarZoom(panel);
+
+			const maxWidth = maxSidebarWidth() / sidebarZoom;
 			const portrait = isPortraitPhone();
 
 			if (portrait !== wasPortrait) {
@@ -17737,7 +17860,7 @@ ${settingsPanelHTML()}
 
 		const threads = await Promise.all(
 			stories.map((story) =>
-				loadThreadWithCeiling(story).then((reader) => {
+				loadThread(story).then((reader) => {
 					pending.delete(story.key);
 					updateLoadingLabel();
 					return reader;
@@ -17748,6 +17871,19 @@ ${settingsPanelHTML()}
 		if (generation !== sidebarGeneration) {
 			return;
 		}
+
+		setSidebarSyncStatus(ui, {
+			checkedAt: threadsCheckedAt(
+				threadCache,
+				stories.map((story) => story.key),
+				Date.now(),
+			),
+			onSync: () => {
+				forgetThreads(stories);
+				setSidebarStage(ui, "comments");
+				return renderDiscussions(stories, ui);
+			},
+		});
 
 		liveDiscussions.clear();
 
@@ -18545,45 +18681,158 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 	const SUBTITLE_COLLAPSE_MS = 240;
 
-	function writeSidebarSubtitle(element, text) {
+	function writeSidebarSubtitle(element, content) {
 		window.clearTimeout(element._hnewhereSubtitleTimer);
 
-		if (text) {
-			element.textContent = text;
+		if (content) {
+			if (typeof content === "string") {
+				element.textContent = content;
+			} else {
+				element.replaceChildren(content);
+			}
+
 			element.classList.add("header-subtitle-visible");
 			return;
 		}
 
 		element.classList.remove("header-subtitle-visible");
 		element._hnewhereSubtitleTimer = window.setTimeout(() => {
-			element.textContent = "";
+			element.replaceChildren();
 		}, SUBTITLE_COLLAPSE_MS);
 	}
 
-	function setSidebarStage(ui, stage) {
-		const element = ui?.headerSubtitle;
-		const label = sidebarStageLabel(stage);
-
-		if (!element || !label) {
-			return;
-		}
-
-		ui.activeStage = stage;
-		writeSidebarSubtitle(element, label);
-		element.classList.add("header-subtitle-stage");
-		element.classList.toggle("header-subtitle-loading", !prefersReducedMotion());
+	function syncAgeLabel(checkedAt) {
+		return "updated " + timeAgo(Math.floor(checkedAt / 1000));
 	}
 
-	function clearSidebarStage(ui) {
+	function syncStatusNode({ checkedAt, onSync }) {
+		const fragment = document.createDocumentFragment();
+		const age = document.createElement("span");
+
+		age.className = "header-sync-age";
+		age.textContent = syncAgeLabel(checkedAt);
+		fragment.appendChild(age);
+
+		if (typeof onSync === "function") {
+			const separator = document.createElement("span");
+
+			separator.className = "header-sync-sep";
+			separator.textContent = "|";
+			fragment.appendChild(separator);
+
+			const button = document.createElement("button");
+
+			button.type = "button";
+			button.className = "header-sync";
+			button.textContent = "sync";
+			button.onclick = (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				onSync();
+			};
+			fragment.appendChild(button);
+		}
+
+		return fragment;
+	}
+
+	function refreshSidebarSubtitle(ui) {
 		const element = ui?.headerSubtitle;
 
 		if (!element) {
 			return;
 		}
 
-		ui.activeStage = null;
+		const browsing = Boolean(
+			ui.shadow?.querySelector("#panel")?.classList.contains("browsing"),
+		);
+		const loading = Boolean(ui.activeStage);
+		const shimmer = !prefersReducedMotion();
+		const where = ui.shadow?.querySelector(".wordmark-where");
+
+		if (where) {
+			const crumbLoading = browsing && loading && shimmer;
+
+			if (where.classList.contains("wordmark-where-loading") && !crumbLoading) {
+				settleWordmarkCrumb(where);
+			}
+
+			where.classList.toggle("wordmark-where-loading", crumbLoading);
+		}
+
+		window.clearInterval(ui.syncTimer);
+		ui.syncTimer = null;
+
+		if (browsing) {
+			element.classList.remove(
+				"header-subtitle-stage",
+				"header-subtitle-loading",
+				"header-subtitle-quiet",
+			);
+			writeSidebarSubtitle(element, "");
+			return;
+		}
+
+		if (loading) {
+			element.classList.remove("header-subtitle-quiet");
+			element.classList.add("header-subtitle-stage");
+			element.classList.toggle("header-subtitle-loading", shimmer);
+			writeSidebarSubtitle(element, ui.stageText || "");
+			return;
+		}
+
 		element.classList.remove("header-subtitle-stage", "header-subtitle-loading");
+		element.classList.toggle("header-subtitle-quiet", Boolean(ui.syncStatus));
+
+		if (ui.syncStatus) {
+			writeSidebarSubtitle(element, syncStatusNode(ui.syncStatus));
+			ui.syncTimer = window.setInterval(() => {
+				const age = element.querySelector(".header-sync-age");
+
+				if (!age || !ui.syncStatus || !element.isConnected) {
+					window.clearInterval(ui.syncTimer);
+					ui.syncTimer = null;
+					return;
+				}
+
+				age.textContent = syncAgeLabel(ui.syncStatus.checkedAt);
+			}, 30000);
+			return;
+		}
+
 		writeSidebarSubtitle(element, ui.restingSubtitle || "");
+	}
+
+	function settleWordmarkCrumb(where) {
+		window.clearTimeout(where._hnewhereSettleTimer);
+		where.classList.remove("wordmark-where-done");
+		void where.offsetWidth;
+		where.classList.add("wordmark-where-done");
+		where._hnewhereSettleTimer = window.setTimeout(() => {
+			where.classList.remove("wordmark-where-done");
+		}, 1000);
+	}
+
+	function setSidebarStage(ui, stage) {
+		const label = sidebarStageLabel(stage);
+
+		if (!ui?.headerSubtitle || !label) {
+			return;
+		}
+
+		ui.activeStage = stage;
+		ui.stageText = label;
+		refreshSidebarSubtitle(ui);
+	}
+
+	function clearSidebarStage(ui) {
+		if (!ui?.headerSubtitle) {
+			return;
+		}
+
+		ui.activeStage = null;
+		ui.stageText = "";
+		refreshSidebarSubtitle(ui);
 	}
 
 	function setSidebarRestingSubtitle(ui, text) {
@@ -18592,23 +18841,26 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		}
 
 		ui.restingSubtitle = text;
+		refreshSidebarSubtitle(ui);
+	}
 
-		if (!ui.activeStage) {
-			writeSidebarSubtitle(ui.headerSubtitle, text);
+	function setSidebarSyncStatus(ui, status) {
+		if (!ui?.headerSubtitle) {
+			return;
 		}
+
+		ui.syncStatus = status;
+		refreshSidebarSubtitle(ui);
 	}
 
 	function setSidebarLoadingLabel(ui, text) {
-		const element = ui?.headerSubtitle;
-
-		if (!element || !text) {
+		if (!ui?.headerSubtitle || !text) {
 			return;
 		}
 
 		ui.activeStage = "comments";
-		writeSidebarSubtitle(element, text);
-		element.classList.add("header-subtitle-stage");
-		element.classList.toggle("header-subtitle-loading", !prefersReducedMotion());
+		ui.stageText = text;
+		refreshSidebarSubtitle(ui);
 	}
 
 	function joinNames(names) {
@@ -23524,6 +23776,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		if (blocked) {
 			return;
 		}
+
+		zoomBaselineValue = await rememberZoomForSite();
 
 		sweepBridgePayloads().catch(console.error);
 
