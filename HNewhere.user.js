@@ -8047,7 +8047,7 @@ button {
 
 			const control = document.createElement(action.href ? "a" : "button");
 
-			control.className = "vote-unvote-link";
+			control.className = "vote-note-action";
 			control.textContent = action.label;
 
 			if (action.href) {
@@ -8065,39 +8065,6 @@ button {
 
 			element.appendChild(document.createTextNode(" "));
 			element.appendChild(control);
-		});
-	}
-
-	function updateVoteStatus(itemId, state, onUnvote) {
-		const label =
-			state === "up" ? "unvote" : state === "down" ? "undown" : null;
-
-		const escapedId = CSS.escape(String(itemId));
-		const selector =
-			`.story-vote-status[data-vote-status-id="${escapedId}"],` +
-			`.comment-vote-status[data-vote-status-id="${escapedId}"]`;
-
-		(sidebarUI?.body?.querySelectorAll(selector) || []).forEach((element) => {
-			element.replaceChildren();
-
-			if (!label) {
-				return;
-			}
-
-			element.appendChild(document.createTextNode(" | "));
-
-			const button = document.createElement("button");
-			button.type = "button";
-			button.className = "vote-unvote-link";
-			button.textContent = label;
-
-			button.onclick = (event) => {
-				event.preventDefault();
-				event.stopPropagation();
-				onUnvote?.();
-			};
-
-			element.appendChild(button);
 		});
 	}
 
@@ -8278,8 +8245,23 @@ button {
 	// #region hnewhere-test-export
 
 	function hnVoteDescriptors(voteInfo, label) {
-		if (!voteInfo || voteInfo.state === "up" || voteInfo.state === "down") {
+		if (!voteInfo) {
 			return [];
+		}
+
+		if (voteInfo.state === "up" || voteInfo.state === "down") {
+			const up = voteInfo.state === "up";
+
+			return [
+				{
+					label: up ? "▲" : "▼",
+					title: (up ? "Remove upvote on " : "Remove downvote on ") + label,
+					action: "un",
+					url: voteInfo.unUrl || null,
+					active: true,
+					variant: up ? "up" : "down",
+				},
+			];
 		}
 
 		const descriptors = [];
@@ -8662,17 +8644,6 @@ button {
 		container.replaceChildren();
 
 		const descriptors = voteDescriptorsFor(sourceID, voteInfo);
-		const state = voteInfo?.state;
-
-		updateVoteStatus(itemId, voteInfo?.unUrl ? state : null, () => {
-			submitVote(
-				sourceID,
-				storyID,
-				itemId,
-				{ action: "un", url: voteInfo.unUrl },
-				container,
-			);
-		});
 
 		if (!descriptors.length) {
 			container.classList.add("hidden");
@@ -15126,19 +15097,21 @@ ${SUBMIT_FORM_CSS}
 	color:var(--meta);
 }
 
-.vote-unvote-link {
+.vote-note-action {
 	background:none;
 	border:0;
 	padding:0;
 	margin:0;
 	color:inherit;
 	font:inherit;
-	text-decoration:none;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 	cursor:pointer;
 }
 
 @media (hover: hover) {
-	.vote-unvote-link:hover {
+	.vote-note-action:hover {
 		text-decoration:underline;
 	}
 }
