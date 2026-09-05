@@ -1015,10 +1015,10 @@
 		}
 
 		if (isPortraitPhone()) {
-			return window.innerWidth - PORTRAIT_SIDEBAR_GUTTER;
+			return (window.innerWidth - PORTRAIT_SIDEBAR_GUTTER) / sidebarZoom;
 		}
 
-		return isMobile() ? Math.round(window.innerWidth * 0.75) : 420;
+		return isMobile() ? Math.round((window.innerWidth * 0.75) / sidebarZoom) : 420;
 	}
 
 	async function saveSiteWidth(width) {
@@ -6370,18 +6370,36 @@ button {
 	const ZOOM_HOSTS_MIN = 5;
 	const ZOOM_DEAD_ZONE = 0.12;
 
-	function pageZoom(
-		{ outerWidth, innerWidth, outerHeight, innerHeight } = window,
-		mobile = isMobile(),
-	) {
-		if (
-			mobile ||
-			!(outerWidth > 0 && innerWidth > 0 && outerHeight > 0 && innerHeight > 0)
-		) {
-			return 1;
-		}
+	function windowMetrics() {
+		return {
+			outerWidth: window.outerWidth,
+			innerWidth: window.innerWidth,
+			outerHeight: window.outerHeight,
+			innerHeight: window.innerHeight,
+			clientWidth: document.documentElement?.clientWidth || 0,
+		};
+	}
 
-		const zoom = Math.min(outerWidth / innerWidth, outerHeight / innerHeight);
+	function pageZoom(metrics = windowMetrics(), mobile = isMobile()) {
+		const { outerWidth, innerWidth, outerHeight, innerHeight, clientWidth } =
+			metrics || {};
+		let zoom;
+
+		if (mobile) {
+			if (!(outerWidth > 0 && clientWidth > 0)) {
+				return 1;
+			}
+
+			zoom = outerWidth / clientWidth;
+		} else {
+			if (
+				!(outerWidth > 0 && innerWidth > 0 && outerHeight > 0 && innerHeight > 0)
+			) {
+				return 1;
+			}
+
+			zoom = Math.min(outerWidth / innerWidth, outerHeight / innerHeight);
+		}
 
 		return Number.isFinite(zoom) && zoom > 0 ? Math.round(zoom * 100) / 100 : 1;
 	}
@@ -6446,6 +6464,27 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
+	let viewportUnitsFollowZoom = null;
+
+	function viewportUnitsScaleWithZoom() {
+		if (viewportUnitsFollowZoom === null && document.body) {
+			const probe = document.createElement("div");
+
+			probe.style.cssText =
+				"position:fixed;left:0;top:0;height:100vh;zoom:2;visibility:hidden;pointer-events:none";
+			document.body.appendChild(probe);
+
+			const height = probe.offsetHeight;
+
+			probe.remove();
+			viewportUnitsFollowZoom =
+				Math.abs(height - window.innerHeight) <
+				Math.abs(height - window.innerHeight / 2);
+		}
+
+		return viewportUnitsFollowZoom !== false;
+	}
+
 	function applySidebarZoom(panel = sidebarUI?.shadow?.querySelector("#panel")) {
 		sidebarZoom =
 			keepSidebarSizePreference && !pageModeActive && zoomBaselineValue
@@ -6455,10 +6494,13 @@ button {
 		if (panel) {
 			if (sidebarZoom === 1) {
 				panel.style.removeProperty("zoom");
-				panel.style.removeProperty("--panel-zoom");
+				panel.style.removeProperty("--viewport-zoom");
 			} else {
 				panel.style.setProperty("zoom", String(sidebarZoom));
-				panel.style.setProperty("--panel-zoom", String(sidebarZoom));
+				panel.style.setProperty(
+					"--viewport-zoom",
+					viewportUnitsScaleWithZoom() ? String(sidebarZoom) : "1",
+				);
 			}
 		}
 
@@ -14327,11 +14369,11 @@ ${[
 	position:fixed;
 	right:0;
 	top:0;
-	height:calc(100vh / var(--panel-zoom, 1));
-	height:calc(100dvh / var(--panel-zoom, 1));
+	height:calc(100vh / var(--viewport-zoom, 1));
+	height:calc(100dvh / var(--viewport-zoom, 1));
 	width:${width}px;
 	min-width:${isPortraitPhone() ? "0" : "280px"};
-	max-width:${isPortraitPhone() ? `calc(100vw - ${PORTRAIT_SIDEBAR_GUTTER}px)` : "calc(80vw / var(--panel-zoom, 1))"};
+	max-width:${isPortraitPhone() ? `calc((100vw - ${PORTRAIT_SIDEBAR_GUTTER}px) / var(--viewport-zoom, 1))` : "calc(80vw / var(--viewport-zoom, 1))"};
 	box-sizing:border-box;
 	background:var(--bg);
 	color:var(--text);
@@ -14780,7 +14822,7 @@ ${SUBMIT_FORM_CSS}
 	left:0;
 	z-index:5;
 	width:max-content;
-	max-width:min(280px, calc(72vw / var(--panel-zoom, 1)));
+	max-width:min(280px, calc(72vw / var(--viewport-zoom, 1)));
 	padding:7px 9px;
 	border:1px solid var(--surface-border);
 	border-radius:6px;
@@ -15995,7 +16037,14 @@ ${settingsPanelHTML()}
 			}
 		};
 
+		const onViewportResize = () => {
+			if (!pageMode) {
+				applySidebarZoom(panel);
+			}
+		};
+
 		window.addEventListener("resize", clampSidebarWidth);
+		window.visualViewport?.addEventListener("resize", onViewportResize);
 
 		host._cleanup = () => {
 			destroyed = true;
@@ -16004,6 +16053,7 @@ ${settingsPanelHTML()}
 			document.removeEventListener("mousemove", onMouseMove);
 			document.removeEventListener("mouseup", onMouseUp);
 			window.removeEventListener("resize", clampSidebarWidth);
+			window.visualViewport?.removeEventListener("resize", onViewportResize);
 			stopWatchingTheme();
 
 			if (sidebar === host) {
