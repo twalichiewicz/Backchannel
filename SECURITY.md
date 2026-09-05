@@ -85,10 +85,10 @@ Worth stating plainly, because the permissions are broad by necessity:
   switched off. A disabled source issues no requests; the entry is a permission
   the script is allowed but does not exercise.
 - **It stores data locally** through `GM.getValue` / `GM.setValue` -- settings,
-  per-site sidebar widths, button position, collapsed threads, seen-comment
-  timestamps, remembered votes and favourites, your reading queue, the sites you
-  have hidden, and anything you write in the notepad. Nothing is sent anywhere
-  except the hosts above.
+  per-site sidebar widths, the zoom level of the last forty sites you visited,
+  button position, collapsed threads, seen-comment timestamps, remembered votes
+  and favorites, your reading queue, the sites you have hidden, and anything you
+  write in the notepad. Nothing is sent anywhere except the hosts above.
 - **The notepad stays on the machine you wrote it on.** Notes live in your
   userscript manager's storage, keyed by page address or, on a PDF, by the
   document's fingerprint. Nothing is uploaded and no source is told they exist.

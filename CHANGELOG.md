@@ -8,6 +8,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.13] — 2026-09-05
+
+### Added
+
+- **The sidebar keeps its size when a page is zoomed.** Zooming a page to make
+  its text readable used to zoom the sidebar with it, so the article arrived at
+  a comfortable size with the discussion beside it huge or tiny. The sidebar
+  now reads the page's zoom and undoes it on itself, holding the size it has on
+  the pages you have not zoomed: it remembers the zoom of the last forty sites
+  and treats the one most of them share as normal. It is a setting, on by
+  default: Keep the sidebar the same size when a page is zoomed. Desktop
+  browsers only.
+
+- **A discussion is fetched once and reused for five minutes.** Changing the
+  sort, toggling a source, or writing a note re-rendered the panel, and every
+  re-render fetched every thread again; one page with seven discussions
+  refetched 322 comments each time. A thread is now kept in memory for five
+  minutes, the twenty most recent, and nothing is stored. The strip under the
+  wordmark, which reads "loading comments…" while the panel fills, now stays
+  and says when the threads were last updated, with `sync` beside it to fetch
+  them fresh. On the Backchannel view the strip folds away, and if the
+  discussion is still loading there, "Discussion" in the wordmark shimmers
+  instead.
+
+### Removed
+
+- **System notifications for watched discussions.** The browser grants
+  notifications to one site at a time and a userscript has no site of its own,
+  so ticking the box only ever covered the page it was ticked on, and a page
+  that had blocked notifications switched the setting off everywhere. Watching
+  is unchanged: a watched discussion with new comments still lands in the queue
+  and counts on the toggle. The system notification, which only decided whether
+  you were told before you looked, is gone until it can be sent from somewhere
+  that is always Backchannel's own.
+
+### Fixed
+
+- **A vote on Hacker News lights the arrow.** After voting, the arrow
+  disappeared and the word "unvote" took its place, with nothing to say it
+  could be clicked. The arrow now stays, colored in, the way it already does
+  for Reddit, and clicking it removes the vote. The messages that can appear in
+  that spot, such as the offer to sign in, carry the panel's dotted underline.
+
+- **A display name that is not a name gives way to the handle.** A Lemmy
+  account whose display name is literally "[object Object]" showed up that
+  way, because that is what its home instance serves. Stringified junk like
+  that now falls back to the handle, on every source.
+
 ## [1.6.12.1] — 2026-08-25
 
 ### Fixed
