@@ -13322,6 +13322,10 @@ ${
 <span>Unless there are unread items in the queue</span>
 </label>
 </div>
+<label class="settings-option">
+<input id="setting-keep-sidebar-size" data-setting="keepSidebarSize" type="checkbox">
+<span>Keep the sidebar the same size when a page is zoomed</span>
+</label>
 </div>
 
 <div class="settings-group">
@@ -13533,6 +13537,7 @@ ${[
 			autoOpenSidebarOnlyFromHN: shadow.querySelector(
 				"#setting-auto-open-only-from-hn",
 			),
+			keepSidebarSize: shadow.querySelector("#setting-keep-sidebar-size"),
 		};
 
 		const settingsRadios = {
@@ -13945,6 +13950,11 @@ ${[
 
 			if (setting === "notepad") {
 				await reopenForNotes();
+				return;
+			}
+
+			if (setting === "keepSidebarSize") {
+				applySidebarZoom();
 				return;
 			}
 
