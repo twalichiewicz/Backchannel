@@ -6361,6 +6361,87 @@ button {
 			: window.innerWidth * 0.8;
 	}
 
+	// #region hnewhere-test-export
+	const ZOOM_HOSTS_MAX = 40;
+	const ZOOM_HOSTS_MIN = 5;
+	const ZOOM_DEAD_ZONE = 0.12;
+
+	function pageZoom(
+		{ outerWidth, innerWidth, outerHeight, innerHeight } = window,
+		mobile = isMobile(),
+	) {
+		if (
+			mobile ||
+			!(outerWidth > 0 && innerWidth > 0 && outerHeight > 0 && innerHeight > 0)
+		) {
+			return 1;
+		}
+
+		const zoom = Math.min(outerWidth / innerWidth, outerHeight / innerHeight);
+
+		return Number.isFinite(zoom) && zoom > 0 ? Math.round(zoom * 100) / 100 : 1;
+	}
+
+	function rememberZoom(byHost, host, zoom) {
+		const next = {};
+
+		for (const [key, value] of Object.entries(byHost || {})) {
+			if (key !== host && typeof value === "number" && value > 0) {
+				next[key] = value;
+			}
+		}
+
+		next[host] = zoom;
+
+		for (const key of Object.keys(next).slice(0, -ZOOM_HOSTS_MAX)) {
+			delete next[key];
+		}
+
+		return next;
+	}
+
+	function zoomBaseline(byHost, fallback) {
+		const counts = new Map();
+		let total = 0;
+
+		for (const zoom of Object.values(byHost || {})) {
+			if (typeof zoom === "number" && zoom > 0) {
+				counts.set(zoom, (counts.get(zoom) || 0) + 1);
+				total += 1;
+			}
+		}
+
+		if (total < ZOOM_HOSTS_MIN) {
+			return fallback;
+		}
+
+		let best = fallback;
+		let bestCount = 0;
+
+		for (const [zoom, count] of counts) {
+			if (
+				count > bestCount ||
+				(count === bestCount && Math.abs(zoom - 1) < Math.abs(best - 1))
+			) {
+				best = zoom;
+				bestCount = count;
+			}
+		}
+
+		return best;
+	}
+
+	function sidebarZoomFactor(baseline, zoom) {
+		if (!(baseline > 0 && zoom > 0)) {
+			return 1;
+		}
+
+		const factor = Math.round((baseline / zoom) * 100) / 100;
+
+		return Math.abs(factor - 1) < ZOOM_DEAD_ZONE ? 1 : factor;
+	}
+	// #endregion hnewhere-test-export
+
 	// -------------------------
 	// Theme detection
 	// -------------------------
