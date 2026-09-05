@@ -5745,8 +5745,81 @@ button {
 
 	const THREAD_CEILING_MS = 20000;
 
+	// #region hnewhere-test-export
+	const THREAD_TTL = 5 * 60 * 1000;
+	const THREAD_CACHE_MAX = 20;
+
+	function cachedThread(cache, key, now) {
+		const entry = cache.get(key);
+
+		if (!entry) {
+			return null;
+		}
+
+		if (now - entry.at >= THREAD_TTL) {
+			cache.delete(key);
+			return null;
+		}
+
+		cache.delete(key);
+		cache.set(key, entry);
+
+		return entry;
+	}
+
+	function rememberThread(cache, key, reader, now) {
+		cache.delete(key);
+		cache.set(key, { reader, at: now });
+
+		while (cache.size > THREAD_CACHE_MAX) {
+			cache.delete(cache.keys().next().value);
+		}
+
+		return cache;
+	}
+
+	function threadsCheckedAt(cache, keys, now) {
+		let oldest = now;
+
+		for (const key of keys) {
+			const at = cache.get(key)?.at;
+
+			if (typeof at === "number" && at < oldest) {
+				oldest = at;
+			}
+		}
+
+		return oldest;
+	}
+	// #endregion hnewhere-test-export
+
+	const threadCache = new Map();
+
+	async function loadThread(story) {
+		const hit = story.local ? null : cachedThread(threadCache, story.key, Date.now());
+
+		if (hit) {
+			return hit.reader;
+		}
+
+		const reader = await loadThreadWithCeiling(story);
+
+		if (!story.local && !reader.empty) {
+			rememberThread(threadCache, story.key, reader, Date.now());
+		}
+
+		return reader;
+	}
+
+	function forgetThreads(stories) {
+		for (const story of stories) {
+			threadCache.delete(story.key);
+		}
+	}
+
 	function emptyThreadReader() {
 		return {
+			empty: true,
 			rootKeys: [],
 			rootTimes: new Map(),
 			async getComment() {
@@ -9111,6 +9184,7 @@ button {
 
 		const swap = () => {
 			panel.classList.toggle("browsing", on);
+			refreshSidebarSubtitle(ui);
 
 			const stranded = on && !sidebarHasDiscussion;
 
@@ -12015,7 +12089,8 @@ header {
 }
 
 .header-subtitle-visible {
-	max-height:16px;
+	max-height:18px;
+	padding-bottom:2px;
 	opacity:.85;
 }
 
@@ -12042,6 +12117,58 @@ header {
 @keyframes hnewhere-subtitle-shimmer {
     from { background-position:120% 0; }
     to { background-position:-20% 0; }
+}
+
+.header-subtitle-quiet {
+	color:var(--subtitle-stage);
+}
+
+.header-sync-sep {
+	margin:0 .35em;
+	opacity:.5;
+}
+
+.header-sync {
+	border:0;
+	padding:0;
+	margin:0;
+	background:none;
+	color:inherit;
+	font:inherit;
+	cursor:pointer;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+}
+
+@media (hover: hover) {
+	.header-sync:hover {
+		text-decoration:underline;
+	}
+}
+
+.wordmark-where-done {
+	animation:hnewhere-crumb-settle .9s ease-out;
+}
+
+@keyframes hnewhere-crumb-settle {
+	0%, 30% { color:var(--subtitle-stage-peak); }
+	100% { color:var(--subtitle-stage); }
+}
+
+.wordmark-where-loading {
+	background:linear-gradient(
+		90deg,
+		var(--subtitle-stage) 0%,
+		var(--subtitle-stage) 40%,
+		var(--subtitle-stage-peak) 50%,
+		var(--subtitle-stage) 60%,
+		var(--subtitle-stage) 100%
+	);
+	background-size:220% 100%;
+	-webkit-background-clip:text;
+	background-clip:text;
+	-webkit-text-fill-color:transparent;
+	animation:hnewhere-subtitle-shimmer 1.6s linear infinite;
 }
 
 .settings-panel {
@@ -17850,7 +17977,7 @@ ${settingsPanelHTML()}
 
 		const threads = await Promise.all(
 			stories.map((story) =>
-				loadThreadWithCeiling(story).then((reader) => {
+				loadThread(story).then((reader) => {
 					pending.delete(story.key);
 					updateLoadingLabel();
 					return reader;
@@ -17861,6 +17988,19 @@ ${settingsPanelHTML()}
 		if (generation !== sidebarGeneration) {
 			return;
 		}
+
+		setSidebarSyncStatus(ui, {
+			checkedAt: threadsCheckedAt(
+				threadCache,
+				stories.map((story) => story.key),
+				Date.now(),
+			),
+			onSync: () => {
+				forgetThreads(stories);
+				setSidebarStage(ui, "comments");
+				return renderDiscussions(stories, ui);
+			},
+		});
 
 		liveDiscussions.clear();
 
@@ -18658,45 +18798,158 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 	const SUBTITLE_COLLAPSE_MS = 240;
 
-	function writeSidebarSubtitle(element, text) {
+	function writeSidebarSubtitle(element, content) {
 		window.clearTimeout(element._hnewhereSubtitleTimer);
 
-		if (text) {
-			element.textContent = text;
+		if (content) {
+			if (typeof content === "string") {
+				element.textContent = content;
+			} else {
+				element.replaceChildren(content);
+			}
+
 			element.classList.add("header-subtitle-visible");
 			return;
 		}
 
 		element.classList.remove("header-subtitle-visible");
 		element._hnewhereSubtitleTimer = window.setTimeout(() => {
-			element.textContent = "";
+			element.replaceChildren();
 		}, SUBTITLE_COLLAPSE_MS);
 	}
 
-	function setSidebarStage(ui, stage) {
-		const element = ui?.headerSubtitle;
-		const label = sidebarStageLabel(stage);
-
-		if (!element || !label) {
-			return;
-		}
-
-		ui.activeStage = stage;
-		writeSidebarSubtitle(element, label);
-		element.classList.add("header-subtitle-stage");
-		element.classList.toggle("header-subtitle-loading", !prefersReducedMotion());
+	function syncAgeLabel(checkedAt) {
+		return "updated " + timeAgo(Math.floor(checkedAt / 1000));
 	}
 
-	function clearSidebarStage(ui) {
+	function syncStatusNode({ checkedAt, onSync }) {
+		const fragment = document.createDocumentFragment();
+		const age = document.createElement("span");
+
+		age.className = "header-sync-age";
+		age.textContent = syncAgeLabel(checkedAt);
+		fragment.appendChild(age);
+
+		if (typeof onSync === "function") {
+			const separator = document.createElement("span");
+
+			separator.className = "header-sync-sep";
+			separator.textContent = "|";
+			fragment.appendChild(separator);
+
+			const button = document.createElement("button");
+
+			button.type = "button";
+			button.className = "header-sync";
+			button.textContent = "sync";
+			button.onclick = (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				onSync();
+			};
+			fragment.appendChild(button);
+		}
+
+		return fragment;
+	}
+
+	function refreshSidebarSubtitle(ui) {
 		const element = ui?.headerSubtitle;
 
 		if (!element) {
 			return;
 		}
 
-		ui.activeStage = null;
+		const browsing = Boolean(
+			ui.shadow?.querySelector("#panel")?.classList.contains("browsing"),
+		);
+		const loading = Boolean(ui.activeStage);
+		const shimmer = !prefersReducedMotion();
+		const where = ui.shadow?.querySelector(".wordmark-where");
+
+		if (where) {
+			const crumbLoading = browsing && loading && shimmer;
+
+			if (where.classList.contains("wordmark-where-loading") && !crumbLoading) {
+				settleWordmarkCrumb(where);
+			}
+
+			where.classList.toggle("wordmark-where-loading", crumbLoading);
+		}
+
+		window.clearInterval(ui.syncTimer);
+		ui.syncTimer = null;
+
+		if (browsing) {
+			element.classList.remove(
+				"header-subtitle-stage",
+				"header-subtitle-loading",
+				"header-subtitle-quiet",
+			);
+			writeSidebarSubtitle(element, "");
+			return;
+		}
+
+		if (loading) {
+			element.classList.remove("header-subtitle-quiet");
+			element.classList.add("header-subtitle-stage");
+			element.classList.toggle("header-subtitle-loading", shimmer);
+			writeSidebarSubtitle(element, ui.stageText || "");
+			return;
+		}
+
 		element.classList.remove("header-subtitle-stage", "header-subtitle-loading");
+		element.classList.toggle("header-subtitle-quiet", Boolean(ui.syncStatus));
+
+		if (ui.syncStatus) {
+			writeSidebarSubtitle(element, syncStatusNode(ui.syncStatus));
+			ui.syncTimer = window.setInterval(() => {
+				const age = element.querySelector(".header-sync-age");
+
+				if (!age || !ui.syncStatus || !element.isConnected) {
+					window.clearInterval(ui.syncTimer);
+					ui.syncTimer = null;
+					return;
+				}
+
+				age.textContent = syncAgeLabel(ui.syncStatus.checkedAt);
+			}, 30000);
+			return;
+		}
+
 		writeSidebarSubtitle(element, ui.restingSubtitle || "");
+	}
+
+	function settleWordmarkCrumb(where) {
+		window.clearTimeout(where._hnewhereSettleTimer);
+		where.classList.remove("wordmark-where-done");
+		void where.offsetWidth;
+		where.classList.add("wordmark-where-done");
+		where._hnewhereSettleTimer = window.setTimeout(() => {
+			where.classList.remove("wordmark-where-done");
+		}, 1000);
+	}
+
+	function setSidebarStage(ui, stage) {
+		const label = sidebarStageLabel(stage);
+
+		if (!ui?.headerSubtitle || !label) {
+			return;
+		}
+
+		ui.activeStage = stage;
+		ui.stageText = label;
+		refreshSidebarSubtitle(ui);
+	}
+
+	function clearSidebarStage(ui) {
+		if (!ui?.headerSubtitle) {
+			return;
+		}
+
+		ui.activeStage = null;
+		ui.stageText = "";
+		refreshSidebarSubtitle(ui);
 	}
 
 	function setSidebarRestingSubtitle(ui, text) {
@@ -18705,23 +18958,26 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		}
 
 		ui.restingSubtitle = text;
+		refreshSidebarSubtitle(ui);
+	}
 
-		if (!ui.activeStage) {
-			writeSidebarSubtitle(ui.headerSubtitle, text);
+	function setSidebarSyncStatus(ui, status) {
+		if (!ui?.headerSubtitle) {
+			return;
 		}
+
+		ui.syncStatus = status;
+		refreshSidebarSubtitle(ui);
 	}
 
 	function setSidebarLoadingLabel(ui, text) {
-		const element = ui?.headerSubtitle;
-
-		if (!element || !text) {
+		if (!ui?.headerSubtitle || !text) {
 			return;
 		}
 
 		ui.activeStage = "comments";
-		writeSidebarSubtitle(element, text);
-		element.classList.add("header-subtitle-stage");
-		element.classList.toggle("header-subtitle-loading", !prefersReducedMotion());
+		ui.stageText = text;
+		refreshSidebarSubtitle(ui);
 	}
 
 	function joinNames(names) {
