@@ -3135,8 +3135,13 @@
 	}
 
 	// #region hnewhere-test-export
+	const JUNK_DISPLAY_NAMES = new Set(["[object Object]", "undefined"]);
+
 	function authorDisplay(author, authorName = "") {
-		const shown = authorName || author || "";
+		const display = JUNK_DISPLAY_NAMES.has(String(authorName || "").trim())
+			? ""
+			: authorName;
+		const shown = display || author || "";
 
 		return {
 			shown,
