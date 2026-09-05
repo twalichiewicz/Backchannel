@@ -13441,7 +13441,7 @@ ${
 </div>
 <label class="settings-option">
 <input id="setting-hide-without-discussion" data-setting="hideWithoutDiscussion" type="checkbox">
-<span>Only show the button when a discussion exists</span>
+<span>Only show the Backchannel toggle when a discussion exists</span>
 </label>
 <div class="settings-suboptions" data-suboptions-of="hideWithoutDiscussion">
 <label class="settings-option sub-option">
