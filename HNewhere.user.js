@@ -14362,6 +14362,7 @@ ${[
 #panel {
 	all:initial;
 	--vote-column:17px;
+	--vote-gutter:8px;
 	line-height:1.4;
 	color-scheme:inherit;
 	-webkit-text-size-adjust:100%;
@@ -15108,7 +15109,7 @@ ${SUBMIT_FORM_CSS}
 }
 
 .story-vote-none {
-	width:8px;
+	width:var(--vote-gutter);
 }
 
 .story-votelinks {
@@ -15144,8 +15145,8 @@ ${SUBMIT_FORM_CSS}
 }
 
 .comment-vote-slot.comment-vote-slot-empty {
-	flex-basis:0;
-	width:0;
+	flex-basis:var(--vote-gutter);
+	width:var(--vote-gutter);
 }
 
 .comment-vote-slot.comment-vote-slot-empty::after {
