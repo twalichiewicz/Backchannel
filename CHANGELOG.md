@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.13.1] — 2026-09-05
+
+### Fixed
+
+- **The sidebar keeps its size under a phone's page zoom too.** 1.6.13 called
+  the setting desktop only. That was a decision made without measuring a phone,
+  and the checkbox showed there regardless, so it read as broken. Measured on
+  an iPhone: Safari's page zoom, the one in the aA menu, narrows the page's
+  layout width, while a pinch narrows only the visible part of it. The setting
+  now reads the layout width, so it follows the page zoom and leaves pinching
+  alone, and it listens for the event iOS actually sends when the zoom changes.
+  iOS also sizes a zoomed element's viewport units differently from desktop
+  browsers, which left the counter-zoomed sidebar short and narrow there; the
+  panel now checks which behaviour it is running under before compensating.
+
+- **Comments in a discussion without voting line up with the title.** Where no
+  source in the panel can vote, the vote column collapsed to nothing and the
+  comments started eight pixels left of the line the title, the note box, the
+  sort row and the LIVE mark all share. The column now keeps the same narrow
+  gutter the story row already kept there, so the comments sit on that line
+  and each reply steps in by it.
+
 ## [1.6.13] — 2026-09-05
 
 ### Added
