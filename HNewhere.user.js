@@ -60,11 +60,14 @@
 // @connect      www.tootfinder.ch
 // @connect      api.hypothes.is
 // @run-at       document-end
-// @noframes
 // ==/UserScript==
 
 (function () {
 	"use strict";
+
+	if (window.top !== window.self && window.name !== "backchannel-article") {
+		return;
+	}
 
 	const OLD_STORAGE = {
 		width: "hn_width",
@@ -378,6 +381,9 @@
 	// #region hnewhere-test-export
 	const START_PAGE_HOST = "backchnnl.app";
 	const START_PAGE_PATH = "/";
+	const START_PAGE_ORIGIN = "https://" + START_PAGE_HOST;
+	const APP_FRAME_NAME = "backchannel-article";
+	const APP_MESSAGE_VERSION = 1;
 
 	function isStartPageAddress(href) {
 		try {
@@ -23677,6 +23683,154 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	}
 
 	// -------------------------
+	// Reader app
+	// -------------------------
+
+	function appFrameMessageVerdict(data, origin, knownOrigin = null) {
+		if (!data || typeof data !== "object" || data.bc !== APP_MESSAGE_VERSION) {
+			return null;
+		}
+
+		if (data.type === "hi") {
+			try {
+				return new URL(String(data.url || "")).origin === origin ? "hi" : null;
+			} catch {
+				return null;
+			}
+		}
+
+		return knownOrigin && origin === knownOrigin ? "ok" : null;
+	}
+
+	function frameLinkTarget(event, here = location.href) {
+		if (
+			event.defaultPrevented ||
+			event.button !== 0 ||
+			event.metaKey ||
+			event.ctrlKey ||
+			event.shiftKey ||
+			event.altKey
+		) {
+			return null;
+		}
+
+		const link = event.target?.closest?.("a[href]");
+
+		if (!link || link.hasAttribute("download")) {
+			return null;
+		}
+
+		const target = (link.getAttribute("target") || "").trim().toLowerCase();
+
+		if (target && target !== "_self") {
+			return null;
+		}
+
+		let url;
+		let current;
+
+		try {
+			url = new URL(link.getAttribute("href"), here);
+			current = new URL(here);
+		} catch {
+			return null;
+		}
+
+		if (url.protocol !== "http:" && url.protocol !== "https:") {
+			return null;
+		}
+
+		if (
+			url.origin === current.origin &&
+			url.pathname === current.pathname &&
+			url.search === current.search
+		) {
+			return null;
+		}
+
+		return url.href;
+	}
+
+	function frameVisibility() {
+		const shown = (element) => {
+			if (!element) {
+				return false;
+			}
+
+			const style = getComputedStyle(element);
+
+			return style.display !== "none" && style.visibility !== "hidden";
+		};
+
+		return (
+			shown(document.documentElement) &&
+			shown(document.body) &&
+			(document.body.innerText || "").trim().length > 0
+		);
+	}
+
+	let frameAgentActive = false;
+	let frameGreeted = false;
+
+	function postToApp(message) {
+		if (!frameGreeted) {
+			return;
+		}
+
+		try {
+			window.parent.postMessage(
+				{ bc: APP_MESSAGE_VERSION, ...message },
+				START_PAGE_ORIGIN,
+			);
+		} catch {
+		}
+	}
+
+	function installFrameAgent() {
+		frameAgentActive = true;
+
+		window.addEventListener("message", (event) => {
+			if (event.source !== window.parent || event.origin !== START_PAGE_ORIGIN) {
+				return;
+			}
+
+			const data = event.data;
+
+			if (!data || typeof data !== "object" || data.bc !== APP_MESSAGE_VERSION) {
+				return;
+			}
+
+			if (data.type === "hello") {
+				frameGreeted = true;
+				postToApp({
+					type: "hi",
+					url: location.href,
+					canonical: canonicalHint(),
+					title: pageTitle(),
+					visible: frameVisibility(),
+				});
+			}
+		});
+
+		document.addEventListener(
+			"click",
+			(event) => {
+				if (!frameGreeted) {
+					return;
+				}
+
+				const url = frameLinkTarget(event);
+
+				if (url) {
+					event.preventDefault();
+					postToApp({ type: "open", url });
+				}
+			},
+			true,
+		);
+	}
+
+	// -------------------------
 	// Soft navigation
 	// -------------------------
 
@@ -23970,5 +24124,9 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		stopButtonSpinner(await createCollapsedButton(storyRefs));
 	}
 
-	init().catch(console.error);
+	if (window.top === window.self) {
+		init().catch(console.error);
+	} else {
+		installFrameAgent();
+	}
 })();
