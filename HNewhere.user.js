@@ -10254,37 +10254,35 @@ button {
 		return body;
 	}
 
-	async function renderQueueView(ui, list) {
+	async function renderQueueView(ui, list, { part = "" } = {}) {
 		const entries = sortQueue(await loadQueue());
 		const watching = await loadWatches();
-		const watchFor = (entry) =>
-			watching.find((watch) => queueEntryMatchesWatch(entry, watch)) || null;
+		const { queued: rest, watched, watchFor } = splitQueueEntries(entries, watching);
+		const kept = sortWatchedEntries(watched, watchFor);
 		const watchKeys = new Set(watching.map((entry) => entry.key));
+		const showQueued = part !== "watching";
+		const showWatching = part !== "queued";
+		const reload = () => renderQueueView(ui, list, { part });
+		let rank = 0;
 
 		list.replaceChildren();
 
-		if (!entries.length) {
+		if (!(showQueued ? rest.length : 0) && !(showWatching ? kept.length : 0)) {
 			const empty = document.createElement("div");
 			empty.className = "browse-empty";
 			empty.textContent =
-				"Nothing queued yet. Use queue on any story, here or on Hacker News, to read it later.";
+				part === "watching"
+					? "Nothing watched yet. Use watch on any discussion to hear when it grows."
+					: "Nothing queued yet. Use queue on any story, here or on Hacker News, to read it later.";
 			list.appendChild(empty);
 			return;
 		}
 
-		const kept = sortWatchedEntries(
-			entries.filter((entry) => watchFor(entry)),
-			watchFor,
-		);
-		const rest = entries.filter((entry) => !watchFor(entry));
-		const reload = () => renderQueueView(ui, list);
-		let rank = 0;
-
-		if (kept.length && rest.length) {
+		if (showQueued && showWatching && kept.length && rest.length) {
 			subhead(list, "queued");
 		}
 
-		for (const entry of rest) {
+		for (const entry of showQueued ? rest : []) {
 			const row = renderBrowseRow(entry, list, (rank += 1), {
 				inQueue: true,
 				watchable: true,
@@ -10295,11 +10293,11 @@ button {
 			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
 		}
 
-		if (kept.length) {
+		if (showQueued && showWatching && kept.length) {
 			subhead(list, "watching");
 		}
 
-		for (const entry of kept) {
+		for (const entry of showWatching ? kept : []) {
 			const state = watchFor(entry);
 			const fresh = watchIsFresh(state);
 			const row = renderBrowseRow(entry, list, 0, {
@@ -10321,11 +10319,11 @@ button {
 
 		refreshQueueEntries(entries).then((refreshed) => {
 			if (refreshed && isBrowsing(ui) && browseTab === "queue") {
-				renderQueueView(ui, list).catch(console.error);
+				renderQueueView(ui, list, { part }).catch(console.error);
 			}
 		});
 
-		if (entries.some((entry) => entry.readAt && !watchFor(entry))) {
+		if (showQueued && entries.some((entry) => entry.readAt && !watchFor(entry))) {
 			const clear = document.createElement("button");
 			clear.type = "button";
 			clear.className = "browse-nav-link browse-clear-read";
@@ -10345,7 +10343,7 @@ button {
 					return clearReadFromQueue(queued, keep);
 				});
 
-				await renderQueueView(ui, list);
+				await renderQueueView(ui, list, { part });
 				refreshQueueCount(ui.shadow);
 				refreshNextUp(ui.shadow);
 			};
@@ -24261,6 +24259,113 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			site: hostLabel(url),
 			content,
 			chars: (content.textContent || "").replace(/\s+/g, " ").trim().length,
+		};
+	}
+
+	function rowDiscussionKeys(row) {
+		return [row?.story, ...(row?.also || [])]
+			.filter(
+				(story) =>
+					story?.source && story.id !== undefined && story.id !== null && story.id !== "",
+			)
+			.map((story) => sourceKey(story.source, story.id));
+	}
+
+	function rowIsUnread(row, seen) {
+		return !rowDiscussionKeys(row).some((key) => Number(seen?.[key]) > 0);
+	}
+
+	function rowCarriesSource(row, sourceId) {
+		return [row?.story, ...(row?.also || [])].some((story) => story?.source === sourceId);
+	}
+
+	function appViewRows(rows, view, seen) {
+		if (view === "unread") {
+			return rows.filter((row) => rowIsUnread(row, seen));
+		}
+
+		if (String(view).startsWith("source:")) {
+			const sourceId = view.slice("source:".length);
+
+			return rows.filter((row) => rowCarriesSource(row, sourceId));
+		}
+
+		return rows;
+	}
+
+	function appViewCounts(rows, seen, sourceIds) {
+		const counts = { unread: 0, all: rows.length, sources: {} };
+
+		for (const id of sourceIds) {
+			counts.sources[id] = 0;
+		}
+
+		for (const row of rows) {
+			if (!rowIsUnread(row, seen)) {
+				continue;
+			}
+
+			counts.unread += 1;
+
+			for (const id of sourceIds) {
+				if (rowCarriesSource(row, id)) {
+					counts.sources[id] += 1;
+				}
+			}
+		}
+
+		return counts;
+	}
+
+	function markKeysSeen(seen, keys, now) {
+		const next = { ...seen };
+		const previous = {};
+
+		for (const key of keys) {
+			previous[key] = seen[key];
+			next[key] = now;
+		}
+
+		return { next, previous };
+	}
+
+	function restoreSeen(seen, previous) {
+		const next = { ...seen };
+
+		for (const [key, value] of Object.entries(previous)) {
+			if (value === undefined) {
+				delete next[key];
+			} else {
+				next[key] = value;
+			}
+		}
+
+		return next;
+	}
+
+	async function markManySeen(keys) {
+		const seen = (await load(STORAGE.seen, {})) || {};
+		const { next, previous } = markKeysSeen(seen, keys, Math.floor(Date.now() / 1000));
+
+		await save(STORAGE.seen, next);
+
+		return previous;
+	}
+
+	async function restoreManySeen(previous) {
+		const seen = (await load(STORAGE.seen, {})) || {};
+
+		await save(STORAGE.seen, restoreSeen(seen, previous));
+	}
+
+	function splitQueueEntries(entries, watching) {
+		const watchFor = (entry) =>
+			watching.find((watch) => queueEntryMatchesWatch(entry, watch)) || null;
+
+		return {
+			queued: entries.filter((entry) => !watchFor(entry)),
+			watched: entries.filter((entry) => watchFor(entry)),
+			watchFor,
 		};
 	}
 
