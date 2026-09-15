@@ -12,13 +12,15 @@ use to detect updates, so every release bumps it.
 
 ### Added
 
-- **backchnnl.app is a reader (#139).** With Backchannel installed, the page
-  is now four panes: a rail of views (Unread, All, Queue, Watching, Collection, and one
-  entry for each source with a front page), the stories, the article itself,
-  and what people said about it. A story counts as read once you open it here,
-  or once you have read its discussion anywhere else. Mark all read clears a
-  view and can be undone, and j and k move through the list. Below 1100px the
-  list slides over the article, and on a phone the panes take turns.
+- **backchnnl.app is a reader (#139).** With Backchannel installed, the page is
+  now four panes: a rail of views (Unread, All stories, Queue, Watching,
+  Collection, and one entry for each source with a front page), the stories, the
+  article itself, and what people said about it. A story counts as read once you
+  open it here, or once you have read its discussion anywhere else. Mark all
+  read clears a view and can be undone, and j and k move through the list. A
+  click anywhere on a story opens it, and the story list and the discussion each
+  resize from their edge. Below 1100px the list slides over the article, and on
+  a phone the panes take turns.
 
 - **The article opens beside its discussion.** It loads in a frame, with
   Backchannel running inside it, so quoted passages light up there as they do
