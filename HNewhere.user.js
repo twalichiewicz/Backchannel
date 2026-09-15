@@ -59,6 +59,7 @@
 // @connect      mastodon.social
 // @connect      www.tootfinder.ch
 // @connect      api.hypothes.is
+// @connect      *
 // @run-at       document-end
 // ==/UserScript==
 
@@ -24017,6 +24018,110 @@ header .item-action-link {
 }
 `;
 
+	const READER_CSS = `
+.bc-reader {
+	display:block;
+	position:relative;
+	box-sizing:border-box;
+	max-width:44em;
+	margin:0 auto;
+	padding:28px 28px 72px;
+	color:var(--text);
+	font:18px/1.62 Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+	overflow-wrap:break-word;
+	-webkit-text-size-adjust:100%;
+}
+
+.bc-reader-head {
+	margin:0 0 24px;
+}
+
+.bc-reader-site,
+.bc-reader-byline {
+	color:var(--meta);
+	font:11px/1.5 Verdana, Geneva, sans-serif;
+}
+
+.bc-reader-title {
+	margin:6px 0 4px;
+	color:var(--text);
+	font:700 30px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.bc-reader-body h1,
+.bc-reader-body h2,
+.bc-reader-body h3,
+.bc-reader-body h4 {
+	margin:1.6em 0 .5em;
+	line-height:1.25;
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.bc-reader a {
+	color:var(--link);
+}
+
+.bc-reader img {
+	display:block;
+	max-width:100%;
+	height:auto;
+	margin:1em auto;
+}
+
+.bc-reader figure {
+	margin:1.5em 0;
+}
+
+.bc-reader figcaption {
+	color:var(--meta);
+	font-size:14px;
+	text-align:center;
+}
+
+.bc-reader blockquote {
+	margin:1.2em 0;
+	padding-left:1em;
+	border-left:3px solid var(--border);
+	color:var(--quote-text);
+}
+
+.bc-reader pre {
+	overflow:auto;
+	padding:12px 14px;
+	border-radius:6px;
+	background:var(--code-bg);
+	font-size:14px;
+	line-height:1.45;
+}
+
+.bc-reader code,
+.bc-reader kbd,
+.bc-reader samp {
+	font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size:.86em;
+}
+
+.bc-reader table {
+	display:block;
+	max-width:100%;
+	overflow-x:auto;
+	border-collapse:collapse;
+	font-size:15px;
+}
+
+.bc-reader th,
+.bc-reader td {
+	padding:4px 8px;
+	border:1px solid var(--border-soft);
+}
+
+.bc-reader hr {
+	margin:2em 0;
+	border:0;
+	border-top:1px solid var(--border);
+}
+`;
+
 	const APP_ICON = (paths) =>
 		`<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">${paths}</svg>`;
 
@@ -24161,6 +24266,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 		});
 
 		document.addEventListener("keydown", onAppKey);
+		window.addEventListener("message", onAppMessage);
 	}
 
 	async function refreshAppSources() {
@@ -24638,6 +24744,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 
 		if (appState) {
 			appState.article = null;
+			appReaderElement()?.remove();
 			appState.ui.shadow.querySelector("#app-article-body")?.replaceChildren();
 		}
 	}
@@ -24649,6 +24756,43 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 		teardownAppArticle();
 		paintAppArticleHead(url, title);
 
+		let http = false;
+
+		try {
+			http = new URL(url).protocol === "http:";
+		} catch {
+			http = false;
+		}
+
+		const article = {
+			url,
+			title,
+			http,
+			started: performance.now(),
+			loadedAt: null,
+			loads: 0,
+			reply: null,
+			origin: null,
+			everReplied: false,
+			probe: null,
+			probing: false,
+			reader: null,
+			frame: null,
+			mode: "wait",
+			dead: false,
+			helloTimer: 0,
+			graceTimer: 0,
+			capTimer: 0,
+		};
+
+		state.article = article;
+		pane.dataset.mode = "wait";
+
+		if (http) {
+			runAppArticleProbe(article).catch(console.error);
+			return;
+		}
+
 		const frame = document.createElement("iframe");
 
 		frame.className = "app-article-frame";
@@ -24656,10 +24800,343 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 		frame.title = title || hostLabel(url);
 		frame.setAttribute("sandbox", APP_FRAME_SANDBOX);
 		frame.setAttribute("referrerpolicy", "no-referrer");
+		frame.addEventListener("load", () => {
+			if (article.dead) {
+				return;
+			}
+
+			article.loads += 1;
+			article.loadedAt = performance.now();
+
+			if (article.loads > 1) {
+				article.reply = null;
+				article.origin = null;
+
+				if (article.everReplied) {
+					article.probe = { ok: false, refused: false, pdf: false, readerChars: 0 };
+				}
+
+				startAppHello(article);
+			}
+
+			clearTimeout(article.graceTimer);
+			article.graceTimer = setTimeout(() => tickAppArticle(article), APP_LOAD_GRACE_MS);
+			tickAppArticle(article);
+		});
 		frame.src = url;
-		pane.dataset.mode = "frame";
+		article.frame = frame;
 		pane.appendChild(frame);
-		state.article = { url, title, frame, dead: false };
+		startAppHello(article);
+		article.capTimer = setTimeout(() => tickAppArticle(article), APP_FRAME_CAP_MS);
+	}
+
+	function startAppHello(article) {
+		clearInterval(article.helloTimer);
+
+		const hello = () => {
+			try {
+				article.frame?.contentWindow?.postMessage(
+					{ bc: APP_MESSAGE_VERSION, type: "hello" },
+					"*",
+				);
+			} catch {
+			}
+		};
+
+		hello();
+		article.helloTimer = setInterval(hello, APP_HELLO_MS);
+	}
+
+	function tickAppArticle(article) {
+		if (article.dead || article !== appState?.article) {
+			return;
+		}
+
+		const now = performance.now();
+		const plan = articleLoadPlan({
+			http: article.http,
+			reply: article.reply,
+			loaded: article.loadedAt !== null,
+			sinceLoad: article.loadedAt === null ? 0 : now - article.loadedAt,
+			sinceStart: now - article.started,
+			probe: article.probe,
+		});
+
+		if (plan === "wait") {
+			return;
+		}
+
+		if (plan === "probe") {
+			if (!article.probing) {
+				runAppArticleProbe(article).catch(console.error);
+			}
+
+			return;
+		}
+
+		applyAppArticleMode(article, plan);
+	}
+
+	function requestPage(url) {
+		return new Promise((resolve) => {
+			const failure = { ok: false, status: 0, finalUrl: url, headers: "", contentType: "", text: "" };
+
+			try {
+				GM.xmlHttpRequest({
+					method: "GET",
+					url,
+					timeout: 15000,
+					anonymous: true,
+					headers: { Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8" },
+					onload: (response) => {
+						const headers = response.responseHeaders || "";
+						const contentType = parseResponseHeaders(headers).get("content-type") || "";
+
+						resolve({
+							ok: response.status >= 200 && response.status < 400,
+							status: response.status,
+							finalUrl: response.finalUrl || url,
+							headers,
+							contentType,
+							text:
+								!contentType || /html|xml|text\/plain/i.test(contentType)
+									? String(response.responseText || "")
+									: "",
+						});
+					},
+					onerror: () => resolve(failure),
+					ontimeout: () => resolve(failure),
+				});
+			} catch {
+				resolve(failure);
+			}
+		});
+	}
+
+	async function runAppArticleProbe(article) {
+		article.probing = true;
+
+		const response = await requestPage(article.url);
+
+		if (article.dead) {
+			return;
+		}
+
+		const probe = {
+			ok: response.ok,
+			refused: response.ok && framingRefused(response.headers),
+			pdf: /application\/pdf/i.test(response.contentType),
+			readerChars: 0,
+		};
+
+		if (response.ok && !probe.pdf && (article.http || probe.refused || article.reply)) {
+			article.reader = extractReaderArticle(response.text, response.finalUrl || article.url);
+			probe.readerChars = article.reader?.chars || 0;
+		}
+
+		article.probe = probe;
+		article.probing = false;
+		tickAppArticle(article);
+	}
+
+	function applyAppArticleMode(article, mode) {
+		if (article.mode === mode) {
+			return;
+		}
+
+		const pane = appState.ui.shadow.querySelector("#app-article-body");
+
+		article.mode = mode;
+		pane.dataset.mode = mode;
+		clearTimeout(article.capTimer);
+
+		if (mode === "frame-agent" || mode === "frame") {
+			return;
+		}
+
+		clearInterval(article.helloTimer);
+		article.frame?.remove();
+		article.frame = null;
+
+		if (mode === "reader") {
+			showAppReader(article);
+		} else {
+			showAppCard(article);
+		}
+	}
+
+	function appReaderElement() {
+		return sidebar?.querySelector(":scope > .bc-reader") || null;
+	}
+
+	function appReaderScroller() {
+		return appState?.ui.shadow.querySelector(".app-reader-scroll") || null;
+	}
+
+	function ensureReaderStyles() {
+		if (document.getElementById("backchannel-reader-style")) {
+			return;
+		}
+
+		const style = document.createElement("style");
+
+		style.id = "backchannel-reader-style";
+		style.textContent = READER_CSS;
+		document.head.appendChild(style);
+	}
+
+	function showAppReader(article) {
+		const reader = article.reader;
+		const pane = appState.ui.shadow.querySelector("#app-article-body");
+
+		if (!reader || !sidebar) {
+			showAppCard(article);
+			return;
+		}
+
+		ensureReaderStyles();
+
+		const element = document.createElement("article");
+		const head = document.createElement("header");
+		const site = document.createElement("div");
+		const title = document.createElement("h1");
+		const body = document.adoptNode(reader.content);
+
+		element.className = "bc-reader";
+		element.slot = "reader";
+		head.className = "bc-reader-head";
+		site.className = "bc-reader-site";
+		site.textContent = reader.site;
+		title.className = "bc-reader-title";
+		title.textContent = reader.title;
+		head.append(site, title);
+
+		if (reader.byline) {
+			const byline = document.createElement("div");
+
+			byline.className = "bc-reader-byline";
+			byline.textContent = reader.byline;
+			head.append(byline);
+		}
+
+		body.className = "bc-reader-body";
+		element.append(head, body);
+		element.addEventListener("click", (event) => {
+			const link = event.target?.closest?.("a[href]");
+
+			if (
+				!link ||
+				event.button !== 0 ||
+				event.metaKey ||
+				event.ctrlKey ||
+				event.shiftKey ||
+				event.altKey
+			) {
+				return;
+			}
+
+			event.preventDefault();
+			openAppURL(link.href);
+		});
+
+		appReaderElement()?.remove();
+		sidebar.appendChild(element);
+
+		const scroller = document.createElement("div");
+
+		scroller.className = "app-reader-scroll";
+		scroller.innerHTML = '<slot name="reader"></slot>';
+		pane.appendChild(scroller);
+
+		if (!appState.ui.shadow.querySelector("#app-article-title").textContent) {
+			appState.ui.shadow.querySelector("#app-article-title").textContent = reader.title;
+		}
+	}
+
+	function showAppCard(article) {
+		const pane = appState.ui.shadow.querySelector("#app-article-body");
+		const card = document.createElement("div");
+		const title = document.createElement("div");
+		const note = document.createElement("div");
+		const open = document.createElement("a");
+
+		card.className = "app-article-note";
+		title.className = "app-card-title";
+		title.textContent = article.title || hostLabel(article.url);
+		note.textContent = hostLabel(article.url) + " can't be shown here.";
+		open.className = "item-action-link app-card-open";
+		open.href = article.url;
+		open.target = "_blank";
+		open.rel = "noopener";
+		open.textContent = "Open in a new tab";
+		open.onclick = () => {
+			rememberAppArrival(article.url).catch(console.error);
+		};
+		card.append(title, note, open);
+		pane.appendChild(card);
+	}
+
+	function postToFrame(message) {
+		const article = appState?.article;
+
+		if (!article?.frame?.contentWindow || !article.origin) {
+			return;
+		}
+
+		try {
+			article.frame.contentWindow.postMessage(
+				{ bc: APP_MESSAGE_VERSION, ...message },
+				article.origin,
+			);
+		} catch {
+		}
+	}
+
+	function onAppFrameHi(article, data) {
+		const url = String(data.url || article.url);
+		const title = String(data.title || "").trim();
+		const before = pageAddress();
+
+		setAppSubject({ url, canonical: String(data.canonical || ""), title: title || article.title });
+
+		if (title) {
+			appState.ui.shadow.querySelector("#app-article-title").textContent = title;
+		}
+
+		if (appState.open && !sameURL(pageAddress(), before)) {
+			appState.open.url = url;
+			openAppDiscussion(appState.open.row).catch(console.error);
+		}
+	}
+
+	function onAppMessage(event) {
+		const article = appState?.article;
+
+		if (!article?.frame || event.source !== article.frame.contentWindow) {
+			return;
+		}
+
+		const verdict = appFrameMessageVerdict(event.data, event.origin, article.origin);
+
+		if (!verdict) {
+			return;
+		}
+
+		const data = event.data;
+
+		if (data.type === "hi") {
+			article.origin = event.origin;
+			article.reply = { visible: Boolean(data.visible) };
+			article.everReplied = true;
+			clearInterval(article.helloTimer);
+			onAppFrameHi(article, data);
+			tickAppArticle(article);
+			return;
+		}
+
+		if (data.type === "open") {
+			openAppURL(String(data.url || ""));
+		}
 	}
 
 	function onAppKey(event) {
