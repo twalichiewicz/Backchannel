@@ -204,6 +204,7 @@
 		watches: "HNewhere:watches",
 		hiddenStories: "HNewhere:hidden_stories",
 		zoomBySite: "HNewhere:zoom_by_site",
+		appListWidth: "HNewhere:app_list_width",
 	};
 
 	// #region hnewhere-test-export
@@ -15999,6 +16000,7 @@ ${appMode ? "" : settingsPanelHTML()}
 			resizing = true;
 			startX = e.clientX;
 			startWidth = panel.offsetWidth;
+			shadow.querySelector("#app")?.classList.add("is-resizing");
 
 			document.body.style.userSelect = "none";
 			document.body.style.cursor = "col-resize";
@@ -16034,6 +16036,7 @@ ${appMode ? "" : settingsPanelHTML()}
 			if (!resizing) return;
 
 			resizing = false;
+			shadow.querySelector("#app")?.classList.remove("is-resizing");
 
 			document.body.style.userSelect = "";
 			document.body.style.cursor = "";
@@ -16056,6 +16059,7 @@ ${appMode ? "" : settingsPanelHTML()}
 			startX = touch.clientX;
 			startWidth = panel.offsetWidth;
 			resizeHandle.classList.add("resize-handle-active");
+			shadow.querySelector("#app")?.classList.add("is-resizing");
 			e.preventDefault();
 		};
 
@@ -16087,6 +16091,7 @@ ${appMode ? "" : settingsPanelHTML()}
 		const onTouchEnd = () => {
 			resizing = false;
 			resizeHandle.classList.remove("resize-handle-active");
+			shadow.querySelector("#app")?.classList.remove("is-resizing");
 		};
 
 		if (resizeHandle) {
@@ -23772,22 +23777,27 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	const APP_FRAME_SANDBOX =
 		"allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads";
 
+	const APP_LIST_MIN_WIDTH = 220;
+	const APP_LIST_MAX_WIDTH = 480;
+
 	const APP_CSS = `
 :host {
 	--rail-bg:var(--header-bg);
 	--rail-fg:var(--header-text);
 	--open-row:rgba(var(--accent-rgb), .13);
+	--article-bg:#e8e8e1;
 }
 
 :host(.${DARK_CLASS}) {
 	--open-row:rgba(var(--accent-rgb), .22);
+	--article-bg:#151515;
 }
 
 #app {
 	all:initial;
 	position:relative;
 	display:grid;
-	grid-template-columns:44px 300px minmax(0, 1fr) auto;
+	grid-template-columns:44px var(--app-list-width, 300px) minmax(0, 1fr) auto;
 	grid-template-rows:minmax(0, 1fr);
 	width:100%;
 	height:100%;
@@ -23964,6 +23974,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 }
 
 #app-list {
+	position:relative;
 	display:flex;
 	flex-direction:column;
 	min-width:0;
@@ -23989,11 +24000,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	font-weight:bold;
 }
 
-.app-pane-count {
-	color:var(--meta);
-	font-size:11px;
-}
-
 .app-pane-action {
 	margin-left:auto;
 }
@@ -24002,6 +24008,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	display:flex;
 	align-items:center;
 	gap:10px;
+}
+
+.app-pane-actions .item-action-link,
+#app-article-open {
+	font-size:10px;
 }
 
 #app > .settings-panel {
@@ -24041,6 +24052,16 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	padding:8px 12px 9px 8px;
 }
 
+#app-list-body .app-row {
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	#app-list-body .app-row:not(.is-open):hover {
+		background:var(--hover-tint);
+	}
+}
+
 #app-list-body .browse-row:not(:last-child) {
 	border-bottom:1px solid var(--border-soft);
 }
@@ -24061,6 +24082,45 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	color:var(--muted);
 }
 
+.app-list-resize {
+	position:absolute;
+	top:0;
+	right:-4px;
+	bottom:0;
+	z-index:3;
+	width:8px;
+	cursor:col-resize;
+	touch-action:none;
+}
+
+#app.is-resizing {
+	cursor:col-resize;
+	-webkit-user-select:none;
+	user-select:none;
+}
+
+#app.is-resizing .app-article-frame {
+	pointer-events:none;
+}
+
+@media (pointer: coarse) {
+	.app-list-resize {
+		right:-10px;
+		width:20px;
+		display:flex;
+		align-items:center;
+		justify-content:center;
+	}
+
+	.app-list-resize::before {
+		content:"";
+		width:4px;
+		height:40px;
+		border-radius:2px;
+		background:var(--grip);
+	}
+}
+
 .app-unread-mark {
 	color:var(--accent);
 	font-size:9px;
@@ -24072,13 +24132,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	flex-direction:column;
 	min-width:0;
 	min-height:0;
-	background:var(--surface);
+	background:var(--article-bg);
 }
 
 #app-article-site {
 	flex:0 0 auto;
-	color:var(--meta);
-	font:11px/1 Verdana, Geneva, sans-serif;
 }
 
 #app-article-title {
@@ -24107,7 +24165,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	inset:0;
 	overflow:auto;
 	overscroll-behavior:contain;
-	background:var(--bg);
+	background:var(--article-bg);
 }
 
 .app-article-note {
@@ -24132,11 +24190,26 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 }
 
 #panel.app-docked > header {
+	--header-bg:var(--bg);
+	--header-text:var(--text);
+	--subtitle-stage:var(--meta);
+	--subtitle-stage-peak:var(--text);
 	flex-shrink:0;
 	height:36px;
 	box-sizing:border-box;
 	padding-top:0;
 	padding-bottom:0;
+	border-bottom:1px solid var(--border-soft);
+}
+
+#panel.app-docked .header-actions button {
+	color:var(--meta);
+}
+
+@media (hover: hover) {
+	#panel.app-docked .header-actions button:hover {
+		color:var(--text);
+	}
 }
 
 #panel.app-docked .header-title {
@@ -24148,6 +24221,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 #panel.app-docked .header-subtitle {
 	min-width:0;
+	font-size:10px;
 	overflow:hidden;
 	text-overflow:ellipsis;
 }
@@ -24162,7 +24236,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	right:auto;
 	height:100%;
 	min-height:0;
-	max-width:calc(100vw - 728px);
+	max-width:calc(100vw - 428px - var(--app-list-width, 300px));
 	box-shadow:none;
 	z-index:auto;
 }
@@ -24187,7 +24261,7 @@ header .item-action-link {
 		bottom:0;
 		left:44px;
 		z-index:4;
-		width:300px;
+		width:var(--app-list-width, 300px);
 		box-shadow:6px 0 18px rgba(0,0,0,.18);
 		transform:translateX(calc(-100% - 60px));
 		visibility:hidden;
@@ -24256,6 +24330,7 @@ header .item-action-link {
 		display:none;
 	}
 
+	.app-list-resize,
 	#panel.app-docked #resize-handle {
 		display:none;
 	}
@@ -24429,17 +24504,17 @@ header .item-action-link {
 		{
 			id: "unread",
 			label: "Unread",
-			icon: APP_ICON('<circle cx="8" cy="8" r="5" fill="currentColor"/>'),
+			icon: APP_ICON('<path fill="currentColor" fill-rule="evenodd" d="M4.1 2.8h7.8a1 1 0 0 1 .93.64l1.57 4.26c.07.17.1.35.1.53V12a1.2 1.2 0 0 1-1.2 1.2H2.7A1.2 1.2 0 0 1 1.5 12V8.23c0-.18.03-.36.1-.53l1.57-4.26a1 1 0 0 1 .93-.64zM4.45 4.3 3.2 7.7h2.55l.75 1.5h3l.75-1.5h2.55L11.55 4.3z"/>'),
 		},
 		{
 			id: "all",
 			label: "All stories",
-			icon: APP_ICON('<rect x="2.5" y="3" width="11" height="2.6" rx="1.3" fill="currentColor"/><rect x="2.5" y="6.7" width="11" height="2.6" rx="1.3" fill="currentColor"/><rect x="2.5" y="10.4" width="11" height="2.6" rx="1.3" fill="currentColor"/>'),
+			icon: APP_ICON('<path fill="currentColor" fill-rule="evenodd" d="M2.5 2.5h9a1 1 0 0 1 1 1V5h1a1 1 0 0 1 1 1v6.2a1.8 1.8 0 0 1-1.8 1.8H3.3a1.8 1.8 0 0 1-1.8-1.8V3.5a1 1 0 0 1 1-1zm10 4v5.7a.5.5 0 0 0 1 0V6.5zM4 4.5v3h6v-3zm0 4.5v1.2h6V9zm0 2.3v1.2h6v-1.2z"/>'),
 		},
 		{
 			id: "queue",
 			label: "Queue",
-			icon: APP_ICON('<path d="M4.6 1.8h6.8a1.1 1.1 0 0 1 1.1 1.1v11.3L8 11.2l-4.5 3V2.9a1.1 1.1 0 0 1 1.1-1.1z" fill="currentColor"/>'),
+			icon: APP_ICON('<rect x="2.5" y="3" width="11" height="2.6" rx="1.3" fill="currentColor"/><rect x="2.5" y="6.7" width="11" height="2.6" rx="1.3" fill="currentColor"/><rect x="2.5" y="10.4" width="11" height="2.6" rx="1.3" fill="currentColor"/>'),
 		},
 		{
 			id: "watching",
@@ -24449,7 +24524,7 @@ header .item-action-link {
 		{
 			id: "collection",
 			label: "Collection",
-			icon: APP_ICON('<path d="M8 1.6l1.95 3.95 4.36.63-3.16 3.08.75 4.34L8 11.55l-3.9 2.05.75-4.34L1.69 6.18l4.36-.63z" fill="currentColor"/>'),
+			icon: APP_ICON('<path d="M4.6 1.8h6.8a1.1 1.1 0 0 1 1.1 1.1v11.3L8 11.2l-4.5 3V2.9a1.1 1.1 0 0 1 1.1-1.1z" fill="currentColor"/>'),
 		},
 	];
 
@@ -24457,8 +24532,8 @@ header .item-action-link {
 		'<path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>',
 	);
 
-	const APP_BRAND_ICON = (d) =>
-		`<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" d="${d}"/></svg>`;
+	const APP_BRAND_ICON = (d, rule = "nonzero") =>
+		`<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="${rule}" d="${d}"/></svg>`;
 
 	const APP_SOURCE_ICONS = {
 		hn: '<span class="rail-hn" aria-hidden="true">HN</span>',
@@ -24472,7 +24547,8 @@ header .item-action-link {
 			"M23.268 5.313c-.35-2.578-2.617-4.61-5.304-5.004C17.51.242 15.792 0 11.813 0h-.03c-3.98 0-4.835.242-5.288.309C3.882.692 1.496 2.518.917 5.127.64 6.412.61 7.837.661 9.143c.074 1.874.088 3.745.26 5.611.118 1.24.325 2.47.62 3.68.55 2.237 2.777 4.098 4.96 4.857 2.336.792 4.849.923 7.256.38.265-.061.527-.132.786-.213.585-.184 1.27-.39 1.774-.753a.057.057 0 0 0 .023-.043v-1.809a.052.052 0 0 0-.02-.041.053.053 0 0 0-.046-.01 20.282 20.282 0 0 1-4.709.545c-2.73 0-3.463-1.284-3.674-1.818a5.593 5.593 0 0 1-.319-1.433.053.053 0 0 1 .066-.054c1.517.363 3.072.546 4.632.546.376 0 .75 0 1.125-.01 1.57-.044 3.224-.124 4.768-.422.038-.008.077-.015.11-.024 2.435-.464 4.753-1.92 4.989-5.604.008-.145.03-1.52.03-1.67.002-.512.167-3.63-.024-5.545zm-3.748 9.195h-2.561V8.29c0-1.309-.55-1.976-1.67-1.976-1.23 0-1.846.79-1.846 2.35v3.403h-2.546V8.663c0-1.56-.617-2.35-1.848-2.35-1.112 0-1.668.668-1.67 1.977v6.218H4.822V8.102c0-1.31.337-2.35 1.011-3.12.696-.77 1.608-1.164 2.74-1.164 1.311 0 2.302.5 2.962 1.498l.638 1.06.638-1.06c.66-.999 1.65-1.498 2.96-1.498 1.13 0 2.043.395 2.74 1.164.675.77 1.012 1.81 1.012 3.12z",
 		),
 		lemmy: APP_BRAND_ICON(
-			"M2.9595 4.2228a3.9132 3.9132 0 0 0-.332.019c-.8781.1012-1.67.5699-2.155 1.3862-.475.8-.5922 1.6809-.35 2.4971.2421.8162.8297 1.5575 1.6982 2.1449.0053.0035.0106.0076.0163.0114.746.4498 1.492.7431 2.2877.8994-.02.3318-.0272.6689-.006 1.0181.0634 1.0432.4368 2.0006.996 2.8492l-2.0061.8189a.4163.4163 0 0 0-.2276.2239.416.416 0 0 0 .0879.455.415.415 0 0 0 .2941.1231.4156.4156 0 0 0 .1595-.0312l2.2093-.9035c.408.4859.8695.9315 1.3723 1.318.0196.0151.0407.0264.0603.0423l-1.2918 1.7103a.416.416 0 0 0 .664.501l1.314-1.7385c.7185.4548 1.4782.7927 2.2294 1.0242.3833.7209 1.1379 1.1871 2.0202 1.1871.8907 0 1.6442-.501 2.0242-1.2072.744-.2347 1.4959-.5729 2.2073-1.0262l1.332 1.7606a.4157.4157 0 0 0 .7439-.1936.4165.4165 0 0 0-.0799-.3074l-1.3099-1.7345c.0083-.0075.0178-.0113.0261-.0188.4968-.3803.9549-.8175 1.3622-1.2939l2.155.8794a.4156.4156 0 0 0 .5412-.2276.4151.4151 0 0 0-.2273-.5432l-1.9438-.7928c.577-.8538.9697-1.8183 1.0504-2.8693.0268-.3507.0242-.6914.0079-1.0262.7905-.1572 1.5321-.4502 2.2737-.8974.0053-.0033.011-.0076.0163-.0113.8684-.5874 1.456-1.3287 1.6982-2.145.2421-.8161.125-1.697-.3501-2.497-.4849-.8163-1.2768-1.2852-2.155-1.3863a3.2175 3.2175 0 0 0-.332-.0189c-.7852-.0151-1.6231.229-2.4286.6942-.5926.342-1.1252.867-1.5433 1.4387-1.1699-.6703-2.6923-1.0476-4.5635-1.0785a15.5768 15.5768 0 0 0-.5111 0c-2.085.034-3.7537.43-5.0142 1.1449-.0033-.0038-.0045-.0114-.008-.0152-.4233-.5916-.973-1.1365-1.5835-1.489-.8055-.465-1.6434-.7083-2.4286-.6941Zm.2858.7365c.5568.042 1.1696.2358 1.7787.5875.485.28.9757.7554 1.346 1.2696a5.6875 5.6875 0 0 0-.4969.4085c-.9201.8516-1.4615 1.9597-1.668 3.2335-.6809-.1402-1.3183-.3945-1.984-.7948-.7553-.5128-1.2159-1.1225-1.4004-1.7445-.1851-.624-.1074-1.2712.2776-1.9196.3743-.63.9275-.9534 1.6118-1.0322a2.796 2.796 0 0 1 .5352-.0076Zm17.5094 0a2.797 2.797 0 0 1 .5353.0075c.6842.0786 1.2374.4021 1.6117 1.0322.385.6484.4627 1.2957.2776 1.9196-.1845.622-.645 1.2317-1.4004 1.7445-.6578.3955-1.2881.6472-1.9598.7888-.1942-1.2968-.7375-2.4338-1.666-3.302a5.5639 5.5639 0 0 0-.4709-.3923c.3645-.49.8287-.9428 1.2938-1.2113.6091-.3515 1.2219-.5454 1.7787-.5875ZM12.006 6.0036a14.832 14.832 0 0 1 .487 0c2.3901.0393 4.0848.67 5.1631 1.678 1.1501 1.0754 1.6423 2.6006 1.499 4.467-.1311 1.7079-1.2203 3.2281-2.652 4.324-.694.5313-1.4626.9354-2.2254 1.2294.0031-.0453.014-.0888.014-.1349.0029-1.1964-.9313-2.2133-2.2918-2.2133-1.3606 0-2.3222 1.0154-2.2918 2.2213.0013.0507.014.0972.0181.1471-.781-.2933-1.5696-.7013-2.2777-1.2456-1.4239-1.0945-2.4997-2.6129-2.6037-4.322-.1129-1.8567.3778-3.3382 1.5212-4.3965C7.5094 6.7 9.352 6.047 12.006 6.0036Zm-3.6419 6.8291c-.6053 0-1.0966.4903-1.0966 1.0966 0 .6063.4913 1.0986 1.0966 1.0986s1.0966-.4923 1.0966-1.0986c0-.6063-.4913-1.0966-1.0966-1.0966zm7.2819.0113c-.5998 0-1.0866.4859-1.0866 1.0866s.4868 1.0885 1.0866 1.0885c.5997 0 1.0865-.4878 1.0865-1.0885s-.4868-1.0866-1.0865-1.0866zM12 16.0835c1.0237 0 1.5654.638 1.5634 1.4829-.0018.7849-.6723 1.485-1.5634 1.485-.9167 0-1.54-.5629-1.5634-1.493-.0212-.8347.5397-1.4749 1.5634-1.4749Z",
+			"M2.9595 4.2228a3.9132 3.9132 0 0 0-.332.019c-.8781.1012-1.67.5699-2.155 1.3862-.475.8-.5922 1.6809-.35 2.4971.2421.8162.8297 1.5575 1.6982 2.1449.0053.0035.0106.0076.0163.0114.746.4498 1.492.7431 2.2877.8994-.02.3318-.0272.6689-.006 1.0181.0634 1.0432.4368 2.0006.996 2.8492l-2.0061.8189a.4163.4163 0 0 0-.2276.2239.416.416 0 0 0 .0879.455.415.415 0 0 0 .2941.1231.4156.4156 0 0 0 .1595-.0312l2.2093-.9035c.408.4859.8695.9315 1.3723 1.318.0196.0151.0407.0264.0603.0423l-1.2918 1.7103a.416.416 0 0 0 .664.501l1.314-1.7385c.7185.4548 1.4782.7927 2.2294 1.0242.3833.7209 1.1379 1.1871 2.0202 1.1871.8907 0 1.6442-.501 2.0242-1.2072.744-.2347 1.4959-.5729 2.2073-1.0262l1.332 1.7606a.4157.4157 0 0 0 .7439-.1936.4165.4165 0 0 0-.0799-.3074l-1.3099-1.7345c.0083-.0075.0178-.0113.0261-.0188.4968-.3803.9549-.8175 1.3622-1.2939l2.155.8794a.4156.4156 0 0 0 .5412-.2276.4151.4151 0 0 0-.2273-.5432l-1.9438-.7928c.577-.8538.9697-1.8183 1.0504-2.8693.0268-.3507.0242-.6914.0079-1.0262.7905-.1572 1.5321-.4502 2.2737-.8974.0053-.0033.011-.0076.0163-.0113.8684-.5874 1.456-1.3287 1.6982-2.145.2421-.8161.125-1.697-.3501-2.497-.4849-.8163-1.2768-1.2852-2.155-1.3863a3.2175 3.2175 0 0 0-.332-.0189c-.7852-.0151-1.6231.229-2.4286.6942-.5926.342-1.1252.867-1.5433 1.4387-1.1699-.6703-2.6923-1.0476-4.5635-1.0785a15.5768 15.5768 0 0 0-.5111 0c-2.085.034-3.7537.43-5.0142 1.1449-.0033-.0038-.0045-.0114-.008-.0152-.4233-.5916-.973-1.1365-1.5835-1.489-.8055-.465-1.6434-.7083-2.4286-.6941ZM8.3641 12.8327c-.6053 0-1.0966.4903-1.0966 1.0966 0 .6063.4913 1.0986 1.0966 1.0986s1.0966-.4923 1.0966-1.0986c0-.6063-.4913-1.0966-1.0966-1.0966zm7.2819.0113c-.5998 0-1.0866.4859-1.0866 1.0866s.4868 1.0885 1.0866 1.0885c.5997 0 1.0865-.4878 1.0865-1.0885s-.4868-1.0866-1.0865-1.0866zM12 16.0835c1.0237 0 1.5654.638 1.5634 1.4829-.0018.7849-.6723 1.485-1.5634 1.485-.9167 0-1.54-.5629-1.5634-1.493-.0212-.8347.5397-1.4749 1.5634-1.4749Z",
+			"evenodd",
 		),
 	};
 
@@ -24492,11 +24568,12 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <button id="settings-toggle" class="rail-button" type="button" data-tip="Settings" aria-label="Open Backchannel settings" aria-expanded="false" aria-controls="settings-panel">${APP_SETTINGS_ICON}</button>
 </nav>
 <section id="app-list" aria-label="Stories">
-<div class="app-pane-head"><span id="app-list-title"></span><span id="app-list-count" class="app-pane-count"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="item-action-link" type="button">mark all read</button><button id="app-list-sync" class="item-action-link" type="button">sync</button></span></div>
+<div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="item-action-link" type="button">mark all read</button><button id="app-list-sync" class="item-action-link" type="button">sync</button></span></div>
 <div id="app-list-body"></div>
+<div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
 <section id="app-article" aria-label="Article">
-<div class="app-pane-head"><button id="app-article-back" class="item-action-link app-phone-only" type="button">&lsaquo; stories</button><span id="app-article-site"></span><span id="app-article-title"></span><a id="app-article-open" class="item-action-link app-pane-action" target="_blank" rel="noopener" hidden>open</a><button id="app-article-discussion" class="item-action-link app-phone-only" type="button">discussion &rsaquo;</button></div>
+<div class="app-pane-head"><button id="app-article-back" class="item-action-link app-phone-only" type="button">&lsaquo; stories</button><span id="app-article-title"></span><span id="app-article-site" class="browse-site"></span><a id="app-article-open" class="item-action-link app-pane-action" target="_blank" rel="noopener" hidden>open</a><button id="app-article-discussion" class="item-action-link app-phone-only" type="button">discussion &rsaquo;</button></div>
 <div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick a story to read it here, with what people said about it beside it.</div></div>
 </section>
 ${settingsPanelHTML()}
@@ -24565,6 +24642,82 @@ ${settingsPanelHTML()}
 		shadow.querySelector("#app-mark-read").onclick = () => {
 			markAppViewRead().catch(console.error);
 		};
+
+		const listBody = shadow.querySelector("#app-list-body");
+		let rowPress = null;
+
+		listBody.addEventListener("pointerdown", (event) => {
+			rowPress = { x: event.clientX, y: event.clientY };
+		});
+
+		listBody.addEventListener("click", (event) => {
+			const press = rowPress;
+			const row = event.target?.closest?.(".app-row");
+
+			rowPress = null;
+
+			if (
+				!row ||
+				event.defaultPrevented ||
+				event.button !== 0 ||
+				event.metaKey ||
+				event.ctrlKey ||
+				event.shiftKey ||
+				event.altKey ||
+				event.target.closest("a, button, input, select, textarea, label, summary")
+			) {
+				return;
+			}
+
+			if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 4) {
+				return;
+			}
+
+			row.querySelector(".browse-title-link")?.click();
+		});
+
+		const appRoot = shadow.querySelector("#app");
+		const listPane = shadow.querySelector("#app-list");
+		const listHandle = shadow.querySelector("#app-list-resize");
+		let listDrag = null;
+		let listSaveTimer = 0;
+
+		load(STORAGE.appListWidth, null)
+			.then((width) => applyAppListWidth(appRoot, width))
+			.catch(console.error);
+
+		listHandle.addEventListener("pointerdown", (event) => {
+			if (event.button !== 0) {
+				return;
+			}
+
+			listDrag = { x: event.clientX, width: listPane.offsetWidth };
+			listHandle.setPointerCapture(event.pointerId);
+			appRoot.classList.add("is-resizing");
+			event.preventDefault();
+		});
+
+		listHandle.addEventListener("pointermove", (event) => {
+			if (!listDrag) {
+				return;
+			}
+
+			const width = applyAppListWidth(appRoot, listDrag.width + event.clientX - listDrag.x);
+
+			clearTimeout(listSaveTimer);
+			listSaveTimer = setTimeout(() => {
+				save(STORAGE.appListWidth, width).catch(console.error);
+			}, 250);
+		});
+
+		const endListDrag = () => {
+			listDrag = null;
+			appRoot.classList.remove("is-resizing");
+		};
+
+		listHandle.addEventListener("pointerup", endListDrag);
+		listHandle.addEventListener("pointercancel", endListDrag);
+		listHandle.addEventListener("lostpointercapture", endListDrag);
 
 		shadow.querySelector("#app-list-sync").onclick = () => {
 			renderAppList({ force: true }).catch(console.error);
@@ -24741,7 +24894,7 @@ ${settingsPanelHTML()}
 		const app = shadow?.querySelector("#app");
 		const label = button?.dataset.tip;
 
-		if (!tip || !app || !label) {
+		if (!tip || !app || !label || button.getAttribute("aria-expanded") === "true") {
 			return;
 		}
 
@@ -24764,6 +24917,17 @@ ${settingsPanelHTML()}
 		tip.style.left = `${Math.round((below ? box.left + box.width / 2 : box.right + 10) - frame.left)}px`;
 		tip.style.top = `${Math.round((below ? box.bottom + 10 : box.top + box.height / 2) - frame.top)}px`;
 		tip.hidden = false;
+	}
+
+	function applyAppListWidth(app, width) {
+		if (!app || typeof width !== "number" || !Number.isFinite(width)) {
+			return null;
+		}
+
+		const clamped = Math.round(Math.min(Math.max(width, APP_LIST_MIN_WIDTH), APP_LIST_MAX_WIDTH));
+
+		app.style.setProperty("--app-list-width", `${clamped}px`);
+		return clamped;
 	}
 
 	function placeAppSettings(open) {
@@ -24935,9 +25099,6 @@ ${settingsPanelHTML()}
 
 		state.listView = view;
 		decorateAppRows(list);
-		ui.shadow.querySelector("#app-list-count").textContent = String(
-			list.querySelectorAll(".browse-row").length || "",
-		);
 		await paintAppCounts();
 	}
 
@@ -25170,7 +25331,7 @@ ${settingsPanelHTML()}
 		const shadow = appState.ui.shadow;
 		const open = shadow.querySelector("#app-article-open");
 
-		shadow.querySelector("#app-article-site").textContent = url ? hostLabel(url) : "";
+		shadow.querySelector("#app-article-site").textContent = url ? `(${hostLabel(url)})` : "";
 		shadow.querySelector("#app-article-title").textContent = title || "";
 		open.href = url || "";
 		open.hidden = !url;
