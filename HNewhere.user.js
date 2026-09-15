@@ -20265,6 +20265,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		annotationController?.cleanup?.();
 		annotationController = null;
 
+		clearSidebarQuoteMarks();
+	}
+
+	function clearSidebarQuoteMarks() {
 		if (sidebarUI?.shadow) {
 			sidebarUI.shadow
 				.querySelectorAll("[data-hnewhere-quote-link='1']")
@@ -21879,6 +21883,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	};
 
 	function detectDocumentSource() {
+		if (appState?.article?.mode === "reader" && appReaderElement()) {
+			return READER_DOCUMENT_SOURCE;
+		}
+
 		if (pdfViewerApp() || document.querySelector(".pdfViewer .textLayer")) {
 			return PDF_DOCUMENT_SOURCE;
 		}
@@ -22720,7 +22728,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				return [];
 			}
 
-			if (getArticleSearchRoot() === document.body) {
+			if (documentSource().id === "html" && getArticleSearchRoot() === document.body) {
 				return [];
 			}
 
@@ -23240,6 +23248,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	// #endregion hnewhere-test-export
 
 	async function openFocusedDiscussion(groupKey, options = {}) {
+		if (frameAgentActive) {
+			postToApp({ type: "focus-quote", key: groupKey });
+			return;
+		}
+
 		const wasHidden = await revealSidebar();
 
 		applyCommentFilter(groupKey, options);
@@ -23668,6 +23681,15 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	}
 
 	async function refreshArticleAnnotations() {
+		if (appState) {
+			await refreshAppAnnotations();
+			return;
+		}
+
+		await refreshLocalAnnotations();
+	}
+
+	async function refreshLocalAnnotations() {
 		clearArticleAnnotations();
 
 		if (!sidebar || !renderedComments.length) {
@@ -24121,6 +24143,58 @@ header .item-action-link {
 	border-top:1px solid var(--border);
 }
 `;
+
+	const READER_DOCUMENT_SOURCE = {
+		id: "reader",
+
+		buildIndex() {
+			return buildTextIndex(appReaderElement() || document.createElement("div"), {
+				skipHidden: true,
+				excludeSelectors: ["[data-hnewhere-annotation-overlay]"],
+			});
+		},
+
+		hostFor() {
+			return appReaderElement() || document.body;
+		},
+
+		originFor(host) {
+			const rect = host.getBoundingClientRect();
+
+			return { left: -rect.left, top: -rect.top };
+		},
+
+		heightFor(host) {
+			return host.scrollHeight;
+		},
+
+		backdropFor(range) {
+			return nearestElement(range?.commonAncestorContainer);
+		},
+
+		scrollIntoView(range) {
+			const scroller = appReaderScroller();
+
+			if (!scroller) {
+				return;
+			}
+
+			const rect = range.getBoundingClientRect();
+			const box = scroller.getBoundingClientRect();
+
+			scroller.scrollTo({
+				top: Math.max(
+					0,
+					scroller.scrollTop + (rect.top - box.top) - scroller.clientHeight * 0.3,
+				),
+				behavior: prefersReducedMotion() ? "auto" : "smooth",
+			});
+		},
+
+		onReindex() {
+			return () => {};
+		},
+	};
 
 	const APP_ICON = (paths) =>
 		`<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">${paths}</svg>`;
@@ -24696,6 +24770,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 			setSidebarStage(ui, "comments");
 			await renderDiscussions(loaded, ui);
 			await refreshSubmitAffordance(ui.shadow);
+			await refreshArticleAnnotations();
 		} catch (error) {
 			console.error(error);
 		} finally {
@@ -24745,6 +24820,10 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 		if (appState) {
 			appState.article = null;
 			appReaderElement()?.remove();
+
+			if (activeDocumentSource === READER_DOCUMENT_SOURCE) {
+				activeDocumentSource = HTML_DOCUMENT_SOURCE;
+			}
 			appState.ui.shadow.querySelector("#app-article-body")?.replaceChildren();
 		}
 	}
@@ -24951,6 +25030,10 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 		clearTimeout(article.capTimer);
 
 		if (mode === "frame-agent" || mode === "frame") {
+			if (mode === "frame-agent") {
+				refreshArticleAnnotations().catch(console.error);
+			}
+
 			return;
 		}
 
@@ -24960,6 +25043,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 
 		if (mode === "reader") {
 			showAppReader(article);
+			refreshArticleAnnotations().catch(console.error);
 		} else {
 			showAppCard(article);
 		}
@@ -25136,6 +25220,129 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 
 		if (data.type === "open") {
 			openAppURL(String(data.url || ""));
+			return;
+		}
+
+		if (data.type === "annotated") {
+			receiveFrameGroups(data.groups);
+			return;
+		}
+
+		if (data.type === "focus-quote") {
+			applyCommentFilter(String(data.key || ""));
+
+			if (appIsPhone()) {
+				setAppStage("discussion");
+			}
+		}
+	}
+
+	async function refreshAppAnnotations() {
+		const article = appState.article;
+
+		if (article?.mode === "reader") {
+			await refreshLocalAnnotations();
+			return;
+		}
+
+		clearArticleAnnotations();
+
+		if (article?.mode !== "frame-agent" || !renderedComments.length) {
+			return;
+		}
+
+		const settings = await loadSettings();
+
+		if (!settings.annotations) {
+			clearCommentFilter({ animate: false });
+			return;
+		}
+
+		postToFrame({
+			type: "annotate",
+			comments: renderedComments.map(frameCommentPayload),
+			settings,
+		});
+	}
+
+	function frameCommentPayload(rendered) {
+		return {
+			id: rendered.id,
+			textHTML: rendered.textHTML || "",
+			local: Boolean(rendered.local),
+			author: rendered.author || "",
+			time: rendered.time || 0,
+		};
+	}
+
+	function remoteAnnotationController(groups) {
+		return {
+			remote: true,
+			groups,
+			groupsByKey: new Map(groups.map((group) => [group.key, group])),
+			setHeatRegions() {},
+			focusGroup(key) {
+				postToFrame({ type: "focus-group", key });
+			},
+			cleanup() {
+				postToFrame({ type: "clear" });
+			},
+		};
+	}
+
+	function receiveFrameGroups(raw) {
+		if (appState?.article?.mode !== "frame-agent") {
+			return;
+		}
+
+		const byId = new Map(renderedComments.map((rendered) => [rendered.id, rendered]));
+		const groups = (Array.isArray(raw) ? raw : [])
+			.map((group) => ({
+				key: String(group?.key || ""),
+				quoteText: String(group?.quoteText || ""),
+				fullQuoteText: String(group?.fullQuoteText || ""),
+				comments: (Array.isArray(group?.comments) ? group.comments : [])
+					.map((comment) => {
+						const rendered = byId.get(String(comment?.commentId || ""));
+
+						return rendered
+							? {
+									commentId: rendered.id,
+									local: Boolean(rendered.local),
+									element: rendered.element,
+									textElement: rendered.textElement,
+									author: rendered.author,
+									time: rendered.time,
+									commentText: rendered.textElement
+										? extractTextWithBreaks(rendered.textElement)
+										: "",
+									quoteText: String(comment.quoteText || ""),
+									quoteNormalized: String(comment.quoteNormalized || ""),
+									fullQuoteText: String(comment.fullQuoteText || ""),
+								}
+							: null;
+					})
+					.filter(Boolean),
+			}))
+			.filter((group) => group.key && group.comments.length);
+
+		clearSidebarQuoteMarks();
+
+		for (const rendered of renderedComments) {
+			rendered.matchedGroupKeys = new Set();
+		}
+
+		for (const group of groups) {
+			for (const comment of group.comments) {
+				byId.get(comment.commentId)?.matchedGroupKeys.add(group.key);
+			}
+		}
+
+		annotationController = remoteAnnotationController(groups);
+		decorateSidebarMatches(annotationController);
+
+		if (activeCommentFilter?.type === "quote") {
+			applyCommentFilter(activeCommentFilter.key, { scroll: false, animate: false });
 		}
 	}
 
@@ -25313,6 +25520,21 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 					title: pageTitle(),
 					visible: frameVisibility(),
 				});
+				return;
+			}
+
+			if (data.type === "annotate") {
+				annotateFrame(data).catch(console.error);
+				return;
+			}
+
+			if (data.type === "focus-group") {
+				annotationController?.focusGroup(String(data.key || ""));
+				return;
+			}
+
+			if (data.type === "clear") {
+				clearFrameAnnotations();
 			}
 		});
 
@@ -25332,6 +25554,70 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 			},
 			true,
 		);
+	}
+
+	let frameComments = [];
+
+	function frameComment(raw) {
+		const textElement = document.createElement("div");
+
+		textElement.innerHTML = sanitizeHTML(String(raw?.textHTML || ""));
+
+		return {
+			id: String(raw?.id || ""),
+			textHTML: String(raw?.textHTML || ""),
+			local: Boolean(raw?.local),
+			author: String(raw?.author || ""),
+			time: Number(raw?.time) || 0,
+			element: null,
+			textElement,
+			matchedGroupKeys: new Set(),
+		};
+	}
+
+	function serializeAnnotationGroup(group) {
+		return {
+			key: group.key,
+			quoteText: group.quoteText || "",
+			fullQuoteText: group.fullQuoteText || "",
+			comments: group.comments.map((comment) => ({
+				commentId: comment.commentId,
+				quoteText: comment.quoteText || "",
+				quoteNormalized: comment.quoteNormalized || "",
+				fullQuoteText: comment.fullQuoteText || "",
+			})),
+		};
+	}
+
+	function clearFrameAnnotations() {
+		annotationController?.cleanup?.();
+		annotationController = null;
+	}
+
+	async function annotateFrame(data) {
+		clearFrameAnnotations();
+
+		const settings = data.settings && typeof data.settings === "object" ? data.settings : {};
+
+		if (!settings.annotations) {
+			return;
+		}
+
+		frameComments = (Array.isArray(data.comments) ? data.comments : []).map(frameComment);
+		activeDocumentSource = detectDocumentSource();
+
+		const index = buildArticleTextIndex();
+		const groups = buildAnnotationGroups(frameComments, index);
+		const controller = createAnnotationOverlay(groups, [], settings);
+
+		annotationController = controller;
+		postToApp({ type: "annotated", groups: groups.map(serializeAnnotationGroup) });
+
+		scheduleIdleTask(() => {
+			if (annotationController === controller) {
+				controller.setHeatRegions(buildHeatRegions(frameComments, index));
+			}
+		});
 	}
 
 	const APP_HELLO_MS = 200;
