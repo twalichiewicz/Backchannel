@@ -2,43 +2,90 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#237140">
 <title>Backchannel</title>
+<link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 
 <style>
   * {
     box-sizing: border-box;
   }
 
+  html,
   body {
+    height: 100%;
     margin: 0;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: system-ui, sans-serif;
-    color: white;
   }
 
-  /*
-   * The green is painted here rather than on body. Backchannel reads the page's
-   * own background to decide whether to draw itself light or dark, and this page
-   * is not a page it should match — with Theme: Detect it follows the system.
-   */
-  .promo-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: -1;
+  body {
+    font-family: system-ui, sans-serif;
+    color: white;
     background: rgb(35, 113, 64);
   }
 
-  /*
-   * Backchannel renders its panel into the page and sets this attribute.
-   * The centering flexbox above would otherwise make the panel one centered item.
-   */
-  html[data-backchannel-installed] body {
-    display: block;
+  .bezel {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    padding: calc(6px + env(safe-area-inset-top, 0px)) calc(6px + env(safe-area-inset-right, 0px)) 0 calc(6px + env(safe-area-inset-left, 0px));
+    background: rgb(35, 113, 64);
+  }
+
+  .screen {
+    position: relative;
+    flex: 1;
     min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    border-radius: 4.5px 4.5px 9px 9px;
+    background: rgb(28, 94, 53);
+  }
+
+  html[data-backchannel-installed] .screen {
+    display: block;
+    overflow: hidden;
+    background: #f6f6ef;
+  }
+
+  .chin {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    height: calc(30px + env(safe-area-inset-bottom, 0px));
+    padding: 0 9px env(safe-area-inset-bottom, 0px);
+    overflow: hidden;
+    white-space: nowrap;
+    font: 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: rgba(255, 255, 255, .72);
+  }
+
+  .chin-side {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .chin a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .chin a:hover {
+    color: white;
+    text-decoration: underline;
+  }
+
+  .chin-sep {
+    opacity: .5;
   }
 
   .demo {
@@ -188,7 +235,9 @@
 
 <body>
 
-<div class="promo-backdrop" data-backchannel-promo></div>
+<div class="bezel">
+
+<main class="screen" id="backchannel-screen">
 
 <div class="demo" data-backchannel-promo>
 
@@ -237,6 +286,18 @@
       Learn more
     </a>
   </div>
+
+</div>
+
+</main>
+
+<footer class="chin">
+  <span class="chin-side">&copy; 2026 Triglavis LLC <span class="chin-sep">|</span> Backchannel <span data-backchannel-version></span></span>
+  <span class="chin-side">
+    <a href="https://github.com/twalichiewicz/Backchannel">GitHub</a>
+    <a href="https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js" data-backchannel-promo>Install</a>
+  </span>
+</footer>
 
 </div>
 
