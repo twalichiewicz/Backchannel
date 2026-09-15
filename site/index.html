@@ -210,6 +210,23 @@
     transition: all .15s;
   }
 
+  @media (max-width: 700px) {
+    html[data-backchannel-installed]:has([data-hnewhere-app]) .bezel {
+      position: relative;
+      min-height: 100%;
+      padding: 0;
+    }
+
+    html[data-backchannel-installed]:has([data-hnewhere-app]) .screen {
+      overflow: visible;
+      border-radius: 0;
+    }
+
+    html[data-backchannel-installed]:has([data-hnewhere-app]) .chin {
+      display: none;
+    }
+  }
+
   @media (max-width: 640px) {
     .demo {
       width: calc(100% - 32px);

@@ -19,8 +19,10 @@ use to detect updates, so every release bumps it.
   open it here, or once you have read its discussion anywhere else. Mark all
   read clears a view and can be undone, and j and k move through the list. A
   click anywhere on a story opens it, and the story list and the discussion each
-  resize from their edge. Below 1100px the list slides over the article, and on
-  a phone the panes take turns.
+  resize from their edge. The discussion opens with the first story you pick.
+  Below 1100px the list slides over the article. On a phone the panes take
+  turns, the rail sits at the foot with a label under each view, pulling the
+  list down syncs it, and the stories run under Safari's bars.
 
 - **The article opens beside its discussion.** It loads in a frame, with
   Backchannel running inside it, so quoted passages light up there as they do

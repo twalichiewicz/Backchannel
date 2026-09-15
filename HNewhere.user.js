@@ -14431,7 +14431,6 @@ ${[
 
 		if (appMode) {
 			host.setAttribute("data-hnewhere-app", "1");
-			host.style.cssText = "display:block;position:absolute;inset:0;";
 		}
 
 		guardHostKeyboard(host);
@@ -23779,9 +23778,14 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 	const APP_LIST_MIN_WIDTH = 220;
 	const APP_LIST_MAX_WIDTH = 480;
+	const APP_PULL_TRIGGER = 56;
+	const APP_PULL_MAX = 96;
 
 	const APP_CSS = `
 :host {
+	display:block;
+	position:absolute;
+	inset:0;
 	--rail-bg:var(--header-bg);
 	--rail-fg:var(--header-text);
 	--open-row:rgba(var(--accent-rgb), .13);
@@ -23871,6 +23875,14 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	cursor:default;
 }
 
+.rail-icon {
+	display:contents;
+}
+
+.rail-label {
+	display:none;
+}
+
 .rail-badge {
 	position:absolute;
 	top:-4px;
@@ -23938,17 +23950,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	margin-top:-4px;
 	background:inherit;
 	transform:rotate(45deg);
-}
-
-.app-tip.is-below {
-	transform:translateX(-50%);
-}
-
-.app-tip.is-below::before {
-	top:-4px;
-	left:50%;
-	margin-top:0;
-	margin-left:-4px;
 }
 
 .app-tip-count {
@@ -24035,9 +24036,9 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	pointer-events:none;
 }
 
-.app-settings-arrow.is-up {
-	border-bottom:0;
-	border-top:1px solid var(--surface-border);
+.app-settings-arrow.is-down {
+	border-left:0;
+	border-right:1px solid var(--surface-border);
 }
 
 #app-list-body {
@@ -24080,6 +24081,21 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 #app-list-body .app-row:not(.is-unread) .browse-title-link {
 	color:var(--muted);
+}
+
+.app-list-pull {
+	flex:0 0 auto;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	height:0;
+	overflow:hidden;
+	color:var(--meta);
+	font-size:11px;
+}
+
+.app-list-pull.is-settling {
+	transition:height .2s ease;
 }
 
 .app-list-resize {
@@ -24241,6 +24257,23 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	z-index:auto;
 }
 
+#app:not(.has-story) #panel.app-docked {
+	display:none;
+}
+
+#panel.app-docked .app-discussion-empty {
+	position:absolute;
+	inset:36px 0 0;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	max-width:none;
+	margin:0;
+	padding:24px;
+	box-sizing:border-box;
+	text-align:center;
+}
+
 header .item-action-link {
 	color:inherit;
 	text-decoration-color:currentColor;
@@ -24282,34 +24315,77 @@ header .item-action-link {
 @media (max-width: 700px) {
 	#app {
 		grid-template-columns:minmax(0, 1fr);
-		grid-template-rows:auto minmax(0, 1fr);
+		grid-template-rows:minmax(0, 1fr) auto;
 	}
 
 	#app-rail {
-		grid-row:1;
+		grid-row:2;
 		flex-direction:row;
-		gap:8px;
-		padding:6px 10px;
+		justify-content:center;
+		justify-content:safe center;
+		gap:2px;
+		padding:5px 8px 4px;
 		overflow-x:auto;
 		overflow-y:hidden;
 		border-right:0;
-		border-bottom:1px solid var(--border-soft);
 	}
 
-	.rail-rule {
-		width:1px;
-		height:20px;
-		margin:0 3px;
-	}
-
+	#app-rail-rule,
+	#app-rail-sources,
 	.rail-spacer {
 		display:none;
+	}
+
+	.rail-button {
+		flex-direction:column;
+		gap:3px;
+		width:auto;
+		min-width:52px;
+		height:auto;
+		padding:0 2px;
+	}
+
+	.rail-button.is-current {
+		background:none;
+		color:var(--rail-fg);
+		--rail-glyph:var(--rail-fg);
+		--rail-knock:var(--rail-bg);
+	}
+
+	.rail-icon {
+		position:relative;
+		display:flex;
+		align-items:center;
+		justify-content:center;
+		width:44px;
+		height:28px;
+		border-radius:14px;
+	}
+
+	.rail-button.is-current .rail-icon {
+		background:var(--rail-fg);
+		color:var(--rail-bg);
+		--rail-glyph:var(--rail-bg);
+		--rail-knock:var(--rail-fg);
+	}
+
+	.rail-label {
+		display:block;
+		font-size:11px;
+		line-height:1.2;
+		white-space:nowrap;
+		opacity:.82;
+	}
+
+	.rail-button.is-current .rail-label {
+		font-weight:600;
+		opacity:1;
 	}
 
 	#app-list,
 	#app-article,
 	#panel.app-docked {
-		grid-row:2;
+		grid-row:1;
 		grid-column:1;
 		position:relative;
 		left:auto;
@@ -24337,6 +24413,40 @@ header .item-action-link {
 
 	.app-phone-only {
 		display:inline-flex !important;
+	}
+
+	:host {
+		position:relative;
+		inset:auto;
+	}
+
+	#app {
+		height:auto;
+		min-height:100vh;
+		min-height:100dvh;
+		overflow:visible;
+	}
+
+	#app:not([data-stage="list"]) {
+		height:100vh;
+		height:100dvh;
+		overflow:hidden;
+	}
+
+	#app-list-body {
+		overflow:visible;
+		padding-bottom:88px;
+	}
+
+	#app-rail {
+		position:fixed;
+		left:0;
+		right:0;
+		bottom:0;
+		z-index:10;
+		background:color-mix(in srgb, var(--rail-bg) 86%, transparent);
+		-webkit-backdrop-filter:blur(14px) saturate(1.3);
+		backdrop-filter:blur(14px) saturate(1.3);
 	}
 }
 `;
@@ -24553,7 +24663,7 @@ header .item-action-link {
 	};
 
 	function appRailButtonHTML(id, label, inner) {
-		return `<button class="rail-button" type="button" data-app-view="${escapeHTML(id)}" data-tip="${escapeHTML(label)}" aria-label="${escapeHTML(label)}" aria-pressed="false">${inner}<span class="rail-badge" data-app-badge="${escapeHTML(id)}"></span></button>`;
+		return `<button class="rail-button" type="button" data-app-view="${escapeHTML(id)}" data-tip="${escapeHTML(label)}" aria-label="${escapeHTML(label)}" aria-pressed="false"><span class="rail-icon">${inner}<span class="rail-badge" data-app-badge="${escapeHTML(id)}"></span></span><span class="rail-label" aria-hidden="true">${escapeHTML(label)}</span></button>`;
 	}
 
 	function appShellOpenHTML() {
@@ -24565,10 +24675,11 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div id="app-rail-rule" class="rail-rule" aria-hidden="true"></div>
 <div id="app-rail-sources"></div>
 <div class="rail-spacer"></div>
-<button id="settings-toggle" class="rail-button" type="button" data-tip="Settings" aria-label="Open Backchannel settings" aria-expanded="false" aria-controls="settings-panel">${APP_SETTINGS_ICON}</button>
+<button id="settings-toggle" class="rail-button" type="button" data-tip="Settings" aria-label="Open Backchannel settings" aria-expanded="false" aria-controls="settings-panel"><span class="rail-icon">${APP_SETTINGS_ICON}</span><span class="rail-label" aria-hidden="true">Settings</span></button>
 </nav>
 <section id="app-list" aria-label="Stories">
-<div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="item-action-link" type="button">mark all read</button><button id="app-list-sync" class="item-action-link" type="button">sync</button></span></div>
+<div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions"><button id="app-list-sync" class="item-action-link" type="button">sync</button><button id="app-mark-read" class="item-action-link" type="button">mark all read</button></span></div>
+<div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
 <div id="app-list-body"></div>
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
@@ -24718,6 +24829,89 @@ ${settingsPanelHTML()}
 		listHandle.addEventListener("pointerup", endListDrag);
 		listHandle.addEventListener("pointercancel", endListDrag);
 		listHandle.addEventListener("lostpointercapture", endListDrag);
+
+		const pull = shadow.querySelector("#app-list-pull");
+		let pullStart = null;
+		let pullDistance = 0;
+		let pullSyncing = false;
+
+		const listScrolled = () => (appIsPhone() ? window.scrollY : listBody.scrollTop) > 0;
+
+		const paintPull = (height, text, settle = false) => {
+			pull.classList.toggle("is-settling", settle);
+			pull.style.height = `${Math.round(height)}px`;
+			pull.textContent = text;
+		};
+
+		listPane.addEventListener(
+			"touchstart",
+			(event) => {
+				pullDistance = 0;
+				pullStart =
+					!pullSyncing && !listScrolled() && event.touches.length === 1
+						? event.touches[0].clientY
+						: null;
+			},
+			{ passive: true },
+		);
+
+		listPane.addEventListener(
+			"touchmove",
+			(event) => {
+				if (pullStart === null) {
+					return;
+				}
+
+				const pulled = event.touches[0].clientY - pullStart;
+				const scrolled = listScrolled();
+
+				if (scrolled || pulled <= 0) {
+					if (scrolled) {
+						pullStart = null;
+					}
+
+					if (pullDistance) {
+						pullDistance = 0;
+						paintPull(0, "");
+					}
+
+					return;
+				}
+
+				event.preventDefault();
+				pullDistance = Math.min(pulled / 2, APP_PULL_MAX);
+				paintPull(pullDistance, pullDistance >= APP_PULL_TRIGGER ? "release to sync" : "pull to sync");
+			},
+			{ passive: false },
+		);
+
+		const endPull = (event) => {
+			if (pullStart === null) {
+				return;
+			}
+
+			const release = event.type === "touchend" && pullDistance >= APP_PULL_TRIGGER;
+
+			pullStart = null;
+			pullDistance = 0;
+
+			if (!release) {
+				paintPull(0, "", true);
+				return;
+			}
+
+			pullSyncing = true;
+			paintPull(36, "syncing…", true);
+			renderAppList({ force: true })
+				.catch(console.error)
+				.finally(() => {
+					pullSyncing = false;
+					paintPull(0, "", true);
+				});
+		};
+
+		listPane.addEventListener("touchend", endPull);
+		listPane.addEventListener("touchcancel", endPull);
 
 		shadow.querySelector("#app-list-sync").onclick = () => {
 			renderAppList({ force: true }).catch(console.error);
@@ -24894,14 +25088,13 @@ ${settingsPanelHTML()}
 		const app = shadow?.querySelector("#app");
 		const label = button?.dataset.tip;
 
-		if (!tip || !app || !label || button.getAttribute("aria-expanded") === "true") {
+		if (!tip || !app || !label || appIsPhone() || button.getAttribute("aria-expanded") === "true") {
 			return;
 		}
 
 		const count = button.querySelector(".rail-badge")?.textContent || "";
 		const box = button.getBoundingClientRect();
 		const frame = app.getBoundingClientRect();
-		const below = appIsPhone();
 
 		tip.replaceChildren(document.createTextNode(label));
 
@@ -24913,9 +25106,8 @@ ${settingsPanelHTML()}
 			tip.append(extra);
 		}
 
-		tip.classList.toggle("is-below", below);
-		tip.style.left = `${Math.round((below ? box.left + box.width / 2 : box.right + 10) - frame.left)}px`;
-		tip.style.top = `${Math.round((below ? box.bottom + 10 : box.top + box.height / 2) - frame.top)}px`;
+		tip.style.left = `${Math.round(box.right + 10 - frame.left)}px`;
+		tip.style.top = `${Math.round(box.top + box.height / 2 - frame.top)}px`;
 		tip.hidden = false;
 	}
 
@@ -24948,21 +25140,21 @@ ${settingsPanelHTML()}
 		}
 
 		const box = toggle.getBoundingClientRect();
-		const up = appIsPhone();
+		const phone = appIsPhone();
 		const width = panel.offsetWidth || 240;
 
-		if (up) {
+		if (phone) {
 			const left = Math.min(
-				Math.max(8, box.left + box.width / 2 - 24),
+				Math.max(8, box.left + box.width / 2 - width / 2),
 				window.innerWidth - width - 8,
 			);
 
 			panel.style.left = `${Math.round(left)}px`;
-			panel.style.top = `${Math.round(box.bottom + 10)}px`;
-			panel.style.bottom = "auto";
-			panel.style.maxHeight = `${Math.round(window.innerHeight - box.bottom - 24)}px`;
+			panel.style.top = "auto";
+			panel.style.bottom = `${Math.round(window.innerHeight - box.top + 10)}px`;
+			panel.style.maxHeight = `${Math.round(box.top - 24)}px`;
 			arrow.style.left = `${Math.round(box.left + box.width / 2 - 6)}px`;
-			arrow.style.top = `${Math.round(box.bottom + 4)}px`;
+			arrow.style.top = `${Math.round(box.top - 16)}px`;
 		} else {
 			const bottom = Math.max(8, window.innerHeight - box.bottom - 6);
 
@@ -24974,7 +25166,7 @@ ${settingsPanelHTML()}
 			arrow.style.top = `${Math.round(box.top + box.height / 2 - 6)}px`;
 		}
 
-		arrow.classList.toggle("is-up", up);
+		arrow.classList.toggle("is-down", phone);
 	}
 
 	function hideAppTip() {
@@ -25000,8 +25192,18 @@ ${settingsPanelHTML()}
 	function setAppStage(stage) {
 		const app = appState?.ui.shadow.querySelector("#app");
 
-		if (app) {
-			app.dataset.stage = stage;
+		if (!app || app.dataset.stage === stage) {
+			return;
+		}
+
+		if (app.dataset.stage === "list") {
+			appState.listScrollY = window.scrollY;
+		}
+
+		app.dataset.stage = stage;
+
+		if (appIsPhone()) {
+			window.scrollTo(0, stage === "list" ? appState.listScrollY || 0 : 0);
 		}
 	}
 
@@ -25022,7 +25224,7 @@ ${settingsPanelHTML()}
 
 		const note = document.createElement("div");
 
-		note.className = "browse-empty";
+		note.className = "browse-empty app-discussion-empty";
 		note.textContent = "What people said about the story you open shows here.";
 		body.replaceChildren(note);
 	}
@@ -25212,6 +25414,7 @@ ${settingsPanelHTML()}
 		const entry = row || state.rowsByURL.get(key) || { story, also: [] };
 
 		state.open = { url, key, row: entry };
+		state.ui.shadow.querySelector("#app").classList.add("has-story");
 		decorateAppRows(state.ui.shadow.querySelector("#app-list-body"));
 		setAppSubject({ url, title: story.title || "" });
 		loadAppArticle(url, story.title || "");
