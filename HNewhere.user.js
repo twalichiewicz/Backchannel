@@ -23830,6 +23830,171 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		);
 	}
 
+	const APP_HELLO_MS = 200;
+	const APP_LOAD_GRACE_MS = 600;
+	const APP_FRAME_CAP_MS = 8000;
+	const READER_MIN_CHARS = 400;
+
+	function parseResponseHeaders(text) {
+		const headers = new Map();
+
+		for (const line of String(text || "").split(/\r?\n/)) {
+			const at = line.indexOf(":");
+
+			if (at < 1) {
+				continue;
+			}
+
+			const name = line.slice(0, at).trim().toLowerCase();
+			const value = line.slice(at + 1).trim();
+
+			headers.set(name, headers.has(name) ? headers.get(name) + "\n" + value : value);
+		}
+
+		return headers;
+	}
+
+	function cspSourceAdmits(source, parentOrigin) {
+		const expression = String(source || "").trim().toLowerCase();
+		let parent;
+
+		try {
+			parent = new URL(parentOrigin);
+		} catch {
+			return false;
+		}
+
+		if (!expression || expression.startsWith("'")) {
+			return false;
+		}
+
+		if (expression === "*") {
+			return parent.protocol === "https:" || parent.protocol === "http:";
+		}
+
+		if (/^[a-z][a-z0-9+.-]*:$/.test(expression)) {
+			return (
+				expression === parent.protocol ||
+				(expression === "http:" && parent.protocol === "https:")
+			);
+		}
+
+		const match =
+			/^(?:([a-z][a-z0-9+.-]*):\/\/)?(\*|\*\.[^:/]+|[^:/*]+)(?::(\d+|\*))?(?:\/.*)?$/.exec(
+				expression,
+			);
+
+		if (!match) {
+			return false;
+		}
+
+		const [, scheme, host, port] = match;
+
+		if (
+			scheme &&
+			scheme + ":" !== parent.protocol &&
+			!(scheme === "http" && parent.protocol === "https:")
+		) {
+			return false;
+		}
+
+		const hostMatches =
+			host === "*" ||
+			(host.startsWith("*.")
+				? parent.hostname.endsWith(host.slice(1))
+				: parent.hostname === host);
+
+		if (!hostMatches) {
+			return false;
+		}
+
+		const parentPort = parent.port || (parent.protocol === "https:" ? "443" : "80");
+
+		return !port || port === "*" || port === parentPort;
+	}
+
+	function frameAncestorsAdmit(sources, parentOrigin) {
+		const list = (sources || []).map((source) => String(source).trim()).filter(Boolean);
+
+		if (!list.length) {
+			return false;
+		}
+
+		if (list.length === 1 && list[0].toLowerCase() === "'none'") {
+			return false;
+		}
+
+		return list.some((source) => cspSourceAdmits(source, parentOrigin));
+	}
+
+	function framingRefused(headerText, parentOrigin = START_PAGE_ORIGIN) {
+		const headers = parseResponseHeaders(headerText);
+		const policies = (headers.get("content-security-policy") || "")
+			.split(/[\n,]/)
+			.map((policy) => policy.trim())
+			.filter(Boolean);
+		let governed = false;
+
+		for (const policy of policies) {
+			const directive = policy
+				.split(";")
+				.map((part) => part.trim().split(/\s+/))
+				.find(([name]) => name?.toLowerCase() === "frame-ancestors");
+
+			if (!directive) {
+				continue;
+			}
+
+			governed = true;
+
+			if (!frameAncestorsAdmit(directive.slice(1), parentOrigin)) {
+				return true;
+			}
+		}
+
+		if (governed) {
+			return false;
+		}
+
+		return (headers.get("x-frame-options") || "")
+			.split(/[\n,]/)
+			.map((value) => value.trim().toLowerCase())
+			.some((value) => value === "deny" || value === "sameorigin");
+	}
+
+	function articleLoadPlan({
+		http = false,
+		reply = null,
+		loaded = false,
+		sinceLoad = 0,
+		sinceStart = 0,
+		probe = null,
+	} = {}) {
+		if (reply?.visible) {
+			return "frame-agent";
+		}
+
+		if (probe) {
+			const readable = (probe.readerChars || 0) >= READER_MIN_CHARS;
+
+			if (http || reply || (probe.ok && probe.refused)) {
+				return readable ? "reader" : "card";
+			}
+
+			return "frame";
+		}
+
+		if (reply || http) {
+			return "probe";
+		}
+
+		if ((loaded && sinceLoad >= APP_LOAD_GRACE_MS) || sinceStart >= APP_FRAME_CAP_MS) {
+			return "probe";
+		}
+
+		return "wait";
+	}
+
 	// -------------------------
 	// Soft navigation
 	// -------------------------
