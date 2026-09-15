@@ -25404,7 +25404,11 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 
 		if (data.type === "hi") {
 			try {
-				return new URL(String(data.url || "")).origin === origin ? "hi" : null;
+				const url = new URL(String(data.url || ""));
+
+				return (url.protocol === "https:" || url.protocol === "http:") && url.origin === origin
+					? "hi"
+					: null;
 			} catch {
 				return null;
 			}
