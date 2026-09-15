@@ -9296,6 +9296,12 @@ button {
 	}
 
 	function openStoryFromRow(story, event, { openPanel = false, focus = "" } = {}) {
+		if (appState && !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) {
+			event.preventDefault();
+			openAppStory(story, { focus }).catch(console.error);
+			return;
+		}
+
 		const records = Promise.allSettled([
 			save(STORAGE.last, {
 				url: story.url,
@@ -9403,17 +9409,31 @@ button {
 
 		const meta = rowMeta();
 
+		const unreadMark = options.unreadDot !== undefined;
 		const row = document.createElement("div");
 		row.className =
-			"story browse-row" + (!rank && !options.bullet ? " browse-row-loose" : "");
+			"story browse-row" +
+			(!rank && !options.bullet && !unreadMark ? " browse-row-loose" : "");
 		row.dataset.storyId = String(story.id);
 		row.innerHTML = `
-	<div class="browse-rank"${
-		options.bullet
-			? ` title="${options.fresh ? "New since you last looked" : "Watching; nothing new yet"}"`
-			: ""
+	<div class="browse-rank${unreadMark ? " app-unread-mark" : ""}"${
+		unreadMark
+			? ` title="${options.unreadDot ? "Unread" : ""}"`
+			: options.bullet
+				? ` title="${options.fresh ? "New since you last looked" : "Watching; nothing new yet"}"`
+				: ""
 	}>${
-		options.bullet ? (options.fresh ? "&#9679;" : "&#9675;") : rank ? `${rank}.` : ""
+		unreadMark
+			? options.unreadDot
+				? "&#9679;"
+				: ""
+			: options.bullet
+				? options.fresh
+					? "&#9679;"
+					: "&#9675;"
+				: rank
+					? `${rank}.`
+					: ""
 	}</div>
 	<div class="browse-main">
 	<div class="story-title">
@@ -9887,6 +9907,10 @@ button {
 	}
 
 	async function refreshQueueCount(root) {
+		if (appState) {
+			paintAppCounts().catch(console.error);
+		}
+
 		const tab = root?.querySelector?.("#browse-tab-queue");
 
 		if (!tab) {
@@ -10004,6 +10028,12 @@ button {
 			}
 
 			event.preventDefault();
+
+			if (appState) {
+				openAppURL(next.url);
+				return;
+			}
+
 			record.catch(() => {}).then(() => {
 				location.href = next.url;
 			});
@@ -10030,8 +10060,9 @@ button {
 
 		const message = document.createElement("div");
 		message.className = "browse-empty no-discussion";
-		message.textContent =
-			"No discussion found for this page yet. Minimize to submit it, or read something else.";
+		message.textContent = appState
+			? "No discussion found for this story yet."
+			: "No discussion found for this page yet. Minimize to submit it, or read something else.";
 
 		body.appendChild(message);
 	}
@@ -13351,11 +13382,12 @@ header button svg {
 }
 `;
 
-	function headerHTML({ subtitle = false, minimize = false, browse = false } = {}) {
+	function headerHTML({ subtitle = false, minimize = false, browse = false, hide = true, back = false } = {}) {
 		return `
 <header>
 
 <span class="header-title">
+${back ? `<button id="app-discussion-back" class="item-action-link app-phone-only" type="button">&lsaquo; article</button>` : ""}
 ${
 	browse
 		? `<button id="browse-toggle" class="header-wordmark" type="button"
@@ -13380,7 +13412,7 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 <path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
 </svg>
 </button>
-<span class="hide-control">
+${hide ? `<span class="hide-control">
 <button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Disable Backchannel here" title="Disable Backchannel here">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <circle cx="8" cy="8" r="6.15" fill="none" stroke="currentColor" stroke-width="2"/>
@@ -13388,7 +13420,7 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </svg>
 <span class="hide-caret" aria-hidden="true">&#9662;</span>
 </button>
-</span>
+</span>` : ""}
 <button id="settings-toggle" aria-label="Open Backchannel settings" title="Backchannel settings" aria-expanded="false" aria-controls="settings-panel">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>
@@ -13405,12 +13437,12 @@ ${
 }
 </div>
 ${
-	`<div id="hide-menu" class="hide-menu" role="menu" hidden>
+	hide ? `<div id="hide-menu" class="hide-menu" role="menu" hidden>
 <button type="button" role="menuitem" data-hide-scope="page">Disable on this page only</button>
 <button type="button" role="menuitem" data-hide-scope="site">Disable on all ${escapeHTML(siteKey())} pages</button>
 <div class="hide-menu-rule" data-pdf-reader-only hidden></div>
 <button id="close-pdf-reader" type="button" role="menuitem" data-pdf-reader-only hidden>Close the PDF reader</button>
-</div>`
+</div>` : ""
 }
 
 </header>
@@ -14362,14 +14394,16 @@ ${[
 	// Sidebar
 	// -------------------------
 
-	async function createSidebar({ pageMode = false } = {}) {
+	async function createSidebar({ pageMode = false, appMode = false } = {}) {
 		if (sidebar) {
 			sidebar._cleanup?.();
 			sidebar.remove();
 			sidebar = null;
 		}
 
-		setPageModeActive(pageMode);
+		const docked = pageMode || appMode;
+
+		setPageModeActive(docked);
 
 		const zoom = applySidebarZoom(null);
 		const savedWidth = await loadSiteWidth();
@@ -14383,8 +14417,16 @@ ${[
 			host.setAttribute("data-hnewhere-page-mode", "1");
 		}
 
+		if (appMode) {
+			host.setAttribute("data-hnewhere-app", "1");
+			host.style.cssText = "display:block;position:absolute;inset:0;";
+		}
+
 		guardHostKeyboard(host);
-		document.body.appendChild(host);
+		(appMode
+			? document.getElementById("backchannel-screen") || document.body
+			: document.body
+		).appendChild(host);
 
 		const shadow = host.attachShadow({
 			mode: "open",
@@ -15872,13 +15914,14 @@ blockquote.comment-quote-redundant {
 	text-decoration-color:currentColor;
 }
 
+${appMode ? APP_CSS : ""}
 </style>
 
-<div id="panel"${pageMode ? ' class="page-mode"' : ""}>
+${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-docked"' : pageMode ? ' class="page-mode"' : ""}>
 
 <div id="resize-handle" aria-hidden="true"></div>
 
-${headerHTML({ subtitle: true, minimize: !pageMode, browse: true })}
+${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMode, back: appMode })}
 <div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
 ${settingsPanelHTML()}
 <div id="comments">
@@ -15902,7 +15945,7 @@ ${settingsPanelHTML()}
 <div id="next-up" class="next-up hidden"></div>
 </div>
 
-</div>
+</div>${appMode ? "</div>" : ""}
 `;
 
 		adoptStyles(shadow);
@@ -16049,7 +16092,7 @@ ${settingsPanelHTML()}
 		let wasPortrait = isPortraitPhone();
 
 		const clampSidebarWidth = () => {
-			if (pageMode) {
+			if (docked) {
 				return;
 			}
 
@@ -16073,7 +16116,7 @@ ${settingsPanelHTML()}
 		};
 
 		const onViewportResize = () => {
-			if (!pageMode) {
+			if (!docked) {
 				applySidebarZoom(panel);
 			}
 		};
@@ -18167,6 +18210,10 @@ ${settingsPanelHTML()}
 
 		for (const story of stories) {
 			await markSeen(story.key);
+		}
+
+		if (appState) {
+			refreshAppSeen().catch(console.error);
 		}
 
 		for (const story of stories) {
@@ -23533,6 +23580,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	}
 
 	async function refreshForSourceChange() {
+		if (appState) {
+			await refreshAppForSourceChange();
+			return;
+		}
+
 		if (isSidebarVisible() && sidebarUI) {
 			await refreshDiscussionsInPlace(sidebarUI);
 			return;
@@ -23683,6 +23735,983 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	// -------------------------
 	// Reader app
 	// -------------------------
+
+	const APP_FRAME_SANDBOX =
+		"allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads";
+
+	const APP_CSS = `
+:host {
+	--rail-bg:#ebebe2;
+	--open-row:rgba(var(--accent-rgb), .13);
+}
+
+:host(.${DARK_CLASS}) {
+	--rail-bg:#161616;
+	--open-row:rgba(var(--accent-rgb), .22);
+}
+
+#app {
+	all:initial;
+	position:relative;
+	display:grid;
+	grid-template-columns:44px 300px minmax(0, 1fr) auto;
+	grid-template-rows:minmax(0, 1fr);
+	width:100%;
+	height:100%;
+	overflow:hidden;
+	background:var(--bg);
+	color:var(--text);
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+	font-size:13px;
+	line-height:1.4;
+	-webkit-text-size-adjust:100%;
+	text-size-adjust:100%;
+}
+
+#app [hidden] {
+	display:none !important;
+}
+
+#app-rail {
+	display:flex;
+	flex-direction:column;
+	align-items:center;
+	gap:6px;
+	min-height:0;
+	padding:10px 0;
+	overflow-y:auto;
+	overscroll-behavior:contain;
+	background:var(--rail-bg);
+	border-right:1px solid var(--border-soft);
+}
+
+.rail-button {
+	position:relative;
+	flex:0 0 auto;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	width:32px;
+	height:32px;
+	padding:0;
+	border:0;
+	border-radius:8px;
+	background:none;
+	color:var(--muted);
+	cursor:pointer;
+	font:inherit;
+	touch-action:manipulation;
+}
+
+@media (hover: hover) {
+	.rail-button:hover:not(:disabled) {
+		background:var(--hover-tint);
+	}
+}
+
+.rail-button:focus-visible {
+	outline:2px solid var(--accent);
+	outline-offset:1px;
+}
+
+.rail-button.is-current {
+	background:var(--accent);
+	color:var(--accent-ink);
+}
+
+.rail-button:disabled {
+	opacity:.35;
+	cursor:default;
+}
+
+.rail-badge {
+	position:absolute;
+	top:-4px;
+	right:-6px;
+	min-width:15px;
+	height:15px;
+	padding:0 4px;
+	box-sizing:border-box;
+	border-radius:8px;
+	background:var(--accent);
+	color:var(--accent-ink);
+	font:600 9px/15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	text-align:center;
+	pointer-events:none;
+}
+
+.rail-button.is-current .rail-badge {
+	background:var(--text);
+	color:var(--bg);
+}
+
+.rail-badge:empty {
+	display:none;
+}
+
+.rail-monogram {
+	font:700 11px/1 Verdana, Geneva, sans-serif;
+	letter-spacing:.02em;
+}
+
+.rail-rule {
+	flex:0 0 auto;
+	width:20px;
+	height:1px;
+	margin:3px 0;
+	background:var(--border);
+}
+
+#app-rail-sources {
+	display:contents;
+}
+
+.rail-spacer {
+	flex:1 1 auto;
+}
+
+#app-list {
+	display:flex;
+	flex-direction:column;
+	min-width:0;
+	min-height:0;
+	background:var(--bg);
+	border-right:1px solid var(--border-soft);
+}
+
+.app-pane-head {
+	flex:0 0 auto;
+	display:flex;
+	align-items:center;
+	gap:8px;
+	height:36px;
+	padding:0 12px;
+	box-sizing:border-box;
+	border-bottom:1px solid var(--border-soft);
+	white-space:nowrap;
+	overflow:hidden;
+}
+
+#app-list-title {
+	font-weight:bold;
+}
+
+.app-pane-count {
+	color:var(--meta);
+	font-size:11px;
+}
+
+.app-pane-action {
+	margin-left:auto;
+}
+
+#app-list-body {
+	flex:1 1 auto;
+	min-height:0;
+	overflow:auto;
+	overscroll-behavior:contain;
+	padding:8px 6px 32px;
+}
+
+#app-list-body .browse-row {
+	padding:5px 6px 6px;
+	border-radius:6px;
+}
+
+#app-list-body .browse-row.is-open {
+	background:var(--open-row);
+}
+
+#app-list-body .app-row:not(.is-unread) .browse-title-link {
+	color:var(--muted);
+}
+
+.app-unread-mark {
+	color:var(--accent);
+	font-size:9px;
+	line-height:17px;
+}
+
+#app-article {
+	display:flex;
+	flex-direction:column;
+	min-width:0;
+	min-height:0;
+	background:var(--surface);
+}
+
+#app-article-site {
+	flex:0 0 auto;
+	color:var(--meta);
+	font:11px/1 Verdana, Geneva, sans-serif;
+}
+
+#app-article-title {
+	min-width:0;
+	overflow:hidden;
+	text-overflow:ellipsis;
+}
+
+.app-article-body {
+	position:relative;
+	flex:1 1 auto;
+	min-height:0;
+}
+
+.app-article-frame {
+	position:absolute;
+	inset:0;
+	width:100%;
+	height:100%;
+	border:0;
+	background:#fff;
+}
+
+.app-reader-scroll {
+	position:absolute;
+	inset:0;
+	overflow:auto;
+	overscroll-behavior:contain;
+	background:var(--bg);
+}
+
+.app-article-note {
+	position:absolute;
+	inset:0;
+	display:flex;
+	flex-direction:column;
+	align-items:center;
+	justify-content:center;
+	gap:8px;
+	padding:24px;
+	box-sizing:border-box;
+	text-align:center;
+	color:var(--meta);
+}
+
+.app-card-title {
+	max-width:32em;
+	color:var(--text);
+	font-size:16px;
+	font-weight:bold;
+}
+
+#panel.app-docked {
+	position:relative;
+	top:auto;
+	right:auto;
+	height:100%;
+	min-height:0;
+	max-width:calc(100vw - 728px);
+	box-shadow:none;
+	z-index:auto;
+}
+
+header .item-action-link {
+	color:inherit;
+	text-decoration-color:currentColor;
+}
+
+.app-phone-only {
+	display:none !important;
+}
+`;
+
+	const APP_ICON = (paths) =>
+		`<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">${paths}</svg>`;
+
+	const APP_VIEWS = [
+		{
+			id: "unread",
+			label: "Unread",
+			icon: APP_ICON('<circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="8" cy="8" r="2.6" fill="currentColor"/>'),
+		},
+		{
+			id: "all",
+			label: "All stories",
+			icon: APP_ICON('<path d="M3 4.5h10M3 8h10M3 11.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>'),
+		},
+		{
+			id: "queue",
+			label: "Queue",
+			icon: APP_ICON('<path d="M4.5 2.6h7v10.8L8 10.9l-3.5 2.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>'),
+		},
+		{
+			id: "watching",
+			label: "Watching",
+			icon: APP_ICON('<path d="M1.9 8S4.2 3.9 8 3.9 14.1 8 14.1 8 11.8 12.1 8 12.1 1.9 8 1.9 8z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.9" fill="currentColor"/>'),
+		},
+		{
+			id: "collection",
+			label: "Collection",
+			icon: APP_ICON('<path d="M8 2.3l1.75 3.6 3.95.55-2.87 2.78.7 3.93L8 11.3l-3.53 1.86.7-3.93L2.3 6.45l3.95-.55z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>'),
+		},
+	];
+
+	const APP_MARK_READ_ICON = APP_ICON(
+		'<path d="M2.8 8.6l3.1 3L13.2 4.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+	);
+
+	const APP_SOURCE_MONOGRAMS = { hn: "HN", reddit: "Re", lobsters: "Lo", mastodon: "Ma", lemmy: "Le" };
+
+	function appRailButtonHTML(id, label, inner) {
+		return `<button class="rail-button" type="button" data-app-view="${escapeHTML(id)}" title="${escapeHTML(label)}" aria-label="${escapeHTML(label)}" aria-pressed="false">${inner}<span class="rail-badge" data-app-badge="${escapeHTML(id)}"></span></button>`;
+	}
+
+	function appShellOpenHTML() {
+		return `<div id="app" data-stage="list">
+<nav id="app-rail" aria-label="Views">
+${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).join("\n")}
+<div id="app-rail-rule" class="rail-rule" aria-hidden="true"></div>
+<div id="app-rail-sources"></div>
+<div class="rail-spacer"></div>
+<button id="app-mark-read" class="rail-button" type="button" title="Mark all as read" aria-label="Mark all as read">${APP_MARK_READ_ICON}</button>
+</nav>
+<section id="app-list" aria-label="Stories">
+<div class="app-pane-head"><span id="app-list-title"></span><span id="app-list-count" class="app-pane-count"></span><button id="app-list-sync" class="item-action-link app-pane-action" type="button">sync</button></div>
+<div id="app-list-body"></div>
+</section>
+<section id="app-article" aria-label="Article">
+<div class="app-pane-head"><button id="app-article-back" class="item-action-link app-phone-only" type="button">&lsaquo; stories</button><span id="app-article-site"></span><span id="app-article-title"></span><a id="app-article-open" class="item-action-link app-pane-action" target="_blank" rel="noopener" hidden>open</a><button id="app-article-discussion" class="item-action-link app-phone-only" type="button">discussion &rsaquo;</button></div>
+<div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick a story to read it here, with what people said about it beside it.</div></div>
+</section>
+`;
+	}
+
+	// #region hnewhere-test-export
+	let appState = null;
+	// #endregion hnewhere-test-export
+
+	function createAppState(ui) {
+		return {
+			ui,
+			view: "unread",
+			listView: "",
+			rows: [],
+			rowsByURL: new Map(),
+			seen: {},
+			sourceIds: [],
+			open: null,
+			article: null,
+			listSeq: 0,
+		};
+	}
+
+	async function runAppPass() {
+		await documentReady();
+
+		const ui = await createSidebar({ appMode: true });
+
+		if (!sidebar) {
+			return;
+		}
+
+		sidebarUI = ui;
+		sidebarHasDiscussion = false;
+		appState = createAppState(ui);
+
+		document.documentElement.setAttribute("data-backchannel-installed", "1");
+
+		for (const node of document.querySelectorAll("[data-backchannel-promo]")) {
+			node.hidden = true;
+		}
+
+		for (const node of document.querySelectorAll("[data-backchannel-version]")) {
+			node.textContent = SCRIPT_VERSION;
+		}
+
+		wireApp(ui);
+		renderAppDiscussionEmpty();
+		setAppDrawer(true);
+		await refreshAppSources();
+	}
+
+	function wireApp(ui) {
+		const shadow = ui.shadow;
+
+		shadow.querySelector("#app-rail").addEventListener("click", (event) => {
+			const button = event.target?.closest?.("[data-app-view]");
+
+			if (button && !button.disabled) {
+				chooseAppView(button.dataset.appView);
+			}
+		});
+
+		shadow.querySelector("#app-mark-read").onclick = () => {
+			markAppViewRead().catch(console.error);
+		};
+
+		shadow.querySelector("#app-list-sync").onclick = () => {
+			renderAppList({ force: true }).catch(console.error);
+		};
+
+		shadow.querySelector("#app-article-open").onclick = () => {
+			rememberAppArrival(appState?.open?.url).catch(console.error);
+		};
+
+		shadow.querySelector("#app-article-back").onclick = () => setAppStage("list");
+		shadow.querySelector("#app-article-discussion").onclick = () => setAppStage("discussion");
+		shadow
+			.querySelector("#app-discussion-back")
+			?.addEventListener("click", () => setAppStage("article"));
+		shadow.querySelector("#app-article").addEventListener("pointerdown", () => {
+			if (appIsNarrow()) {
+				setAppDrawer(false);
+			}
+		});
+
+		document.addEventListener("keydown", onAppKey);
+	}
+
+	async function refreshAppSources() {
+		const state = appState;
+		const settings = await loadSettings();
+
+		state.sourceIds = frontPageSourceIds(settings);
+		renderAppRailSources();
+
+		if (!enabledSourceIds(settings, registeredSourceIds()).length) {
+			sidebarHasDiscussion = false;
+			renderSourcePicker(state.ui);
+			renderAppListMessage("Pick where comments come from, and the front pages fill in here.");
+			await paintAppCounts();
+			return;
+		}
+
+		await renderAppList();
+	}
+
+	async function refreshAppForSourceChange() {
+		await refreshAppSources();
+
+		if (appState?.open) {
+			await openAppDiscussion(appState.open.row);
+		} else {
+			renderAppDiscussionEmpty();
+		}
+	}
+
+	function renderAppRailSources() {
+		const state = appState;
+		const holder = state.ui.shadow.querySelector("#app-rail-sources");
+
+		holder.innerHTML = state.sourceIds
+			.map((id) => {
+				const label = getSource(id)?.label || id;
+				const mark = APP_SOURCE_MONOGRAMS[id] || label.slice(0, 2);
+
+				return appRailButtonHTML(
+					"source:" + id,
+					label,
+					`<span class="rail-monogram" aria-hidden="true">${escapeHTML(mark)}</span>`,
+				);
+			})
+			.join("");
+
+		state.ui.shadow.querySelector("#app-rail-rule").hidden = !state.sourceIds.length;
+
+		if (
+			state.view.startsWith("source:") &&
+			!state.sourceIds.includes(state.view.slice("source:".length))
+		) {
+			state.view = "unread";
+		}
+
+		paintAppRail();
+	}
+
+	function appViewIsFrontPage(view) {
+		return view === "unread" || view === "all" || view.startsWith("source:");
+	}
+
+	function appViewLabel(view) {
+		if (view.startsWith("source:")) {
+			const id = view.slice("source:".length);
+
+			return getSource(id)?.label || id;
+		}
+
+		return APP_VIEWS.find((entry) => entry.id === view)?.label || "";
+	}
+
+	function paintAppRail() {
+		const state = appState;
+
+		for (const button of state.ui.shadow.querySelectorAll("#app-rail [data-app-view]")) {
+			const current = button.dataset.appView === state.view;
+
+			button.classList.toggle("is-current", current);
+			button.setAttribute("aria-pressed", String(current));
+		}
+
+		state.ui.shadow.querySelector("#app-mark-read").disabled = !appViewIsFrontPage(state.view);
+		state.ui.shadow.querySelector("#app-list-title").textContent = appViewLabel(state.view);
+	}
+
+	function chooseAppView(view) {
+		const state = appState;
+
+		if (!state) {
+			return;
+		}
+
+		if (view === state.view) {
+			if (appIsNarrow()) {
+				setAppDrawer(!state.ui.shadow.querySelector("#app").classList.contains("list-open"));
+			}
+
+			return;
+		}
+
+		state.view = view;
+		paintAppRail();
+		renderAppList().catch(console.error);
+
+		if (appIsNarrow()) {
+			setAppDrawer(true);
+		}
+	}
+
+	function appIsPhone() {
+		return window.matchMedia("(max-width: 700px)").matches;
+	}
+
+	function appIsNarrow() {
+		return window.matchMedia("(max-width: 1100px)").matches && !appIsPhone();
+	}
+
+	function setAppDrawer(open) {
+		appState?.ui.shadow.querySelector("#app")?.classList.toggle("list-open", Boolean(open));
+	}
+
+	function setAppStage(stage) {
+		const app = appState?.ui.shadow.querySelector("#app");
+
+		if (app) {
+			app.dataset.stage = stage;
+		}
+	}
+
+	function renderAppListMessage(text) {
+		const note = document.createElement("div");
+
+		note.className = "browse-empty";
+		note.textContent = text;
+		appState.ui.shadow.querySelector("#app-list-body").replaceChildren(note);
+	}
+
+	function renderAppDiscussionEmpty() {
+		const body = appState?.ui.body;
+
+		if (!body) {
+			return;
+		}
+
+		const note = document.createElement("div");
+
+		note.className = "browse-empty";
+		note.textContent = "What people said about the story you open shows here.";
+		body.replaceChildren(note);
+	}
+
+	async function renderAppList({ force = false } = {}) {
+		const state = appState;
+		const ui = state.ui;
+		const list = ui.shadow.querySelector("#app-list-body");
+		const view = state.view;
+		const request = ++state.listSeq;
+
+		paintAppRail();
+
+		if (view === "queue" || view === "watching") {
+			await renderQueueView(ui, list, { part: view === "queue" ? "queued" : "watching" });
+		} else if (view === "collection") {
+			await renderCollectionView(ui, list);
+		} else {
+			if (state.listView !== view || !list.childElementCount) {
+				renderBrowseSkeleton(list, "Loading front pages…");
+			}
+
+			const [{ rows: allRows }, hiddenKeys, queued, seen] = await Promise.all([
+				loadFrontPages({ force }),
+				loadHiddenStoryKeys(),
+				loadQueue(),
+				load(STORAGE.seen, {}),
+			]);
+
+			if (request !== state.listSeq) {
+				return;
+			}
+
+			state.rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
+			state.rowsByURL = new Map(
+				state.rows.map((row) => [normalizeURL(row.story.url) || row.story.url, row]),
+			);
+			state.seen = seen || {};
+
+			const shown = appViewRows(state.rows, view, state.seen);
+			const queuedKeys = new Set(queued.map(queueKey));
+
+			list.replaceChildren();
+
+			if (!shown.length) {
+				renderAppListMessage(
+					!allRows.length
+						? "Could not reach any front page."
+						: view === "unread"
+							? "All caught up."
+							: "Nothing here right now.",
+				);
+			}
+
+			for (const row of shown) {
+				const unread = rowIsUnread(row, state.seen);
+				const element = renderBrowseRow(row.story, list, 0, {
+					also: row.also,
+					queuedKeys,
+					hideable: true,
+					reload: () => renderAppList(),
+					unreadDot: unread,
+				});
+
+				element.classList.toggle("is-unread", unread);
+			}
+
+			refreshFavoriteControls().catch(console.error);
+		}
+
+		if (request !== state.listSeq) {
+			return;
+		}
+
+		state.listView = view;
+		decorateAppRows(list);
+		ui.shadow.querySelector("#app-list-count").textContent = String(
+			list.querySelectorAll(".browse-row").length || "",
+		);
+		await paintAppCounts();
+	}
+
+	function decorateAppRows(list) {
+		for (const element of list.querySelectorAll(".browse-row")) {
+			const href = element.querySelector(".browse-title-link")?.getAttribute("href") || "";
+
+			element.classList.add("app-row");
+			element.dataset.appKey = normalizeURL(href) || href;
+			element.classList.toggle(
+				"is-open",
+				Boolean(appState.open) && element.dataset.appKey === appState.open.key,
+			);
+		}
+	}
+
+	async function paintAppCounts() {
+		const state = appState;
+
+		if (!state) {
+			return;
+		}
+
+		const [queue, watches] = await Promise.all([loadQueue(), loadWatches()]);
+		const { queued } = splitQueueEntries(queue, watches);
+		const counts = appViewCounts(state.rows, state.seen, state.sourceIds);
+		const badges = {
+			unread: counts.unread,
+			all: counts.all,
+			queue: unreadQueueCount(queued),
+			watching: unseenWatchCount(watches),
+		};
+
+		for (const id of state.sourceIds) {
+			badges["source:" + id] = counts.sources[id];
+		}
+
+		for (const badge of state.ui.shadow.querySelectorAll("[data-app-badge]")) {
+			const value = badges[badge.dataset.appBadge] || 0;
+
+			badge.textContent = value ? (value > 999 ? "999+" : String(value)) : "";
+		}
+	}
+
+	async function refreshAppSeen() {
+		const state = appState;
+
+		if (!state) {
+			return;
+		}
+
+		state.seen = (await load(STORAGE.seen, {})) || {};
+
+		for (const element of state.ui.shadow.querySelectorAll("#app-list-body .app-row")) {
+			const row = state.rowsByURL.get(element.dataset.appKey);
+			const mark = element.querySelector(".app-unread-mark");
+
+			if (!row || !mark) {
+				continue;
+			}
+
+			const unread = rowIsUnread(row, state.seen);
+
+			element.classList.toggle("is-unread", unread);
+			mark.textContent = unread ? "●" : "";
+			mark.title = unread ? "Unread" : "";
+		}
+
+		await paintAppCounts();
+	}
+
+	async function markAppViewRead() {
+		const state = appState;
+
+		if (!state || !appViewIsFrontPage(state.view)) {
+			return;
+		}
+
+		const rows = appViewRows(state.rows, state.view, state.seen).filter((row) =>
+			rowIsUnread(row, state.seen),
+		);
+		const keys = rows.flatMap(rowDiscussionKeys);
+
+		if (!keys.length) {
+			return;
+		}
+
+		const previous = await markManySeen(keys);
+
+		await refreshAppSeen();
+
+		showToast(`Marked ${pluralize(rows.length, "story", "stories")} as read`, {
+			action: {
+				label: "undo",
+				onAct: () => {
+					restoreManySeen(previous).then(refreshAppSeen).catch(console.error);
+				},
+			},
+		});
+	}
+
+	async function openAppStory(story, { focus = "", row = null } = {}) {
+		const state = appState;
+		const url = String(story?.url || "");
+
+		if (!state || !/^https?:/i.test(url)) {
+			return;
+		}
+
+		const key = normalizeURL(url) || url;
+		const entry = row || state.rowsByURL.get(key) || { story, also: [] };
+
+		state.open = { url, key, row: entry };
+		decorateAppRows(state.ui.shadow.querySelector("#app-list-body"));
+		setAppSubject({ url, title: story.title || "" });
+		loadAppArticle(url, story.title || "");
+
+		if (appIsNarrow()) {
+			setAppDrawer(false);
+		}
+
+		if (appIsPhone()) {
+			setAppStage("article");
+		}
+
+		markQueueArrival(url).catch(console.error);
+		markWatchArrival(url).catch(console.error);
+
+		const keys = rowDiscussionKeys(entry);
+
+		if (keys.length) {
+			await markManySeen(keys);
+			await refreshAppSeen();
+		}
+
+		await openAppDiscussion(entry, { focus });
+	}
+
+	function openAppURL(url) {
+		const address = String(url || "");
+
+		if (!appState || !/^https?:/i.test(address)) {
+			return;
+		}
+
+		const row = appState.rowsByURL.get(normalizeURL(address) || address) || null;
+
+		openAppStory(row ? row.story : { url: address, title: "" }, { row }).catch(
+			console.error,
+		);
+	}
+
+	async function openAppDiscussion(row, { focus = "" } = {}) {
+		const state = appState;
+		const ui = state.ui;
+		const url = state.open?.url;
+		const generation = ++sidebarGeneration;
+
+		clearArticleAnnotations();
+		stopObservingNewComments();
+		forgetVisitSeenTimes();
+		renderedComments = [];
+		activeCommentFilter = null;
+		sidebarHasDiscussion = true;
+		setSidebarStage(ui, "discussion");
+
+		try {
+			const settings = await loadSettings();
+			const found = await discoverAll(pageAddresses(), settings);
+			const missingHN = [row?.story, ...(row?.also || [])]
+				.filter((story) => story?.source === "hn" && story.id)
+				.map((story) => String(story.id))
+				.filter(
+					(id) =>
+						!found.some(
+							(discussion) => discussion.source === "hn" && String(discussion.id) === id,
+						),
+				);
+			const recovered = missingHN.length
+				? (await loadStories(missingHN.map((id) => ({ objectID: id })))).map(hnDiscussion)
+				: [];
+			const loaded = await resolveDiscussions(dedupeDiscussions([...found, ...recovered]));
+
+			if (generation !== sidebarGeneration) {
+				return;
+			}
+
+			if (!loaded.length) {
+				sidebarHasDiscussion = false;
+				renderNoDiscussion(ui);
+				await refreshSubmitAffordance(ui.shadow);
+				return;
+			}
+
+			if (focus && url) {
+				await rememberPendingFocus(url, focus);
+			}
+
+			setSidebarStage(ui, "comments");
+			await renderDiscussions(loaded, ui);
+			await refreshSubmitAffordance(ui.shadow);
+		} catch (error) {
+			console.error(error);
+		} finally {
+			clearSidebarStage(ui);
+		}
+	}
+
+	async function rememberAppArrival(url) {
+		if (!url) {
+			return;
+		}
+
+		const row = appState?.open?.row;
+		const hn = [row?.story, ...(row?.also || [])].filter(
+			(story) => story?.source === "hn" && story.id,
+		);
+
+		await save(STORAGE.last, {
+			url,
+			source: hn.length ? "hn" : row?.story?.source || "",
+			ids: hn.map((story) => String(story.id)),
+			timestamp: Date.now(),
+			openPanel: true,
+		});
+	}
+
+	function paintAppArticleHead(url, title) {
+		const shadow = appState.ui.shadow;
+		const open = shadow.querySelector("#app-article-open");
+
+		shadow.querySelector("#app-article-site").textContent = url ? hostLabel(url) : "";
+		shadow.querySelector("#app-article-title").textContent = title || "";
+		open.href = url || "";
+		open.hidden = !url;
+	}
+
+	function teardownAppArticle() {
+		const article = appState?.article;
+
+		if (article) {
+			article.dead = true;
+			clearInterval(article.helloTimer);
+			clearTimeout(article.graceTimer);
+			clearTimeout(article.capTimer);
+		}
+
+		if (appState) {
+			appState.article = null;
+			appState.ui.shadow.querySelector("#app-article-body")?.replaceChildren();
+		}
+	}
+
+	function loadAppArticle(url, title = "") {
+		const state = appState;
+		const pane = state.ui.shadow.querySelector("#app-article-body");
+
+		teardownAppArticle();
+		paintAppArticleHead(url, title);
+
+		const frame = document.createElement("iframe");
+
+		frame.className = "app-article-frame";
+		frame.name = APP_FRAME_NAME;
+		frame.title = title || hostLabel(url);
+		frame.setAttribute("sandbox", APP_FRAME_SANDBOX);
+		frame.setAttribute("referrerpolicy", "no-referrer");
+		frame.src = url;
+		pane.dataset.mode = "frame";
+		pane.appendChild(frame);
+		state.article = { url, title, frame, dead: false };
+	}
+
+	function onAppKey(event) {
+		if (!appState || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+			return;
+		}
+
+		const path = event.composedPath();
+		const origin = path[0];
+
+		if (origin instanceof Element && origin.matches(EDITABLE_SELECTOR)) {
+			return;
+		}
+
+		const inList =
+			origin === document.body ||
+			origin === document.documentElement ||
+			path.some((node) => node?.id === "app-list" || node?.id === "app-rail");
+		const step = { j: 1, k: -1, ...(inList ? { ArrowDown: 1, ArrowUp: -1 } : {}) }[event.key];
+
+		if (step) {
+			event.preventDefault();
+			stepAppSelection(step);
+			return;
+		}
+
+		if (event.key === "o" && appState.open?.url) {
+			rememberAppArrival(appState.open.url).catch(console.error);
+			window.open(appState.open.url, "_blank", "noopener");
+		}
+	}
+
+	function stepAppSelection(step) {
+		const rows = [...appState.ui.shadow.querySelectorAll("#app-list-body .app-row")];
+
+		if (!rows.length) {
+			return;
+		}
+
+		const at = rows.findIndex((row) => row.classList.contains("is-open"));
+		const next =
+			at === -1
+				? rows[step > 0 ? 0 : rows.length - 1]
+				: rows[Math.min(rows.length - 1, Math.max(0, at + step))];
+
+		if (!next || next === rows[at]) {
+			return;
+		}
+
+		next.scrollIntoView({ block: "nearest" });
+		next.querySelector(".browse-title-link")?.click();
+	}
 
 	function appFrameMessageVerdict(data, origin, knownOrigin = null) {
 		if (!data || typeof data !== "object" || data.bc !== APP_MESSAGE_VERSION) {
@@ -24498,7 +25527,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		}
 
 		if (onStartPage()) {
-			await runStartPagePass();
+			await runAppPass();
 			return;
 		}
 
@@ -24507,33 +25536,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		await runPagePass();
 	}
 
-	async function runStartPagePass() {
-		await documentReady();
-
-		await markQueueArrival().catch(console.error);
-		await markWatchArrival().catch(console.error);
-
-		const settings = await loadSettings();
-		const setupOnly = !enabledSourceIds(settings, registeredSourceIds()).length;
-
-		await openSidebar([], {
-			pageMode: true,
-			setupOnly,
-			browseOnly: !setupOnly,
-		});
-
-		if (!sidebar) {
+	async function runPagePass() {
+		if (appState) {
 			return;
 		}
 
-		document.documentElement.setAttribute("data-backchannel-installed", "1");
-
-		for (const node of document.querySelectorAll("[data-backchannel-promo]")) {
-			node.hidden = true;
-		}
-	}
-
-	async function runPagePass() {
 		if (isHiddenSite()) {
 			return;
 		}
