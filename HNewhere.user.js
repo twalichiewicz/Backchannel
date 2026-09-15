@@ -4127,7 +4127,7 @@ ${
 	function noteDocumentRef(fingerprint = null) {
 		return fingerprint
 			? { kind: "pdf", id: String(fingerprint) }
-			: { kind: "url", id: normalizeURL(location.href) || location.href };
+			: { kind: "url", id: normalizeURL(pageHref()) || pageHref() };
 	}
 
 	function noteStorageKey(ref) {
@@ -4455,7 +4455,7 @@ button {
 				prefix: chosen.prefix,
 				suffix: chosen.suffix,
 				page: chosen.page,
-				url: location.href,
+				url: pageHref(),
 			},
 		]);
 
@@ -4773,7 +4773,7 @@ button {
 						Date.now().toString(36) +
 						Math.floor(Math.random() * 1e6).toString(36),
 					created: Math.floor(Date.now() / 1000),
-					url: location.href,
+					url: pageHref(),
 				},
 				parsed,
 			),
@@ -5057,7 +5057,7 @@ button {
 					notes,
 					previous,
 					noteDocumentRefForPage(),
-					{ url: location.href, title: pageTitle() },
+					{ url: pageHref(), title: pageTitle() },
 					Date.now(),
 				),
 			);
@@ -5646,7 +5646,7 @@ button {
 
 		wireRowWatchLink(
 			button,
-			{ url, title: title || document.title || "", site: hostLabel(url) },
+			{ url, title: title || pageDocumentTitle(), site: hostLabel(url) },
 			{ discussions },
 		);
 	}
@@ -6062,7 +6062,33 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
+	// #region hnewhere-test-export
+	let appSubject = null;
+
+	function setAppSubject(subject) {
+		appSubject = subject?.url
+			? {
+					url: String(subject.url),
+					canonical: String(subject.canonical || ""),
+					title: String(subject.title || ""),
+				}
+			: null;
+	}
+
+	function pageHref() {
+		return appSubject ? appSubject.url : location.href;
+	}
+
+	function pageDocumentTitle() {
+		return appSubject ? appSubject.title : document.title || "";
+	}
+	// #endregion hnewhere-test-export
+
 	function canonicalHint() {
+		if (appSubject) {
+			return appSubject.canonical;
+		}
+
 		return (
 			document.querySelector('link[rel~="canonical" i]')?.href ||
 			document.querySelector('meta[property="og:url" i]')?.content ||
@@ -6071,12 +6097,12 @@ button {
 	}
 
 	function pageAddress() {
-		return canonicalPageURL(location.href, canonicalHint());
+		return canonicalPageURL(pageHref(), canonicalHint());
 	}
 
 	function pageAddresses() {
 		const here = pageAddress();
-		const original = archivedOriginalURL(location.href, canonicalHint());
+		const original = archivedOriginalURL(pageHref(), canonicalHint());
 
 		return original && !sameURL(original, here) ? [here, original] : [here];
 	}
@@ -7231,6 +7257,10 @@ button {
 
 	// #region hnewhere-test-export
 	function pageTitle(doc = document) {
+		if (doc === document && appSubject) {
+			return (appSubject.title || hostLabel(appSubject.url)).trim().replace(/\s+/g, " ");
+		}
+
 		const candidates = [
 			doc === document ? pdfTitle : null,
 			doc.querySelector('meta[property="og:title"]')?.content,
@@ -9745,7 +9775,7 @@ button {
 	async function saveCollectedNotes(page, notes) {
 		await saveNotes(notes, page);
 
-		if (sameURL(page.url || "", location.href)) {
+		if (sameURL(page.url || "", pageHref())) {
 			await reopenForNotes();
 		}
 	}
@@ -18465,7 +18495,7 @@ ${settingsPanelHTML()}
 			: favoriteButtonHTML({
 					key: normalizeURL(pageURL) || "",
 					url: pageURL,
-					title: page || document.title || "",
+					title: page || pageDocumentTitle(),
 					site: hostLabel(pageURL),
 					kind: "discussion",
 				});
