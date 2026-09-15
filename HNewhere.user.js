@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.13.2
+// @version      1.6.14
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -59,12 +59,16 @@
 // @connect      mastodon.social
 // @connect      www.tootfinder.ch
 // @connect      api.hypothes.is
+// @connect      *
 // @run-at       document-end
-// @noframes
 // ==/UserScript==
 
 (function () {
 	"use strict";
+
+	if (window.top !== window.self && window.name !== "backchannel-article") {
+		return;
+	}
 
 	const OLD_STORAGE = {
 		width: "hn_width",
@@ -200,6 +204,7 @@
 		watches: "HNewhere:watches",
 		hiddenStories: "HNewhere:hidden_stories",
 		zoomBySite: "HNewhere:zoom_by_site",
+		appListWidth: "HNewhere:app_list_width",
 	};
 
 	// #region hnewhere-test-export
@@ -378,6 +383,9 @@
 	// #region hnewhere-test-export
 	const START_PAGE_HOST = "backchnnl.app";
 	const START_PAGE_PATH = "/";
+	const START_PAGE_ORIGIN = "https://" + START_PAGE_HOST;
+	const APP_FRAME_NAME = "backchannel-article";
+	const APP_MESSAGE_VERSION = 1;
 
 	function isStartPageAddress(href) {
 		try {
@@ -4127,7 +4135,7 @@ ${
 	function noteDocumentRef(fingerprint = null) {
 		return fingerprint
 			? { kind: "pdf", id: String(fingerprint) }
-			: { kind: "url", id: normalizeURL(location.href) || location.href };
+			: { kind: "url", id: normalizeURL(pageHref()) || pageHref() };
 	}
 
 	function noteStorageKey(ref) {
@@ -4455,7 +4463,7 @@ button {
 				prefix: chosen.prefix,
 				suffix: chosen.suffix,
 				page: chosen.page,
-				url: location.href,
+				url: pageHref(),
 			},
 		]);
 
@@ -4773,7 +4781,7 @@ button {
 						Date.now().toString(36) +
 						Math.floor(Math.random() * 1e6).toString(36),
 					created: Math.floor(Date.now() / 1000),
-					url: location.href,
+					url: pageHref(),
 				},
 				parsed,
 			),
@@ -5057,7 +5065,7 @@ button {
 					notes,
 					previous,
 					noteDocumentRefForPage(),
-					{ url: location.href, title: pageTitle() },
+					{ url: pageHref(), title: pageTitle() },
 					Date.now(),
 				),
 			);
@@ -5646,7 +5654,7 @@ button {
 
 		wireRowWatchLink(
 			button,
-			{ url, title: title || document.title || "", site: hostLabel(url) },
+			{ url, title: title || pageDocumentTitle(), site: hostLabel(url) },
 			{ discussions },
 		);
 	}
@@ -6062,7 +6070,33 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
+	// #region hnewhere-test-export
+	let appSubject = null;
+
+	function setAppSubject(subject) {
+		appSubject = subject?.url
+			? {
+					url: String(subject.url),
+					canonical: String(subject.canonical || ""),
+					title: String(subject.title || ""),
+				}
+			: null;
+	}
+
+	function pageHref() {
+		return appSubject ? appSubject.url : location.href;
+	}
+
+	function pageDocumentTitle() {
+		return appSubject ? appSubject.title : document.title || "";
+	}
+	// #endregion hnewhere-test-export
+
 	function canonicalHint() {
+		if (appSubject) {
+			return appSubject.canonical;
+		}
+
 		return (
 			document.querySelector('link[rel~="canonical" i]')?.href ||
 			document.querySelector('meta[property="og:url" i]')?.content ||
@@ -6071,12 +6105,12 @@ button {
 	}
 
 	function pageAddress() {
-		return canonicalPageURL(location.href, canonicalHint());
+		return canonicalPageURL(pageHref(), canonicalHint());
 	}
 
 	function pageAddresses() {
 		const here = pageAddress();
-		const original = archivedOriginalURL(location.href, canonicalHint());
+		const original = archivedOriginalURL(pageHref(), canonicalHint());
 
 		return original && !sameURL(original, here) ? [here, original] : [here];
 	}
@@ -7231,6 +7265,10 @@ button {
 
 	// #region hnewhere-test-export
 	function pageTitle(doc = document) {
+		if (doc === document && appSubject) {
+			return (appSubject.title || hostLabel(appSubject.url)).trim().replace(/\s+/g, " ");
+		}
+
 		const candidates = [
 			doc === document ? pdfTitle : null,
 			doc.querySelector('meta[property="og:title"]')?.content,
@@ -9260,6 +9298,12 @@ button {
 	}
 
 	function openStoryFromRow(story, event, { openPanel = false, focus = "" } = {}) {
+		if (appState && !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) {
+			event.preventDefault();
+			openAppStory(story, { focus }).catch(console.error);
+			return;
+		}
+
 		const records = Promise.allSettled([
 			save(STORAGE.last, {
 				url: story.url,
@@ -9367,17 +9411,31 @@ button {
 
 		const meta = rowMeta();
 
+		const unreadMark = options.unreadDot !== undefined;
 		const row = document.createElement("div");
 		row.className =
-			"story browse-row" + (!rank && !options.bullet ? " browse-row-loose" : "");
+			"story browse-row" +
+			(!rank && !options.bullet && !unreadMark ? " browse-row-loose" : "");
 		row.dataset.storyId = String(story.id);
 		row.innerHTML = `
-	<div class="browse-rank"${
-		options.bullet
-			? ` title="${options.fresh ? "New since you last looked" : "Watching; nothing new yet"}"`
-			: ""
+	<div class="browse-rank${unreadMark ? " app-unread-mark" : ""}"${
+		unreadMark
+			? ` title="${options.unreadDot ? "Unread" : ""}"`
+			: options.bullet
+				? ` title="${options.fresh ? "New since you last looked" : "Watching; nothing new yet"}"`
+				: ""
 	}>${
-		options.bullet ? (options.fresh ? "&#9679;" : "&#9675;") : rank ? `${rank}.` : ""
+		unreadMark
+			? options.unreadDot
+				? "&#9679;"
+				: ""
+			: options.bullet
+				? options.fresh
+					? "&#9679;"
+					: "&#9675;"
+				: rank
+					? `${rank}.`
+					: ""
 	}</div>
 	<div class="browse-main">
 	<div class="story-title">
@@ -9745,7 +9803,7 @@ button {
 	async function saveCollectedNotes(page, notes) {
 		await saveNotes(notes, page);
 
-		if (sameURL(page.url || "", location.href)) {
+		if (sameURL(page.url || "", pageHref())) {
 			await reopenForNotes();
 		}
 	}
@@ -9851,6 +9909,10 @@ button {
 	}
 
 	async function refreshQueueCount(root) {
+		if (appState) {
+			paintAppCounts().catch(console.error);
+		}
+
 		const tab = root?.querySelector?.("#browse-tab-queue");
 
 		if (!tab) {
@@ -9968,6 +10030,12 @@ button {
 			}
 
 			event.preventDefault();
+
+			if (appState) {
+				openAppURL(next.url);
+				return;
+			}
+
 			record.catch(() => {}).then(() => {
 				location.href = next.url;
 			});
@@ -9994,8 +10062,9 @@ button {
 
 		const message = document.createElement("div");
 		message.className = "browse-empty no-discussion";
-		message.textContent =
-			"No discussion found for this page yet. Minimize to submit it, or read something else.";
+		message.textContent = appState
+			? "No discussion found for this story yet."
+			: "No discussion found for this page yet. Minimize to submit it, or read something else.";
 
 		body.appendChild(message);
 	}
@@ -10218,37 +10287,35 @@ button {
 		return body;
 	}
 
-	async function renderQueueView(ui, list) {
+	async function renderQueueView(ui, list, { part = "" } = {}) {
 		const entries = sortQueue(await loadQueue());
 		const watching = await loadWatches();
-		const watchFor = (entry) =>
-			watching.find((watch) => queueEntryMatchesWatch(entry, watch)) || null;
+		const { queued: rest, watched, watchFor } = splitQueueEntries(entries, watching);
+		const kept = sortWatchedEntries(watched, watchFor);
 		const watchKeys = new Set(watching.map((entry) => entry.key));
+		const showQueued = part !== "watching";
+		const showWatching = part !== "queued";
+		const reload = () => renderQueueView(ui, list, { part });
+		let rank = 0;
 
 		list.replaceChildren();
 
-		if (!entries.length) {
+		if (!(showQueued ? rest.length : 0) && !(showWatching ? kept.length : 0)) {
 			const empty = document.createElement("div");
 			empty.className = "browse-empty";
 			empty.textContent =
-				"Nothing queued yet. Use queue on any story, here or on Hacker News, to read it later.";
+				part === "watching"
+					? "Nothing watched yet. Use watch on any discussion to hear when it grows."
+					: "Nothing queued yet. Use queue on any story, here or on Hacker News, to read it later.";
 			list.appendChild(empty);
 			return;
 		}
 
-		const kept = sortWatchedEntries(
-			entries.filter((entry) => watchFor(entry)),
-			watchFor,
-		);
-		const rest = entries.filter((entry) => !watchFor(entry));
-		const reload = () => renderQueueView(ui, list);
-		let rank = 0;
-
-		if (kept.length && rest.length) {
+		if (showQueued && showWatching && kept.length && rest.length) {
 			subhead(list, "queued");
 		}
 
-		for (const entry of rest) {
+		for (const entry of showQueued ? rest : []) {
 			const row = renderBrowseRow(entry, list, (rank += 1), {
 				inQueue: true,
 				watchable: true,
@@ -10259,11 +10326,11 @@ button {
 			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
 		}
 
-		if (kept.length) {
+		if (showQueued && showWatching && kept.length) {
 			subhead(list, "watching");
 		}
 
-		for (const entry of kept) {
+		for (const entry of showWatching ? kept : []) {
 			const state = watchFor(entry);
 			const fresh = watchIsFresh(state);
 			const row = renderBrowseRow(entry, list, 0, {
@@ -10285,11 +10352,11 @@ button {
 
 		refreshQueueEntries(entries).then((refreshed) => {
 			if (refreshed && isBrowsing(ui) && browseTab === "queue") {
-				renderQueueView(ui, list).catch(console.error);
+				renderQueueView(ui, list, { part }).catch(console.error);
 			}
 		});
 
-		if (entries.some((entry) => entry.readAt && !watchFor(entry))) {
+		if (showQueued && entries.some((entry) => entry.readAt && !watchFor(entry))) {
 			const clear = document.createElement("button");
 			clear.type = "button";
 			clear.className = "browse-nav-link browse-clear-read";
@@ -10309,7 +10376,7 @@ button {
 					return clearReadFromQueue(queued, keep);
 				});
 
-				await renderQueueView(ui, list);
+				await renderQueueView(ui, list, { part });
 				refreshQueueCount(ui.shadow);
 				refreshNextUp(ui.shadow);
 			};
@@ -13317,13 +13384,16 @@ header button svg {
 }
 `;
 
-	function headerHTML({ subtitle = false, minimize = false, browse = false } = {}) {
+	function headerHTML({ subtitle = false, minimize = false, browse = false, hide = true, back = false, settings = true, title = "" } = {}) {
 		return `
 <header>
 
 <span class="header-title">
+${back ? `<button id="app-discussion-back" class="item-action-link app-phone-only" type="button">&lsaquo; article</button>` : ""}
 ${
-	browse
+	title
+		? `<span class="header-static-title">${escapeHTML(title)}</span>`
+		: browse
 		? `<button id="browse-toggle" class="header-wordmark" type="button"
 title="${escapeHTML(browseLabel())}"><span
 class="wordmark-root"><b>Back</b>channel</span><span class="wordmark-more" aria-hidden="true">&#8943;</span><span
@@ -13346,7 +13416,7 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 <path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
 </svg>
 </button>
-<span class="hide-control">
+${hide ? `<span class="hide-control">
 <button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Disable Backchannel here" title="Disable Backchannel here">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <circle cx="8" cy="8" r="6.15" fill="none" stroke="currentColor" stroke-width="2"/>
@@ -13354,12 +13424,16 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 </svg>
 <span class="hide-caret" aria-hidden="true">&#9662;</span>
 </button>
-</span>
-<button id="settings-toggle" aria-label="Open Backchannel settings" title="Backchannel settings" aria-expanded="false" aria-controls="settings-panel">
+</span>` : ""}
+${
+	settings
+		? `<button id="settings-toggle" aria-label="Open Backchannel settings" title="Backchannel settings" aria-expanded="false" aria-controls="settings-panel">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>
 </svg>
-</button>
+</button>`
+		: ""
+}
 ${
 	minimize
 		? `<button id="minimize" aria-label="Minimize Backchannel" title="Minimize">
@@ -13371,12 +13445,12 @@ ${
 }
 </div>
 ${
-	`<div id="hide-menu" class="hide-menu" role="menu" hidden>
+	hide ? `<div id="hide-menu" class="hide-menu" role="menu" hidden>
 <button type="button" role="menuitem" data-hide-scope="page">Disable on this page only</button>
 <button type="button" role="menuitem" data-hide-scope="site">Disable on all ${escapeHTML(siteKey())} pages</button>
 <div class="hide-menu-rule" data-pdf-reader-only hidden></div>
 <button id="close-pdf-reader" type="button" role="menuitem" data-pdf-reader-only hidden>Close the PDF reader</button>
-</div>`
+</div>` : ""
 }
 
 </header>
@@ -13807,6 +13881,10 @@ ${[
 			settingsPanel.classList.toggle("hidden", !open);
 			settingsToggle.classList.toggle("is-open", open);
 			settingsToggle.setAttribute("aria-expanded", open ? "true" : "false");
+
+			if (appState) {
+				placeAppSettings(open);
+			}
 
 			if (open) {
 				setHideMenuOpen(false);
@@ -14328,14 +14406,16 @@ ${[
 	// Sidebar
 	// -------------------------
 
-	async function createSidebar({ pageMode = false } = {}) {
+	async function createSidebar({ pageMode = false, appMode = false } = {}) {
 		if (sidebar) {
 			sidebar._cleanup?.();
 			sidebar.remove();
 			sidebar = null;
 		}
 
-		setPageModeActive(pageMode);
+		const docked = pageMode || appMode;
+
+		setPageModeActive(docked);
 
 		const zoom = applySidebarZoom(null);
 		const savedWidth = await loadSiteWidth();
@@ -14349,8 +14429,15 @@ ${[
 			host.setAttribute("data-hnewhere-page-mode", "1");
 		}
 
+		if (appMode) {
+			host.setAttribute("data-hnewhere-app", "1");
+		}
+
 		guardHostKeyboard(host);
-		document.body.appendChild(host);
+		(appMode
+			? document.getElementById("backchannel-screen") || document.body
+			: document.body
+		).appendChild(host);
 
 		const shadow = host.attachShadow({
 			mode: "open",
@@ -15838,15 +15925,16 @@ blockquote.comment-quote-redundant {
 	text-decoration-color:currentColor;
 }
 
+${appMode ? APP_CSS : ""}
 </style>
 
-<div id="panel"${pageMode ? ' class="page-mode"' : ""}>
+${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-docked"' : pageMode ? ' class="page-mode"' : ""}>
 
 <div id="resize-handle" aria-hidden="true"></div>
 
-${headerHTML({ subtitle: true, minimize: !pageMode, browse: true })}
+${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMode, back: appMode, settings: !appMode, title: appMode ? "Discussion" : "" })}
 <div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
-${settingsPanelHTML()}
+${appMode ? "" : settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
 <div class="filter-banner-head">
@@ -15868,7 +15956,7 @@ ${settingsPanelHTML()}
 <div id="next-up" class="next-up hidden"></div>
 </div>
 
-</div>
+</div>${appMode ? "</div>" : ""}
 `;
 
 		adoptStyles(shadow);
@@ -15911,6 +15999,7 @@ ${settingsPanelHTML()}
 			resizing = true;
 			startX = e.clientX;
 			startWidth = panel.offsetWidth;
+			shadow.querySelector("#app")?.classList.add("is-resizing");
 
 			document.body.style.userSelect = "none";
 			document.body.style.cursor = "col-resize";
@@ -15946,6 +16035,7 @@ ${settingsPanelHTML()}
 			if (!resizing) return;
 
 			resizing = false;
+			shadow.querySelector("#app")?.classList.remove("is-resizing");
 
 			document.body.style.userSelect = "";
 			document.body.style.cursor = "";
@@ -15968,6 +16058,7 @@ ${settingsPanelHTML()}
 			startX = touch.clientX;
 			startWidth = panel.offsetWidth;
 			resizeHandle.classList.add("resize-handle-active");
+			shadow.querySelector("#app")?.classList.add("is-resizing");
 			e.preventDefault();
 		};
 
@@ -15999,6 +16090,7 @@ ${settingsPanelHTML()}
 		const onTouchEnd = () => {
 			resizing = false;
 			resizeHandle.classList.remove("resize-handle-active");
+			shadow.querySelector("#app")?.classList.remove("is-resizing");
 		};
 
 		if (resizeHandle) {
@@ -16015,7 +16107,7 @@ ${settingsPanelHTML()}
 		let wasPortrait = isPortraitPhone();
 
 		const clampSidebarWidth = () => {
-			if (pageMode) {
+			if (docked) {
 				return;
 			}
 
@@ -16039,7 +16131,7 @@ ${settingsPanelHTML()}
 		};
 
 		const onViewportResize = () => {
-			if (!pageMode) {
+			if (!docked) {
 				applySidebarZoom(panel);
 			}
 		};
@@ -18135,6 +18227,10 @@ ${settingsPanelHTML()}
 			await markSeen(story.key);
 		}
 
+		if (appState) {
+			refreshAppSeen().catch(console.error);
+		}
+
 		for (const story of stories) {
 			if (!isSidebarVisible() || !getSource(story.source)?.capabilities.vote) {
 				continue;
@@ -18465,7 +18561,7 @@ ${settingsPanelHTML()}
 			: favoriteButtonHTML({
 					key: normalizeURL(pageURL) || "",
 					url: pageURL,
-					title: page || document.title || "",
+					title: page || pageDocumentTitle(),
 					site: hostLabel(pageURL),
 					kind: "discussion",
 				});
@@ -20183,6 +20279,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		annotationController?.cleanup?.();
 		annotationController = null;
 
+		clearSidebarQuoteMarks();
+	}
+
+	function clearSidebarQuoteMarks() {
 		if (sidebarUI?.shadow) {
 			sidebarUI.shadow
 				.querySelectorAll("[data-hnewhere-quote-link='1']")
@@ -21797,6 +21897,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	};
 
 	function detectDocumentSource() {
+		if (appState?.article?.mode === "reader" && appReaderElement()) {
+			return READER_DOCUMENT_SOURCE;
+		}
+
 		if (pdfViewerApp() || document.querySelector(".pdfViewer .textLayer")) {
 			return PDF_DOCUMENT_SOURCE;
 		}
@@ -22638,7 +22742,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				return [];
 			}
 
-			if (getArticleSearchRoot() === document.body) {
+			if (documentSource().id === "html" && getArticleSearchRoot() === document.body) {
 				return [];
 			}
 
@@ -23158,6 +23262,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	// #endregion hnewhere-test-export
 
 	async function openFocusedDiscussion(groupKey, options = {}) {
+		if (frameAgentActive) {
+			postToApp({ type: "focus-quote", key: groupKey });
+			return;
+		}
+
 		const wasHidden = await revealSidebar();
 
 		applyCommentFilter(groupKey, options);
@@ -23499,6 +23608,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	}
 
 	async function refreshForSourceChange() {
+		if (appState) {
+			await refreshAppForSourceChange();
+			return;
+		}
+
 		if (isSidebarVisible() && sidebarUI) {
 			await refreshDiscussionsInPlace(sidebarUI);
 			return;
@@ -23581,6 +23695,15 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	}
 
 	async function refreshArticleAnnotations() {
+		if (appState) {
+			await refreshAppAnnotations();
+			return;
+		}
+
+		await refreshLocalAnnotations();
+	}
+
+	async function refreshLocalAnnotations() {
 		clearArticleAnnotations();
 
 		if (!sidebar || !renderedComments.length) {
@@ -23644,6 +23767,3135 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 			controller.setHeatRegions(buildHeatRegions(renderedComments, articleIndex));
 		});
+	}
+
+	// -------------------------
+	// Reader app
+	// -------------------------
+
+	const APP_FRAME_SANDBOX =
+		"allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads";
+
+	const APP_LIST_MIN_WIDTH = 220;
+	const APP_LIST_MAX_WIDTH = 480;
+	const APP_PULL_TRIGGER = 56;
+	const APP_PULL_MAX = 96;
+
+	const APP_CSS = `
+:host {
+	display:block;
+	position:absolute;
+	inset:0;
+	--rail-bg:var(--header-bg);
+	--rail-fg:var(--header-text);
+	--open-row:rgba(var(--accent-rgb), .13);
+	--article-bg:#e8e8e1;
+}
+
+:host(.${DARK_CLASS}) {
+	--open-row:rgba(var(--accent-rgb), .22);
+	--article-bg:#151515;
+}
+
+#app {
+	all:initial;
+	position:relative;
+	display:grid;
+	grid-template-columns:44px var(--app-list-width, 300px) minmax(0, 1fr) auto;
+	grid-template-rows:minmax(0, 1fr);
+	width:100%;
+	height:100%;
+	overflow:hidden;
+	background:var(--bg);
+	color:var(--text);
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+	font-size:13px;
+	line-height:1.4;
+	-webkit-text-size-adjust:100%;
+	text-size-adjust:100%;
+}
+
+#app [hidden] {
+	display:none !important;
+}
+
+#app-rail {
+	display:flex;
+	flex-direction:column;
+	align-items:center;
+	gap:6px;
+	min-height:0;
+	padding:10px 0;
+	overflow-x:hidden;
+	overflow-y:auto;
+	overscroll-behavior:contain;
+	background:var(--rail-bg);
+}
+
+.rail-button {
+	position:relative;
+	flex:0 0 auto;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	width:32px;
+	height:32px;
+	padding:0;
+	border:0;
+	border-radius:8px;
+	background:none;
+	color:var(--rail-fg);
+	cursor:pointer;
+	font:inherit;
+	touch-action:manipulation;
+	--rail-glyph:var(--rail-fg);
+	--rail-knock:var(--rail-bg);
+}
+
+@media (hover: hover) {
+	.rail-button:hover:not(:disabled):not(.is-current) {
+		background:rgba(255,255,255,.16);
+	}
+}
+
+.rail-button:focus-visible {
+	outline:2px solid var(--rail-fg);
+	outline-offset:1px;
+}
+
+.rail-button.is-current {
+	background:var(--rail-fg);
+	color:var(--rail-bg);
+	--rail-glyph:var(--rail-bg);
+	--rail-knock:var(--rail-fg);
+}
+
+.rail-button:disabled {
+	opacity:.35;
+	cursor:default;
+}
+
+.rail-icon {
+	display:contents;
+}
+
+.rail-label {
+	display:none;
+}
+
+.rail-badge {
+	position:absolute;
+	top:-4px;
+	right:-5px;
+	min-width:15px;
+	height:15px;
+	padding:0 4px;
+	box-sizing:border-box;
+	border-radius:8px;
+	background:var(--rail-fg);
+	color:var(--rail-bg);
+	box-shadow:0 0 0 1.5px var(--rail-bg);
+	font:600 9px/15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	text-align:center;
+	pointer-events:none;
+}
+
+.rail-badge:empty {
+	display:none;
+}
+
+.rail-monogram {
+	font:700 11px/1 Verdana, Geneva, sans-serif;
+	letter-spacing:.02em;
+}
+
+.rail-hn {
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	min-width:20px;
+	height:16px;
+	padding:0 3px;
+	box-sizing:border-box;
+	border-radius:4px;
+	background:var(--rail-glyph);
+	color:var(--rail-knock);
+	font:700 9px/1 Verdana, Geneva, sans-serif;
+	letter-spacing:.02em;
+}
+
+.app-tip {
+	position:absolute;
+	z-index:20;
+	top:0;
+	left:0;
+	padding:5px 9px;
+	border-radius:6px;
+	background:var(--rail-fg);
+	color:var(--rail-bg);
+	font:600 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	white-space:nowrap;
+	box-shadow:0 4px 14px rgba(0,0,0,.22);
+	pointer-events:none;
+	transform:translateY(-50%);
+}
+
+.app-tip::before {
+	content:"";
+	position:absolute;
+	top:50%;
+	left:-4px;
+	width:8px;
+	height:8px;
+	margin-top:-4px;
+	background:inherit;
+	transform:rotate(45deg);
+}
+
+.app-tip-count {
+	margin-left:6px;
+	font-weight:normal;
+	opacity:.75;
+}
+
+.rail-rule {
+	flex:0 0 auto;
+	width:20px;
+	height:1px;
+	margin:3px 0;
+	background:rgba(255,255,255,.3);
+}
+
+#app-rail-sources {
+	display:contents;
+}
+
+.rail-spacer {
+	flex:1 1 auto;
+}
+
+#app-list {
+	position:relative;
+	display:flex;
+	flex-direction:column;
+	min-width:0;
+	min-height:0;
+	background:var(--bg);
+	border-right:1px solid var(--border-soft);
+}
+
+.app-pane-head {
+	flex:0 0 auto;
+	display:flex;
+	align-items:center;
+	gap:8px;
+	height:36px;
+	padding:0 12px;
+	box-sizing:border-box;
+	border-bottom:1px solid var(--border-soft);
+	white-space:nowrap;
+	overflow:hidden;
+}
+
+#app-list-title {
+	font-weight:bold;
+}
+
+.app-pane-action {
+	margin-left:auto;
+}
+
+.app-pane-actions {
+	display:flex;
+	align-items:center;
+	gap:10px;
+}
+
+.app-pane-actions .item-action-link,
+#app-article-open {
+	font-size:10px;
+}
+
+#app > .settings-panel {
+	position:fixed;
+	top:auto;
+	right:auto;
+	z-index:30;
+}
+
+.app-settings-arrow {
+	position:fixed;
+	z-index:31;
+	width:12px;
+	height:12px;
+	box-sizing:border-box;
+	background:var(--surface);
+	border-left:1px solid var(--surface-border);
+	border-bottom:1px solid var(--surface-border);
+	transform:rotate(45deg);
+	pointer-events:none;
+}
+
+.app-settings-arrow.is-down {
+	border-left:0;
+	border-right:1px solid var(--surface-border);
+}
+
+#app-list-body {
+	flex:1 1 auto;
+	min-height:0;
+	overflow:auto;
+	overscroll-behavior:contain;
+	padding:0 0 32px;
+}
+
+#app-list-body .browse-row {
+	padding:8px 12px 9px 8px;
+}
+
+#app-list-body .app-row {
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	#app-list-body .app-row:not(.is-open):hover {
+		background:var(--hover-tint);
+	}
+}
+
+#app-list-body .browse-row:not(:last-child) {
+	border-bottom:1px solid var(--border-soft);
+}
+
+#app-list-body .browse-subhead,
+#app-list-body .browse-empty,
+#app-list-body .browse-skeleton,
+#app-list-body .browse-nav {
+	padding-left:12px;
+	padding-right:12px;
+}
+
+#app-list-body .browse-row.is-open {
+	background:var(--open-row);
+}
+
+#app-list-body .app-row:not(.is-unread) .browse-title-link {
+	color:var(--muted);
+}
+
+.app-list-pull {
+	flex:0 0 auto;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	height:0;
+	overflow:hidden;
+	color:var(--meta);
+	font-size:11px;
+}
+
+.app-list-pull.is-settling {
+	transition:height .2s ease;
+}
+
+.app-list-resize {
+	position:absolute;
+	top:0;
+	right:-4px;
+	bottom:0;
+	z-index:3;
+	width:8px;
+	cursor:col-resize;
+	touch-action:none;
+}
+
+#app.is-resizing {
+	cursor:col-resize;
+	-webkit-user-select:none;
+	user-select:none;
+}
+
+#app.is-resizing .app-article-frame {
+	pointer-events:none;
+}
+
+@media (pointer: coarse) {
+	.app-list-resize {
+		right:-10px;
+		width:20px;
+		display:flex;
+		align-items:center;
+		justify-content:center;
+	}
+
+	.app-list-resize::before {
+		content:"";
+		width:4px;
+		height:40px;
+		border-radius:2px;
+		background:var(--grip);
+	}
+}
+
+.app-unread-mark {
+	color:var(--accent);
+	font-size:9px;
+	line-height:17px;
+}
+
+#app-article {
+	display:flex;
+	flex-direction:column;
+	min-width:0;
+	min-height:0;
+	background:var(--article-bg);
+}
+
+#app-article-site {
+	flex:0 0 auto;
+}
+
+#app-article-title {
+	min-width:0;
+	overflow:hidden;
+	text-overflow:ellipsis;
+}
+
+.app-article-body {
+	position:relative;
+	flex:1 1 auto;
+	min-height:0;
+}
+
+.app-article-frame {
+	position:absolute;
+	inset:0;
+	width:100%;
+	height:100%;
+	border:0;
+	background:#fff;
+}
+
+.app-reader-scroll {
+	position:absolute;
+	inset:0;
+	overflow:auto;
+	overscroll-behavior:contain;
+	background:var(--article-bg);
+}
+
+.app-article-note {
+	position:absolute;
+	inset:0;
+	display:flex;
+	flex-direction:column;
+	align-items:center;
+	justify-content:center;
+	gap:8px;
+	padding:24px;
+	box-sizing:border-box;
+	text-align:center;
+	color:var(--meta);
+}
+
+.app-card-title {
+	max-width:32em;
+	color:var(--text);
+	font-size:16px;
+	font-weight:bold;
+}
+
+#panel.app-docked > header {
+	--header-bg:var(--bg);
+	--header-text:var(--text);
+	--subtitle-stage:var(--meta);
+	--subtitle-stage-peak:var(--text);
+	flex-shrink:0;
+	height:36px;
+	box-sizing:border-box;
+	padding-top:0;
+	padding-bottom:0;
+	border-bottom:1px solid var(--border-soft);
+}
+
+#panel.app-docked .header-actions button {
+	color:var(--meta);
+}
+
+@media (hover: hover) {
+	#panel.app-docked .header-actions button:hover {
+		color:var(--text);
+	}
+}
+
+#panel.app-docked .header-title {
+	flex-direction:row;
+	align-items:baseline;
+	gap:8px;
+	white-space:nowrap;
+}
+
+#panel.app-docked .header-subtitle {
+	min-width:0;
+	font-size:10px;
+	overflow:hidden;
+	text-overflow:ellipsis;
+}
+
+#panel.app-docked .header-subtitle-visible {
+	padding-bottom:0;
+}
+
+#panel.app-docked {
+	position:relative;
+	top:auto;
+	right:auto;
+	height:100%;
+	min-height:0;
+	max-width:calc(100vw - 428px - var(--app-list-width, 300px));
+	box-shadow:none;
+	z-index:auto;
+}
+
+#app:not(.has-story) #panel.app-docked {
+	display:none;
+}
+
+#panel.app-docked .app-discussion-empty {
+	position:absolute;
+	inset:36px 0 0;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	max-width:none;
+	margin:0;
+	padding:24px;
+	box-sizing:border-box;
+	text-align:center;
+}
+
+header .item-action-link {
+	color:inherit;
+	text-decoration-color:currentColor;
+}
+
+.app-phone-only {
+	display:none !important;
+}
+
+@media (max-width: 1100px) {
+	#app {
+		grid-template-columns:44px minmax(0, 1fr) auto;
+	}
+
+	#app-list {
+		position:absolute;
+		top:0;
+		bottom:0;
+		left:44px;
+		z-index:4;
+		width:var(--app-list-width, 300px);
+		box-shadow:6px 0 18px rgba(0,0,0,.18);
+		transform:translateX(calc(-100% - 60px));
+		visibility:hidden;
+		transition:transform .18s ease, visibility 0s linear .18s;
+	}
+
+	#app.list-open #app-list {
+		transform:none;
+		visibility:visible;
+		transition:transform .18s ease;
+	}
+
+	#panel.app-docked {
+		max-width:calc(100vw - 420px);
+	}
+}
+
+@media (max-width: 700px) {
+	#app {
+		grid-template-columns:minmax(0, 1fr);
+		grid-template-rows:minmax(0, 1fr) auto;
+	}
+
+	#app-rail {
+		grid-row:2;
+		flex-direction:row;
+		justify-content:center;
+		justify-content:safe center;
+		gap:2px;
+		padding:5px 8px 4px;
+		overflow-x:auto;
+		overflow-y:hidden;
+		border-right:0;
+	}
+
+	#app-rail-rule,
+	#app-rail-sources,
+	.rail-spacer {
+		display:none;
+	}
+
+	.rail-button {
+		flex-direction:column;
+		gap:3px;
+		width:auto;
+		min-width:52px;
+		height:auto;
+		padding:0 2px;
+	}
+
+	.rail-button.is-current {
+		background:none;
+		color:var(--rail-fg);
+		--rail-glyph:var(--rail-fg);
+		--rail-knock:var(--rail-bg);
+	}
+
+	.rail-icon {
+		position:relative;
+		display:flex;
+		align-items:center;
+		justify-content:center;
+		width:44px;
+		height:28px;
+		border-radius:14px;
+	}
+
+	.rail-button.is-current .rail-icon {
+		background:var(--rail-fg);
+		color:var(--rail-bg);
+		--rail-glyph:var(--rail-bg);
+		--rail-knock:var(--rail-fg);
+	}
+
+	.rail-label {
+		display:block;
+		font-size:11px;
+		line-height:1.2;
+		white-space:nowrap;
+		opacity:.82;
+	}
+
+	.rail-button.is-current .rail-label {
+		font-weight:600;
+		opacity:1;
+	}
+
+	#app-list,
+	#app-article,
+	#panel.app-docked {
+		grid-row:1;
+		grid-column:1;
+		position:relative;
+		left:auto;
+		width:auto !important;
+		min-width:0;
+		max-width:none;
+		transform:none;
+		visibility:visible;
+		box-shadow:none;
+		border:0;
+		transition:none;
+	}
+
+	#app:not([data-stage="list"]) #app-rail,
+	#app:not([data-stage="list"]) #app-list,
+	#app:not([data-stage="article"]) #app-article,
+	#app:not([data-stage="discussion"]) #panel.app-docked {
+		display:none;
+	}
+
+	.app-list-resize,
+	#panel.app-docked #resize-handle {
+		display:none;
+	}
+
+	.app-phone-only {
+		display:inline-flex !important;
+	}
+
+	:host {
+		position:relative;
+		inset:auto;
+	}
+
+	#app {
+		height:auto;
+		min-height:100vh;
+		min-height:100dvh;
+		overflow:visible;
+	}
+
+	#app:not([data-stage="list"]) {
+		height:100vh;
+		height:100dvh;
+		overflow:hidden;
+	}
+
+	#app-list-body {
+		overflow:visible;
+		padding-bottom:88px;
+	}
+
+	#app-rail {
+		position:fixed;
+		left:0;
+		right:0;
+		bottom:0;
+		z-index:10;
+		background:color-mix(in srgb, var(--rail-bg) 86%, transparent);
+		-webkit-backdrop-filter:blur(14px) saturate(1.3);
+		backdrop-filter:blur(14px) saturate(1.3);
+	}
+}
+`;
+
+	const READER_CSS = `
+.bc-reader {
+	display:block;
+	position:relative;
+	box-sizing:border-box;
+	max-width:44em;
+	margin:0 auto;
+	padding:28px 28px 72px;
+	color:var(--text);
+	font:18px/1.62 Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+	overflow-wrap:break-word;
+	-webkit-text-size-adjust:100%;
+}
+
+.bc-reader-head {
+	margin:0 0 24px;
+}
+
+.bc-reader-site,
+.bc-reader-byline {
+	color:var(--meta);
+	font:11px/1.5 Verdana, Geneva, sans-serif;
+}
+
+.bc-reader-title {
+	margin:6px 0 4px;
+	color:var(--text);
+	font:700 30px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.bc-reader-body h1,
+.bc-reader-body h2,
+.bc-reader-body h3,
+.bc-reader-body h4 {
+	margin:1.6em 0 .5em;
+	line-height:1.25;
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.bc-reader a {
+	color:var(--link);
+}
+
+.bc-reader img {
+	display:block;
+	max-width:100%;
+	height:auto;
+	margin:1em auto;
+}
+
+.bc-reader figure {
+	margin:1.5em 0;
+}
+
+.bc-reader figcaption {
+	color:var(--meta);
+	font-size:14px;
+	text-align:center;
+}
+
+.bc-reader blockquote {
+	margin:1.2em 0;
+	padding-left:1em;
+	border-left:3px solid var(--border);
+	color:var(--quote-text);
+}
+
+.bc-reader pre {
+	overflow:auto;
+	padding:12px 14px;
+	border-radius:6px;
+	background:var(--code-bg);
+	font-size:14px;
+	line-height:1.45;
+}
+
+.bc-reader code,
+.bc-reader kbd,
+.bc-reader samp {
+	font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size:.86em;
+}
+
+.bc-reader table {
+	display:block;
+	max-width:100%;
+	overflow-x:auto;
+	border-collapse:collapse;
+	font-size:15px;
+}
+
+.bc-reader th,
+.bc-reader td {
+	padding:4px 8px;
+	border:1px solid var(--border-soft);
+}
+
+.bc-reader hr {
+	margin:2em 0;
+	border:0;
+	border-top:1px solid var(--border);
+}
+`;
+
+	const READER_DOCUMENT_SOURCE = {
+		id: "reader",
+
+		buildIndex() {
+			return buildTextIndex(appReaderElement() || document.createElement("div"), {
+				skipHidden: true,
+				excludeSelectors: ["[data-hnewhere-annotation-overlay]"],
+			});
+		},
+
+		hostFor() {
+			return appReaderElement() || document.body;
+		},
+
+		originFor(host) {
+			const rect = host.getBoundingClientRect();
+
+			return { left: -rect.left, top: -rect.top };
+		},
+
+		heightFor(host) {
+			return host.scrollHeight;
+		},
+
+		backdropFor(range) {
+			return nearestElement(range?.commonAncestorContainer);
+		},
+
+		scrollIntoView(range) {
+			const scroller = appReaderScroller();
+
+			if (!scroller) {
+				return;
+			}
+
+			const rect = range.getBoundingClientRect();
+			const box = scroller.getBoundingClientRect();
+
+			scroller.scrollTo({
+				top: Math.max(
+					0,
+					scroller.scrollTop + (rect.top - box.top) - scroller.clientHeight * 0.3,
+				),
+				behavior: prefersReducedMotion() ? "auto" : "smooth",
+			});
+		},
+
+		onReindex() {
+			return () => {};
+		},
+	};
+
+	const APP_ICON = (paths) =>
+		`<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">${paths}</svg>`;
+
+	const APP_VIEWS = [
+		{
+			id: "unread",
+			label: "Unread",
+			icon: APP_ICON('<path fill="currentColor" fill-rule="evenodd" d="M4.1 2.8h7.8a1 1 0 0 1 .93.64l1.57 4.26c.07.17.1.35.1.53V12a1.2 1.2 0 0 1-1.2 1.2H2.7A1.2 1.2 0 0 1 1.5 12V8.23c0-.18.03-.36.1-.53l1.57-4.26a1 1 0 0 1 .93-.64zM4.45 4.3 3.2 7.7h2.55l.75 1.5h3l.75-1.5h2.55L11.55 4.3z"/>'),
+		},
+		{
+			id: "all",
+			label: "All stories",
+			icon: APP_ICON('<path fill="currentColor" fill-rule="evenodd" d="M2.5 2.5h9a1 1 0 0 1 1 1V5h1a1 1 0 0 1 1 1v6.2a1.8 1.8 0 0 1-1.8 1.8H3.3a1.8 1.8 0 0 1-1.8-1.8V3.5a1 1 0 0 1 1-1zm10 4v5.7a.5.5 0 0 0 1 0V6.5zM4 4.5v3h6v-3zm0 4.5v1.2h6V9zm0 2.3v1.2h6v-1.2z"/>'),
+		},
+		{
+			id: "queue",
+			label: "Queue",
+			icon: APP_ICON('<rect x="2.5" y="3" width="11" height="2.6" rx="1.3" fill="currentColor"/><rect x="2.5" y="6.7" width="11" height="2.6" rx="1.3" fill="currentColor"/><rect x="2.5" y="10.4" width="11" height="2.6" rx="1.3" fill="currentColor"/>'),
+		},
+		{
+			id: "watching",
+			label: "Watching",
+			icon: APP_ICON('<path fill="currentColor" fill-rule="evenodd" d="M8 3.3c-3.6 0-6.2 2.9-7 4.7.8 1.8 3.4 4.7 7 4.7s6.2-2.9 7-4.7c-.8-1.8-3.4-4.7-7-4.7zm0 2.3a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"/>'),
+		},
+		{
+			id: "collection",
+			label: "Collection",
+			icon: APP_ICON('<path d="M4.6 1.8h6.8a1.1 1.1 0 0 1 1.1 1.1v11.3L8 11.2l-4.5 3V2.9a1.1 1.1 0 0 1 1.1-1.1z" fill="currentColor"/>'),
+		},
+	];
+
+	const APP_SETTINGS_ICON = APP_ICON(
+		'<path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>',
+	);
+
+	const APP_BRAND_ICON = (d, rule = "nonzero") =>
+		`<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="${rule}" d="${d}"/></svg>`;
+
+	const APP_SOURCE_ICONS = {
+		hn: '<span class="rail-hn" aria-hidden="true">HN</span>',
+		reddit: APP_BRAND_ICON(
+			"M12 0C5.373 0 0 5.373 0 12c0 3.314 1.343 6.314 3.515 8.485l-2.286 2.286C.775 23.225 1.097 24 1.738 24H12c6.627 0 12-5.373 12-12S18.627 0 12 0Zm4.388 3.199c1.104 0 1.999.895 1.999 1.999 0 1.105-.895 2-1.999 2-.946 0-1.739-.657-1.947-1.539v.002c-1.147.162-2.032 1.15-2.032 2.341v.007c1.776.067 3.4.567 4.686 1.363.473-.363 1.064-.58 1.707-.58 1.547 0 2.802 1.254 2.802 2.802 0 1.117-.655 2.081-1.601 2.531-.088 3.256-3.637 5.876-7.997 5.876-4.361 0-7.905-2.617-7.998-5.87-.954-.447-1.614-1.415-1.614-2.538 0-1.548 1.255-2.802 2.803-2.802.645 0 1.239.218 1.712.585 1.275-.79 2.881-1.291 4.64-1.365v-.01c0-1.663 1.263-3.034 2.88-3.207.188-.911.993-1.595 1.959-1.595Zm-8.085 8.376c-.784 0-1.459.78-1.506 1.797-.047 1.016.64 1.429 1.426 1.429.786 0 1.371-.369 1.418-1.385.047-1.017-.553-1.841-1.338-1.841Zm7.406 0c-.786 0-1.385.824-1.338 1.841.047 1.017.634 1.385 1.418 1.385.785 0 1.473-.413 1.426-1.429-.046-1.017-.721-1.797-1.506-1.797Zm-3.703 4.013c-.974 0-1.907.048-2.77.135-.147.015-.241.168-.183.305.483 1.154 1.622 1.964 2.953 1.964 1.33 0 2.47-.81 2.953-1.964.057-.137-.037-.29-.184-.305-.863-.087-1.795-.135-2.769-.135Z",
+		),
+		lobsters: APP_BRAND_ICON(
+			"M0 0v24h24V0zm5.414 4.02h7.86c.105 0 .15.014.15.134-.015.285 0 .556 0 .841v.12c-.21.015-.42 0-.615.03-.3.045-.6.089-.885.164-.525.165-.793.527-.853 1.022a5.09 5.09 0 0 0-.047.674v9.586c0 .405.046.808.091 1.198.045.435.33.72.736.87.345.135.718.167 1.078.182.945.03 1.877.014 2.792-.226 1.32-.33 2.204-1.156 2.64-2.46.134-.42.193-.855.298-1.29.015-.03.046-.09.076-.09h.99c-.03 1.8.03 3.599 0 5.399H5.25v-.944c0-.165 0-.149.15-.164.344-.03.689-.045 1.034-.105.69-.12 1.005-.467 1.11-1.172.03-.21.047-.434.047-.644V7.035c0-.27-.032-.54-.062-.795-.045-.465-.344-.749-.779-.914-.405-.15-.825-.166-1.245-.196h-.226v-.976c0-.105.03-.134.135-.134z",
+		),
+		mastodon: APP_BRAND_ICON(
+			"M23.268 5.313c-.35-2.578-2.617-4.61-5.304-5.004C17.51.242 15.792 0 11.813 0h-.03c-3.98 0-4.835.242-5.288.309C3.882.692 1.496 2.518.917 5.127.64 6.412.61 7.837.661 9.143c.074 1.874.088 3.745.26 5.611.118 1.24.325 2.47.62 3.68.55 2.237 2.777 4.098 4.96 4.857 2.336.792 4.849.923 7.256.38.265-.061.527-.132.786-.213.585-.184 1.27-.39 1.774-.753a.057.057 0 0 0 .023-.043v-1.809a.052.052 0 0 0-.02-.041.053.053 0 0 0-.046-.01 20.282 20.282 0 0 1-4.709.545c-2.73 0-3.463-1.284-3.674-1.818a5.593 5.593 0 0 1-.319-1.433.053.053 0 0 1 .066-.054c1.517.363 3.072.546 4.632.546.376 0 .75 0 1.125-.01 1.57-.044 3.224-.124 4.768-.422.038-.008.077-.015.11-.024 2.435-.464 4.753-1.92 4.989-5.604.008-.145.03-1.52.03-1.67.002-.512.167-3.63-.024-5.545zm-3.748 9.195h-2.561V8.29c0-1.309-.55-1.976-1.67-1.976-1.23 0-1.846.79-1.846 2.35v3.403h-2.546V8.663c0-1.56-.617-2.35-1.848-2.35-1.112 0-1.668.668-1.67 1.977v6.218H4.822V8.102c0-1.31.337-2.35 1.011-3.12.696-.77 1.608-1.164 2.74-1.164 1.311 0 2.302.5 2.962 1.498l.638 1.06.638-1.06c.66-.999 1.65-1.498 2.96-1.498 1.13 0 2.043.395 2.74 1.164.675.77 1.012 1.81 1.012 3.12z",
+		),
+		lemmy: APP_BRAND_ICON(
+			"M2.9595 4.2228a3.9132 3.9132 0 0 0-.332.019c-.8781.1012-1.67.5699-2.155 1.3862-.475.8-.5922 1.6809-.35 2.4971.2421.8162.8297 1.5575 1.6982 2.1449.0053.0035.0106.0076.0163.0114.746.4498 1.492.7431 2.2877.8994-.02.3318-.0272.6689-.006 1.0181.0634 1.0432.4368 2.0006.996 2.8492l-2.0061.8189a.4163.4163 0 0 0-.2276.2239.416.416 0 0 0 .0879.455.415.415 0 0 0 .2941.1231.4156.4156 0 0 0 .1595-.0312l2.2093-.9035c.408.4859.8695.9315 1.3723 1.318.0196.0151.0407.0264.0603.0423l-1.2918 1.7103a.416.416 0 0 0 .664.501l1.314-1.7385c.7185.4548 1.4782.7927 2.2294 1.0242.3833.7209 1.1379 1.1871 2.0202 1.1871.8907 0 1.6442-.501 2.0242-1.2072.744-.2347 1.4959-.5729 2.2073-1.0262l1.332 1.7606a.4157.4157 0 0 0 .7439-.1936.4165.4165 0 0 0-.0799-.3074l-1.3099-1.7345c.0083-.0075.0178-.0113.0261-.0188.4968-.3803.9549-.8175 1.3622-1.2939l2.155.8794a.4156.4156 0 0 0 .5412-.2276.4151.4151 0 0 0-.2273-.5432l-1.9438-.7928c.577-.8538.9697-1.8183 1.0504-2.8693.0268-.3507.0242-.6914.0079-1.0262.7905-.1572 1.5321-.4502 2.2737-.8974.0053-.0033.011-.0076.0163-.0113.8684-.5874 1.456-1.3287 1.6982-2.145.2421-.8161.125-1.697-.3501-2.497-.4849-.8163-1.2768-1.2852-2.155-1.3863a3.2175 3.2175 0 0 0-.332-.0189c-.7852-.0151-1.6231.229-2.4286.6942-.5926.342-1.1252.867-1.5433 1.4387-1.1699-.6703-2.6923-1.0476-4.5635-1.0785a15.5768 15.5768 0 0 0-.5111 0c-2.085.034-3.7537.43-5.0142 1.1449-.0033-.0038-.0045-.0114-.008-.0152-.4233-.5916-.973-1.1365-1.5835-1.489-.8055-.465-1.6434-.7083-2.4286-.6941ZM8.3641 12.8327c-.6053 0-1.0966.4903-1.0966 1.0966 0 .6063.4913 1.0986 1.0966 1.0986s1.0966-.4923 1.0966-1.0986c0-.6063-.4913-1.0966-1.0966-1.0966zm7.2819.0113c-.5998 0-1.0866.4859-1.0866 1.0866s.4868 1.0885 1.0866 1.0885c.5997 0 1.0865-.4878 1.0865-1.0885s-.4868-1.0866-1.0865-1.0866zM12 16.0835c1.0237 0 1.5654.638 1.5634 1.4829-.0018.7849-.6723 1.485-1.5634 1.485-.9167 0-1.54-.5629-1.5634-1.493-.0212-.8347.5397-1.4749 1.5634-1.4749Z",
+			"evenodd",
+		),
+	};
+
+	function appRailButtonHTML(id, label, inner) {
+		return `<button class="rail-button" type="button" data-app-view="${escapeHTML(id)}" data-tip="${escapeHTML(label)}" aria-label="${escapeHTML(label)}" aria-pressed="false"><span class="rail-icon">${inner}<span class="rail-badge" data-app-badge="${escapeHTML(id)}"></span></span><span class="rail-label" aria-hidden="true">${escapeHTML(label)}</span></button>`;
+	}
+
+	function appShellOpenHTML() {
+		return `<div id="app" data-stage="list">
+<div id="app-tip" class="app-tip" role="tooltip" hidden></div>
+<div id="app-settings-arrow" class="app-settings-arrow" hidden></div>
+<nav id="app-rail" aria-label="Views">
+${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).join("\n")}
+<div id="app-rail-rule" class="rail-rule" aria-hidden="true"></div>
+<div id="app-rail-sources"></div>
+<div class="rail-spacer"></div>
+<button id="settings-toggle" class="rail-button" type="button" data-tip="Settings" aria-label="Open Backchannel settings" aria-expanded="false" aria-controls="settings-panel"><span class="rail-icon">${APP_SETTINGS_ICON}</span><span class="rail-label" aria-hidden="true">Settings</span></button>
+</nav>
+<section id="app-list" aria-label="Stories">
+<div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions"><button id="app-list-sync" class="item-action-link" type="button">sync</button><button id="app-mark-read" class="item-action-link" type="button">mark all read</button></span></div>
+<div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
+<div id="app-list-body"></div>
+<div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
+</section>
+<section id="app-article" aria-label="Article">
+<div class="app-pane-head"><button id="app-article-back" class="item-action-link app-phone-only" type="button">&lsaquo; stories</button><span id="app-article-title"></span><span id="app-article-site" class="browse-site"></span><a id="app-article-open" class="item-action-link app-pane-action" target="_blank" rel="noopener" hidden>open</a><button id="app-article-discussion" class="item-action-link app-phone-only" type="button">discussion &rsaquo;</button></div>
+<div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick a story to read it here, with what people said about it beside it.</div></div>
+</section>
+${settingsPanelHTML()}
+`;
+	}
+
+	// #region hnewhere-test-export
+	let appState = null;
+	// #endregion hnewhere-test-export
+
+	function createAppState(ui) {
+		return {
+			ui,
+			view: "unread",
+			listView: "",
+			rows: [],
+			rowsByURL: new Map(),
+			seen: {},
+			sourceIds: [],
+			open: null,
+			article: null,
+			listSeq: 0,
+		};
+	}
+
+	async function runAppPass() {
+		await documentReady();
+
+		const ui = await createSidebar({ appMode: true });
+
+		if (!sidebar) {
+			return;
+		}
+
+		sidebarUI = ui;
+		sidebarHasDiscussion = false;
+		appState = createAppState(ui);
+
+		document.documentElement.setAttribute("data-backchannel-installed", "1");
+
+		for (const node of document.querySelectorAll("[data-backchannel-promo]")) {
+			node.hidden = true;
+		}
+
+		for (const node of document.querySelectorAll("[data-backchannel-version]")) {
+			node.textContent = SCRIPT_VERSION;
+		}
+
+		wireApp(ui);
+		renderAppDiscussionEmpty();
+		setAppDrawer(true);
+		await refreshAppSources();
+	}
+
+	function wireApp(ui) {
+		const shadow = ui.shadow;
+
+		shadow.querySelector("#app-rail").addEventListener("click", (event) => {
+			const button = event.target?.closest?.("[data-app-view]");
+
+			if (button && !button.disabled) {
+				chooseAppView(button.dataset.appView);
+			}
+		});
+
+		shadow.querySelector("#app-mark-read").onclick = () => {
+			markAppViewRead().catch(console.error);
+		};
+
+		const listBody = shadow.querySelector("#app-list-body");
+		let rowPress = null;
+
+		listBody.addEventListener("pointerdown", (event) => {
+			rowPress = { x: event.clientX, y: event.clientY };
+		});
+
+		listBody.addEventListener("click", (event) => {
+			const press = rowPress;
+			const row = event.target?.closest?.(".app-row");
+
+			rowPress = null;
+
+			if (
+				!row ||
+				event.defaultPrevented ||
+				event.button !== 0 ||
+				event.metaKey ||
+				event.ctrlKey ||
+				event.shiftKey ||
+				event.altKey ||
+				event.target.closest("a, button, input, select, textarea, label, summary")
+			) {
+				return;
+			}
+
+			if (press && Math.hypot(event.clientX - press.x, event.clientY - press.y) > 4) {
+				return;
+			}
+
+			row.querySelector(".browse-title-link")?.click();
+		});
+
+		const appRoot = shadow.querySelector("#app");
+		const listPane = shadow.querySelector("#app-list");
+		const listHandle = shadow.querySelector("#app-list-resize");
+		let listDrag = null;
+		let listSaveTimer = 0;
+
+		load(STORAGE.appListWidth, null)
+			.then((width) => applyAppListWidth(appRoot, width))
+			.catch(console.error);
+
+		listHandle.addEventListener("pointerdown", (event) => {
+			if (event.button !== 0) {
+				return;
+			}
+
+			listDrag = { x: event.clientX, width: listPane.offsetWidth };
+			listHandle.setPointerCapture(event.pointerId);
+			appRoot.classList.add("is-resizing");
+			event.preventDefault();
+		});
+
+		listHandle.addEventListener("pointermove", (event) => {
+			if (!listDrag) {
+				return;
+			}
+
+			const width = applyAppListWidth(appRoot, listDrag.width + event.clientX - listDrag.x);
+
+			clearTimeout(listSaveTimer);
+			listSaveTimer = setTimeout(() => {
+				save(STORAGE.appListWidth, width).catch(console.error);
+			}, 250);
+		});
+
+		const endListDrag = () => {
+			listDrag = null;
+			appRoot.classList.remove("is-resizing");
+		};
+
+		listHandle.addEventListener("pointerup", endListDrag);
+		listHandle.addEventListener("pointercancel", endListDrag);
+		listHandle.addEventListener("lostpointercapture", endListDrag);
+
+		const pull = shadow.querySelector("#app-list-pull");
+		let pullStart = null;
+		let pullDistance = 0;
+		let pullSyncing = false;
+
+		const listScrolled = () => (appIsPhone() ? window.scrollY : listBody.scrollTop) > 0;
+
+		const paintPull = (height, text, settle = false) => {
+			pull.classList.toggle("is-settling", settle);
+			pull.style.height = `${Math.round(height)}px`;
+			pull.textContent = text;
+		};
+
+		listPane.addEventListener(
+			"touchstart",
+			(event) => {
+				pullDistance = 0;
+				pullStart =
+					!pullSyncing && !listScrolled() && event.touches.length === 1
+						? event.touches[0].clientY
+						: null;
+			},
+			{ passive: true },
+		);
+
+		listPane.addEventListener(
+			"touchmove",
+			(event) => {
+				if (pullStart === null) {
+					return;
+				}
+
+				const pulled = event.touches[0].clientY - pullStart;
+				const scrolled = listScrolled();
+
+				if (scrolled || pulled <= 0) {
+					if (scrolled) {
+						pullStart = null;
+					}
+
+					if (pullDistance) {
+						pullDistance = 0;
+						paintPull(0, "");
+					}
+
+					return;
+				}
+
+				event.preventDefault();
+				pullDistance = Math.min(pulled / 2, APP_PULL_MAX);
+				paintPull(pullDistance, pullDistance >= APP_PULL_TRIGGER ? "release to sync" : "pull to sync");
+			},
+			{ passive: false },
+		);
+
+		const endPull = (event) => {
+			if (pullStart === null) {
+				return;
+			}
+
+			const release = event.type === "touchend" && pullDistance >= APP_PULL_TRIGGER;
+
+			pullStart = null;
+			pullDistance = 0;
+
+			if (!release) {
+				paintPull(0, "", true);
+				return;
+			}
+
+			pullSyncing = true;
+			paintPull(36, "syncing…", true);
+			renderAppList({ force: true })
+				.catch(console.error)
+				.finally(() => {
+					pullSyncing = false;
+					paintPull(0, "", true);
+				});
+		};
+
+		listPane.addEventListener("touchend", endPull);
+		listPane.addEventListener("touchcancel", endPull);
+
+		shadow.querySelector("#app-list-sync").onclick = () => {
+			renderAppList({ force: true }).catch(console.error);
+		};
+
+		shadow.querySelector("#app-article-open").onclick = () => {
+			rememberAppArrival(appState?.open?.url).catch(console.error);
+		};
+
+		shadow.querySelector("#app-article-back").onclick = () => setAppStage("list");
+		shadow.querySelector("#app-article-discussion").onclick = () => setAppStage("discussion");
+		shadow
+			.querySelector("#app-discussion-back")
+			?.addEventListener("click", () => setAppStage("article"));
+		shadow.querySelector("#app-article").addEventListener("pointerdown", () => {
+			if (appIsNarrow()) {
+				setAppDrawer(false);
+			}
+		});
+
+		const rail = shadow.querySelector("#app-rail");
+		const railButton = (event) => event.target?.closest?.(".rail-button") || null;
+
+		rail.addEventListener("pointerover", (event) => {
+			const button = railButton(event);
+
+			if (button && event.pointerType !== "touch") {
+				showAppTip(button);
+			}
+		});
+
+		rail.addEventListener("pointerout", (event) => {
+			const button = railButton(event);
+
+			if (button && !button.contains(event.relatedTarget)) {
+				hideAppTip();
+			}
+		});
+
+		rail.addEventListener("focusin", (event) => {
+			const button = railButton(event);
+
+			if (button?.matches(":focus-visible")) {
+				showAppTip(button);
+			}
+		});
+
+		rail.addEventListener("focusout", hideAppTip);
+
+		window.addEventListener("resize", () => {
+			const panel = shadow.querySelector("#settings-panel");
+
+			if (panel && !panel.classList.contains("hidden")) {
+				placeAppSettings(true);
+			}
+		});
+		rail.addEventListener("scroll", hideAppTip);
+		rail.addEventListener("click", hideAppTip);
+
+		document.addEventListener("keydown", onAppKey);
+		window.addEventListener("message", onAppMessage);
+	}
+
+	async function refreshAppSources() {
+		const state = appState;
+		const settings = await loadSettings();
+
+		state.sourceIds = frontPageSourceIds(settings);
+		renderAppRailSources();
+
+		if (!enabledSourceIds(settings, registeredSourceIds()).length) {
+			sidebarHasDiscussion = false;
+			renderSourcePicker(state.ui);
+			renderAppListMessage("Pick where comments come from, and the front pages fill in here.");
+			await paintAppCounts();
+			return;
+		}
+
+		await renderAppList();
+	}
+
+	async function refreshAppForSourceChange() {
+		await refreshAppSources();
+
+		if (appState?.open) {
+			await openAppDiscussion(appState.open.row);
+		} else {
+			renderAppDiscussionEmpty();
+		}
+	}
+
+	function renderAppRailSources() {
+		const state = appState;
+		const holder = state.ui.shadow.querySelector("#app-rail-sources");
+
+		holder.innerHTML = state.sourceIds
+			.map((id) => {
+				const label = getSource(id)?.label || id;
+				const mark =
+					APP_SOURCE_ICONS[id] ||
+					`<span class="rail-monogram" aria-hidden="true">${escapeHTML(label.slice(0, 2))}</span>`;
+
+				return appRailButtonHTML("source:" + id, label, mark);
+			})
+			.join("");
+
+		state.ui.shadow.querySelector("#app-rail-rule").hidden = !state.sourceIds.length;
+
+		if (
+			state.view.startsWith("source:") &&
+			!state.sourceIds.includes(state.view.slice("source:".length))
+		) {
+			state.view = "unread";
+		}
+
+		paintAppRail();
+	}
+
+	function appViewIsFrontPage(view) {
+		return view === "unread" || view === "all" || view.startsWith("source:");
+	}
+
+	function appViewLabel(view) {
+		if (view.startsWith("source:")) {
+			const id = view.slice("source:".length);
+
+			return getSource(id)?.label || id;
+		}
+
+		return APP_VIEWS.find((entry) => entry.id === view)?.label || "";
+	}
+
+	function paintAppRail() {
+		const state = appState;
+
+		for (const button of state.ui.shadow.querySelectorAll("#app-rail [data-app-view]")) {
+			const current = button.dataset.appView === state.view;
+
+			button.classList.toggle("is-current", current);
+			button.setAttribute("aria-pressed", String(current));
+		}
+
+		state.ui.shadow.querySelector("#app-mark-read").hidden = !appViewIsFrontPage(state.view);
+		state.ui.shadow.querySelector("#app-list-title").textContent = appViewLabel(state.view);
+	}
+
+	function chooseAppView(view) {
+		const state = appState;
+
+		if (!state) {
+			return;
+		}
+
+		if (view === state.view) {
+			if (appIsNarrow()) {
+				setAppDrawer(!state.ui.shadow.querySelector("#app").classList.contains("list-open"));
+			}
+
+			return;
+		}
+
+		state.view = view;
+		paintAppRail();
+		renderAppList().catch(console.error);
+
+		if (appIsNarrow()) {
+			setAppDrawer(true);
+		}
+	}
+
+	function showAppTip(button) {
+		const shadow = appState?.ui.shadow;
+		const tip = shadow?.querySelector("#app-tip");
+		const app = shadow?.querySelector("#app");
+		const label = button?.dataset.tip;
+
+		if (!tip || !app || !label || appIsPhone() || button.getAttribute("aria-expanded") === "true") {
+			return;
+		}
+
+		const count = button.querySelector(".rail-badge")?.textContent || "";
+		const box = button.getBoundingClientRect();
+		const frame = app.getBoundingClientRect();
+
+		tip.replaceChildren(document.createTextNode(label));
+
+		if (count) {
+			const extra = document.createElement("span");
+
+			extra.className = "app-tip-count";
+			extra.textContent = count;
+			tip.append(extra);
+		}
+
+		tip.style.left = `${Math.round(box.right + 10 - frame.left)}px`;
+		tip.style.top = `${Math.round(box.top + box.height / 2 - frame.top)}px`;
+		tip.hidden = false;
+	}
+
+	function applyAppListWidth(app, width) {
+		if (!app || typeof width !== "number" || !Number.isFinite(width)) {
+			return null;
+		}
+
+		const clamped = Math.round(Math.min(Math.max(width, APP_LIST_MIN_WIDTH), APP_LIST_MAX_WIDTH));
+
+		app.style.setProperty("--app-list-width", `${clamped}px`);
+		return clamped;
+	}
+
+	function placeAppSettings(open) {
+		const shadow = appState?.ui.shadow;
+		const panel = shadow?.querySelector("#settings-panel");
+		const toggle = shadow?.querySelector("#settings-toggle");
+		const arrow = shadow?.querySelector("#app-settings-arrow");
+
+		if (!panel || !toggle || !arrow) {
+			return;
+		}
+
+		hideAppTip();
+		arrow.hidden = !open;
+
+		if (!open) {
+			return;
+		}
+
+		const box = toggle.getBoundingClientRect();
+		const phone = appIsPhone();
+		const width = panel.offsetWidth || 240;
+
+		if (phone) {
+			const left = Math.min(
+				Math.max(8, box.left + box.width / 2 - width / 2),
+				window.innerWidth - width - 8,
+			);
+
+			panel.style.left = `${Math.round(left)}px`;
+			panel.style.top = "auto";
+			panel.style.bottom = `${Math.round(window.innerHeight - box.top + 10)}px`;
+			panel.style.maxHeight = `${Math.round(box.top - 24)}px`;
+			arrow.style.left = `${Math.round(box.left + box.width / 2 - 6)}px`;
+			arrow.style.top = `${Math.round(box.top - 16)}px`;
+		} else {
+			const bottom = Math.max(8, window.innerHeight - box.bottom - 6);
+
+			panel.style.left = `${Math.round(box.right + 12)}px`;
+			panel.style.top = "auto";
+			panel.style.bottom = `${Math.round(bottom)}px`;
+			panel.style.maxHeight = `${Math.round(window.innerHeight - bottom - 16)}px`;
+			arrow.style.left = `${Math.round(box.right + 6)}px`;
+			arrow.style.top = `${Math.round(box.top + box.height / 2 - 6)}px`;
+		}
+
+		arrow.classList.toggle("is-down", phone);
+	}
+
+	function hideAppTip() {
+		const tip = appState?.ui.shadow.querySelector("#app-tip");
+
+		if (tip) {
+			tip.hidden = true;
+		}
+	}
+
+	function appIsPhone() {
+		return window.matchMedia("(max-width: 700px)").matches;
+	}
+
+	function appIsNarrow() {
+		return window.matchMedia("(max-width: 1100px)").matches && !appIsPhone();
+	}
+
+	function setAppDrawer(open) {
+		appState?.ui.shadow.querySelector("#app")?.classList.toggle("list-open", Boolean(open));
+	}
+
+	function setAppStage(stage) {
+		const app = appState?.ui.shadow.querySelector("#app");
+
+		if (!app || app.dataset.stage === stage) {
+			return;
+		}
+
+		if (app.dataset.stage === "list") {
+			appState.listScrollY = window.scrollY;
+		}
+
+		app.dataset.stage = stage;
+
+		if (appIsPhone()) {
+			window.scrollTo(0, stage === "list" ? appState.listScrollY || 0 : 0);
+		}
+	}
+
+	function renderAppListMessage(text) {
+		const note = document.createElement("div");
+
+		note.className = "browse-empty";
+		note.textContent = text;
+		appState.ui.shadow.querySelector("#app-list-body").replaceChildren(note);
+	}
+
+	function renderAppDiscussionEmpty() {
+		const body = appState?.ui.body;
+
+		if (!body) {
+			return;
+		}
+
+		const note = document.createElement("div");
+
+		note.className = "browse-empty app-discussion-empty";
+		note.textContent = "What people said about the story you open shows here.";
+		body.replaceChildren(note);
+	}
+
+	async function renderAppList({ force = false } = {}) {
+		const state = appState;
+		const ui = state.ui;
+		const list = ui.shadow.querySelector("#app-list-body");
+		const view = state.view;
+		const request = ++state.listSeq;
+
+		paintAppRail();
+
+		if (view === "queue" || view === "watching") {
+			await renderQueueView(ui, list, { part: view === "queue" ? "queued" : "watching" });
+		} else if (view === "collection") {
+			await renderCollectionView(ui, list);
+		} else {
+			if (state.listView !== view || !list.childElementCount) {
+				renderBrowseSkeleton(list, "Loading front pages…");
+			}
+
+			const [{ rows: allRows }, hiddenKeys, queued, seen] = await Promise.all([
+				loadFrontPages({ force }),
+				loadHiddenStoryKeys(),
+				loadQueue(),
+				load(STORAGE.seen, {}),
+			]);
+
+			if (request !== state.listSeq) {
+				return;
+			}
+
+			state.rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
+			state.rowsByURL = new Map(
+				state.rows.map((row) => [normalizeURL(row.story.url) || row.story.url, row]),
+			);
+			state.seen = seen || {};
+
+			const shown = appViewRows(state.rows, view, state.seen);
+			const queuedKeys = new Set(queued.map(queueKey));
+
+			list.replaceChildren();
+
+			if (!shown.length) {
+				renderAppListMessage(
+					!allRows.length
+						? "Could not reach any front page."
+						: view === "unread"
+							? "All caught up."
+							: "Nothing here right now.",
+				);
+			}
+
+			for (const row of shown) {
+				const unread = rowIsUnread(row, state.seen);
+				const element = renderBrowseRow(row.story, list, 0, {
+					also: row.also,
+					queuedKeys,
+					hideable: true,
+					reload: () => renderAppList(),
+					unreadDot: unread,
+				});
+
+				element.classList.toggle("is-unread", unread);
+			}
+
+			refreshFavoriteControls().catch(console.error);
+		}
+
+		if (request !== state.listSeq) {
+			return;
+		}
+
+		state.listView = view;
+		decorateAppRows(list);
+		await paintAppCounts();
+	}
+
+	function decorateAppRows(list) {
+		for (const element of list.querySelectorAll(".browse-row")) {
+			const href = element.querySelector(".browse-title-link")?.getAttribute("href") || "";
+
+			element.classList.add("app-row");
+			element.dataset.appKey = normalizeURL(href) || href;
+			element.classList.toggle(
+				"is-open",
+				Boolean(appState.open) && element.dataset.appKey === appState.open.key,
+			);
+		}
+	}
+
+	async function paintAppCounts() {
+		const state = appState;
+
+		if (!state) {
+			return;
+		}
+
+		const [queue, watches] = await Promise.all([loadQueue(), loadWatches()]);
+		const { queued } = splitQueueEntries(queue, watches);
+		const counts = appViewCounts(state.rows, state.seen, state.sourceIds);
+		const badges = {
+			unread: counts.unread,
+			all: counts.all,
+			queue: unreadQueueCount(queued),
+			watching: unseenWatchCount(watches),
+		};
+
+		for (const id of state.sourceIds) {
+			badges["source:" + id] = counts.sources[id];
+		}
+
+		for (const badge of state.ui.shadow.querySelectorAll("[data-app-badge]")) {
+			const value = badges[badge.dataset.appBadge] || 0;
+
+			badge.textContent = value ? (value > 999 ? "999+" : String(value)) : "";
+		}
+	}
+
+	async function refreshAppSeen() {
+		const state = appState;
+
+		if (!state) {
+			return;
+		}
+
+		state.seen = (await load(STORAGE.seen, {})) || {};
+
+		for (const element of state.ui.shadow.querySelectorAll("#app-list-body .app-row")) {
+			const row = state.rowsByURL.get(element.dataset.appKey);
+			const mark = element.querySelector(".app-unread-mark");
+
+			if (!row || !mark) {
+				continue;
+			}
+
+			const unread = rowIsUnread(row, state.seen);
+
+			element.classList.toggle("is-unread", unread);
+			mark.textContent = unread ? "●" : "";
+			mark.title = unread ? "Unread" : "";
+		}
+
+		await paintAppCounts();
+	}
+
+	async function markAppViewRead() {
+		const state = appState;
+
+		if (!state || !appViewIsFrontPage(state.view)) {
+			return;
+		}
+
+		const rows = appViewRows(state.rows, state.view, state.seen).filter((row) =>
+			rowIsUnread(row, state.seen),
+		);
+		const keys = rows.flatMap(rowDiscussionKeys);
+
+		if (!keys.length) {
+			return;
+		}
+
+		const previous = await markManySeen(keys);
+
+		await refreshAppSeen();
+
+		showToast(`Marked ${pluralize(rows.length, "story", "stories")} as read`, {
+			action: {
+				label: "undo",
+				onAct: () => {
+					restoreManySeen(previous).then(refreshAppSeen).catch(console.error);
+				},
+			},
+		});
+	}
+
+	async function openAppStory(story, { focus = "", row = null } = {}) {
+		const state = appState;
+		const url = String(story?.url || "");
+
+		if (!state || !/^https?:/i.test(url)) {
+			return;
+		}
+
+		const key = normalizeURL(url) || url;
+		const entry = row || state.rowsByURL.get(key) || { story, also: [] };
+
+		state.open = { url, key, row: entry };
+		state.ui.shadow.querySelector("#app").classList.add("has-story");
+		decorateAppRows(state.ui.shadow.querySelector("#app-list-body"));
+		setAppSubject({ url, title: story.title || "" });
+		loadAppArticle(url, story.title || "");
+
+		if (appIsNarrow()) {
+			setAppDrawer(false);
+		}
+
+		if (appIsPhone()) {
+			setAppStage("article");
+		}
+
+		markQueueArrival(url).catch(console.error);
+		markWatchArrival(url).catch(console.error);
+
+		const keys = rowDiscussionKeys(entry);
+
+		if (keys.length) {
+			await markManySeen(keys);
+			await refreshAppSeen();
+		}
+
+		await openAppDiscussion(entry, { focus });
+	}
+
+	function openAppURL(url) {
+		const address = String(url || "");
+
+		if (!appState || !/^https?:/i.test(address)) {
+			return;
+		}
+
+		const row = appState.rowsByURL.get(normalizeURL(address) || address) || null;
+
+		openAppStory(row ? row.story : { url: address, title: "" }, { row }).catch(
+			console.error,
+		);
+	}
+
+	async function openAppDiscussion(row, { focus = "" } = {}) {
+		const state = appState;
+		const ui = state.ui;
+		const url = state.open?.url;
+		const generation = ++sidebarGeneration;
+
+		clearArticleAnnotations();
+		stopObservingNewComments();
+		forgetVisitSeenTimes();
+		renderedComments = [];
+		activeCommentFilter = null;
+		sidebarHasDiscussion = true;
+		setSidebarStage(ui, "discussion");
+
+		try {
+			const settings = await loadSettings();
+			const found = await discoverAll(pageAddresses(), settings);
+			const missingHN = [row?.story, ...(row?.also || [])]
+				.filter((story) => story?.source === "hn" && story.id)
+				.map((story) => String(story.id))
+				.filter(
+					(id) =>
+						!found.some(
+							(discussion) => discussion.source === "hn" && String(discussion.id) === id,
+						),
+				);
+			const recovered = missingHN.length
+				? (await loadStories(missingHN.map((id) => ({ objectID: id })))).map(hnDiscussion)
+				: [];
+			const loaded = await resolveDiscussions(dedupeDiscussions([...found, ...recovered]));
+
+			if (generation !== sidebarGeneration) {
+				return;
+			}
+
+			if (!loaded.length) {
+				sidebarHasDiscussion = false;
+				renderNoDiscussion(ui);
+				await refreshSubmitAffordance(ui.shadow);
+				return;
+			}
+
+			if (focus && url) {
+				await rememberPendingFocus(url, focus);
+			}
+
+			setSidebarStage(ui, "comments");
+			await renderDiscussions(loaded, ui);
+			await refreshSubmitAffordance(ui.shadow);
+			await refreshArticleAnnotations();
+		} catch (error) {
+			console.error(error);
+		} finally {
+			clearSidebarStage(ui);
+		}
+	}
+
+	async function rememberAppArrival(url) {
+		if (!url) {
+			return;
+		}
+
+		const row = appState?.open?.row;
+		const hn = [row?.story, ...(row?.also || [])].filter(
+			(story) => story?.source === "hn" && story.id,
+		);
+
+		await save(STORAGE.last, {
+			url,
+			source: hn.length ? "hn" : row?.story?.source || "",
+			ids: hn.map((story) => String(story.id)),
+			timestamp: Date.now(),
+			openPanel: true,
+		});
+	}
+
+	function paintAppArticleHead(url, title) {
+		const shadow = appState.ui.shadow;
+		const open = shadow.querySelector("#app-article-open");
+
+		shadow.querySelector("#app-article-site").textContent = url ? `(${hostLabel(url)})` : "";
+		shadow.querySelector("#app-article-title").textContent = title || "";
+		open.href = url || "";
+		open.hidden = !url;
+	}
+
+	function teardownAppArticle() {
+		const article = appState?.article;
+
+		if (article) {
+			article.dead = true;
+			clearInterval(article.helloTimer);
+			clearTimeout(article.graceTimer);
+			clearTimeout(article.capTimer);
+		}
+
+		if (appState) {
+			appState.article = null;
+			appReaderElement()?.remove();
+
+			if (activeDocumentSource === READER_DOCUMENT_SOURCE) {
+				activeDocumentSource = HTML_DOCUMENT_SOURCE;
+			}
+			appState.ui.shadow.querySelector("#app-article-body")?.replaceChildren();
+		}
+	}
+
+	function loadAppArticle(url, title = "") {
+		const state = appState;
+		const pane = state.ui.shadow.querySelector("#app-article-body");
+
+		teardownAppArticle();
+		paintAppArticleHead(url, title);
+
+		let http = false;
+
+		try {
+			http = new URL(url).protocol === "http:";
+		} catch {
+			http = false;
+		}
+
+		const article = {
+			url,
+			title,
+			http,
+			started: performance.now(),
+			loadedAt: null,
+			loads: 0,
+			reply: null,
+			origin: null,
+			everReplied: false,
+			probe: null,
+			probing: false,
+			reader: null,
+			frame: null,
+			mode: "wait",
+			dead: false,
+			helloTimer: 0,
+			graceTimer: 0,
+			capTimer: 0,
+		};
+
+		state.article = article;
+		pane.dataset.mode = "wait";
+
+		if (http) {
+			runAppArticleProbe(article).catch(console.error);
+			return;
+		}
+
+		const frame = document.createElement("iframe");
+
+		frame.className = "app-article-frame";
+		frame.name = APP_FRAME_NAME;
+		frame.title = title || hostLabel(url);
+		frame.setAttribute("sandbox", APP_FRAME_SANDBOX);
+		frame.setAttribute("referrerpolicy", "no-referrer");
+		frame.addEventListener("load", () => {
+			if (article.dead) {
+				return;
+			}
+
+			article.loads += 1;
+			article.loadedAt = performance.now();
+
+			if (article.loads > 1) {
+				article.reply = null;
+				article.origin = null;
+
+				if (article.everReplied) {
+					article.probe = { ok: false, refused: false, pdf: false, readerChars: 0 };
+				}
+
+				startAppHello(article);
+			}
+
+			clearTimeout(article.graceTimer);
+			article.graceTimer = setTimeout(() => tickAppArticle(article), APP_LOAD_GRACE_MS);
+			tickAppArticle(article);
+		});
+		frame.src = url;
+		article.frame = frame;
+		pane.appendChild(frame);
+		startAppHello(article);
+		article.capTimer = setTimeout(() => tickAppArticle(article), APP_FRAME_CAP_MS);
+	}
+
+	function startAppHello(article) {
+		clearInterval(article.helloTimer);
+
+		const hello = () => {
+			try {
+				article.frame?.contentWindow?.postMessage(
+					{ bc: APP_MESSAGE_VERSION, type: "hello" },
+					"*",
+				);
+			} catch {
+			}
+		};
+
+		hello();
+		article.helloTimer = setInterval(hello, APP_HELLO_MS);
+	}
+
+	function tickAppArticle(article) {
+		if (article.dead || article !== appState?.article) {
+			return;
+		}
+
+		const now = performance.now();
+		const plan = articleLoadPlan({
+			http: article.http,
+			reply: article.reply,
+			loaded: article.loadedAt !== null,
+			sinceLoad: article.loadedAt === null ? 0 : now - article.loadedAt,
+			sinceStart: now - article.started,
+			probe: article.probe,
+		});
+
+		if (plan === "wait") {
+			return;
+		}
+
+		if (plan === "probe") {
+			if (!article.probing) {
+				runAppArticleProbe(article).catch(console.error);
+			}
+
+			return;
+		}
+
+		applyAppArticleMode(article, plan);
+	}
+
+	function requestPage(url) {
+		return new Promise((resolve) => {
+			const failure = { ok: false, status: 0, finalUrl: url, headers: "", contentType: "", text: "" };
+
+			try {
+				GM.xmlHttpRequest({
+					method: "GET",
+					url,
+					timeout: 15000,
+					anonymous: true,
+					headers: { Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8" },
+					onload: (response) => {
+						const headers = response.responseHeaders || "";
+						const contentType = parseResponseHeaders(headers).get("content-type") || "";
+
+						resolve({
+							ok: response.status >= 200 && response.status < 400,
+							status: response.status,
+							finalUrl: response.finalUrl || url,
+							headers,
+							contentType,
+							text:
+								!contentType || /html|xml|text\/plain/i.test(contentType)
+									? String(response.responseText || "")
+									: "",
+						});
+					},
+					onerror: () => resolve(failure),
+					ontimeout: () => resolve(failure),
+				});
+			} catch {
+				resolve(failure);
+			}
+		});
+	}
+
+	async function runAppArticleProbe(article) {
+		article.probing = true;
+
+		const response = await requestPage(article.url);
+
+		if (article.dead) {
+			return;
+		}
+
+		const probe = {
+			ok: response.ok,
+			refused: response.ok && framingRefused(response.headers),
+			pdf: /application\/pdf/i.test(response.contentType),
+			readerChars: 0,
+		};
+
+		if (response.ok && !probe.pdf && (article.http || probe.refused || article.reply)) {
+			article.reader = extractReaderArticle(response.text, response.finalUrl || article.url);
+			probe.readerChars = article.reader?.chars || 0;
+		}
+
+		article.probe = probe;
+		article.probing = false;
+		tickAppArticle(article);
+	}
+
+	function applyAppArticleMode(article, mode) {
+		if (article.mode === mode) {
+			return;
+		}
+
+		const pane = appState.ui.shadow.querySelector("#app-article-body");
+
+		article.mode = mode;
+		pane.dataset.mode = mode;
+		clearTimeout(article.capTimer);
+
+		if (mode === "frame-agent" || mode === "frame") {
+			if (mode === "frame-agent") {
+				refreshArticleAnnotations().catch(console.error);
+			}
+
+			return;
+		}
+
+		clearInterval(article.helloTimer);
+		article.frame?.remove();
+		article.frame = null;
+
+		if (mode === "reader") {
+			showAppReader(article);
+			refreshArticleAnnotations().catch(console.error);
+		} else {
+			showAppCard(article);
+		}
+	}
+
+	function appReaderElement() {
+		return sidebar?.querySelector(":scope > .bc-reader") || null;
+	}
+
+	function appReaderScroller() {
+		return appState?.ui.shadow.querySelector(".app-reader-scroll") || null;
+	}
+
+	function ensureReaderStyles() {
+		if (document.getElementById("backchannel-reader-style")) {
+			return;
+		}
+
+		const style = document.createElement("style");
+
+		style.id = "backchannel-reader-style";
+		style.textContent = READER_CSS;
+		document.head.appendChild(style);
+	}
+
+	function showAppReader(article) {
+		const reader = article.reader;
+		const pane = appState.ui.shadow.querySelector("#app-article-body");
+
+		if (!reader || !sidebar) {
+			showAppCard(article);
+			return;
+		}
+
+		ensureReaderStyles();
+
+		const element = document.createElement("article");
+		const head = document.createElement("header");
+		const site = document.createElement("div");
+		const title = document.createElement("h1");
+		const body = document.adoptNode(reader.content);
+
+		element.className = "bc-reader";
+		element.slot = "reader";
+		head.className = "bc-reader-head";
+		site.className = "bc-reader-site";
+		site.textContent = reader.site;
+		title.className = "bc-reader-title";
+		title.textContent = reader.title;
+		head.append(site, title);
+
+		if (reader.byline) {
+			const byline = document.createElement("div");
+
+			byline.className = "bc-reader-byline";
+			byline.textContent = reader.byline;
+			head.append(byline);
+		}
+
+		body.className = "bc-reader-body";
+		element.append(head, body);
+		element.addEventListener("click", (event) => {
+			const link = event.target?.closest?.("a[href]");
+
+			if (
+				!link ||
+				event.button !== 0 ||
+				event.metaKey ||
+				event.ctrlKey ||
+				event.shiftKey ||
+				event.altKey
+			) {
+				return;
+			}
+
+			event.preventDefault();
+			openAppURL(link.href);
+		});
+
+		appReaderElement()?.remove();
+		sidebar.appendChild(element);
+
+		const scroller = document.createElement("div");
+
+		scroller.className = "app-reader-scroll";
+		scroller.innerHTML = '<slot name="reader"></slot>';
+		pane.appendChild(scroller);
+
+		if (!appState.ui.shadow.querySelector("#app-article-title").textContent) {
+			appState.ui.shadow.querySelector("#app-article-title").textContent = reader.title;
+		}
+	}
+
+	function showAppCard(article) {
+		const pane = appState.ui.shadow.querySelector("#app-article-body");
+		const card = document.createElement("div");
+		const title = document.createElement("div");
+		const note = document.createElement("div");
+		const open = document.createElement("a");
+
+		card.className = "app-article-note";
+		title.className = "app-card-title";
+		title.textContent = article.title || hostLabel(article.url);
+		note.textContent = hostLabel(article.url) + " can't be shown here.";
+		open.className = "item-action-link app-card-open";
+		open.href = article.url;
+		open.target = "_blank";
+		open.rel = "noopener";
+		open.textContent = "Open in a new tab";
+		open.onclick = () => {
+			rememberAppArrival(article.url).catch(console.error);
+		};
+		card.append(title, note, open);
+		pane.appendChild(card);
+	}
+
+	function postToFrame(message) {
+		const article = appState?.article;
+
+		if (!article?.frame?.contentWindow || !article.origin) {
+			return;
+		}
+
+		try {
+			article.frame.contentWindow.postMessage(
+				{ bc: APP_MESSAGE_VERSION, ...message },
+				article.origin,
+			);
+		} catch {
+		}
+	}
+
+	function onAppFrameHi(article, data) {
+		const url = String(data.url || article.url);
+		const title = String(data.title || "").trim();
+		const before = pageAddress();
+
+		setAppSubject({ url, canonical: String(data.canonical || ""), title: title || article.title });
+
+		if (title) {
+			appState.ui.shadow.querySelector("#app-article-title").textContent = title;
+		}
+
+		if (appState.open && !sameURL(pageAddress(), before)) {
+			appState.open.url = url;
+			openAppDiscussion(appState.open.row).catch(console.error);
+		}
+	}
+
+	function onAppMessage(event) {
+		const article = appState?.article;
+
+		if (!article?.frame || event.source !== article.frame.contentWindow) {
+			return;
+		}
+
+		const verdict = appFrameMessageVerdict(event.data, event.origin, article.origin);
+
+		if (!verdict) {
+			return;
+		}
+
+		const data = event.data;
+
+		if (data.type === "hi") {
+			article.origin = event.origin;
+			article.reply = { visible: Boolean(data.visible) };
+			article.everReplied = true;
+			clearInterval(article.helloTimer);
+			onAppFrameHi(article, data);
+			tickAppArticle(article);
+			return;
+		}
+
+		if (data.type === "open") {
+			openAppURL(String(data.url || ""));
+			return;
+		}
+
+		if (data.type === "annotated") {
+			receiveFrameGroups(data.groups);
+			return;
+		}
+
+		if (data.type === "focus-quote") {
+			applyCommentFilter(String(data.key || ""));
+
+			if (appIsPhone()) {
+				setAppStage("discussion");
+			}
+		}
+	}
+
+	async function refreshAppAnnotations() {
+		const article = appState.article;
+
+		if (article?.mode === "reader") {
+			await refreshLocalAnnotations();
+			return;
+		}
+
+		clearArticleAnnotations();
+
+		if (article?.mode !== "frame-agent" || !renderedComments.length) {
+			return;
+		}
+
+		const settings = await loadSettings();
+
+		if (!settings.annotations) {
+			clearCommentFilter({ animate: false });
+			return;
+		}
+
+		postToFrame({
+			type: "annotate",
+			comments: renderedComments.map(frameCommentPayload),
+			settings,
+		});
+	}
+
+	function frameCommentPayload(rendered) {
+		return {
+			id: rendered.id,
+			textHTML: rendered.textHTML || "",
+			local: Boolean(rendered.local),
+			author: rendered.author || "",
+			time: rendered.time || 0,
+		};
+	}
+
+	function remoteAnnotationController(groups) {
+		return {
+			remote: true,
+			groups,
+			groupsByKey: new Map(groups.map((group) => [group.key, group])),
+			setHeatRegions() {},
+			focusGroup(key) {
+				postToFrame({ type: "focus-group", key });
+			},
+			cleanup() {
+				postToFrame({ type: "clear" });
+			},
+		};
+	}
+
+	function receiveFrameGroups(raw) {
+		if (appState?.article?.mode !== "frame-agent") {
+			return;
+		}
+
+		const byId = new Map(renderedComments.map((rendered) => [rendered.id, rendered]));
+		const groups = (Array.isArray(raw) ? raw : [])
+			.map((group) => ({
+				key: String(group?.key || ""),
+				quoteText: String(group?.quoteText || ""),
+				fullQuoteText: String(group?.fullQuoteText || ""),
+				comments: (Array.isArray(group?.comments) ? group.comments : [])
+					.map((comment) => {
+						const rendered = byId.get(String(comment?.commentId || ""));
+
+						return rendered
+							? {
+									commentId: rendered.id,
+									local: Boolean(rendered.local),
+									element: rendered.element,
+									textElement: rendered.textElement,
+									author: rendered.author,
+									time: rendered.time,
+									commentText: rendered.textElement
+										? extractTextWithBreaks(rendered.textElement)
+										: "",
+									quoteText: String(comment.quoteText || ""),
+									quoteNormalized: String(comment.quoteNormalized || ""),
+									fullQuoteText: String(comment.fullQuoteText || ""),
+								}
+							: null;
+					})
+					.filter(Boolean),
+			}))
+			.filter((group) => group.key && group.comments.length);
+
+		clearSidebarQuoteMarks();
+
+		for (const rendered of renderedComments) {
+			rendered.matchedGroupKeys = new Set();
+		}
+
+		for (const group of groups) {
+			for (const comment of group.comments) {
+				byId.get(comment.commentId)?.matchedGroupKeys.add(group.key);
+			}
+		}
+
+		annotationController = remoteAnnotationController(groups);
+		decorateSidebarMatches(annotationController);
+
+		if (activeCommentFilter?.type === "quote") {
+			applyCommentFilter(activeCommentFilter.key, { scroll: false, animate: false });
+		}
+	}
+
+	function onAppKey(event) {
+		if (!appState || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+			return;
+		}
+
+		const path = event.composedPath();
+		const origin = path[0];
+
+		if (origin instanceof Element && origin.matches(EDITABLE_SELECTOR)) {
+			return;
+		}
+
+		const inList =
+			origin === document.body ||
+			origin === document.documentElement ||
+			path.some((node) => node?.id === "app-list" || node?.id === "app-rail");
+		const step = { j: 1, k: -1, ...(inList ? { ArrowDown: 1, ArrowUp: -1 } : {}) }[event.key];
+
+		if (step) {
+			event.preventDefault();
+			stepAppSelection(step);
+			return;
+		}
+
+		if (event.key === "o" && appState.open?.url) {
+			rememberAppArrival(appState.open.url).catch(console.error);
+			window.open(appState.open.url, "_blank", "noopener");
+		}
+	}
+
+	function stepAppSelection(step) {
+		const rows = [...appState.ui.shadow.querySelectorAll("#app-list-body .app-row")];
+
+		if (!rows.length) {
+			return;
+		}
+
+		const at = rows.findIndex((row) => row.classList.contains("is-open"));
+		const next =
+			at === -1
+				? rows[step > 0 ? 0 : rows.length - 1]
+				: rows[Math.min(rows.length - 1, Math.max(0, at + step))];
+
+		if (!next || next === rows[at]) {
+			return;
+		}
+
+		next.scrollIntoView({ block: "nearest" });
+		next.querySelector(".browse-title-link")?.click();
+	}
+
+	function appFrameMessageVerdict(data, origin, knownOrigin = null) {
+		if (!data || typeof data !== "object" || data.bc !== APP_MESSAGE_VERSION) {
+			return null;
+		}
+
+		if (data.type === "hi") {
+			try {
+				const url = new URL(String(data.url || ""));
+
+				return (url.protocol === "https:" || url.protocol === "http:") && url.origin === origin
+					? "hi"
+					: null;
+			} catch {
+				return null;
+			}
+		}
+
+		return knownOrigin && origin === knownOrigin ? "ok" : null;
+	}
+
+	function frameLinkTarget(event, here = location.href) {
+		if (
+			event.defaultPrevented ||
+			event.button !== 0 ||
+			event.metaKey ||
+			event.ctrlKey ||
+			event.shiftKey ||
+			event.altKey
+		) {
+			return null;
+		}
+
+		const link = event.target?.closest?.("a[href]");
+
+		if (!link || link.hasAttribute("download")) {
+			return null;
+		}
+
+		const target = (link.getAttribute("target") || "").trim().toLowerCase();
+
+		if (target && target !== "_self") {
+			return null;
+		}
+
+		let url;
+		let current;
+
+		try {
+			url = new URL(link.getAttribute("href"), here);
+			current = new URL(here);
+		} catch {
+			return null;
+		}
+
+		if (url.protocol !== "http:" && url.protocol !== "https:") {
+			return null;
+		}
+
+		if (
+			url.origin === current.origin &&
+			url.pathname === current.pathname &&
+			url.search === current.search
+		) {
+			return null;
+		}
+
+		return url.href;
+	}
+
+	function frameVisibility() {
+		const shown = (element) => {
+			if (!element) {
+				return false;
+			}
+
+			const style = getComputedStyle(element);
+
+			return style.display !== "none" && style.visibility !== "hidden";
+		};
+
+		return (
+			shown(document.documentElement) &&
+			shown(document.body) &&
+			(document.body.innerText || "").trim().length > 0
+		);
+	}
+
+	let frameAgentActive = false;
+	let frameGreeted = false;
+
+	function postToApp(message) {
+		if (!frameGreeted) {
+			return;
+		}
+
+		try {
+			window.parent.postMessage(
+				{ bc: APP_MESSAGE_VERSION, ...message },
+				START_PAGE_ORIGIN,
+			);
+		} catch {
+		}
+	}
+
+	function installFrameAgent() {
+		frameAgentActive = true;
+
+		window.addEventListener("message", (event) => {
+			if (event.source !== window.parent || event.origin !== START_PAGE_ORIGIN) {
+				return;
+			}
+
+			const data = event.data;
+
+			if (!data || typeof data !== "object" || data.bc !== APP_MESSAGE_VERSION) {
+				return;
+			}
+
+			if (data.type === "hello") {
+				frameGreeted = true;
+				postToApp({
+					type: "hi",
+					url: location.href,
+					canonical: canonicalHint(),
+					title: pageTitle(),
+					visible: frameVisibility(),
+				});
+				return;
+			}
+
+			if (data.type === "annotate") {
+				annotateFrame(data).catch(console.error);
+				return;
+			}
+
+			if (data.type === "focus-group") {
+				annotationController?.focusGroup(String(data.key || ""));
+				return;
+			}
+
+			if (data.type === "clear") {
+				clearFrameAnnotations();
+			}
+		});
+
+		document.addEventListener(
+			"click",
+			(event) => {
+				if (!frameGreeted) {
+					return;
+				}
+
+				const url = frameLinkTarget(event);
+
+				if (url) {
+					event.preventDefault();
+					postToApp({ type: "open", url });
+				}
+			},
+			true,
+		);
+	}
+
+	let frameComments = [];
+
+	function frameComment(raw) {
+		const textElement = document.createElement("div");
+
+		textElement.innerHTML = sanitizeHTML(String(raw?.textHTML || ""));
+
+		return {
+			id: String(raw?.id || ""),
+			textHTML: String(raw?.textHTML || ""),
+			local: Boolean(raw?.local),
+			author: String(raw?.author || ""),
+			time: Number(raw?.time) || 0,
+			element: null,
+			textElement,
+			matchedGroupKeys: new Set(),
+		};
+	}
+
+	function serializeAnnotationGroup(group) {
+		return {
+			key: group.key,
+			quoteText: group.quoteText || "",
+			fullQuoteText: group.fullQuoteText || "",
+			comments: group.comments.map((comment) => ({
+				commentId: comment.commentId,
+				quoteText: comment.quoteText || "",
+				quoteNormalized: comment.quoteNormalized || "",
+				fullQuoteText: comment.fullQuoteText || "",
+			})),
+		};
+	}
+
+	function clearFrameAnnotations() {
+		annotationController?.cleanup?.();
+		annotationController = null;
+	}
+
+	async function annotateFrame(data) {
+		clearFrameAnnotations();
+
+		const settings = data.settings && typeof data.settings === "object" ? data.settings : {};
+
+		if (!settings.annotations) {
+			return;
+		}
+
+		frameComments = (Array.isArray(data.comments) ? data.comments : []).map(frameComment);
+		activeDocumentSource = detectDocumentSource();
+
+		const index = buildArticleTextIndex();
+		const groups = buildAnnotationGroups(frameComments, index);
+		const controller = createAnnotationOverlay(groups, [], settings);
+
+		annotationController = controller;
+		postToApp({ type: "annotated", groups: groups.map(serializeAnnotationGroup) });
+
+		scheduleIdleTask(() => {
+			if (annotationController === controller) {
+				controller.setHeatRegions(buildHeatRegions(frameComments, index));
+			}
+		});
+	}
+
+	const APP_HELLO_MS = 200;
+	const APP_LOAD_GRACE_MS = 600;
+	const APP_FRAME_CAP_MS = 8000;
+	const READER_MIN_CHARS = 400;
+
+	function parseResponseHeaders(text) {
+		const headers = new Map();
+
+		for (const line of String(text || "").split(/\r?\n/)) {
+			const at = line.indexOf(":");
+
+			if (at < 1) {
+				continue;
+			}
+
+			const name = line.slice(0, at).trim().toLowerCase();
+			const value = line.slice(at + 1).trim();
+
+			headers.set(name, headers.has(name) ? headers.get(name) + "\n" + value : value);
+		}
+
+		return headers;
+	}
+
+	function cspSourceAdmits(source, parentOrigin) {
+		const expression = String(source || "").trim().toLowerCase();
+		let parent;
+
+		try {
+			parent = new URL(parentOrigin);
+		} catch {
+			return false;
+		}
+
+		if (!expression || expression.startsWith("'")) {
+			return false;
+		}
+
+		if (expression === "*") {
+			return parent.protocol === "https:" || parent.protocol === "http:";
+		}
+
+		if (/^[a-z][a-z0-9+.-]*:$/.test(expression)) {
+			return (
+				expression === parent.protocol ||
+				(expression === "http:" && parent.protocol === "https:")
+			);
+		}
+
+		const match =
+			/^(?:([a-z][a-z0-9+.-]*):\/\/)?(\*|\*\.[^:/]+|[^:/*]+)(?::(\d+|\*))?(?:\/.*)?$/.exec(
+				expression,
+			);
+
+		if (!match) {
+			return false;
+		}
+
+		const [, scheme, host, port] = match;
+
+		if (
+			scheme &&
+			scheme + ":" !== parent.protocol &&
+			!(scheme === "http" && parent.protocol === "https:")
+		) {
+			return false;
+		}
+
+		const hostMatches =
+			host === "*" ||
+			(host.startsWith("*.")
+				? parent.hostname.endsWith(host.slice(1))
+				: parent.hostname === host);
+
+		if (!hostMatches) {
+			return false;
+		}
+
+		const parentPort = parent.port || (parent.protocol === "https:" ? "443" : "80");
+
+		return !port || port === "*" || port === parentPort;
+	}
+
+	function frameAncestorsAdmit(sources, parentOrigin) {
+		const list = (sources || []).map((source) => String(source).trim()).filter(Boolean);
+
+		if (!list.length) {
+			return false;
+		}
+
+		if (list.length === 1 && list[0].toLowerCase() === "'none'") {
+			return false;
+		}
+
+		return list.some((source) => cspSourceAdmits(source, parentOrigin));
+	}
+
+	function framingRefused(headerText, parentOrigin = START_PAGE_ORIGIN) {
+		const headers = parseResponseHeaders(headerText);
+		const policies = (headers.get("content-security-policy") || "")
+			.split(/[\n,]/)
+			.map((policy) => policy.trim())
+			.filter(Boolean);
+		let governed = false;
+
+		for (const policy of policies) {
+			const directive = policy
+				.split(";")
+				.map((part) => part.trim().split(/\s+/))
+				.find(([name]) => name?.toLowerCase() === "frame-ancestors");
+
+			if (!directive) {
+				continue;
+			}
+
+			governed = true;
+
+			if (!frameAncestorsAdmit(directive.slice(1), parentOrigin)) {
+				return true;
+			}
+		}
+
+		if (governed) {
+			return false;
+		}
+
+		return (headers.get("x-frame-options") || "")
+			.split(/[\n,]/)
+			.map((value) => value.trim().toLowerCase())
+			.some((value) => value === "deny" || value === "sameorigin");
+	}
+
+	function articleLoadPlan({
+		http = false,
+		reply = null,
+		loaded = false,
+		sinceLoad = 0,
+		sinceStart = 0,
+		probe = null,
+	} = {}) {
+		if (reply?.visible) {
+			return "frame-agent";
+		}
+
+		if (probe) {
+			const readable = (probe.readerChars || 0) >= READER_MIN_CHARS;
+
+			if (http || reply || (probe.ok && probe.refused)) {
+				return readable ? "reader" : "card";
+			}
+
+			return "frame";
+		}
+
+		if (reply || http) {
+			return "probe";
+		}
+
+		if ((loaded && sinceLoad >= APP_LOAD_GRACE_MS) || sinceStart >= APP_FRAME_CAP_MS) {
+			return "probe";
+		}
+
+		return "wait";
+	}
+
+	const READER_MAX_BYTES = 3 * 1024 * 1024;
+
+	const READER_KEEP_TAGS = new Set(
+		"P H1 H2 H3 H4 H5 H6 A IMG FIGURE FIGCAPTION UL OL LI DL DT DD BLOCKQUOTE PRE CODE KBD SAMP EM STRONG B I U S SMALL SUB SUP MARK BR HR TABLE CAPTION THEAD TBODY TFOOT TR TH TD TIME ABBR Q CITE DEL INS".split(
+			" ",
+		),
+	);
+
+	const READER_DROP_TAGS = new Set(
+		"SCRIPT STYLE NOSCRIPT TEMPLATE IFRAME FRAME FRAMESET OBJECT EMBED APPLET FORM INPUT BUTTON SELECT TEXTAREA OPTION LABEL NAV ASIDE FOOTER SVG CANVAS VIDEO AUDIO SOURCE TRACK MAP AREA DIALOG MENU LINK META HEAD TITLE BASE MATH".split(
+			" ",
+		),
+	);
+
+	const READER_BLOCK_WRAPPERS = new Set(
+		"DIV SECTION ARTICLE MAIN HEADER CENTER ADDRESS DETAILS SUMMARY HGROUP".split(" "),
+	);
+
+	const READER_BLOCK_TAGS = new Set(
+		"P H1 H2 H3 H4 H5 H6 FIGURE UL OL DL BLOCKQUOTE PRE TABLE HR DIV SECTION ARTICLE MAIN HEADER CENTER ADDRESS DETAILS HGROUP".split(
+			" ",
+		),
+	);
+
+	function readerURL(value, base) {
+		try {
+			const url = new URL(String(value || "").trim(), base);
+
+			return url.protocol === "http:" || url.protocol === "https:" ? url : null;
+		} catch {
+			return null;
+		}
+	}
+
+	function firstSrcsetURL(srcset) {
+		return (
+			String(srcset || "")
+				.split(",")
+				.map((part) => part.trim().split(/\s+/)[0])
+				.find(Boolean) || ""
+		);
+	}
+
+	function readerImageSource(image, base) {
+		const candidates = [
+			image.getAttribute("data-src"),
+			image.getAttribute("data-original"),
+			image.getAttribute("data-lazy-src"),
+			image.getAttribute("src"),
+			firstSrcsetURL(image.getAttribute("srcset") || image.getAttribute("data-srcset")),
+		];
+
+		for (const candidate of candidates) {
+			if (!candidate || /^data:/i.test(candidate.trim())) {
+				continue;
+			}
+
+			const url = readerURL(candidate, base);
+
+			if (url) {
+				url.protocol = "https:";
+				return url.href;
+			}
+		}
+
+		return "";
+	}
+
+	function readerWrapperHoldsText(element) {
+		return [...element.childNodes].some((child) => {
+			if (child.nodeType === Node.TEXT_NODE) {
+				return Boolean(child.nodeValue.trim());
+			}
+
+			if (child.nodeType !== Node.ELEMENT_NODE) {
+				return false;
+			}
+
+			const tag = child.nodeName.toUpperCase();
+
+			return !READER_BLOCK_TAGS.has(tag) && !READER_DROP_TAGS.has(tag);
+		});
+	}
+
+	function readerElementPlan(element, base) {
+		const tag = element.nodeName.toUpperCase();
+
+		if (
+			READER_DROP_TAGS.has(tag) ||
+			element.hasAttribute("hidden") ||
+			element.getAttribute("aria-hidden") === "true"
+		) {
+			return { drop: true };
+		}
+
+		if (READER_BLOCK_WRAPPERS.has(tag)) {
+			return readerWrapperHoldsText(element) ? { paragraph: true } : { unwrap: true };
+		}
+
+		if (!READER_KEEP_TAGS.has(tag)) {
+			return { unwrap: true };
+		}
+
+		if (tag === "A") {
+			const url = readerURL(element.getAttribute("href"), base);
+
+			return url
+				? { attributes: [["href", url.href], ["rel", "noopener noreferrer"]] }
+				: { unwrap: true };
+		}
+
+		if (tag === "IMG") {
+			const src = readerImageSource(element, base);
+
+			if (!src) {
+				return { drop: true };
+			}
+
+			const attributes = [
+				["src", src],
+				["loading", "lazy"],
+				["referrerpolicy", "no-referrer"],
+			];
+			const alt = element.getAttribute("alt");
+
+			if (alt) {
+				attributes.push(["alt", alt]);
+			}
+
+			return { attributes };
+		}
+
+		if (tag === "TD" || tag === "TH") {
+			return {
+				attributes: ["colspan", "rowspan"]
+					.filter((name) => /^\d{1,3}$/.test(element.getAttribute(name) || ""))
+					.map((name) => [name, element.getAttribute(name)]),
+			};
+		}
+
+		if (tag === "OL" && /^-?\d{1,6}$/.test(element.getAttribute("start") || "")) {
+			return { attributes: [["start", element.getAttribute("start")]] };
+		}
+
+		return { attributes: [] };
+	}
+
+	function cleanReaderTree(node, base, inert) {
+		for (const child of [...node.childNodes]) {
+			if (child.nodeType === Node.COMMENT_NODE) {
+				child.remove();
+				continue;
+			}
+
+			if (child.nodeType !== Node.ELEMENT_NODE) {
+				continue;
+			}
+
+			const plan = readerElementPlan(child, base);
+
+			if (plan.drop) {
+				child.remove();
+				continue;
+			}
+
+			if (plan.unwrap || plan.paragraph) {
+				const holder = plan.paragraph
+					? inert.createElement("p")
+					: inert.createDocumentFragment();
+
+				while (child.firstChild) {
+					holder.appendChild(child.firstChild);
+				}
+
+				cleanReaderTree(holder, base, inert);
+				child.replaceWith(holder);
+				continue;
+			}
+
+			for (const attribute of [...child.attributes]) {
+				child.removeAttribute(attribute.name);
+			}
+
+			for (const [name, value] of plan.attributes) {
+				child.setAttribute(name, value);
+			}
+
+			cleanReaderTree(child, base, inert);
+		}
+	}
+
+	function readerTitle(doc, url) {
+		for (const candidate of [
+			doc.querySelector('meta[property="og:title"]')?.getAttribute("content"),
+			doc.querySelector('meta[name="twitter:title"]')?.getAttribute("content"),
+			doc.querySelector("h1")?.textContent,
+			doc.title,
+		]) {
+			const title = String(candidate || "").trim().replace(/\s+/g, " ");
+
+			if (title) {
+				return title;
+			}
+		}
+
+		return hostLabel(url);
+	}
+
+	function readerRoot(doc) {
+		const length = (element) =>
+			(element?.textContent || "").replace(/\s+/g, " ").trim().length;
+
+		for (const [candidate, floor] of [
+			[doc.querySelector("main article"), 800],
+			[doc.querySelector("article"), 800],
+			[doc.querySelector("main"), READER_MIN_CHARS],
+			[doc.querySelector("[role='main']"), READER_MIN_CHARS],
+		]) {
+			if (candidate && length(candidate) >= floor) {
+				return candidate;
+			}
+		}
+
+		return doc.body;
+	}
+
+	function extractReaderArticle(html, url) {
+		const text = String(html || "");
+
+		if (!text || text.length > READER_MAX_BYTES) {
+			return null;
+		}
+
+		const doc = new DOMParser().parseFromString(text, "text/html");
+
+		for (const junk of doc.querySelectorAll("script, style, noscript, template")) {
+			junk.remove();
+		}
+
+		const root = readerRoot(doc);
+
+		if (!root) {
+			return null;
+		}
+
+		const title = readerTitle(doc, url);
+		const byline = String(
+			doc.querySelector('meta[name="author"]')?.getAttribute("content") || "",
+		).trim();
+		const content = doc.createElement("div");
+
+		content.append(...root.childNodes);
+		cleanReaderTree(content, url, doc);
+
+		const lead = content.querySelector("h1, h2");
+
+		if (lead && lead.textContent.trim().replace(/\s+/g, " ") === title) {
+			lead.remove();
+		}
+
+		return {
+			title,
+			byline,
+			site: hostLabel(url),
+			content,
+			chars: (content.textContent || "").replace(/\s+/g, " ").trim().length,
+		};
+	}
+
+	function rowDiscussionKeys(row) {
+		return [row?.story, ...(row?.also || [])]
+			.filter(
+				(story) =>
+					story?.source && story.id !== undefined && story.id !== null && story.id !== "",
+			)
+			.map((story) => sourceKey(story.source, story.id));
+	}
+
+	function rowIsUnread(row, seen) {
+		return !rowDiscussionKeys(row).some((key) => Number(seen?.[key]) > 0);
+	}
+
+	function rowCarriesSource(row, sourceId) {
+		return [row?.story, ...(row?.also || [])].some((story) => story?.source === sourceId);
+	}
+
+	function appViewRows(rows, view, seen) {
+		if (view === "unread") {
+			return rows.filter((row) => rowIsUnread(row, seen));
+		}
+
+		if (String(view).startsWith("source:")) {
+			const sourceId = view.slice("source:".length);
+
+			return rows.filter((row) => rowCarriesSource(row, sourceId));
+		}
+
+		return rows;
+	}
+
+	function appViewCounts(rows, seen, sourceIds) {
+		const counts = { unread: 0, all: rows.length, sources: {} };
+
+		for (const id of sourceIds) {
+			counts.sources[id] = 0;
+		}
+
+		for (const row of rows) {
+			if (!rowIsUnread(row, seen)) {
+				continue;
+			}
+
+			counts.unread += 1;
+
+			for (const id of sourceIds) {
+				if (rowCarriesSource(row, id)) {
+					counts.sources[id] += 1;
+				}
+			}
+		}
+
+		return counts;
+	}
+
+	function markKeysSeen(seen, keys, now) {
+		const next = { ...seen };
+		const previous = {};
+
+		for (const key of keys) {
+			previous[key] = seen[key];
+			next[key] = now;
+		}
+
+		return { next, previous };
+	}
+
+	function restoreSeen(seen, previous) {
+		const next = { ...seen };
+
+		for (const [key, value] of Object.entries(previous)) {
+			if (value === undefined) {
+				delete next[key];
+			} else {
+				next[key] = value;
+			}
+		}
+
+		return next;
+	}
+
+	async function markManySeen(keys) {
+		const seen = (await load(STORAGE.seen, {})) || {};
+		const { next, previous } = markKeysSeen(seen, keys, Math.floor(Date.now() / 1000));
+
+		await save(STORAGE.seen, next);
+
+		return previous;
+	}
+
+	async function restoreManySeen(previous) {
+		const seen = (await load(STORAGE.seen, {})) || {};
+
+		await save(STORAGE.seen, restoreSeen(seen, previous));
+	}
+
+	function splitQueueEntries(entries, watching) {
+		const watchFor = (entry) =>
+			watching.find((watch) => queueEntryMatchesWatch(entry, watch)) || null;
+
+		return {
+			queued: entries.filter((entry) => !watchFor(entry)),
+			watched: entries.filter((entry) => watchFor(entry)),
+			watchFor,
+		};
 	}
 
 	// -------------------------
@@ -23775,7 +27027,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		}
 
 		if (onStartPage()) {
-			await runStartPagePass();
+			await runAppPass();
 			return;
 		}
 
@@ -23784,33 +27036,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		await runPagePass();
 	}
 
-	async function runStartPagePass() {
-		await documentReady();
-
-		await markQueueArrival().catch(console.error);
-		await markWatchArrival().catch(console.error);
-
-		const settings = await loadSettings();
-		const setupOnly = !enabledSourceIds(settings, registeredSourceIds()).length;
-
-		await openSidebar([], {
-			pageMode: true,
-			setupOnly,
-			browseOnly: !setupOnly,
-		});
-
-		if (!sidebar) {
+	async function runPagePass() {
+		if (appState) {
 			return;
 		}
 
-		document.documentElement.setAttribute("data-backchannel-installed", "1");
-
-		for (const node of document.querySelectorAll("[data-backchannel-promo]")) {
-			node.hidden = true;
-		}
-	}
-
-	async function runPagePass() {
 		if (isHiddenSite()) {
 			return;
 		}
@@ -23940,5 +27170,9 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		stopButtonSpinner(await createCollapsedButton(storyRefs));
 	}
 
-	init().catch(console.error);
+	if (window.top === window.self) {
+		init().catch(console.error);
+	} else {
+		installFrameAgent();
+	}
 })();

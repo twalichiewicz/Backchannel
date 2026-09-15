@@ -8,6 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.14] — 2026-09-14
+
+### Added
+
+- **backchnnl.app is a reader (#139).** With Backchannel installed, the page is
+  now four panes: a rail of views (Unread, All stories, Queue, Watching,
+  Collection, and one entry for each source with a front page), the stories, the
+  article itself, and what people said about it. A story counts as read once you
+  open it here, or once you have read its discussion anywhere else. Mark all
+  read clears a view and can be undone, and j and k move through the list. A
+  click anywhere on a story opens it, and the story list and the discussion each
+  resize from their edge. The discussion opens with the first story you pick.
+  Below 1100px the list slides over the article. On a phone the panes take
+  turns, the rail sits at the foot with a label under each view, pulling the
+  list down syncs it, and the stories run under Safari's bars.
+
+- **The article opens beside its discussion.** It loads in a frame, with
+  Backchannel running inside it, so quoted passages light up there as they do
+  on any page: pressing a highlight focuses the discussion on it, and pressing
+  a quote scrolls the article to its passage. A site that refuses to be framed
+  is read out instead, as a plain reading view in the panel's colors, and a page
+  with nothing readable offers a new tab. Links inside either open in the app.
+
+- **The site has a favicon.** The hand-drawn bird, on the green.
+
+### Changed
+
+- **Backchannel now loads in frames.** Everywhere except the reader's own
+  article frame it stops on its first line. In that frame it answers only
+  backchnnl.app.
+
+- **It may connect to any host, for one request.** When a page opened in the
+  reader gives no answer from its frame, Backchannel fetches it once, without
+  cookies, to read whether it may be framed and, if it may not, its text.
+  `@connect *` covers that request. Tampermonkey may ask before the first one to
+  a host outside the named list.
+
+### Fixed
+
+- **The wheel scrolls the stories on backchnnl.app.** It did nothing while the
+  pointer was over the list (#137). Each pane now scrolls on its own.
+
+- **No "Disable Backchannel here" on backchnnl.app.** The button offered to
+  switch off the page that is Backchannel (#138).
+
 ## [1.6.13.1] — 2026-09-05
 
 ### Fixed
