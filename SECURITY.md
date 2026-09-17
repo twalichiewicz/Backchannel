@@ -32,7 +32,9 @@ you will be credited in the changelog unless you would rather not be.
 Worth stating plainly, because the permissions are broad by necessity:
 
 - **It runs on every `http` and `https` page** you visit, injected by your
-  userscript manager.
+  userscript manager. Since 1.6.14 that includes frames inside those pages;
+  everywhere except the reader's own article frame on backchnnl.app it stops on
+  its first statement.
 - **It can make cross-origin requests**, via `GM.xmlHttpRequest`, restricted by
   the `@connect` header. Which hosts it *actually* contacts depends on which
   comment sources you have enabled:
@@ -52,12 +54,13 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Hypothes.is | `api.hypothes.is` | the URL of each page you visit, to find public annotations on it. No account, signed in or out |
   | *no source enabled* | none | nothing -- the script performs no lookup at all. Kind of weird to use it this way, but no judgements. |
 
-  Two hosts sit outside that table because they are not lookups:
+  Three hosts sit outside that table because they are not lookups:
 
   | Host | When | What it is told |
   | --- | --- | --- |
   | `old.reddit.com` | only when you press vote or reply | the comment you are acting on, in a popup window you can see. Nothing at page load |
   | `cdn.jsdelivr.net` | when your manager fetches the script's declared resources, and again from the page itself if it did not | nothing about you -- it is a file download of a fixed, versioned URL |
+  | the page you open in the reader on backchnnl.app | only when that page gives no answer from inside its frame | nothing but the request itself: one `GET` without cookies, to read whether it may be framed and, if it may not, its text |
 
 - **Enhanced PDF support downloads a copy of pdf.js.** The reader is
   [pdf.js](https://mozilla.github.io/pdf.js/), declared as two `@resource` files
@@ -78,14 +81,17 @@ Worth stating plainly, because the permissions are broad by necessity:
    - **None of this happens in Firefox.** Firefox reserves its built-in PDF viewer
   and lets no extension run there, userscript managers included, so on a PDF the
   script never starts: nothing is read, no host is contacted, and no button or
-  sidebar appears. This is a limit of the browser rather than a setting, and it
+  Sidebar appears. This is a limit of the browser rather than a setting, and it
   applies whatever Enhanced PDF support is set to.
 - **`@connect` is a ceiling, not a statement of use.** The header is static, so
   it lists every host any source *could* contact, including sources you have
   switched off. A disabled source issues no requests; the entry is a permission
-  the script is allowed but does not exercise.
+  the script is allowed but does not exercise. Since 1.6.14 it also lists `*`,
+  for the reader's one fetch of a page that will not answer from its frame.
+  Tampermonkey may ask before the first such request to a host outside the
+  named list.
 - **It stores data locally** through `GM.getValue` / `GM.setValue` -- settings,
-  per-site sidebar widths, the zoom level of the last forty sites you visited,
+  per-site Sidebar widths, the zoom level of the last forty sites you visited,
   button position, collapsed threads, seen-comment timestamps, remembered votes
   and favorites, your reading queue, the sites you have hidden, and anything you
   write in the notepad. Nothing is sent anywhere except the hosts above.
@@ -122,7 +128,17 @@ Worth stating plainly, because the permissions are broad by necessity:
   markup this script wrote.
 - **The UI renders inside shadow roots**, so page styles and page scripts do not
   reach into it by accident, and its styles do not leak onto the page.
-- **`@noframes`** keeps it out of iframes.
+- **Frames get almost nothing.** The script loads in frames, but anywhere
+  except a frame named `backchannel-article` it stops on its first statement. In
+  that frame, inside the reader on backchnnl.app, it answers only messages from
+  `https://backchnnl.app`, and tells that page only the frame's address, its
+  title, whether it is showing, which quotes it found, and which link was
+  pressed. It performs no lookup there and writes nothing to storage.
+- **The reader frames pages under a sandbox**, with no referrer and without
+  permission to navigate the reader itself, so a page that tries to break out of
+  its frame stays in it. A page read out instead is reduced by an allowlist to
+  reading markup (text, links, https images, lists, tables and code) before it
+  is shown.
 
 ## Exact table of what each source requests
 
@@ -149,6 +165,7 @@ source you have not switched on issues none of these.
 | Mastodon | `GET www.tootfinder.ch/rest/api/search/<domain>` | `<domain>` only, never the full address | No |
 | Mastodon (front page) | `GET mastodon.social/api/v1/trends/links?limit=40` | nothing about you, only what that instance is linking to | No |
 | Hypothes.is | `GET api.hypothes.is/api/search?url=<page>&limit=200` | `<page>` | No |
+| backchnnl.app reader, not a source | `GET <the page you opened>`, only when it gives no answer from its frame | nothing but the request itself | No, it is sent without cookies |
 | pdf.js, not a source | `GET cdn.jsdelivr.net/npm/pdfjs-dist@<version>/legacy/build/pdf.min.mjs` and `pdf.worker.min.mjs` | nothing about you, two fixed files at a pinned version | No |
 | no source enabled | none | nothing, no lookup is performed at all | -- |
 
