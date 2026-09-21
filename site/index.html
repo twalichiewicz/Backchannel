@@ -2,43 +2,271 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#237140">
 <title>Backchannel</title>
+<link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 
 <style>
   * {
     box-sizing: border-box;
   }
 
+  html,
   body {
+    height: 100%;
     margin: 0;
-    min-height: 100vh;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: system-ui, sans-serif;
-    color: white;
+    overscroll-behavior: none;
   }
 
-  /*
-   * The green is painted here rather than on body. Backchannel reads the page's
-   * own background to decide whether to draw itself light or dark, and this page
-   * is not a page it should match — with Theme: Detect it follows the system.
-   */
-  .promo-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: -1;
+  body {
+    font-family: system-ui, sans-serif;
+    color: white;
     background: rgb(35, 113, 64);
   }
 
-  /*
-   * Backchannel renders its panel into the page and sets this attribute.
-   * The centering flexbox above would otherwise make the panel one centered item.
-   */
-  html[data-backchannel-installed] body {
-    display: block;
+  .bezel {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    padding: calc(6px + env(safe-area-inset-top, 0px)) calc(6px + env(safe-area-inset-right, 0px)) 0 calc(6px + env(safe-area-inset-left, 0px));
+    background: rgb(35, 113, 64);
+  }
+
+  .screen {
+    position: relative;
+    flex: 1;
     min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    border-radius: 4.5px 4.5px 9px 9px;
+    background: rgb(28, 94, 53);
+  }
+
+  html[data-backchannel-installed] .screen {
+    display: block;
+    overflow: hidden;
+    background: #f6f6ef;
+  }
+
+  html[data-backchannel-installed]:not(:has([data-hnewhere-app])) .bezel {
+    display: none;
+  }
+
+  .chin {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    height: calc(30px + env(safe-area-inset-bottom, 0px));
+    padding: 0 0 env(safe-area-inset-bottom, 0px);
+    overflow: clip;
+    font: 11px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: rgba(255, 255, 255, .72);
+    transition: height .45s cubic-bezier(.22, .61, .36, 1);
+  }
+
+  .chin.is-privacy-open,
+  .chin:not([data-privacy-ready]):has(#privacy:target) {
+    height: calc(min(62vh, 30rem) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .chin-bar {
+    flex: 0 0 30px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 9px;
+    white-space: nowrap;
+  }
+
+  html[data-backchannel-dark] body,
+  html[data-backchannel-dark] .bezel {
+    background: #1b5732;
+  }
+
+  .chin-side {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .chin a {
+    color: inherit;
+    text-decoration: none;
+    text-underline-offset: 2px;
+  }
+
+  .chin a:hover {
+    color: white;
+    text-decoration: underline;
+  }
+
+  .chin a.chin-link {
+    text-decoration: underline dotted;
+  }
+
+  .chin a.chin-link:hover {
+    text-decoration: underline;
+  }
+
+  .chin a.chin-link[aria-expanded="true"] {
+    color: white;
+    text-decoration: underline;
+  }
+
+  .chin a.chin-install {
+    padding: 3px;
+    border-radius: 4px;
+    background: white;
+    color: color(srgb 0.1096 0.3705 0.2068);
+    text-decoration: none;
+    outline: 1px solid transparent;
+    outline-offset: 2px;
+    transition: background .15s, outline-color .15s;
+  }
+
+  .chin a.chin-install:hover {
+    background: #f9f9f9;
+    outline-color: white;
+  }
+
+  .chin-version {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  html:not([data-backchannel-installed]) .chin-version {
+    display: none;
+  }
+
+  .chin-sep {
+    opacity: .5;
+  }
+
+  .privacy-drawer {
+    flex: 1;
+    min-height: 0;
+    visibility: hidden;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity .25s, transform .25s, visibility 0s linear .45s;
+  }
+
+  .chin.is-privacy-open .privacy-drawer,
+  .chin:not([data-privacy-ready]):has(#privacy:target) .privacy-drawer {
+    visibility: visible;
+    opacity: 1;
+    transform: none;
+    transition-delay: 0s;
+  }
+
+  .chin.is-privacy-popping .privacy-drawer {
+    transition: none;
+    animation: privacy-pop .6s cubic-bezier(.2, .8, .2, 1);
+  }
+
+  @keyframes privacy-pop {
+    0% {
+      opacity: 0;
+      transform: translateY(18px) scaleY(.98);
+    }
+
+    65% {
+      opacity: 1;
+      transform: translateY(-6px) scaleY(1.01);
+    }
+
+    100% {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  .privacy-scroll {
+    height: 100%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 4px 9px 20px;
+  }
+
+  .privacy-scroll:focus-visible {
+    outline: none;
+  }
+
+  .privacy-body {
+    max-width: 44rem;
+    font: 13px/1.62 system-ui, sans-serif;
+    color: rgba(255, 255, 255, .72);
+  }
+
+  .privacy-body h2 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    font-weight: 400;
+    color: white;
+  }
+
+  .privacy-body h3,
+  .privacy-meta {
+    font: 9px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, .5);
+  }
+
+  .privacy-body h3 {
+    margin: 24px 0 6px;
+    font-weight: 400;
+  }
+
+  .privacy-body .privacy-meta {
+    margin: 0 0 20px;
+  }
+
+  .privacy-body p,
+  .privacy-body ul {
+    margin: 0 0 10px;
+  }
+
+  .privacy-body ul {
+    padding-left: 18px;
+  }
+
+  .privacy-body li {
+    margin-bottom: 5px;
+  }
+
+  .privacy-body strong {
+    color: white;
+    font-weight: 500;
+  }
+
+  .privacy-body a {
+    color: white;
+    text-decoration: underline dotted;
+  }
+
+  .privacy-body a:hover {
+    text-decoration: underline;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .chin,
+    .privacy-drawer {
+      transition: none;
+    }
+
+    .chin.is-privacy-popping .privacy-drawer {
+      animation: none;
+    }
   }
 
   .demo {
@@ -159,6 +387,23 @@
     transition: all .15s;
   }
 
+  @media (max-width: 700px) {
+    html[data-backchannel-installed]:has([data-hnewhere-app]) .bezel {
+      position: relative;
+      min-height: 100%;
+      padding: 0;
+    }
+
+    html[data-backchannel-installed]:has([data-hnewhere-app]) .screen {
+      overflow: visible;
+      border-radius: 0;
+    }
+
+    html[data-backchannel-installed]:has([data-hnewhere-app]) .chin {
+      display: none;
+    }
+  }
+
   @media (max-width: 640px) {
     .demo {
       width: calc(100% - 32px);
@@ -188,7 +433,9 @@
 
 <body>
 
-<div class="promo-backdrop" data-backchannel-promo></div>
+<div class="bezel">
+
+<main class="screen" id="backchannel-screen">
 
 <div class="demo" data-backchannel-promo>
 
@@ -237,6 +484,53 @@
       Learn more
     </a>
   </div>
+
+</div>
+
+</main>
+
+<footer class="chin">
+  <div class="chin-bar">
+    <span class="chin-side">
+      <span>&copy; 2026 <a href="https://triglavis.com/">Triglavis LLC</a></span>
+      <span class="chin-version"><span class="chin-sep">|</span> Backchannel <span data-backchannel-version></span></span>
+    </span>
+    <span class="chin-side">
+      <a class="chin-link" href="https://github.com/twalichiewicz/Backchannel">GitHub</a>
+      <a class="chin-link" href="#privacy" data-privacy aria-expanded="false" aria-controls="privacy">Privacy</a>
+      <a class="chin-install" href="https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js" data-backchannel-promo>Install</a>
+    </span>
+  </div>
+  <div class="privacy-drawer" id="privacy">
+    <div class="privacy-scroll" role="region" aria-label="Privacy policy" tabindex="-1">
+      <div class="privacy-body">
+        <h2>Privacy</h2>
+        <p class="privacy-meta">Triglavis LLC &middot; backchnnl.app &middot; Last updated 16 September 2026</p>
+
+        <h3>What this site collects</h3>
+        <p>Nothing. There are no cookies, no analytics, no tracking pixels and no third-party scripts on this page. <strong>Cloudflare</strong> hosts it and, like any host, receives each request for it.</p>
+
+        <h3>What the script does</h3>
+        <p>Backchannel has no server, no analytics and no telemetry. Nothing you read, write or save with it is sent to Triglavis.</p>
+        <ul>
+          <li>Your settings, queue, favorites, votes, notes, hidden sites and the comments you have seen stay in your userscript manager's storage, on your device.</li>
+          <li>To find discussions, it asks each source you have turned on about the page you are on. Most are told its address; Lobsters and Mastodon are told only its domain. A source you have turned off is asked nothing.</li>
+          <li><strong>Reddit</strong> is the only source that can tell who you are. Signed in, its requests arrive as your account.</li>
+          <li>Voting and replying happen in a window on that source's own site, using the session you already have there.</li>
+          <li>An article opened in the reader loads from the site that published it, with no referrer. If the page does not respond inside that frame, the script fetches it once, without cookies, to see whether it can be shown there and, if not, to show its text.</li>
+          <li>Enhanced PDF support uses pdf.js, downloaded from <strong>cdn.jsdelivr.net</strong>. That request carries nothing about you.</li>
+        </ul>
+        <p>Every host the script can contact, and exactly what each is told, is listed in <a href="https://github.com/twalichiewicz/Backchannel/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+
+        <h3>Your choices</h3>
+        <p>Turn any source off in Settings, or hide Backchannel on any site. Removing the script, or clearing your userscript manager's data, deletes everything it stored.</p>
+
+        <h3>Changes</h3>
+        <p>This policy changes in the open, alongside the code, and the date above moves with it. Questions go to <a href="https://github.com/twalichiewicz/Backchannel/issues">GitHub issues</a>.</p>
+      </div>
+    </div>
+  </div>
+</footer>
 
 </div>
 
@@ -676,6 +970,66 @@
     stopAudio();
     closeAllBirds();
   });
+
+  /*
+   * Privacy drawer.
+   */
+  const chin = document.querySelector(".chin");
+  const privacyToggle = chin.querySelector("[data-privacy]");
+  const privacyScroll = chin.querySelector(".privacy-scroll");
+
+  let privacyOpen = false;
+  let privacyPopTimer = null;
+
+  function setPrivacyOpen(open) {
+    privacyOpen = open;
+    chin.classList.toggle("is-privacy-open", open);
+    privacyToggle.setAttribute("aria-expanded", String(open));
+    privacyScroll.scrollTop = 0;
+
+    clearTimeout(privacyPopTimer);
+    chin.classList.toggle("is-privacy-popping", open);
+
+    if (open) {
+      privacyPopTimer = setTimeout(() => {
+        chin.classList.remove("is-privacy-popping");
+      }, 620);
+
+      privacyScroll.focus({ preventScroll: true });
+    } else if (chin.contains(document.activeElement)) {
+      privacyToggle.focus({ preventScroll: true });
+    }
+  }
+
+  privacyToggle.addEventListener("click", event => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    setPrivacyOpen(!privacyOpen);
+  });
+
+  document.addEventListener("keydown", event => {
+    if (
+      event.key === "Escape" &&
+      privacyOpen &&
+      (chin.contains(document.activeElement) || document.activeElement === document.body)
+    ) {
+      setPrivacyOpen(false);
+    }
+  });
+
+  chin.setAttribute("data-privacy-ready", "");
+
+  function openPrivacyFromHash() {
+    if (location.hash === "#privacy" && !privacyOpen) {
+      setPrivacyOpen(true);
+    }
+  }
+
+  window.addEventListener("hashchange", openPrivacyFromHash);
+  openPrivacyFromHash();
 
   /*
    * Initialize Web Audio after the first user interaction.
