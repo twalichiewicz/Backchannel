@@ -26046,6 +26046,15 @@ header .item-action-link {
 		--rail-knock:var(--rail-fg);
 	}
 
+	.rail-button:active:not(:disabled):not(.is-current) .rail-icon,
+	#settings-toggle.rail-button[aria-expanded="true"] .rail-icon {
+		background:rgba(255,255,255,.26);
+	}
+
+	#settings-toggle.rail-button[aria-expanded="true"] {
+		background:none;
+	}
+
 	.rail-label {
 		display:block;
 		font-size:11px;
