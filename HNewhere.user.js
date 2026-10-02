@@ -4386,7 +4386,7 @@ button {
 			position:absolute;
 			left:${Math.max(8, Math.min(chosen.left + window.scrollX, window.scrollX + window.innerWidth - 340))}px;
 			top:${chosen.top + window.scrollY + 8}px;
-			z-index:2147483646;
+			z-index:2147483647;
 		`;
 
 		const shadow = host.attachShadow({ mode: "open" });
@@ -4964,7 +4964,7 @@ button {
 			position:absolute;
 			left:${chosen.left + window.scrollX}px;
 			top:${chosen.top + window.scrollY + 6}px;
-			z-index:2147483646;
+			z-index:2147483647;
 		`;
 		wrapper.appendChild(
 			pdfReaderButton("Add note", () => {
@@ -14589,7 +14589,7 @@ ${[
 	box-sizing:border-box;
 	background:var(--bg);
 	color:var(--text);
-	z-index:2147483646;
+	z-index:2147483647;
 	display:flex;
 	flex-direction:column;
 	border-left:1px solid var(--border);
