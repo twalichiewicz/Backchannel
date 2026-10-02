@@ -28426,11 +28426,21 @@ ${settingsPanelHTML()}
 		const data = event.data;
 
 		if (data.type === "hi") {
+			const visible = Boolean(data.visible);
+			const changed = !article.reply || article.reply.visible !== visible;
+
 			article.origin = event.origin;
-			article.reply = { visible: Boolean(data.visible) };
+			article.reply = { visible };
 			article.everReplied = true;
-			clearInterval(article.helloTimer);
-			onAppFrameHi(article, data);
+
+			if (visible) {
+				clearInterval(article.helloTimer);
+			}
+
+			if (changed) {
+				onAppFrameHi(article, data);
+			}
+
 			tickAppArticle(article);
 			return;
 		}
@@ -28915,6 +28925,7 @@ ${settingsPanelHTML()}
 
 	const APP_HELLO_MS = 200;
 	const APP_LOAD_GRACE_MS = 600;
+	const APP_HIDDEN_GRACE_MS = 2000;
 	const APP_FRAME_CAP_MS = 8000;
 	const APP_FRAME_FIT_STEPS = 4;
 	const APP_FRAME_MIN_FIT = 0.5;
@@ -29060,8 +29071,14 @@ ${settingsPanelHTML()}
 			return "frame-agent";
 		}
 
+		const settled = (loaded && sinceLoad >= APP_HIDDEN_GRACE_MS) || sinceStart >= APP_FRAME_CAP_MS;
+
 		if (probe) {
 			const readable = (probe.readerChars || 0) >= READER_MIN_CHARS;
+
+			if (reply && !http && !settled) {
+				return "wait";
+			}
 
 			if (http || reply || (probe.ok && probe.refused)) {
 				return readable ? "reader" : "card";
