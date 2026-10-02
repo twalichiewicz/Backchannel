@@ -26953,8 +26953,18 @@ ${settingsPanelHTML()}
 		shadow
 			.querySelector("#app-discussion-back")
 			?.addEventListener("click", () => setAppStage("article"));
-		shadow.querySelector("#app-article").addEventListener("pointerdown", () => {
-			if (appIsNarrow()) {
+		shadow.addEventListener("pointerdown", (event) => {
+			const path = event.composedPath();
+			const inside = ["#app-list", "#app-rail", "#app-toggle-list"].some((selector) =>
+				path.includes(shadow.querySelector(selector)),
+			);
+
+			if (appIsNarrow() && !inside) {
+				setAppDrawer(false);
+			}
+		});
+		window.addEventListener("blur", () => {
+			if (appIsNarrow() && shadow.activeElement?.tagName === "IFRAME") {
 				setAppDrawer(false);
 			}
 		});
@@ -28570,6 +28580,11 @@ ${settingsPanelHTML()}
 			origin === document.body ||
 			origin === document.documentElement ||
 			path.some((node) => node?.id === "app-list" || node?.id === "app-rail");
+		if (event.key === "Escape" && appIsNarrow()) {
+			setAppDrawer(false);
+			return;
+		}
+
 		const step = { j: 1, k: -1, ...(inList ? { ArrowDown: 1, ArrowUp: -1 } : {}) }[event.key];
 
 		if (step) {
