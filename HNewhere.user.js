@@ -26768,7 +26768,13 @@ ${settingsPanelHTML()}
 		paintPaneToggles();
 
 		for (const query of ["(max-width: 700px)", "(max-width: 1100px)"]) {
-			window.matchMedia(query).addEventListener("change", settleAppList);
+			window.matchMedia(query).addEventListener("change", () => {
+				if (appLayout() === "narrow") {
+					setAppDrawer(!appRoot.classList.contains("has-story"));
+				}
+
+				settleAppList();
+			});
 		}
 
 		load(STORAGE.appPanes, null)
