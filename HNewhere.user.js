@@ -20227,6 +20227,18 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 	// #region hnewhere-test-export
 
+	function parseHNAge(title) {
+		const [iso = "", unix = ""] = String(title || "").trim().split(/\s+/);
+
+		if (/^\d+$/.test(unix)) {
+			return Number(unix);
+		}
+
+		const parsed = Date.parse(/(?:Z|[+-]\d\d:?\d\d)$/i.test(iso) ? iso : iso + "Z");
+
+		return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : 0;
+	}
+
 	function parseFrontPageRow(row) {
 		const id = Number(row.id);
 		const link = row.querySelector(".titleline > a");
@@ -20243,9 +20255,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			? parsed.href
 			: HN_ORIGIN + "/item?id=" + id;
 
-		const time = Number(
-			(subtext?.querySelector(".age")?.getAttribute("title") || "").split(/\s+/)[1],
-		);
+		const time = parseHNAge(subtext?.querySelector(".age")?.getAttribute("title"));
 
 		const commentLink = [...(subtext?.querySelectorAll("a") || [])].find((anchor) =>
 			/\bcomments?\b|\bdiscuss\b/i.test(anchor.textContent || ""),
@@ -20257,7 +20267,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			url,
 			by: subtext?.querySelector(".hnuser")?.textContent || "",
 			score: parseInt(subtext?.querySelector(".score")?.textContent || "", 10) || 0,
-			time: Number.isFinite(time) ? time : 0,
+			time,
 			descendants:
 				parseInt((commentLink?.textContent || "").replace(/\D+/g, ""), 10) || 0,
 			site: row.querySelector(".sitestr")?.textContent || "",
