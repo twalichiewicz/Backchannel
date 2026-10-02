@@ -24723,6 +24723,60 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	text-align:left;
 }
 
+#app-saved {
+	display:none;
+}
+
+.app-saved-menu {
+	min-width:184px;
+	padding:6px;
+}
+
+.app-saved-item {
+	display:flex;
+	align-items:center;
+	gap:10px;
+	width:100%;
+	padding:9px 10px;
+	border:0;
+	border-radius:6px;
+	background:none;
+	color:inherit;
+	font:inherit;
+	font-size:13px;
+	line-height:1.2;
+	text-align:left;
+	cursor:pointer;
+	-webkit-tap-highlight-color:transparent;
+}
+
+.app-saved-item:active {
+	background:var(--hover-tint);
+}
+
+.app-saved-item[aria-pressed="true"] {
+	background:var(--active-tint);
+	font-weight:600;
+}
+
+.app-saved-icon {
+	display:inline-flex;
+	flex:0 0 auto;
+}
+
+.app-saved-label {
+	flex:1 1 auto;
+}
+
+.app-saved-count {
+	font-size:11px;
+	opacity:.7;
+}
+
+.app-saved-count:empty {
+	display:none;
+}
+
 .app-view-menu[hidden] {
 	display:none;
 }
@@ -26046,13 +26100,23 @@ header .item-action-link {
 		--rail-knock:var(--rail-fg);
 	}
 
-	.rail-button:active:not(:disabled):not(.is-current) .rail-icon,
-	#settings-toggle.rail-button[aria-expanded="true"] .rail-icon {
+	#app-rail .rail-button:active:not(:disabled):not(.is-current) .rail-icon,
+	#app-rail .rail-button[aria-expanded="true"]:not(.is-current) .rail-icon {
 		background:rgba(255,255,255,.26);
 	}
 
-	#settings-toggle.rail-button[aria-expanded="true"] {
+	#app-rail .rail-button[aria-expanded="true"] {
 		background:none;
+	}
+
+	#app-saved {
+		display:flex;
+	}
+
+	#app-rail [data-app-view="queue"],
+	#app-rail [data-app-view="watching"],
+	#app-rail [data-app-view="collection"] {
+		display:none;
 	}
 
 	.rail-label {
@@ -26339,6 +26403,10 @@ header .item-action-link {
 		},
 	];
 
+	const APP_SAVED_ICON = APP_ICON(
+		'<path fill="currentColor" d="M1.5 4A1.5 1.5 0 0 1 3 2.5h3.3c.4 0 .78.16 1.06.44l1.2 1.06H13a1.5 1.5 0 0 1 1.5 1.5V12a1.5 1.5 0 0 1-1.5 1.5H3A1.5 1.5 0 0 1 1.5 12V4z"/>',
+	);
+
 	const APP_SETTINGS_ICON = APP_ICON(
 		'<path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>',
 	);
@@ -26404,6 +26472,15 @@ header .item-action-link {
 		return `<div id="app" data-stage="list">
 <div id="app-tip" class="app-tip" role="tooltip" hidden></div>
 <div id="app-settings-arrow" class="app-settings-arrow" hidden></div>
+<div id="app-saved-arrow" class="app-settings-arrow is-down" hidden></div>
+<div id="app-saved-menu" class="app-view-menu app-saved-menu" role="menu" aria-label="Saved" hidden>
+${APP_VIEWS.filter((view) => APP_FILLED_VIEWS.includes(view.id))
+	.map(
+		(view) =>
+			`<button class="app-saved-item" type="button" role="menuitem" data-app-view="${escapeHTML(view.id)}" aria-pressed="false"><span class="app-saved-icon">${view.icon}</span><span class="app-saved-label">${escapeHTML(view.label)}</span><span class="app-saved-count" data-app-badge="${escapeHTML(view.id)}"></span></button>`,
+	)
+	.join("\n")}
+</div>
 <div id="app-view-arrow" class="app-drop-arrow" aria-hidden="true" hidden></div>
 <div id="app-view-menu" class="app-view-menu" role="dialog" aria-label="Text settings" hidden>
 <div class="settings-head"><span class="settings-crumb-root">Text</span></div>
@@ -26421,6 +26498,7 @@ header .item-action-link {
 </div>
 <nav id="app-rail" aria-label="Views">
 ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).join("\n")}
+<button id="app-saved" class="rail-button" type="button" data-tip="Saved" aria-label="Saved" aria-haspopup="true" aria-expanded="false" aria-controls="app-saved-menu"><span class="rail-icon">${APP_SAVED_ICON}<span class="rail-badge" data-app-badge="saved"></span></span><span class="rail-label" aria-hidden="true">Saved</span></button>
 <div id="app-rail-rule" class="rail-rule" aria-hidden="true"></div>
 <div id="app-rail-sources"></div>
 <div class="rail-spacer"></div>
@@ -26774,6 +26852,28 @@ ${settingsPanelHTML()}
 		if (typeof ResizeObserver === "function") {
 			new ResizeObserver(() => paintAppFrameFit()).observe(shadow.querySelector("#app-article-body"));
 		}
+
+		const savedButton = shadow.querySelector("#app-saved");
+		const savedMenu = shadow.querySelector("#app-saved-menu");
+
+		savedButton.onclick = () => setAppSavedMenuOpen(savedMenu.hidden);
+
+		for (const item of savedMenu.querySelectorAll("[data-app-view]")) {
+			item.onclick = () => {
+				setAppSavedMenuOpen(false);
+				chooseAppView(item.dataset.appView);
+			};
+		}
+
+		shadow.addEventListener("pointerdown", (event) => {
+			const path = event.composedPath();
+
+			if (!savedMenu.hidden && !path.includes(savedMenu) && !path.includes(savedButton)) {
+				setAppSavedMenuOpen(false);
+			}
+		});
+		window.addEventListener("blur", () => setAppSavedMenuOpen(false));
+		window.addEventListener("resize", () => placeAppSavedMenu());
 
 		listToggle.onclick = () => {
 			if (appIsNarrow()) {
@@ -27256,12 +27356,14 @@ ${settingsPanelHTML()}
 	function paintAppRail() {
 		const state = appState;
 
-		for (const button of state.ui.shadow.querySelectorAll("#app-rail [data-app-view]")) {
+		for (const button of state.ui.shadow.querySelectorAll("#app-rail [data-app-view], #app-saved-menu [data-app-view]")) {
 			const current = button.dataset.appView === state.view;
 
 			button.classList.toggle("is-current", current);
 			button.setAttribute("aria-pressed", String(current));
 		}
+
+		state.ui.shadow.querySelector("#app-saved").classList.toggle("is-current", APP_FILLED_VIEWS.includes(state.view));
 
 		if (state.railFilled) {
 			paintAppRailFill(state.railFilled);
@@ -27627,6 +27729,8 @@ ${settingsPanelHTML()}
 			watching: unseenWatchCount(watches),
 		};
 
+		badges.saved = badges.queue + badges.watching;
+
 		for (const id of state.sourceIds) {
 			badges["source:" + id] = counts.sources[id];
 		}
@@ -27948,6 +28052,48 @@ ${settingsPanelHTML()}
 		wireRowWatchLink(holder.querySelector(".app-head-watch"), story, { reload: relist });
 
 		refreshFavoriteControls().catch(console.error);
+	}
+
+	function setAppSavedMenuOpen(open) {
+		const shadow = appState?.ui.shadow;
+		const menu = shadow?.querySelector("#app-saved-menu");
+		const button = shadow?.querySelector("#app-saved");
+
+		if (!menu || !button) {
+			return;
+		}
+
+		const show = Boolean(open);
+
+		menu.hidden = !show;
+		shadow.querySelector("#app-saved-arrow").hidden = !show;
+		button.setAttribute("aria-expanded", String(show));
+
+		if (show) {
+			hideAppTip();
+			placeAppSavedMenu();
+		}
+	}
+
+	function placeAppSavedMenu() {
+		const shadow = appState?.ui.shadow;
+		const menu = shadow?.querySelector("#app-saved-menu");
+		const button = shadow?.querySelector("#app-saved");
+		const arrow = shadow?.querySelector("#app-saved-arrow");
+
+		if (!menu || menu.hidden || !button || !arrow) {
+			return;
+		}
+
+		const box = button.getBoundingClientRect();
+		const width = menu.offsetWidth || 184;
+		const left = Math.min(Math.max(8, box.left + box.width / 2 - width / 2), window.innerWidth - width - 8);
+
+		menu.style.left = `${Math.round(left)}px`;
+		menu.style.top = "auto";
+		menu.style.bottom = `${Math.round(window.innerHeight - box.top + 10)}px`;
+		arrow.style.left = `${Math.round(box.left + box.width / 2 - 6)}px`;
+		arrow.style.top = `${Math.round(box.top - 16)}px`;
 	}
 
 	function setAppViewMenuOpen(open) {
@@ -28613,9 +28759,16 @@ ${settingsPanelHTML()}
 			origin === document.body ||
 			origin === document.documentElement ||
 			path.some((node) => node?.id === "app-list" || node?.id === "app-rail");
-		if (event.key === "Escape" && appIsNarrow()) {
-			setAppDrawer(false);
-			return;
+		if (event.key === "Escape") {
+			if (!appState.ui.shadow.querySelector("#app-saved-menu").hidden) {
+				setAppSavedMenuOpen(false);
+				return;
+			}
+
+			if (appIsNarrow()) {
+				setAppDrawer(false);
+				return;
+			}
 		}
 
 		const step = { j: 1, k: -1, ...(inList ? { ArrowDown: 1, ArrowUp: -1 } : {}) }[event.key];
