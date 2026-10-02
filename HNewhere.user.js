@@ -9559,7 +9559,7 @@ button {
 	<div class="browse-main">
 	<div class="story-title">
 	<a class="browse-title-link${isWriting ? " browse-quote" : ""}" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
-	${story.site && !isWriting ? `<span class="browse-site">(${escapeHTML(story.site)}${appState && !story.watchPlaceholder ? `, ${age}` : ""})</span>` : ""}
+	${story.site && !isWriting ? `<span class="browse-site">(${escapeHTML(story.site)}${appState && !story.watchPlaceholder && story.time ? `, ${age}` : ""})</span>` : ""}
 	</div>
 	<div class="story-meta">
 	${meta}
