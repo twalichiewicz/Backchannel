@@ -28227,7 +28227,7 @@ ${settingsPanelHTML()}
 
 		const probe = {
 			ok: response.ok,
-			refused: response.ok && framingRefused(response.headers),
+			refused: framingRefused(response.headers),
 			pdf: /application\/pdf/i.test(response.contentType),
 			readerChars: 0,
 		};
@@ -29080,7 +29080,7 @@ ${settingsPanelHTML()}
 				return "wait";
 			}
 
-			if (http || reply || (probe.ok && probe.refused)) {
+			if (http || reply || probe.refused) {
 				return readable ? "reader" : "card";
 			}
 
