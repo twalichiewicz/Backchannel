@@ -26792,7 +26792,11 @@ ${settingsPanelHTML()}
 		let listSaveTimer = 0;
 
 		load(STORAGE.appListWidth, null)
-			.then((width) => applyAppListWidth(appRoot, width))
+			.then((width) => {
+				if (applyAppListWidth(appRoot, width)) {
+					settleAppList();
+				}
+			})
 			.catch(console.error);
 
 		listHandle.addEventListener("pointerdown", (event) => {
