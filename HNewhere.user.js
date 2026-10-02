@@ -26453,6 +26453,7 @@ ${settingsPanelHTML()}
 			listSeq: 0,
 			countSeq: 0,
 			railFilled: null,
+			panesHidden: { list: false, discussion: false },
 		};
 	}
 
@@ -26578,20 +26579,44 @@ ${settingsPanelHTML()}
 		const discussionToggle = shadow.querySelector("#app-toggle-discussion");
 		let lastListWidth = appRoot.style.getPropertyValue("--app-list-width") || "300px";
 
-		const paneHidden = { list: false, discussion: false };
+		const paneHidden = appState.panesHidden;
 		const paneSlides = {};
 
 		const paintPaneToggles = () => {
-			for (const [toggle, hidden, name] of [
-				[listToggle, paneHidden.list, "the article list"],
-				[discussionToggle, paneHidden.discussion, "the discussion"],
-			]) {
-				const label = `${hidden ? "Show" : "Hide"} ${name}`;
+			const label = `${paneHidden.discussion ? "Show" : "Hide"} the discussion`;
 
-				toggle.setAttribute("aria-pressed", hidden ? "false" : "true");
-				toggle.setAttribute("aria-label", label);
-				toggle.title = label;
+			discussionToggle.setAttribute("aria-pressed", paneHidden.discussion ? "false" : "true");
+			discussionToggle.setAttribute("aria-label", label);
+			discussionToggle.title = label;
+			paintAppListToggle();
+		};
+
+		const openListColumn = (open) => {
+			const current = appRoot.style.getPropertyValue("--app-list-width");
+
+			if (open) {
+				if (current === "0px") {
+					appRoot.style.setProperty("--app-list-width", lastListWidth);
+				}
+
+				return;
 			}
+
+			if (current && current !== "0px") {
+				lastListWidth = current;
+			}
+
+			appRoot.style.setProperty("--app-list-width", "0px");
+		};
+
+		const settleAppList = () => {
+			const { column } = appListPlacement({ layout: appLayout(), hidden: paneHidden.list });
+
+			clearTimeout(paneSlides.list);
+			appRoot.classList.remove("list-moving", "list-out");
+			openListColumn(column);
+			appRoot.classList.toggle("list-hidden", !column);
+			paintAppListToggle();
 		};
 
 		const setPaneHidden = (pane, hidden, remember = true) => {
@@ -26605,22 +26630,9 @@ ${settingsPanelHTML()}
 			const moving = `${pane}-moving`;
 			const out = `${pane}-out`;
 			const openColumn = (open) => {
-				if (!list) {
-					return;
+				if (list) {
+					openListColumn(open);
 				}
-
-				if (open) {
-					appRoot.style.setProperty("--app-list-width", lastListWidth);
-					return;
-				}
-
-				const current = appRoot.style.getPropertyValue("--app-list-width");
-
-				if (current && current !== "0px") {
-					lastListWidth = current;
-				}
-
-				appRoot.style.setProperty("--app-list-width", "0px");
 			};
 
 			paneHidden[pane] = hidden;
@@ -26628,8 +26640,9 @@ ${settingsPanelHTML()}
 			clearTimeout(paneSlides[pane]);
 			appRoot.classList.remove(moving, out);
 
-			if (!remember || prefersReducedMotion() || (list && appIsNarrow())) {
-				openColumn(!hidden);
+			if (list && (!remember || prefersReducedMotion() || appLayout() !== "wide")) {
+				settleAppList();
+			} else if (!remember || prefersReducedMotion()) {
 				appRoot.classList.toggle(hiddenClass, hidden);
 			} else if (hidden) {
 				element.style.setProperty("--pane-width", `${Math.round(element.getBoundingClientRect().width)}px`);
@@ -26743,9 +26756,21 @@ ${settingsPanelHTML()}
 			new ResizeObserver(() => paintAppFrameFit()).observe(shadow.querySelector("#app-article-body"));
 		}
 
-		listToggle.onclick = () => setPaneHidden("list", !paneHidden.list);
+		listToggle.onclick = () => {
+			if (appIsNarrow()) {
+				setAppDrawer(!appRoot.classList.contains("list-open"));
+				return;
+			}
+
+			setPaneHidden("list", !paneHidden.list);
+		};
 		discussionToggle.onclick = () => setPaneHidden("discussion", !paneHidden.discussion);
 		paintPaneToggles();
+
+		for (const query of ["(max-width: 700px)", "(max-width: 1100px)"]) {
+			window.matchMedia(query).addEventListener("change", settleAppList);
+		}
+
 		load(STORAGE.appPanes, null)
 			.then((panes) => {
 				if (panes && typeof panes === "object") {
@@ -27339,8 +27364,49 @@ ${settingsPanelHTML()}
 		return window.matchMedia("(max-width: 1100px)").matches && !appIsPhone();
 	}
 
+	function appLayout() {
+		if (appIsPhone()) {
+			return "phone";
+		}
+
+		return appIsNarrow() ? "narrow" : "wide";
+	}
+
+	function appListPlacement({ layout = "wide", hidden = false, drawerOpen = false } = {}) {
+		if (layout === "phone") {
+			return { column: true, shown: true };
+		}
+
+		if (layout === "narrow") {
+			return { column: true, shown: drawerOpen };
+		}
+
+		return { column: !hidden, shown: !hidden };
+	}
+
+	function paintAppListToggle() {
+		const shadow = appState?.ui.shadow;
+		const toggle = shadow?.querySelector("#app-toggle-list");
+
+		if (!toggle) {
+			return;
+		}
+
+		const { shown } = appListPlacement({
+			layout: appLayout(),
+			hidden: appState.panesHidden.list,
+			drawerOpen: shadow.querySelector("#app").classList.contains("list-open"),
+		});
+		const label = `${shown ? "Hide" : "Show"} the article list`;
+
+		toggle.setAttribute("aria-pressed", shown ? "true" : "false");
+		toggle.setAttribute("aria-label", label);
+		toggle.title = label;
+	}
+
 	function setAppDrawer(open) {
 		appState?.ui.shadow.querySelector("#app")?.classList.toggle("list-open", Boolean(open));
+		paintAppListToggle();
 	}
 
 	function setAppStage(stage) {
