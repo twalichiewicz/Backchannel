@@ -1724,16 +1724,20 @@
 		);
 	}
 
+	const HTML_ENTITY_NAMES = new Map([["amp", "&"], ["lt", "<"], ["gt", ">"], ["quot", '"'], ["apos", "'"], ["nbsp", "\u00a0"]]);
+
 	function unescapeHTML(value) {
-		if (!value) {
-			return "";
-		}
+		return String(value || "").replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|[a-z]{2,6});/gi, (entity, body) => {
+			if (body[0] !== "#") {
+				return HTML_ENTITY_NAMES.get(body) ?? entity;
+			}
 
-		const holder = document.createElement("textarea");
+			const code = /^#x/i.test(body) ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
 
-		holder.innerHTML = value;
-
-		return holder.value;
+			return code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff)
+				? String.fromCodePoint(code)
+				: entity;
+		});
 	}
 
 	function redditDiscussion(post) {
