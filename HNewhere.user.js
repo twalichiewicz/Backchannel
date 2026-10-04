@@ -27073,6 +27073,11 @@ header .item-action-link {
 	color:var(--link);
 }
 
+.bc-reader-body :is(h1, h2, h3, h4, h5, h6) a {
+	color:inherit;
+	text-decoration:none;
+}
+
 .bc-reader img {
 	display:block;
 	max-width:100%;
@@ -30044,6 +30049,25 @@ ${settingsPanelHTML()}
 		document.head.appendChild(style);
 	}
 
+	function dropReaderImage(image, body) {
+		const figure = image.closest("figure");
+		let holder = image.parentElement;
+
+		image.remove();
+
+		if (figure && body.contains(figure) && !figure.querySelector("img, pre, table")) {
+			figure.remove();
+			return;
+		}
+
+		while (holder && holder !== body && !holder.textContent.trim() && !holder.querySelector("img, pre, table, hr")) {
+			const up = holder.parentElement;
+
+			holder.remove();
+			holder = up;
+		}
+	}
+
 	function showAppReader(article) {
 		const reader = article.reader;
 		const pane = appState.ui.shadow.querySelector("#app-article-body");
@@ -30079,6 +30103,16 @@ ${settingsPanelHTML()}
 		}
 
 		body.className = "bc-reader-body";
+
+		for (const image of body.querySelectorAll("img")) {
+			image.addEventListener("error", () => dropReaderImage(image, body));
+			image.addEventListener("load", () => {
+				if (image.naturalWidth <= 48 && image.naturalHeight <= 48) {
+					dropReaderImage(image, body);
+				}
+			});
+		}
+
 		element.append(head, body);
 		element.addEventListener("click", (event) => {
 			const link = event.target?.closest?.("a[href]");
