@@ -24587,12 +24587,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	transform:rotate(45deg);
 }
 
-.app-tip-count {
-	margin-left:6px;
-	font-weight:normal;
-	opacity:.75;
-}
-
 .rail-rule {
 	flex:0 0 auto;
 	width:20px;
@@ -28539,20 +28533,10 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		const count = button.querySelector(".rail-badge")?.textContent || "";
 		const box = button.getBoundingClientRect();
 		const frame = app.getBoundingClientRect();
 
-		tip.replaceChildren(document.createTextNode(label));
-
-		if (count) {
-			const extra = document.createElement("span");
-
-			extra.className = "app-tip-count";
-			extra.textContent = count;
-			tip.append(extra);
-		}
-
+		tip.textContent = label;
 		tip.style.left = `${Math.round(box.right + 10 - frame.left)}px`;
 		tip.style.top = `${Math.round(box.top + box.height / 2 - frame.top)}px`;
 		tip.hidden = false;
