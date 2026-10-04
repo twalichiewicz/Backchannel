@@ -28746,6 +28746,24 @@ ${settingsPanelHTML()}
 		menu.style.bottom = `${Math.round(window.innerHeight - box.top + 10)}px`;
 	}
 
+	function compactCount(count) {
+		const value = Math.max(0, Math.floor(Number(count) || 0));
+
+		if (value < 1000) {
+			return String(value);
+		}
+
+		if (value < 10000) {
+			return `${Math.floor(value / 100) / 10}k`;
+		}
+
+		if (value < 1000000) {
+			return `${Math.floor(value / 1000)}k`;
+		}
+
+		return `${Math.floor(value / 100000) / 10}m`;
+	}
+
 	function lowerAppSheet() {
 		const stage = appState?.ui.shadow.querySelector("#app")?.dataset.stage || "list";
 
@@ -28779,7 +28797,7 @@ ${settingsPanelHTML()}
 		}
 
 		discussion.setAttribute("aria-pressed", String(stage === "discussion"));
-		discussion.querySelector(".rail-badge").textContent = total ? (total > 999 ? "999+" : String(total)) : "";
+		discussion.querySelector(".rail-badge").textContent = total ? compactCount(total) : "";
 		const rail = shadow.querySelector("#app-rail");
 
 		shadow.querySelector("#app").style.setProperty("--app-rail-height", `${rail.offsetHeight}px`);
