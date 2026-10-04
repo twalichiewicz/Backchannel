@@ -12519,7 +12519,6 @@ header button svg {
 
 .settings-option.sub-option {
 	margin-left:20px;
-	font-size:11px;
 }
 
 .settings-option[hidden],
@@ -13018,7 +13017,7 @@ header button svg {
 }
 
 .settings-option-hint {
-	margin:3px 0 0 23px;
+	margin:1.5px 0 0 23px;
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
@@ -13367,6 +13366,18 @@ header button svg {
 
 .segment + .segment {
 	border-left:1px solid var(--help-border);
+}
+
+.settings-panel .settings-field .segmented {
+	display:grid;
+	grid-auto-flow:column;
+	grid-auto-columns:1fr;
+	width:fit-content;
+	max-width:100%;
+}
+
+.settings-panel .settings-field .segment span {
+	padding:4px 14px;
 }
 
 .segment input {
