@@ -23918,6 +23918,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 		const rectsByGroup = new Map();
 		let activeGroupKey = null;
+		let leaveTimer = 0;
 
 		const hoverQuery =
 			typeof window.matchMedia === "function"
@@ -23970,14 +23971,18 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 			node.addEventListener("pointerenter", () => {
 				if (hoverQuery?.matches !== false) {
+					clearTimeout(leaveTimer);
 					setActiveGroup(group.key);
 				}
 			});
 
 			node.addEventListener("pointerleave", () => {
-				if (activeGroupKey === group.key) {
-					setActiveGroup(null);
-				}
+				clearTimeout(leaveTimer);
+				leaveTimer = setTimeout(() => {
+					if (activeGroupKey === group.key) {
+						setActiveGroup(null);
+					}
+				}, 120);
 			});
 
 			node.addEventListener("focus", () => {
@@ -24155,6 +24160,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				scrollRangeIntoView(group.range);
 			},
 			cleanup() {
+				clearTimeout(leaveTimer);
 				window.removeEventListener("resize", scheduleRender);
 				window.removeEventListener("load", scheduleRender, true);
 				document.fonts?.removeEventListener?.("loadingdone", onFontsSettled);
