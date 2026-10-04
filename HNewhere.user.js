@@ -26579,13 +26579,15 @@ header .item-action-link {
 		top:45px;
 	}
 
-	#app[data-moving="article"] #app-article,
-	#app[data-moving="discussion"] #panel.app-docked {
+	#app[data-moving="article"] #app-article {
 		display:flex !important;
-		position:fixed;
-		inset:0;
+		position:absolute;
+		top:var(--app-move-top, 0px);
+		right:0;
+		left:0;
 		z-index:30;
-		height:auto;
+		height:100vh;
+		height:100lvh;
 		min-height:0;
 		overflow:hidden;
 	}
@@ -28607,6 +28609,7 @@ ${settingsPanelHTML()}
 		if (was === "list") {
 			const scroll = appState.scrolls.article || 0;
 
+			app.style.setProperty("--app-move-top", `${Math.round(window.scrollY)}px`);
 			app.dataset.moving = "article";
 
 			for (const piece of chrome) {
@@ -28642,6 +28645,7 @@ ${settingsPanelHTML()}
 		}
 
 		window.scrollTo(0, appState.scrolls.list || 0);
+		app.style.setProperty("--app-move-top", `${Math.round(window.scrollY)}px`);
 
 		const pieces = [article, ...chrome, ...(was === "discussion" ? [panel] : [])];
 
