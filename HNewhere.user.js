@@ -9508,12 +9508,14 @@ button {
 			const totalWord = totalComments === 1 ? "comment" : "comments";
 			const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
 	title="Go to the page and read what was said about it">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalWord}</a>`;
+			const sourceCount = new Set(discussions.map((each) => each.source || "hn")).size;
+			const sourcesTotal = `<span class="browse-sources-total">${totalComments}+ ${totalWord}${sourceCount > 1 ? ` across ${sourceCount} sources` : ""}</span>`;
 
 			if (appState) {
 				return `${rowQueueLink()}
 	${rowActions()}
 	${rowHideLink()}
-	${counted ? `|\n\t${commentTotal}` : ""}`.replace(/^\s*\|\s*/, "");
+	${counted ? `|\n\t${commentTotal}\n\t${sourcesTotal}` : ""}`.replace(/^\s*\|\s*/, "");
 			}
 
 			return `${
@@ -9565,7 +9567,17 @@ button {
 	${meta}
 	</div>
 	</div>
+	${appState && !isWriting ? `<button class="browse-more" type="button" aria-label="More" aria-haspopup="true">${APP_ICON('<circle cx="8" cy="2.8" r="1.9"/><circle cx="8" cy="8" r="1.9"/><circle cx="8" cy="13.2" r="1.9"/>')}</button>` : ""}
 	`;
+
+		const more = row.querySelector(".browse-more");
+
+		if (more) {
+			more.onclick = (event) => {
+				event.stopPropagation();
+				openAppRowMenu(row, more);
+			};
+		}
 
 		const total = row.querySelector(".browse-comments-total");
 
@@ -13507,12 +13519,11 @@ header button svg {
 }
 `;
 
-	function headerHTML({ subtitle = false, minimize = false, browse = false, hide = true, back = false, settings = true, title = "" } = {}) {
+	function headerHTML({ subtitle = false, minimize = false, browse = false, hide = true, settings = true, title = "" } = {}) {
 		return `
 <header>
 
 <span class="header-title">
-${back ? `<button id="app-discussion-back" class="item-action-link app-phone-only" type="button">&lsaquo; article</button>` : ""}
 ${
 	title
 		? `<span class="header-static-title">${escapeHTML(title)}</span>`
@@ -16065,7 +16076,7 @@ ${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-dock
 
 <div id="resize-handle" aria-hidden="true"></div>
 
-${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMode, back: appMode, settings: !appMode, title: appMode ? "Discussion" : "" })}
+${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMode, settings: !appMode, title: appMode ? "Discussion" : "" })}
 <div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><button id="compose-dock-close" class="compose-dock-close" type="button" aria-label="Close the composer" title="Close">&times;</button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
 ${appMode ? "" : settingsPanelHTML()}
 <div id="comments">
@@ -18832,6 +18843,11 @@ ${appMode ? "" : settingsPanelHTML()}
 	function paintAppDiscussionMeta(wrapper, stories, total) {
 		const shadow = appState?.ui.shadow;
 		const slot = shadow?.querySelector("#app-discussion-meta");
+
+		if (appState) {
+			appState.openTotal = total;
+			paintAppChrome();
+		}
 
 		if (!slot) {
 			return;
@@ -23312,6 +23328,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 		activeCommentFilter = filter;
 
+		if (appIsPhone() && options.scroll !== false) {
+			setAppStage("discussion");
+		}
+
 		const visibleCommentIds = getVisibleCommentIds([...directMatchIds]);
 
 		positionFilterBannerForComment(anchorElement);
@@ -25466,6 +25486,13 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	pointer-events:none;
 }
 
+.app-drop-arrow.is-down {
+	border-top:0;
+	border-left:0;
+	border-right:1px solid var(--surface-border);
+	border-bottom:1px solid var(--surface-border);
+}
+
 .app-drop-arrow[hidden] {
 	display:none;
 }
@@ -25984,8 +26011,22 @@ header .item-action-link {
 	text-decoration-color:currentColor;
 }
 
-.app-phone-only {
+#app-bar,
+#app-bar-back,
+#app-save-menu,
+#app-row-menu,
+#app-list-foot,
+#app-list-heading,
+.app-view-open-slot,
+.browse-more,
+.browse-sources-total,
+.app-settings-version,
+.app-settings-top .settings-credits-label {
 	display:none !important;
+}
+
+.app-settings-top-spacer {
+	flex:1 1 auto;
 }
 
 @media (min-width: 701px) {
@@ -26053,11 +26094,8 @@ header .item-action-link {
 		grid-row:2;
 		flex-direction:row;
 		justify-content:center;
-		justify-content:safe center;
 		gap:2px;
 		padding:5px 8px 4px;
-		overflow-x:auto;
-		overflow-y:hidden;
 		border-right:0;
 	}
 
@@ -26068,12 +26106,18 @@ header .item-action-link {
 	}
 
 	.rail-button {
+		position:relative;
 		flex-direction:column;
-		gap:3px;
+		gap:0;
 		width:auto;
-		min-width:52px;
-		height:auto;
-		padding:0 2px;
+		min-width:0;
+		height:38px;
+		padding:0;
+		overflow:visible;
+	}
+
+	.rail-button:has(.rail-badge:not(:empty)) {
+		padding-right:7px;
 	}
 
 	.rail-button.is-current {
@@ -26088,9 +26132,14 @@ header .item-action-link {
 		display:flex;
 		align-items:center;
 		justify-content:center;
-		width:44px;
-		height:28px;
-		border-radius:14px;
+		width:38px;
+		height:38px;
+		border-radius:19px;
+	}
+
+	#app-rail .rail-icon svg {
+		width:22px;
+		height:22px;
 	}
 
 	.rail-button.is-current .rail-icon {
@@ -26098,6 +26147,14 @@ header .item-action-link {
 		color:var(--rail-bg);
 		--rail-glyph:var(--rail-bg);
 		--rail-knock:var(--rail-fg);
+	}
+
+	#app-rail .rail-button:hover:not(:disabled):not(.is-current) {
+		background:none;
+	}
+
+	#app-rail .rail-button:hover:not(:disabled):not(.is-current):not([aria-expanded="true"]) .rail-icon {
+		background:rgba(255,255,255,.16);
 	}
 
 	#app-rail .rail-button:active:not(:disabled):not(.is-current) .rail-icon,
@@ -26120,16 +26177,7 @@ header .item-action-link {
 	}
 
 	.rail-label {
-		display:block;
-		font-size:11px;
-		line-height:1.2;
-		white-space:nowrap;
-		opacity:.82;
-	}
-
-	.rail-button.is-current .rail-label {
-		font-weight:600;
-		opacity:1;
+		display:none;
 	}
 
 	#app-list,
@@ -26151,18 +26199,261 @@ header .item-action-link {
 
 	#app:not([data-stage="list"]) #app-rail,
 	#app:not([data-stage="list"]) #app-list,
-	#app:not([data-stage="article"]) #app-article,
+	#app[data-stage="list"] #app-article,
 	#app:not([data-stage="discussion"]) #panel.app-docked {
 		display:none;
 	}
 
-	.app-list-resize,
-	#panel.app-docked #resize-handle {
+	#app-article {
+		min-height:100vh;
+		min-height:100dvh;
+		height:auto;
+	}
+
+	#app[data-stage="discussion"] #panel.app-docked,
+	#panel.app-docked.is-lowering {
+		display:flex !important;
+		position:fixed;
+		top:calc(72px + env(safe-area-inset-top, 0px));
+		right:0;
+		bottom:0;
+		left:0;
+		z-index:20;
+		flex-direction:column;
+		min-height:0;
+		height:auto;
+		overflow:hidden;
+		border-radius:18px 18px 0 0;
+		box-shadow:0 -10px 32px rgba(0,0,0,.24), 0 -1px 0 rgba(0,0,0,.06);
+	}
+
+	.app-article-body {
+		flex:0 0 auto;
+		min-height:100vh;
+		min-height:100dvh;
+		height:calc(var(--app-frame-height, 100dvh) * var(--app-zoom, 1) * var(--app-frame-fit, 1));
+	}
+
+	.app-article-frame {
+		height:max(var(--app-frame-height, 0px), calc(100dvh / (var(--app-zoom, 1) * var(--app-frame-fit, 1))));
+	}
+
+	.app-reader-scroll {
+		position:static;
+		overflow:visible;
+		overscroll-behavior:auto;
+	}
+
+	#panel.app-docked #comments {
+		flex:1 1 auto;
+		min-height:0;
+		overflow:auto;
+		overscroll-behavior:contain;
+		-webkit-overflow-scrolling:touch;
+	}
+
+	#app-bar {
+		display:flex !important;
+		position:fixed;
+		right:12px;
+		bottom:calc(16px + env(safe-area-inset-bottom, 0px));
+		z-index:25;
+		flex-direction:column;
+		align-items:center;
+		gap:8px;
+	}
+
+	#app-bar-back {
+		display:flex !important;
+		position:fixed;
+		left:12px;
+		bottom:calc(16px + env(safe-area-inset-bottom, 0px));
+		z-index:25;
+	}
+
+	#app-bar,
+	#app-bar-back {
+		transition:opacity .28s ease;
+	}
+
+	#app[data-scrolling] #app-bar,
+	#app[data-scrolling] #app-bar-back {
+		opacity:0;
+		pointer-events:none;
+	}
+
+	#app-bar[hidden],
+	#app-bar-back[hidden] {
+		display:none !important;
+	}
+
+	.app-stack-button {
+		display:flex;
+		position:relative;
+		flex-direction:column;
+		align-items:center;
+		justify-content:center;
+		gap:1px;
+		box-sizing:border-box;
+		width:36px;
+		height:36px;
+		margin:0;
+		padding:0;
+		border:0;
+		border-radius:18px;
+		background:var(--surface);
+		box-shadow:0 0 0 1px var(--surface-border), 0 1px 2px rgba(0,0,0,.16), 0 6px 14px rgba(0,0,0,.16);
+		color:var(--surface-text);
+		--icon-on:var(--surface-text);
+		font:inherit;
+		cursor:pointer;
+		-webkit-tap-highlight-color:transparent;
+	}
+
+	.app-stack-button::before {
+		content:"";
+		position:absolute;
+		inset:-4px;
+	}
+
+	.app-stack-button svg {
+		width:18px;
+		height:18px;
+		fill:currentColor;
+	}
+
+	#app-bar-more[aria-expanded="true"],
+	#app-bar-save[aria-expanded="true"],
+	#app-bar-discussion[aria-pressed="true"] {
+		background:var(--rail-bg);
+		box-shadow:0 1px 2px rgba(0,0,0,.16), 0 6px 14px rgba(0,0,0,.16);
+		color:var(--rail-fg);
+		--icon-on:var(--rail-fg);
+	}
+
+	#app-bar-discussion:has(.rail-badge:not(:empty)) {
+		height:50px;
+	}
+
+	#app-bar-discussion .rail-badge {
+		position:static;
+		min-width:0;
+		height:auto;
+		padding:0;
+		border-radius:0;
+		background:none;
+		box-shadow:none;
+		color:inherit;
+		font:600 10px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, sans-serif;
+	}
+
+	#app-save-menu {
+		display:block !important;
+	}
+
+	#app-save-menu[hidden] {
+		display:none !important;
+	}
+
+	.app-save-row {
+		display:flex;
+		align-items:center;
+		gap:4px;
+	}
+
+	.app-save-row .app-article-actions {
+		display:inline-flex;
+		align-items:center;
+		gap:4px;
+	}
+
+	.app-save-row .app-head-icon {
+		width:40px;
+		height:40px;
+	}
+
+	.app-view-open-slot {
+		display:block !important;
+		margin-top:8px;
+		padding-top:8px;
+		border-top:1px solid var(--surface-border);
+	}
+
+	#app-view-menu.app-view-plain .settings-head,
+	#app-view-menu.app-view-plain .settings-field:not(.app-view-open-slot) {
 		display:none;
 	}
 
-	.app-phone-only {
-		display:inline-flex !important;
+	#app-view-menu.app-view-plain .app-view-open-slot {
+		margin-top:0;
+		padding-top:0;
+		border-top:0;
+	}
+
+	.app-view-open-slot #app-article-open {
+		display:inline-flex;
+		align-items:center;
+		gap:8px;
+		width:auto;
+		height:auto;
+		padding:4px 0;
+		color:var(--surface-text);
+	}
+
+	.app-view-open-slot #app-article-open::after {
+		content:attr(aria-label);
+		font-size:12px;
+	}
+
+	#app:not([data-stage="list"]) #app-article {
+		padding-bottom:calc(88px + env(safe-area-inset-bottom, 0px));
+	}
+
+	#app:not([data-stage="list"]) .app-reader-scroll,
+	#app[data-moving="article"] .app-reader-scroll {
+		padding-top:calc(12px + env(safe-area-inset-top, 0px));
+	}
+
+	#app[data-stage="discussion"] #panel.app-docked #comments {
+		padding-bottom:calc(88px + env(safe-area-inset-bottom, 0px));
+	}
+
+	#app[data-stage="discussion"] #panel.app-docked .compose-dock {
+		top:45px;
+	}
+
+	#app[data-moving="article"] #app-article,
+	#app[data-moving="discussion"] #panel.app-docked {
+		display:flex !important;
+		position:fixed;
+		inset:0;
+		z-index:30;
+		height:auto;
+		min-height:0;
+		overflow:hidden;
+	}
+
+	#app[data-moving] #app-bar,
+	#app[data-moving] #app-bar-back {
+		z-index:31;
+	}
+
+	.app-list-resize,
+	#panel.app-docked #resize-handle,
+	#app-article > .app-pane-head,
+	#app-list > .app-pane-head {
+		display:none;
+	}
+
+	#app-list-foot {
+		display:flex !important;
+		justify-content:center;
+		padding:10px 0 4px;
+	}
+
+	#app-list-foot[hidden],
+	#app-list-body:not(:has(.browse-row)) + #app-list-foot {
+		display:none !important;
 	}
 
 	.app-wide-only {
@@ -26191,26 +26482,158 @@ header .item-action-link {
 		overflow:visible;
 	}
 
-	#app:not([data-stage="list"]) {
-		height:100vh;
-		height:100dvh;
-		overflow:hidden;
-	}
-
 	#app-list-body {
 		overflow:visible;
-		padding-bottom:88px;
+	}
+
+	#app-list {
+		padding-bottom:calc(var(--app-rail-height, 44px) + 36px + env(safe-area-inset-bottom, 0px));
+	}
+
+	#app-list-heading {
+		display:block !important;
+		padding:16px 16px 6px;
+		font:700 26px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+		letter-spacing:-.01em;
+	}
+
+	#app-list-body .browse-row {
+		position:relative;
+		align-items:center;
+		gap:10px;
+		padding:8px 44px 8px 12px;
+	}
+
+	#app-list-body .browse-more {
+		display:flex !important;
+		position:absolute;
+		top:50%;
+		right:4px;
+		align-items:center;
+		justify-content:center;
+		width:36px;
+		height:36px;
+		margin-top:-18px;
+		padding:0;
+		border:0;
+		border-radius:18px;
+		background:none;
+		color:var(--meta);
+		cursor:pointer;
+		-webkit-tap-highlight-color:transparent;
+	}
+
+	#app-list-body .browse-more svg {
+		width:18px;
+		height:18px;
+	}
+
+	#app-list-body .browse-more circle {
+		fill:currentColor;
+	}
+
+	#app-list-body .story-meta .browse-save-link,
+	#app-list-body .story-meta .item-action-link,
+	#app-list-body .story-meta .browse-hide-link,
+	#app-list-body .story-meta .browse-comments-total,
+	#app-list-body .story-meta .browse-watch-link {
+		display:none;
+	}
+
+	#app-list-body .story-meta {
+		font-size:0;
+		line-height:1;
+	}
+
+	#app-list-body .browse-sources-total {
+		display:inline !important;
+		color:var(--meta);
+		font-size:11px;
+		line-height:1.4;
+	}
+
+	#app-row-menu {
+		display:block !important;
+		min-width:150px;
+		padding:6px;
+	}
+
+	#app-row-menu[hidden] {
+		display:none !important;
 	}
 
 	#app-rail {
 		position:fixed;
-		left:0;
-		right:0;
-		bottom:0;
+		left:50%;
+		right:auto;
+		bottom:calc(14px + env(safe-area-inset-bottom, 0px));
 		z-index:10;
-		background:color-mix(in srgb, var(--rail-bg) 86%, transparent);
-		-webkit-backdrop-filter:blur(14px) saturate(1.3);
-		backdrop-filter:blur(14px) saturate(1.3);
+		width:max-content;
+		max-width:calc(100% - 24px);
+		padding:3px;
+		gap:6px;
+		border-radius:22px;
+		background:var(--rail-bg);
+		box-shadow:0 6px 20px rgba(0,0,0,.22), inset 0 0 0 1px rgba(255,255,255,.14);
+		transform:translateX(-50%);
+		overflow:visible;
+	}
+
+	#app-settings-modal {
+		padding:calc(12px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px));
+	}
+
+	.app-settings-dialog {
+		width:100%;
+		height:100%;
+		border-radius:14px;
+	}
+
+
+	.app-settings-body {
+		flex-direction:column;
+	}
+
+	.app-settings-nav {
+		flex:0 0 auto;
+		flex-direction:row;
+		gap:4px;
+		overflow-x:auto;
+		padding:8px 10px;
+		border-right:0;
+		border-bottom:1px solid var(--surface-divider);
+	}
+
+	.app-settings-tab {
+		flex:0 0 auto;
+	}
+
+	#app-settings-content {
+		padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px));
+	}
+
+	.app-settings-version {
+		display:inline !important;
+		margin-left:8px;
+		color:var(--meta);
+		font-size:12px;
+	}
+
+	.app-settings-top a[href$="/issues"] {
+		display:inline-flex;
+		align-items:center;
+		justify-content:center;
+		width:32px;
+		height:32px;
+		margin-right:2px;
+		border-radius:16px;
+		color:var(--surface-text);
+	}
+
+	.app-settings-top .settings-credits-mark {
+		display:block;
+		width:16px;
+		height:16px;
 	}
 }
 `;
@@ -26495,6 +26918,7 @@ ${APP_VIEWS.filter((view) => APP_FILLED_VIEWS.includes(view.id))
 <button id="app-zoom-in" type="button" class="stepper-button" aria-label="Bigger text">+</button>
 </div>
 </div>
+<div class="settings-field app-view-open-slot"></div>
 </div>
 <nav id="app-rail" aria-label="Views">
 ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).join("\n")}
@@ -26504,20 +26928,26 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div class="rail-spacer"></div>
 <button id="settings-toggle" class="rail-button" type="button" data-tip="Settings" aria-label="Open Backchannel settings" aria-expanded="false" aria-controls="settings-panel"><span class="rail-icon">${APP_SETTINGS_ICON}</span><span class="rail-label" aria-hidden="true">Settings</span></button>
 </nav>
+<button id="app-bar-back" class="app-stack-button" type="button" aria-label="Back to the articles" data-glyph="down" hidden>${APP_ICON('<path d="M2.2 5.1a1 1 0 0 1 1.4-.1L8 9l4.4-4a1 1 0 0 1 1.3 1.5l-5 4.6a1 1 0 0 1-1.4 0l-5-4.6a1 1 0 0 1-.1-1.4z"/>')}</button>
+<div id="app-row-menu" class="app-view-menu app-row-menu" role="menu" aria-label="This article" hidden></div>
+<div id="app-bar" class="app-bar" hidden><button id="app-bar-more" class="app-stack-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="More">${APP_ICON('<circle cx="8" cy="2.6" r="2.1"/><circle cx="8" cy="8" r="2.1"/><circle cx="8" cy="13.4" r="2.1"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-save-menu" aria-label="Save or watch">${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
+<div id="app-save-menu" class="app-view-menu app-save-menu" role="menu" aria-label="Save or watch" hidden><span class="app-save-row"></span></div>
 <section id="app-list" aria-label="Articles">
 <div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="app-head-icon" type="button" aria-label="Mark all as read" title="Mark all as read">${APP_MARK_READ_ICON}</button><button id="app-list-sync" class="app-head-icon" type="button" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button></span></div>
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
+<div id="app-list-heading" class="app-list-heading"></div>
 <div id="app-list-body"></div>
+<div id="app-list-foot" hidden><button id="app-list-mark-read" class="item-action-link" type="button">Mark all as read</button></div>
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
 <section id="app-article" aria-label="Article">
-<div class="app-pane-head"><button id="app-article-back" class="item-action-link app-phone-only" type="button">&lsaquo; articles</button><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><span id="app-article-tools-sep" class="app-head-sep" aria-hidden="true" hidden>|</span><button id="app-view-toggle" class="app-head-icon app-view-toggle app-wide-only" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button><button id="app-article-discussion" class="item-action-link app-phone-only" type="button">discussion &rsaquo;</button></div>
+<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><span id="app-article-tools-sep" class="app-head-sep" aria-hidden="true" hidden>|</span><button id="app-view-toggle" class="app-head-icon app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
 <div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick an article to read it here, with what people said about it beside it.</div></div>
 </section>
 ${settingsPanelHTML()}
 <div id="app-settings-modal" class="app-settings-modal" hidden>
 <div class="app-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
-<div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
+<div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><span class="app-settings-version" hidden></span><span class="app-settings-top-spacer"></span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
 <div class="app-settings-body">
 <nav class="app-settings-nav" aria-label="Settings sections">
 <button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
@@ -26551,6 +26981,9 @@ ${settingsPanelHTML()}
 			countSeq: 0,
 			railFilled: null,
 			panesHidden: { list: false, discussion: false },
+			scrolls: { list: 0, article: 0, discussion: 0 },
+			openTotal: 0,
+			moving: false,
 		};
 	}
 
@@ -26635,6 +27068,9 @@ ${settingsPanelHTML()}
 		});
 
 		shadow.querySelector("#app-mark-read").onclick = () => {
+			markAppViewRead().catch(console.error);
+		};
+		shadow.querySelector("#app-list-mark-read").onclick = () => {
 			markAppViewRead().catch(console.error);
 		};
 
@@ -26893,6 +27329,15 @@ ${settingsPanelHTML()}
 				}
 
 				settleAppList();
+				homeAppArticleActions();
+				setAppViewMenuOpen(false);
+				setAppSaveMenuOpen(false);
+
+				if (!appIsPhone() && appRoot.dataset.stage !== "list") {
+					appRoot.dataset.stage = "list";
+				}
+
+				paintAppChrome();
 			});
 		}
 
@@ -27071,11 +27516,63 @@ ${settingsPanelHTML()}
 			rememberAppArrival(appState?.open?.url).catch(console.error);
 		};
 
-		shadow.querySelector("#app-article-back").onclick = () => setAppStage("list");
-		shadow.querySelector("#app-article-discussion").onclick = () => setAppStage("discussion");
-		shadow
-			.querySelector("#app-discussion-back")
-			?.addEventListener("click", () => setAppStage("article"));
+		shadow.querySelector("#app-bar-back").onclick = () => setAppStage("list");
+		shadow.querySelector("#app-bar-discussion").onclick = () => setAppStage(appRoot.dataset.stage === "discussion" ? "article" : "discussion");
+		homeAppArticleActions();
+
+		const saveButton = shadow.querySelector("#app-bar-save");
+		const saveMenu = shadow.querySelector("#app-save-menu");
+
+		saveButton.onclick = () => setAppSaveMenuOpen(saveMenu.hidden);
+		shadow.addEventListener("pointerdown", (event) => {
+			const path = event.composedPath();
+
+			if (!saveMenu.hidden && !path.includes(saveMenu) && !path.includes(saveButton)) {
+				setAppSaveMenuOpen(false);
+			}
+
+			const rowMenu = shadow.querySelector("#app-row-menu");
+
+			if (!rowMenu.hidden && !path.includes(rowMenu) && !path.some((node) => node?.classList?.contains("browse-more"))) {
+				closeAppRowMenu();
+			}
+		});
+		shadow.querySelector("#app-bar-more").onclick = () => setAppViewMenuOpen(shadow.querySelector("#app-view-menu").hidden);
+		window.addEventListener("blur", () => setAppSaveMenuOpen(false));
+
+		let scrollTimer = 0;
+		const noteScrolling = () => {
+			if (!appIsPhone() || appRoot.dataset.stage === "list") {
+				return;
+			}
+
+			appRoot.dataset.scrolling = "1";
+			clearTimeout(scrollTimer);
+			scrollTimer = setTimeout(() => {
+				delete appRoot.dataset.scrolling;
+			}, 500);
+		};
+
+		window.addEventListener("scroll", noteScrolling, { passive: true });
+		shadow.querySelector("#comments")?.addEventListener("scroll", noteScrolling, { passive: true });
+		new ResizeObserver(() => paintAppChrome()).observe(shadow.querySelector("#app-rail"));
+		paintAppChrome();
+
+		const noteKeyboard = () => {
+			const view = window.visualViewport;
+			const covered = view ? Math.max(0, Math.round(window.innerHeight - view.height - view.offsetTop)) : 0;
+
+			appRoot.style.setProperty("--app-keyboard", `${covered}px`);
+		};
+
+		window.visualViewport?.addEventListener("resize", noteKeyboard);
+		window.visualViewport?.addEventListener("scroll", noteKeyboard);
+
+		watchPullDown(window, () => {
+			if (appIsPhone()) {
+				lowerAppSheet();
+			}
+		});
 		shadow.addEventListener("pointerdown", (event) => {
 			const path = event.composedPath();
 			const inside = ["#app-list", "#app-rail", "#app-toggle-list"].some((selector) =>
@@ -27152,6 +27649,10 @@ ${settingsPanelHTML()}
 		const nav = modal.querySelector(".app-settings-nav");
 		const credits = panel.querySelector(".settings-credits");
 		const report = credits?.querySelector('a[href$="/issues"]');
+		const version = modal.querySelector(".app-settings-version");
+		const close = shadow.querySelector("#app-settings-close");
+
+		version.textContent = SCRIPT_VERSION ? `v${SCRIPT_VERSION}` : "";
 
 		if (report) {
 			report.innerHTML = '<span class="settings-credits-label">Report an issue</span><svg class="settings-credits-mark" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M5.6 6.2a2.4 2.4 0 0 1 4.8 0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><rect x="4.7" y="6.2" width="6.6" height="7.6" rx="3.3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 8.2v5.4M4.7 8.4 2.6 7.2M4.7 10.6H2.4M5 12.6l-2 1.3M11.3 8.4l2.1-1.2M11.3 10.6h2.3M11 12.6l2 1.3M6.3 4.3 5.3 2.8M9.7 4.3l1-1.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -27214,7 +27715,23 @@ ${settingsPanelHTML()}
 				content.append(panel);
 
 				if (credits) {
-					nav?.append(credits);
+					if (appIsPhone()) {
+						credits.hidden = true;
+						version.hidden = !version.textContent;
+
+						if (report) {
+							close.before(report);
+						}
+					} else {
+						credits.hidden = false;
+						version.hidden = true;
+
+						if (report && report.parentElement !== credits) {
+							credits.prepend(report);
+						}
+
+						nav?.append(credits);
+					}
 				}
 
 				modal.hidden = false;
@@ -27238,19 +27755,6 @@ ${settingsPanelHTML()}
 		};
 
 		gear.onclick = (event) => {
-			if (appIsPhone()) {
-				if (panel.parentElement !== app) {
-					app.append(panel);
-				}
-
-				if (credits && credits.parentElement !== panel) {
-					panel.append(credits);
-				}
-
-				toggleDropdown?.(event);
-				return;
-			}
-
 			event.preventDefault();
 			event.stopPropagation();
 			setOpen(modal.hidden);
@@ -27343,6 +27847,59 @@ ${settingsPanelHTML()}
 		return view === "unread" || view === "all" || view.startsWith("source:");
 	}
 
+	function openAppRowMenu(row, button) {
+		const shadow = appState?.ui.shadow;
+		const menu = shadow?.querySelector("#app-row-menu");
+
+		if (!menu) {
+			return;
+		}
+
+		if (!menu.hidden && menu.dataset.row === row.dataset.storyId) {
+			closeAppRowMenu();
+			return;
+		}
+
+		const links = [...row.querySelectorAll(".story-meta button")].filter((link) => link.textContent.trim());
+
+		menu.replaceChildren(
+			...links.map((link) => {
+				const item = document.createElement("button");
+
+				item.type = "button";
+				item.className = "app-saved-item app-row-item";
+				item.textContent = link.textContent.trim();
+				item.onclick = (event) => {
+					event.stopPropagation();
+					closeAppRowMenu();
+					link.click();
+				};
+
+				return item;
+			}),
+		);
+		menu.dataset.row = row.dataset.storyId || "";
+		menu.hidden = false;
+
+		const box = button.getBoundingClientRect();
+		const width = menu.offsetWidth;
+		const height = menu.offsetHeight;
+		const below = box.bottom + 6 + height <= window.innerHeight - 8;
+
+		menu.style.left = `${Math.round(Math.max(8, Math.min(box.right - width, window.innerWidth - width - 8)))}px`;
+		menu.style.top = `${Math.round(below ? box.bottom + 6 : Math.max(8, box.top - 6 - height))}px`;
+		menu.style.bottom = "auto";
+	}
+
+	function closeAppRowMenu() {
+		const menu = appState?.ui.shadow.querySelector("#app-row-menu");
+
+		if (menu) {
+			menu.hidden = true;
+			delete menu.dataset.row;
+		}
+	}
+
 	function appViewLabel(view) {
 		if (view.startsWith("source:")) {
 			const id = view.slice("source:".length);
@@ -27370,7 +27927,9 @@ ${settingsPanelHTML()}
 		}
 
 		state.ui.shadow.querySelector("#app-mark-read").hidden = !appViewIsFrontPage(state.view);
+		state.ui.shadow.querySelector("#app-list-foot").hidden = !appViewIsFrontPage(state.view);
 		state.ui.shadow.querySelector("#app-list-title").textContent = appViewLabel(state.view);
+		state.ui.shadow.querySelector("#app-list-heading").textContent = appViewLabel(state.view);
 	}
 
 	function chooseAppView(view) {
@@ -27553,19 +28112,275 @@ ${settingsPanelHTML()}
 	function setAppStage(stage) {
 		const app = appState?.ui.shadow.querySelector("#app");
 
-		if (!app || app.dataset.stage === stage) {
+		if (!app) {
 			return;
 		}
 
-		if (app.dataset.stage === "list") {
-			appState.listScrollY = window.scrollY;
+		const was = app.dataset.stage || "list";
+
+		if (was === stage || appState.moving) {
+			return;
+		}
+
+		if (appIsPhone() && !prefersReducedMotion()) {
+			moveAppStage(was, stage);
+			return;
+		}
+
+		if (appIsPhone()) {
+			noteAppStageScroll(was);
 		}
 
 		app.dataset.stage = stage;
+		paintAppChrome();
 
 		if (appIsPhone()) {
-			window.scrollTo(0, stage === "list" ? appState.listScrollY || 0 : 0);
+			restoreAppStageScroll(was, stage);
 		}
+	}
+
+	function appDocumentStage(stage) {
+		return stage === "discussion" ? "article" : stage;
+	}
+
+	function noteAppStageScroll(stage) {
+		appState.scrolls[appDocumentStage(stage)] = window.scrollY;
+
+		if (stage === "discussion") {
+			appState.scrolls.discussion = appState.ui.shadow.querySelector("#comments")?.scrollTop || 0;
+		}
+	}
+
+	function restoreAppStageScroll(was, stage) {
+		if (appDocumentStage(was) !== appDocumentStage(stage)) {
+			window.scrollTo(0, appState.scrolls[appDocumentStage(stage)] || 0);
+		}
+
+		if (stage === "discussion") {
+			const comments = appState.ui.shadow.querySelector("#comments");
+
+			if (comments) {
+				comments.scrollTop = appState.scrolls.discussion || 0;
+			}
+		}
+	}
+
+	function paintAppScrollPadding() {
+		const stage = appState?.ui.shadow.querySelector("#app")?.dataset.stage || "list";
+
+		document.documentElement.style.scrollPaddingTop = appIsPhone() && stage !== "list" ? "calc(40px + env(safe-area-inset-top, 0px))" : "";
+		document.documentElement.style.overflowY = appIsPhone() && stage === "discussion" ? "hidden" : "";
+	}
+
+	function moveAppStage(was, stage) {
+		const shadow = appState.ui.shadow;
+		const app = shadow.querySelector("#app");
+		const article = shadow.querySelector("#app-article");
+		const panel = shadow.querySelector("#panel");
+		const chrome = [shadow.querySelector("#app-bar"), shadow.querySelector("#app-bar-back")];
+		const timing = (up) => ({ duration: up ? 320 : 260, easing: "cubic-bezier(.32,.72,0,1)", fill: "both" });
+		const frames = (up, far) => (up ? [{ transform: `translateY(${far})` }, { transform: "translateY(0)" }] : [{ transform: "translateY(0)" }, { transform: `translateY(${far})` }]);
+		const settle = (motions) =>
+			Promise.all(motions.map((motion) => motion.finished))
+				.catch(() => {})
+				.then(() => {
+					for (const motion of motions) {
+						motion.cancel();
+					}
+				});
+
+		noteAppStageScroll(was);
+		appState.moving = true;
+		setAppSaveMenuOpen(false);
+		setAppViewMenuOpen(false);
+
+		const raiseSheet = () => {
+			const comments = shadow.querySelector("#comments");
+
+			if (comments) {
+				comments.scrollTop = appState.scrolls.discussion || 0;
+			}
+
+			return settle([panel.animate(frames(true, "100%"), timing(true))]);
+		};
+
+		if (was === "article" && stage === "discussion") {
+			app.dataset.stage = "discussion";
+			paintAppChrome();
+			raiseSheet().then(() => {
+				appState.moving = false;
+			});
+			return;
+		}
+
+		if (was === "discussion" && stage === "article") {
+			settle([panel.animate(frames(false, "100%"), timing(false))]).then(() => {
+				app.dataset.stage = "article";
+				paintAppChrome();
+				appState.moving = false;
+			});
+			return;
+		}
+
+		if (was === "list") {
+			const scroll = appState.scrolls.article || 0;
+
+			app.dataset.moving = "article";
+
+			for (const piece of chrome) {
+				piece.hidden = false;
+			}
+
+			article.scrollTop = scroll;
+			settle([article.animate(frames(true, "100%"), timing(true)), ...chrome.map((piece) => piece.animate(frames(true, "100vh"), timing(true)))]).then(() => {
+				delete app.dataset.moving;
+				article.scrollTop = 0;
+				app.dataset.stage = stage;
+				paintAppChrome();
+				window.scrollTo(0, scroll);
+
+				if (stage === "discussion") {
+					return raiseSheet();
+				}
+
+				return null;
+			}).then(() => {
+				appState.moving = false;
+			});
+			return;
+		}
+
+		app.dataset.moving = "article";
+		article.scrollTop = window.scrollY;
+		app.dataset.stage = "list";
+		paintAppChrome();
+
+		for (const piece of chrome) {
+			piece.hidden = false;
+		}
+
+		window.scrollTo(0, appState.scrolls.list || 0);
+
+		const pieces = [article, ...chrome, ...(was === "discussion" ? [panel] : [])];
+
+		if (was === "discussion") {
+			panel.classList.add("is-lowering");
+		}
+
+		settle(pieces.map((piece) => piece.animate(frames(false, piece === article ? "100%" : "100vh"), timing(false)))).then(() => {
+			delete app.dataset.moving;
+			panel.classList.remove("is-lowering");
+			article.scrollTop = 0;
+			paintAppChrome();
+			window.scrollTo(0, appState.scrolls.list || 0);
+			appState.moving = false;
+		});
+	}
+
+	function watchPullDown(target, onPull, zone = APP_PULL_ZONE) {
+		let from = null;
+		const start = (y) => {
+			from = window.scrollY <= 0 && y <= zone ? y : null;
+		};
+		const end = (y) => {
+			if (from !== null && y - from >= 80 && window.scrollY <= 0) {
+				onPull();
+			}
+
+			from = null;
+		};
+
+		target.addEventListener("pointerdown", (event) => start(event.clientY));
+		target.addEventListener("pointerup", (event) => end(event.clientY));
+		target.addEventListener("touchstart", (event) => start(event.touches[0]?.clientY ?? -1), { passive: true });
+		target.addEventListener("touchend", (event) => end(event.changedTouches[0]?.clientY ?? -1), { passive: true });
+	}
+
+	function homeAppArticleActions() {
+		const shadow = appState?.ui.shadow;
+		const middle = shadow?.querySelector(".app-pane-middle");
+
+		if (!middle) {
+			return;
+		}
+
+		const actions = shadow.querySelector("#app-article-actions");
+		const toggle = shadow.querySelector("#app-view-toggle");
+		const open = shadow.querySelector("#app-article-open");
+		const sep = shadow.querySelector("#app-article-tools-sep");
+
+		if (appIsPhone()) {
+			shadow.querySelector("#app-save-menu .app-save-row").append(actions);
+			shadow.querySelector("#app-view-menu .app-view-open-slot").append(open);
+			return;
+		}
+
+		if (actions.parentElement !== middle) {
+			sep.before(actions);
+			toggle.after(open);
+		}
+	}
+
+	function setAppSaveMenuOpen(open) {
+		const shadow = appState?.ui.shadow;
+		const menu = shadow?.querySelector("#app-save-menu");
+		const button = shadow?.querySelector("#app-bar-save");
+
+		if (!menu || !button) {
+			return;
+		}
+
+		const show = Boolean(open);
+
+		menu.hidden = !show;
+		button.setAttribute("aria-expanded", String(show));
+
+		if (!show) {
+			return;
+		}
+
+		hideAppTip();
+
+		const box = button.getBoundingClientRect();
+		const width = menu.offsetWidth;
+
+		menu.style.left = `${Math.round(Math.max(8, Math.min(box.left + box.width / 2 - width / 2, window.innerWidth - width - 8)))}px`;
+		menu.style.top = "auto";
+		menu.style.bottom = `${Math.round(window.innerHeight - box.top + 10)}px`;
+	}
+
+	function lowerAppSheet() {
+		const stage = appState?.ui.shadow.querySelector("#app")?.dataset.stage || "list";
+
+		if (stage === "discussion") {
+			setAppStage("article");
+		} else if (stage === "article") {
+			setAppStage("list");
+		}
+	}
+
+	function paintAppChrome() {
+		const shadow = appState?.ui.shadow;
+		const bar = shadow?.querySelector("#app-bar");
+
+		if (!bar) {
+			return;
+		}
+
+		paintAppScrollPadding();
+
+		const stage = shadow.querySelector("#app").dataset.stage || "list";
+		const total = appState.openTotal;
+		const discussion = shadow.querySelector("#app-bar-discussion");
+
+		bar.hidden = stage === "list";
+		shadow.querySelector("#app-bar-back").hidden = stage === "list";
+
+		discussion.setAttribute("aria-pressed", String(stage === "discussion"));
+		discussion.querySelector(".rail-badge").textContent = total ? (total > 999 ? "999+" : String(total)) : "";
+		const rail = shadow.querySelector("#app-rail");
+
+		shadow.querySelector("#app").style.setProperty("--app-rail-height", `${rail.offsetHeight}px`);
 	}
 
 	function resetAppListScroll() {
@@ -27575,7 +28390,7 @@ ${settingsPanelHTML()}
 			list.scrollTop = 0;
 		}
 
-		if (appIsPhone()) {
+		if (appIsPhone() && (appState?.ui.shadow.querySelector("#app").dataset.stage || "list") === "list") {
 			window.scrollTo(0, 0);
 		}
 	}
@@ -27837,6 +28652,11 @@ ${settingsPanelHTML()}
 		const key = normalizeURL(url) || url;
 		const entry = row || state.rowsByURL.get(key) || { story, also: [] };
 
+		if (appIsPhone() && state.open?.key === key && state.article && !focus) {
+			setAppStage("article");
+			return;
+		}
+
 		state.open = { url, key, row: entry };
 		const shell = state.ui.shadow.querySelector("#app");
 
@@ -27849,6 +28669,7 @@ ${settingsPanelHTML()}
 		clearAppDiscussion();
 		decorateAppRows(state.ui.shadow.querySelector("#app-list-body"));
 		setAppSubject({ url, title: story.title || "" });
+		state.openTotal = 0;
 		loadAppArticle(url, story.title || "");
 
 		if (appIsNarrow()) {
@@ -27856,8 +28677,16 @@ ${settingsPanelHTML()}
 		}
 
 		if (appIsPhone()) {
+			state.scrolls.article = 0;
+			state.scrolls.discussion = 0;
 			setAppStage("article");
+
+			if (!state.moving) {
+				window.scrollTo(0, 0);
+			}
 		}
+
+		paintAppChrome();
 
 		markQueueArrival(url).catch(console.error);
 		markWatchArrival(url).catch(console.error);
@@ -28105,12 +28934,14 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		const show = Boolean(open) && !toggle.hidden;
+		const show = Boolean(open) && (!toggle.hidden || appIsPhone());
 
 		menu.hidden = !show;
+		menu.classList.toggle("app-view-plain", toggle.hidden);
 		shadow.querySelector("#app-view-arrow")?.toggleAttribute("hidden", !show);
 		toggle.setAttribute("aria-expanded", String(show));
 		toggle.classList.toggle("is-open", show);
+		shadow.querySelector("#app-bar-more")?.setAttribute("aria-expanded", String(show));
 
 		if (show) {
 			placeAppViewMenu();
@@ -28127,8 +28958,9 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		const box = toggle.getBoundingClientRect();
-		const room = pane.getBoundingClientRect();
+		const phone = appIsPhone();
+		const box = (phone ? shadow.querySelector("#app-bar-more") : toggle).getBoundingClientRect();
+		const room = phone ? { left: 0, right: window.innerWidth } : pane.getBoundingClientRect();
 		const width = menu.offsetWidth;
 		const left = Math.min(
 			Math.max(box.left + box.width / 2 - width / 2, room.left + 8),
@@ -28138,11 +28970,12 @@ ${settingsPanelHTML()}
 		const arrow = shadow.querySelector("#app-view-arrow");
 
 		menu.style.left = `${Math.round(left)}px`;
-		menu.style.top = `${Math.round(box.bottom + 9)}px`;
+		menu.style.top = phone ? `${Math.round(box.top - menu.offsetHeight - 9)}px` : `${Math.round(box.bottom + 9)}px`;
 
 		if (arrow) {
 			arrow.style.left = `${Math.round(box.left + box.width / 2 - 5)}px`;
-			arrow.style.top = `${Math.round(box.bottom + 4)}px`;
+			arrow.style.top = phone ? `${Math.round(box.top - 10)}px` : `${Math.round(box.bottom + 4)}px`;
+			arrow.classList.toggle("is-down", phone);
 		}
 	}
 
@@ -28179,7 +29012,11 @@ ${settingsPanelHTML()}
 			if (activeDocumentSource === READER_DOCUMENT_SOURCE) {
 				activeDocumentSource = HTML_DOCUMENT_SOURCE;
 			}
-			appState.ui.shadow.querySelector("#app-article-body")?.replaceChildren();
+			const body = appState.ui.shadow.querySelector("#app-article-body");
+
+			body?.replaceChildren();
+			body?.style.removeProperty("--app-frame-height");
+			body?.style.removeProperty("--app-frame-fit");
 		}
 	}
 
@@ -28218,7 +29055,12 @@ ${settingsPanelHTML()}
 			graceTimer: 0,
 			capTimer: 0,
 			contentWidth: 0,
+			contentHeight: 0,
 			fitSteps: 0,
+			heightState: "",
+			heightSteps: 0,
+			probeHeight: 0,
+			probeView: 0,
 		};
 
 		state.article = article;
@@ -28248,7 +29090,10 @@ ${settingsPanelHTML()}
 				article.reply = null;
 				article.origin = null;
 				article.contentWidth = 0;
+				article.contentHeight = 0;
 				article.fitSteps = 0;
+				article.heightState = "";
+				article.heightSteps = 0;
 				paintAppFrameFit(article);
 
 				if (article.everReplied) {
@@ -28269,8 +29114,13 @@ ${settingsPanelHTML()}
 		article.capTimer = setTimeout(() => tickAppArticle(article), APP_FRAME_CAP_MS);
 	}
 
-	function fitAppFrame(article, width, view) {
+	function fitAppFrame(article, width, view, height = 0, viewHeight = 0) {
+		if (height > 0 && viewHeight > 0) {
+			fitAppFrameHeight(article, Math.ceil(height), Math.ceil(viewHeight));
+		}
+
 		if (!(width > 0) || !(view > 0)) {
+			paintAppFrameFit(article);
 			return;
 		}
 
@@ -28280,6 +29130,46 @@ ${settingsPanelHTML()}
 		}
 
 		paintAppFrameFit(article);
+	}
+
+	function fitAppFrameHeight(article, height, viewHeight) {
+		if (article.heightState === "bound") {
+			return;
+		}
+
+		if (article.heightState === "probe") {
+			if (viewHeight <= article.probeView) {
+				article.probeHeight = height;
+				return;
+			}
+
+			article.heightState = height - article.probeHeight >= (viewHeight - article.probeView) / 4 ? "bound" : "free";
+			article.contentHeight = article.heightState === "free" ? height : 0;
+			return;
+		}
+
+		if (article.heightState === "free") {
+			if (height > article.contentHeight) {
+				if (article.heightSteps >= APP_FRAME_HEIGHT_STEPS) {
+					return;
+				}
+
+				article.heightSteps += 1;
+			}
+
+			article.contentHeight = height;
+			return;
+		}
+
+		if (height <= viewHeight) {
+			article.contentHeight = 0;
+			return;
+		}
+
+		article.heightState = "probe";
+		article.probeHeight = height;
+		article.probeView = viewHeight;
+		article.contentHeight = viewHeight + APP_FRAME_HEIGHT_PROBE;
 	}
 
 	function paintAppFrameFit(article = appState?.article) {
@@ -28296,6 +29186,13 @@ ${settingsPanelHTML()}
 			: 1;
 
 		frame.style.setProperty("--app-frame-fit", String(Math.floor(fit * 1000) / 1000));
+		pane.style.setProperty("--app-frame-fit", String(Math.floor(fit * 1000) / 1000));
+
+		if (article.contentHeight) {
+			pane.style.setProperty("--app-frame-height", `${article.contentHeight}px`);
+		} else {
+			pane.style.removeProperty("--app-frame-height");
+		}
 	}
 
 	function startAppHello(article) {
@@ -28615,8 +29512,16 @@ ${settingsPanelHTML()}
 			return;
 		}
 
+		if (data.type === "collapse") {
+			if (appIsPhone() && window.scrollY <= 0) {
+				lowerAppSheet();
+			}
+
+			return;
+		}
+
 		if (data.type === "size") {
-			fitAppFrame(article, Number(data.width), Number(data.view));
+			fitAppFrame(article, Number(data.width), Number(data.view), Number(data.height), Number(data.viewHeight));
 			return;
 		}
 
@@ -28760,8 +29665,18 @@ ${settingsPanelHTML()}
 			origin === document.documentElement ||
 			path.some((node) => node?.id === "app-list" || node?.id === "app-rail");
 		if (event.key === "Escape") {
-			if (!appState.ui.shadow.querySelector("#app-saved-menu").hidden) {
+			const shadow = appState.ui.shadow;
+
+			if (!shadow.querySelector("#app-saved-menu").hidden || !shadow.querySelector("#app-view-menu").hidden || !shadow.querySelector("#app-save-menu").hidden || !shadow.querySelector("#app-row-menu").hidden) {
 				setAppSavedMenuOpen(false);
+				setAppViewMenuOpen(false);
+				setAppSaveMenuOpen(false);
+				closeAppRowMenu();
+				return;
+			}
+
+			if (appIsPhone() && shadow.querySelector("#app").dataset.stage !== "list") {
+				lowerAppSheet();
 				return;
 			}
 
@@ -28940,16 +29855,17 @@ ${settingsPanelHTML()}
 		let queued = 0;
 
 		const report = () => {
-
 			const width = frameContentWidth();
 			const view = window.innerWidth;
+			const height = Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0);
+			const viewHeight = window.innerHeight;
 
-			if (`${width}x${view}` === last) {
+			if (`${width}x${view}x${height}x${viewHeight}` === last) {
 				return;
 			}
 
-			last = `${width}x${view}`;
-			postToApp({ type: "size", width, view });
+			last = `${width}x${view}x${height}x${viewHeight}`;
+			postToApp({ type: "size", width, view, height, viewHeight });
 		};
 		const soon = () => {
 			clearTimeout(queued);
@@ -28973,6 +29889,7 @@ ${settingsPanelHTML()}
 
 	function installFrameAgent() {
 		frameAgentActive = true;
+		watchPullDown(window, () => postToApp({ type: "collapse" }));
 
 		window.addEventListener("message", (event) => {
 			if (event.source !== window.parent || event.origin !== START_PAGE_ORIGIN) {
@@ -29100,6 +30017,9 @@ ${settingsPanelHTML()}
 	const APP_HIDDEN_GRACE_MS = 2000;
 	const APP_FRAME_CAP_MS = 8000;
 	const APP_FRAME_FIT_STEPS = 4;
+	const APP_FRAME_HEIGHT_STEPS = 6;
+	const APP_FRAME_HEIGHT_PROBE = 100;
+	const APP_PULL_ZONE = 150;
 	const APP_FRAME_MIN_FIT = 0.5;
 	const APP_FRAME_SETTLE_MS = 250;
 	const READER_MIN_CHARS = 400;
