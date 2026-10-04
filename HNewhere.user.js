@@ -26183,6 +26183,7 @@ header .item-action-link {
 #app-row-menu,
 #app-list-foot,
 #app-list-heading,
+#app-next,
 .browse-more,
 .browse-sources-total,
 .app-settings-version,
@@ -26371,7 +26372,7 @@ header .item-action-link {
 
 	#app-article {
 		min-height:100vh;
-		min-height:100dvh;
+		min-height:100lvh;
 		height:auto;
 	}
 
@@ -26395,12 +26396,16 @@ header .item-action-link {
 	.app-article-body {
 		flex:0 0 auto;
 		min-height:100vh;
-		min-height:100dvh;
-		height:calc(var(--app-frame-height, 100dvh) * var(--app-zoom, 1) * var(--app-frame-fit, 1));
+		min-height:100lvh;
+		height:calc(var(--app-frame-height, 100lvh) * var(--app-zoom, 1) * var(--app-frame-fit, 1));
+	}
+
+	.app-article-body[data-mode="reader"] {
+		height:auto;
 	}
 
 	.app-article-frame {
-		height:max(var(--app-frame-height, 0px), calc(100dvh / (var(--app-zoom, 1) * var(--app-frame-fit, 1))));
+		height:max(var(--app-frame-height, 0px), calc(100lvh / (var(--app-zoom, 1) * var(--app-frame-fit, 1))));
 	}
 
 	.app-reader-scroll {
@@ -26516,8 +26521,49 @@ header .item-action-link {
 		font:600 10px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, sans-serif;
 	}
 
-	#app:not([data-stage="list"]) #app-article {
-		padding-bottom:calc(88px + env(safe-area-inset-bottom, 0px));
+	#app-next {
+		display:flex !important;
+		flex-direction:column;
+		gap:6px;
+		padding:22px 60px calc(26px + env(safe-area-inset-bottom, 0px));
+		border-top:1px solid var(--border-soft);
+	}
+
+	#app-next[hidden] {
+		display:none !important;
+	}
+
+	.app-next-label {
+		color:var(--meta);
+		font-size:11px;
+		font-weight:600;
+		letter-spacing:.06em;
+		text-transform:uppercase;
+	}
+
+	.app-next-link {
+		display:flex;
+		flex-direction:column;
+		gap:3px;
+		padding:0;
+		border:0;
+		background:none;
+		color:inherit;
+		font:inherit;
+		text-align:left;
+		cursor:pointer;
+		-webkit-tap-highlight-color:transparent;
+	}
+
+	.app-next-title {
+		font-size:17px;
+		font-weight:600;
+		line-height:1.3;
+	}
+
+	.app-next-meta {
+		color:var(--meta);
+		font-size:12px;
 	}
 
 	#app:not([data-stage="list"]) .app-reader-scroll,
@@ -27195,6 +27241,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <section id="app-article" aria-label="Article">
 <div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><span id="app-article-tools-sep" class="app-head-sep" aria-hidden="true" hidden>|</span><button id="app-view-toggle" class="app-head-icon app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
 <div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick an article to read it here, with what people said about it beside it.</div></div>
+<div id="app-next" class="app-next" hidden><span class="app-next-label">Read next</span><button id="app-next-link" class="app-next-link" type="button"><span class="app-next-title"></span><span class="app-next-meta"></span></button></div>
 </section>
 ${settingsPanelHTML()}
 <div id="app-settings-modal" class="app-settings-modal" hidden>
@@ -27783,6 +27830,13 @@ ${settingsPanelHTML()}
 		shadow.querySelector("#app-bar-open").onclick = () => shadow.querySelector("#app-article-open").click();
 		shadow.querySelector("#app-bar-save").onclick = () => shadow.querySelector('#app-article-actions [data-item-action="fave"]')?.click();
 		shadow.querySelector("#app-bar-like").onclick = () => shadow.querySelector("#app-article-actions .app-head-votes:not(.hidden) .app-head-thumb-up")?.click();
+		shadow.querySelector("#app-next-link").onclick = () => {
+			const next = appNextRow();
+
+			if (next) {
+				openAppStory(next.story, { row: next }).catch(console.error);
+			}
+		};
 		new MutationObserver(() => paintAppBarActions()).observe(shadow.querySelector(".app-pane-middle"), { attributes: true, childList: true, characterData: true, subtree: true });
 		const searchButton = shadow.querySelector("#app-search");
 		const searchBar = shadow.querySelector("#app-search-page");
@@ -28646,6 +28700,38 @@ ${settingsPanelHTML()}
 		shadow.querySelector("#app-bar-open").hidden = shadow.querySelector("#app-article-open").hidden;
 	}
 
+	function appNextRow() {
+		const state = appState;
+		const rows = [...(state?.ui.shadow.querySelectorAll("#app-list-body .browse-row") || [])];
+		const at = rows.findIndex((row) => row.classList.contains("is-open"));
+		const next = at >= 0 ? rows[at + 1] : null;
+
+		return next ? state.rowsByURL.get(next.dataset.appKey) || null : null;
+	}
+
+	function paintAppNext() {
+		const shadow = appState?.ui.shadow;
+		const section = shadow?.querySelector("#app-next");
+
+		if (!section) {
+			return;
+		}
+
+		const next = appState.open ? appNextRow() : null;
+
+		section.hidden = !next;
+
+		if (next) {
+			section.querySelector(".app-next-title").textContent = next.story.title || next.story.url;
+			section.querySelector(".app-next-meta").textContent = [
+				next.story.site || hostLabel(next.story.url),
+				next.story.descendants ? `${compactCount(next.story.descendants)} comments` : "",
+			]
+				.filter(Boolean)
+				.join(" \u00b7 ");
+		}
+	}
+
 	function compactCount(count) {
 		const value = Math.max(0, Math.floor(Number(count) || 0));
 
@@ -28699,6 +28785,7 @@ ${settingsPanelHTML()}
 		discussion.setAttribute("aria-pressed", String(stage === "discussion"));
 		discussion.querySelector(".rail-badge").textContent = total ? compactCount(total) : "";
 		paintAppBarActions();
+		paintAppNext();
 		const rail = shadow.querySelector("#app-rail");
 
 		shadow.querySelector("#app").style.setProperty("--app-rail-height", `${rail.offsetHeight}px`);
@@ -28995,6 +29082,8 @@ ${settingsPanelHTML()}
 				Boolean(appState.open) && element.dataset.appKey === appState.open.key,
 			);
 		}
+
+		paintAppNext();
 	}
 
 	async function paintAppCounts() {
