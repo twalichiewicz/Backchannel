@@ -342,6 +342,7 @@
 	let buttonMarkPreference = BUTTON_MARK_DEFAULT;
 	let accentPreference = null;
 	let keepSidebarSizePreference = true;
+	let commentImagesPreference = false;
 
 	function syncAppearancePreferences(settings) {
 		themePreference = settings.theme || "auto";
@@ -353,6 +354,7 @@
 		accentPreference =
 			typeof settings.accentColor === "string" ? settings.accentColor : null;
 		keepSidebarSizePreference = settings.keepSidebarSize !== false;
+		commentImagesPreference = settings.commentImages === true;
 	}
 	// #endregion hnewhere-test-export
 
@@ -375,6 +377,7 @@
 		commentSort: "best",
 		newCommentsFirst: false,
 		keepSidebarSize: true,
+		commentImages: false,
 	};
 
 	// #region hnewhere-test-export
@@ -2446,6 +2449,12 @@
 		return /^https?:\/\//i.test(url) ? `<a href="${url}">${label}</a>` : label;
 	}
 
+	function markdownImage(url, alt) {
+		return /^https:\/\//i.test(url)
+			? markdownAnchor(url, `<img src="${url}" alt="${alt}">`)
+			: markdownAnchor(url, alt || "image");
+	}
+
 	function markdownInline(escaped) {
 		const held = [];
 		const hold = (html) => `\u0000${held.push(html) - 1}\u0000`;
@@ -2455,7 +2464,7 @@
 		);
 
 		out = out.replace(/!\[([^\]\n]*)\]\(([^)\s]+)[^)]*\)/g, (m, alt, url) =>
-			hold(markdownAnchor(url, alt.trim() || "image")),
+			hold(markdownImage(url, alt.trim())),
 		);
 
 		out = out.replace(/\[([^\]\n]*)\]\(([^)\s]+)[^)]*\)/g, (m, label, url) =>
@@ -3210,6 +3219,7 @@ ${
 		"annotations",
 		"pdfReader",
 		"notepad",
+		"commentImages",
 	]);
 
 	function pdfViewerRefusesExtensions() {
@@ -6224,7 +6234,7 @@ button {
 		return HIDDEN_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
 	}
 
-	function sanitizeHTML(html) {
+	function sanitizeHTML(html, { images = true } = {}) {
 		const template = document.createElement("template");
 		template.innerHTML = html || "";
 
@@ -6248,9 +6258,25 @@ button {
 			"HR",
 		]);
 
+		if (images) {
+			allowedTags.add("IMG");
+		}
+
 		function cleanNode(node) {
 			for (const child of [...node.childNodes]) {
 				if (child.nodeType !== Node.ELEMENT_NODE) {
+					continue;
+				}
+
+				if (child.tagName === "IMG" && !images) {
+					if (child.parentNode?.nodeName === "A") {
+						child.replaceWith(
+							inertDocument.createTextNode((child.getAttribute("alt") || "").trim() || "image"),
+						);
+					} else {
+						child.remove();
+					}
+
 					continue;
 				}
 
@@ -6287,8 +6313,23 @@ button {
 					}
 				}
 
+				const source = child.tagName === "IMG" ? String(child.getAttribute("src") || "").trim() : "";
+				const alt = child.getAttribute("alt") || "";
+
+				if (child.tagName === "IMG" && !/^https:\/\/[^/]/i.test(source)) {
+					child.remove();
+					continue;
+				}
+
 				for (const attr of [...child.attributes]) {
 					child.removeAttribute(attr.name);
+				}
+
+				if (child.tagName === "IMG") {
+					child.setAttribute("src", source);
+					child.setAttribute("alt", alt);
+					child.setAttribute("loading", "lazy");
+					child.setAttribute("referrerpolicy", "no-referrer");
 				}
 
 				if (safeHref) {
@@ -13741,6 +13782,13 @@ to allow highlighting and annotation directly onto PDFs.
 </div>
 </div>
 <label class="settings-option">
+<input id="setting-comment-images" data-setting="commentImages" type="checkbox">
+<span>Show images in comments</span>
+</label>
+<div class="settings-option-hint">
+Comments that include images will render them inline with the comment. When disabled, the images will be replaced with a link.
+</div>
+<label class="settings-option">
 <input id="setting-notepad" data-setting="notepad" type="checkbox">
 <span>Enable notepad</span>
 </label>
@@ -13920,6 +13968,7 @@ ${[
 				"#setting-auto-open-only-from-hn",
 			),
 			keepSidebarSize: shadow.querySelector("#setting-keep-sidebar-size"),
+			commentImages: shadow.querySelector("#setting-comment-images"),
 		};
 
 		const settingsRadios = {
@@ -14307,6 +14356,15 @@ ${[
 
 			if (setting === "keepSidebarSize") {
 				applySidebarZoom();
+				return;
+			}
+
+			if (setting === "commentImages") {
+				if (sidebarUI && renderedDiscussions.length) {
+					await renderDiscussions(renderedDiscussions, sidebarUI);
+					await onAnnotationChange?.();
+				}
+
 				return;
 			}
 
@@ -15242,6 +15300,15 @@ ${SUBMIT_FORM_CSS}
 
 .text p {
 	margin:8px 0;
+}
+
+.text img {
+	display:block;
+	max-width:100%;
+	max-height:420px;
+	height:auto;
+	margin:6px 0;
+	border-radius:4px;
 }
 
 .text > *:first-child,
@@ -16587,7 +16654,7 @@ ${appMode ? "" : settingsPanelHTML()}
 		storyBodyHTML
 			? `
 	<div class="story-text">
-	${sanitizeHTML(storyBodyHTML)}
+	${sanitizeHTML(storyBodyHTML, { images: commentImagesPreference })}
 	</div>
 	`
 			: ""
@@ -17971,7 +18038,7 @@ ${appMode ? "" : settingsPanelHTML()}
 
       <div class="comment-content">
        	<div class="text">
-        		${sanitizeHTML(comment.bodyHTML) || ""}
+        		${sanitizeHTML(comment.bodyHTML, { images: commentImagesPreference }) || ""}
        	</div>
        	${
 					capabilities.reply
@@ -30581,7 +30648,7 @@ ${settingsPanelHTML()}
 	function frameComment(raw) {
 		const textElement = document.createElement("div");
 
-		textElement.innerHTML = sanitizeHTML(String(raw?.textHTML || ""));
+		textElement.innerHTML = sanitizeHTML(String(raw?.textHTML || ""), { images: false });
 
 		return {
 			id: String(raw?.id || ""),
