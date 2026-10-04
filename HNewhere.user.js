@@ -26013,6 +26013,8 @@ header .item-action-link {
 
 #app-bar,
 #app-bar-back,
+#app-search,
+#app-search-page,
 #app-save-menu,
 #app-row-menu,
 #app-list-foot,
@@ -26456,6 +26458,133 @@ header .item-action-link {
 		display:none !important;
 	}
 
+	#app-search {
+		display:flex !important;
+		position:fixed;
+		left:calc(50% + var(--app-rail-width, 200px) / 2 + 10px);
+		bottom:calc(14px + env(safe-area-inset-bottom, 0px));
+		z-index:10;
+		width:var(--app-rail-height, 44px);
+		height:var(--app-rail-height, 44px);
+		border-radius:50%;
+		background:var(--rail-bg);
+		box-shadow:0 6px 20px rgba(0,0,0,.22), inset 0 0 0 1px rgba(255,255,255,.14);
+		color:var(--rail-fg);
+		filter:none;
+	}
+
+	#app-search svg {
+		width:22px;
+		height:22px;
+	}
+
+	#app-search[hidden] {
+		display:none !important;
+	}
+
+	#app-search[aria-expanded="true"] {
+		background:var(--rail-fg);
+		color:var(--rail-bg);
+	}
+
+	#app-search-page {
+		display:flex !important;
+		position:fixed;
+		inset:0;
+		z-index:40;
+		flex-direction:column;
+		background:var(--surface);
+		color:var(--surface-text);
+	}
+
+	#app-search-page[hidden] {
+		display:none !important;
+	}
+
+	.app-search-head {
+		display:flex;
+		flex:0 0 auto;
+		align-items:center;
+		gap:8px;
+		padding:calc(10px + env(safe-area-inset-top, 0px)) 12px 10px;
+		border-bottom:1px solid var(--surface-divider);
+	}
+
+	.app-search-input {
+		flex:1 1 auto;
+		min-width:0;
+		box-sizing:border-box;
+		height:38px;
+		padding:0 12px;
+		border:0;
+		border-radius:10px;
+		background:var(--hover-tint, rgba(0,0,0,.06));
+		color:inherit;
+		font:inherit;
+		font-size:16px;
+		outline:none;
+		-webkit-appearance:none;
+	}
+
+	.app-search-close {
+		flex:0 0 auto;
+		padding:8px 4px;
+		border:0;
+		background:none;
+		color:var(--rail-bg);
+		font:inherit;
+		font-size:15px;
+		cursor:pointer;
+	}
+
+	.app-search-results {
+		flex:1 1 auto;
+		min-height:0;
+		overflow:auto;
+		padding:4px 8px calc(24px + env(safe-area-inset-bottom, 0px));
+		-webkit-overflow-scrolling:touch;
+	}
+
+	.app-search-group-name {
+		padding:14px 8px 4px;
+		color:var(--meta);
+		font-size:11px;
+		font-weight:600;
+		letter-spacing:.04em;
+		text-transform:uppercase;
+	}
+
+	.app-search-item {
+		display:flex;
+		flex-direction:column;
+		gap:2px;
+		width:100%;
+		padding:9px 8px;
+		border:0;
+		border-radius:8px;
+		background:none;
+		color:inherit;
+		font:inherit;
+		font-size:14px;
+		line-height:1.3;
+		text-align:left;
+		cursor:pointer;
+		-webkit-tap-highlight-color:transparent;
+	}
+
+	.app-search-item:active {
+		background:var(--hover-tint);
+	}
+
+	.app-search-item-note {
+		color:var(--meta);
+		font-size:11px;
+	}
+
+	.app-search-item-note:empty {
+		display:none;
+	}
+
 	.app-wide-only {
 		display:none !important;
 	}
@@ -26495,6 +26624,11 @@ header .item-action-link {
 		padding:16px 16px 6px;
 		font:700 26px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 		letter-spacing:-.01em;
+	}
+
+	#app[data-searching] #app-rail,
+	#app[data-searching] #app-search {
+		display:none !important;
 	}
 
 	#app-list-body .browse-row {
@@ -26920,6 +27054,8 @@ ${APP_VIEWS.filter((view) => APP_FILLED_VIEWS.includes(view.id))
 </div>
 <div class="settings-field app-view-open-slot"></div>
 </div>
+<button id="app-search" class="app-stack-button" type="button" aria-label="Search the list" aria-expanded="false" aria-controls="app-search-bar" hidden>${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</button>
+<div id="app-search-page" class="app-search-page" role="dialog" aria-label="Search Backchannel" hidden><div class="app-search-head"><input id="app-search-input" class="app-search-input" type="search" placeholder="Search Backchannel" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search Backchannel"><button id="app-search-close" class="app-search-close" type="button">Cancel</button></div><div id="app-search-results" class="app-search-results"></div></div>
 <nav id="app-rail" aria-label="Views">
 ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).join("\n")}
 <button id="app-saved" class="rail-button" type="button" data-tip="Saved" aria-label="Saved" aria-haspopup="true" aria-expanded="false" aria-controls="app-saved-menu"><span class="rail-icon">${APP_SAVED_ICON}<span class="rail-badge" data-app-badge="saved"></span></span><span class="rail-label" aria-hidden="true">Saved</span></button>
@@ -26984,6 +27120,7 @@ ${settingsPanelHTML()}
 			scrolls: { list: 0, article: 0, discussion: 0 },
 			openTotal: 0,
 			moving: false,
+			savedIndex: [],
 		};
 	}
 
@@ -27332,6 +27469,7 @@ ${settingsPanelHTML()}
 				homeAppArticleActions();
 				setAppViewMenuOpen(false);
 				setAppSaveMenuOpen(false);
+				setAppSearchOpen(false);
 
 				if (!appIsPhone() && appRoot.dataset.stage !== "list") {
 					appRoot.dataset.stage = "list";
@@ -27539,6 +27677,23 @@ ${settingsPanelHTML()}
 		});
 		shadow.querySelector("#app-bar-more").onclick = () => setAppViewMenuOpen(shadow.querySelector("#app-view-menu").hidden);
 		window.addEventListener("blur", () => setAppSaveMenuOpen(false));
+		const searchButton = shadow.querySelector("#app-search");
+		const searchBar = shadow.querySelector("#app-search-page");
+		const searchInput = shadow.querySelector("#app-search-input");
+
+		searchButton.onclick = () => {
+			indexAppSaved().catch(console.error).then(() => renderAppSearch(searchInput.value));
+			setAppSearchOpen(searchBar.hidden);
+		};
+		shadow.querySelector("#app-search-close").onclick = () => setAppSearchOpen(false);
+		searchInput.addEventListener("input", () => renderAppSearch(searchInput.value));
+		searchInput.addEventListener("keydown", (event) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				event.stopPropagation();
+				setAppSearchOpen(false);
+			}
+		});
 
 		let scrollTimer = 0;
 		const noteScrolling = () => {
@@ -27765,6 +27920,10 @@ ${settingsPanelHTML()}
 		}
 
 		shadow.querySelector("#app-settings-close").onclick = () => setOpen(false);
+		openAppSettingsSection = (section) => {
+			setOpen(true);
+			showSection(section);
+		};
 
 		modal.addEventListener("click", (event) => {
 			event.stopPropagation();
@@ -28375,13 +28534,182 @@ ${settingsPanelHTML()}
 
 		bar.hidden = stage === "list";
 		shadow.querySelector("#app-bar-back").hidden = stage === "list";
+		shadow.querySelector("#app-search").hidden = stage !== "list";
+
+		if (stage !== "list") {
+			setAppSearchOpen(false);
+		}
 
 		discussion.setAttribute("aria-pressed", String(stage === "discussion"));
 		discussion.querySelector(".rail-badge").textContent = total ? (total > 999 ? "999+" : String(total)) : "";
 		const rail = shadow.querySelector("#app-rail");
 
 		shadow.querySelector("#app").style.setProperty("--app-rail-height", `${rail.offsetHeight}px`);
+		shadow.querySelector("#app").style.setProperty("--app-rail-width", `${rail.offsetWidth}px`);
 	}
+
+	function setAppSearchOpen(open) {
+		const shadow = appState?.ui.shadow;
+		const page = shadow?.querySelector("#app-search-page");
+		const button = shadow?.querySelector("#app-search");
+		const input = shadow?.querySelector("#app-search-input");
+
+		if (!page || !button || !input) {
+			return;
+		}
+
+		const show = Boolean(open) && appIsPhone();
+
+		page.hidden = !show;
+		button.setAttribute("aria-expanded", String(show));
+		shadow.querySelector("#app").toggleAttribute("data-searching", show);
+
+		if (show) {
+			input.value = "";
+			renderAppSearch("");
+			input.focus({ preventScroll: true });
+			return;
+		}
+
+		input.blur();
+	}
+
+	function appSearchEntries() {
+		const state = appState;
+		const shadow = state.ui.shadow;
+		const entries = [];
+
+		for (const view of APP_VIEWS) {
+			entries.push({ group: "Go to", title: view.label, note: "", keys: view.label, run: () => chooseAppView(view.id) });
+		}
+
+		for (const view of [["queue", "Queue"], ["watching", "Watching"], ["collection", "Collection"]]) {
+			entries.push({ group: "Go to", title: view[1], note: "Saved", keys: `${view[1]} saved`, run: () => chooseAppView(view[0]) });
+		}
+
+		entries.push({ group: "Go to", title: "Settings", note: "", keys: "settings preferences", run: () => openAppSettingsSection("general") });
+
+		for (const entry of state.rowsByURL.values()) {
+			const story = entry.story;
+
+			if (story?.title) {
+				entries.push({ group: "Articles", title: story.title, note: story.site || "", keys: `${story.title} ${story.site || ""}`, run: () => openAppStory(story, { row: entry }).catch(console.error) });
+			}
+		}
+
+		for (const item of state.savedIndex) {
+			entries.push({ group: "Saved", title: item.title, note: item.note, keys: `${item.title} ${item.note}`, run: () => openAppURL(item.url) });
+		}
+
+		const panel = shadow.querySelector("#settings-panel");
+
+		const seen = new Set();
+
+		for (const field of panel?.querySelectorAll(".settings-field, .settings-group label") || []) {
+			const label = (field.matches("label") ? field.textContent : field.querySelector(".settings-field-label, label")?.textContent || "").trim().split("\n")[0].trim();
+			const owner = field.closest("[data-app-section]");
+			const section = owner?.dataset.appSection === "sidebar" ? "sidebar" : "general";
+
+			if (label && label.length < 80 && !seen.has(label) && !field.closest("#app-view-menu")) {
+				seen.add(label);
+				entries.push({ group: "Settings", title: label, note: section === "sidebar" ? "Sidebar" : "General", keys: `${label} settings`, run: () => openAppSettingsSection(section) });
+			}
+		}
+
+		entries.push({ group: "Settings", title: "Sources", note: "Where comments come from", keys: "sources reddit hacker news bluesky lobsters mastodon lemmy settings", run: () => openAppSettingsSection("sources") });
+		entries.push({ group: "Settings", title: "Manage disabled sites", note: "Blocked", keys: "blocked disabled sites manage settings", run: () => openAppSettingsSection("blocked") });
+
+		return entries;
+	}
+
+	async function indexAppSaved() {
+		const state = appState;
+
+		if (!state) {
+			return;
+		}
+
+		const [queue, favorites] = await Promise.all([loadQueue(), loadFavoriteEntries()]);
+		const index = [];
+
+		for (const entry of queue) {
+			if (entry.title && entry.url) {
+				index.push({ title: entry.title, note: entry.site ? `${entry.site} · Queue` : "Queue", url: entry.url });
+			}
+		}
+
+		for (const entry of favorites) {
+			if (entry.title && entry.url) {
+				index.push({ title: entry.title, note: entry.site ? `${entry.site} · Collection` : "Collection", url: entry.url });
+			}
+		}
+
+		state.savedIndex = index;
+	}
+
+	function renderAppSearch(query) {
+		const shadow = appState?.ui.shadow;
+		const results = shadow?.querySelector("#app-search-results");
+
+		if (!results) {
+			return;
+		}
+
+		const needle = String(query || "").trim().toLowerCase();
+		const terms = needle.split(/\s+/).filter(Boolean);
+		const matches = appSearchEntries().filter((entry) => (needle ? terms.every((term) => entry.keys.toLowerCase().includes(term)) : entry.group === "Go to"));
+		const groups = new Map();
+
+		for (const entry of matches) {
+			if (!groups.has(entry.group)) {
+				groups.set(entry.group, []);
+			}
+
+			if (groups.get(entry.group).length < 8) {
+				groups.get(entry.group).push(entry);
+			}
+		}
+
+		results.replaceChildren(
+			...[...groups].map(([name, entries]) => {
+				const group = document.createElement("section");
+				const heading = document.createElement("div");
+
+				group.className = "app-search-group";
+				heading.className = "app-search-group-name";
+				heading.textContent = name;
+				group.append(heading);
+
+				for (const entry of entries) {
+					const item = document.createElement("button");
+
+					item.type = "button";
+					item.className = "app-search-item";
+					item.innerHTML = `<span class="app-search-item-title"></span><span class="app-search-item-note"></span>`;
+					item.querySelector(".app-search-item-title").textContent = entry.title;
+					item.querySelector(".app-search-item-note").textContent = entry.note;
+					item.onclick = (event) => {
+						event.stopPropagation();
+						setAppSearchOpen(false);
+						setTimeout(() => entry.run(), 0);
+					};
+					group.append(item);
+				}
+
+				return group;
+			}),
+		);
+
+		if (!groups.size) {
+			const empty = document.createElement("div");
+
+			empty.className = "browse-empty";
+			empty.textContent = "Nothing matches.";
+			results.append(empty);
+		}
+	}
+
+	let openAppSettingsSection = () => {};
 
 	function resetAppListScroll() {
 		const list = appState?.ui.shadow.querySelector("#app-list-body");
@@ -29667,10 +29995,11 @@ ${settingsPanelHTML()}
 		if (event.key === "Escape") {
 			const shadow = appState.ui.shadow;
 
-			if (!shadow.querySelector("#app-saved-menu").hidden || !shadow.querySelector("#app-view-menu").hidden || !shadow.querySelector("#app-save-menu").hidden || !shadow.querySelector("#app-row-menu").hidden) {
+			if (!shadow.querySelector("#app-saved-menu").hidden || !shadow.querySelector("#app-view-menu").hidden || !shadow.querySelector("#app-save-menu").hidden || !shadow.querySelector("#app-search-page").hidden || !shadow.querySelector("#app-row-menu").hidden) {
 				setAppSavedMenuOpen(false);
 				setAppViewMenuOpen(false);
 				setAppSaveMenuOpen(false);
+				setAppSearchOpen(false);
 				closeAppRowMenu();
 				return;
 			}
