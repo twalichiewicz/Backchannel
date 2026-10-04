@@ -25450,6 +25450,21 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	background:var(--article-bg);
 }
 
+.app-article-image {
+	position:absolute;
+	inset:0;
+	display:flex;
+	overflow:auto;
+	overscroll-behavior:contain;
+	background:var(--article-bg);
+}
+
+.app-article-image img {
+	max-width:100%;
+	height:auto;
+	margin:auto;
+}
+
 .app-article-note {
 	position:absolute;
 	inset:0;
@@ -26401,8 +26416,16 @@ header .item-action-link {
 		height:calc(var(--app-frame-height, 100lvh) * var(--app-zoom, 1) * var(--app-frame-fit, 1));
 	}
 
-	.app-article-body[data-mode="reader"] {
+	.app-article-body:is([data-mode="reader"], [data-mode="image"]) {
 		height:auto;
+	}
+
+	.app-article-image {
+		position:static;
+		min-height:100vh;
+		min-height:100lvh;
+		overflow:visible;
+		overscroll-behavior:auto;
 	}
 
 	.app-article-frame {
@@ -29868,6 +29891,7 @@ ${settingsPanelHTML()}
 			ok: response.ok,
 			refused: framingRefused(response.headers),
 			pdf: /application\/pdf/i.test(response.contentType),
+			image: response.ok && /^image\//i.test(response.contentType),
 			readerChars: 0,
 		};
 
@@ -29903,13 +29927,34 @@ ${settingsPanelHTML()}
 		clearInterval(article.helloTimer);
 		article.frame?.remove();
 		article.frame = null;
+		pane.querySelector(".app-article-image")?.remove();
 
 		if (mode === "reader") {
 			showAppReader(article);
 			refreshArticleAnnotations().catch(console.error);
+		} else if (mode === "image") {
+			showAppImage(article);
 		} else {
 			showAppCard(article);
 		}
+	}
+
+	function showAppImage(article) {
+		const pane = appState.ui.shadow.querySelector("#app-article-body");
+		const holder = document.createElement("div");
+		const image = document.createElement("img");
+
+		holder.className = "app-article-image";
+		image.alt = article.title || hostLabel(article.url);
+		image.referrerPolicy = "no-referrer";
+		image.onerror = () => {
+			if (!article.dead && article.mode === "image") {
+				applyAppArticleMode(article, "card");
+			}
+		};
+		image.src = article.url;
+		holder.appendChild(image);
+		pane.appendChild(holder);
 	}
 
 	function appReaderElement() {
@@ -30070,7 +30115,7 @@ ${settingsPanelHTML()}
 			const changed = !article.reply || article.reply.visible !== visible;
 
 			article.origin = event.origin;
-			article.reply = { visible };
+			article.reply = { visible, image: Boolean(data.image) };
 			article.everReplied = true;
 
 			if (visible) {
@@ -30379,9 +30424,12 @@ ${settingsPanelHTML()}
 			return style.display !== "none" && style.visibility !== "hidden";
 		};
 
+		if (!shown(document.documentElement) || !shown(document.body)) {
+			return false;
+		}
+
 		return (
-			shown(document.documentElement) &&
-			shown(document.body) &&
+			/^(image|video|audio)\//i.test(document.contentType || "") ||
 			(document.body.innerText || "").trim().length > 0
 		);
 	}
@@ -30489,6 +30537,7 @@ ${settingsPanelHTML()}
 					image: document.querySelector('meta[property="og:image"], meta[name="twitter:image"]')?.getAttribute("content") || "",
 					title: pageTitle(),
 					visible: frameVisibility(),
+					image: /^image\//i.test(document.contentType || ""),
 				});
 				watchFrameSize();
 				return;
@@ -30738,6 +30787,10 @@ ${settingsPanelHTML()}
 		sinceStart = 0,
 		probe = null,
 	} = {}) {
+		if (reply?.image || probe?.image) {
+			return "image";
+		}
+
 		if (reply?.visible) {
 			return "frame-agent";
 		}
