@@ -9536,7 +9536,8 @@ button {
 		const row = document.createElement("div");
 		row.className =
 			"story browse-row" +
-			(!rank && !options.bullet && !unreadMark ? " browse-row-loose" : "");
+			(!rank && !options.bullet && !unreadMark ? " browse-row-loose" : "") +
+			((unreadMark && options.unreadDot) || (options.bullet && options.fresh) ? " is-unread" : "");
 		row.dataset.storyId = String(story.id);
 		row.innerHTML = `
 	<div class="browse-rank${unreadMark ? " app-unread-mark" : ""}"${
@@ -9558,6 +9559,7 @@ button {
 					? `${rank}.`
 					: ""
 	}</div>
+	${appState && !isWriting ? appRowThumbHTML(story) : ""}
 	<div class="browse-main">
 	<div class="story-title">
 	<a class="browse-title-link${isWriting ? " browse-quote" : ""}" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
@@ -25250,6 +25252,80 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	line-height:17px;
 }
 
+.browse-thumb-wrap {
+	display:none;
+}
+
+#app-list-body {
+	--thumb:30px;
+}
+
+#app-list-body .browse-row:has(.browse-thumb-wrap) {
+	align-items:flex-start;
+	gap:8px;
+}
+
+#app-list-body .browse-row:has(.browse-thumb-wrap) .browse-rank {
+	display:none;
+}
+
+#app-list-body .browse-thumb-wrap {
+	display:block;
+	position:relative;
+	flex:0 0 auto;
+	width:var(--thumb);
+	height:var(--thumb);
+	margin-top:2px;
+	border-radius:calc(var(--thumb) * .23);
+	background:var(--hover-tint);
+}
+
+#app-list-body .browse-thumb {
+	display:block;
+	width:calc(var(--thumb) * .46);
+	height:calc(var(--thumb) * .46);
+	margin:calc(var(--thumb) * .27);
+	object-fit:contain;
+}
+
+#app-list-body .has-preview .browse-thumb {
+	width:100%;
+	height:100%;
+	margin:0;
+	border-radius:inherit;
+	object-fit:cover;
+}
+
+#app-list-body .is-generic .browse-thumb {
+	display:none;
+}
+
+#app-list-body .is-generic::before {
+	content:"";
+	position:absolute;
+	inset:calc(var(--thumb) * .27);
+	box-sizing:border-box;
+	border:1.5px solid currentColor;
+	border-radius:3px;
+	background:
+		linear-gradient(currentColor, currentColor) 50% 32% / 56% 1.5px no-repeat,
+		linear-gradient(currentColor, currentColor) 50% 54% / 56% 1.5px no-repeat,
+		linear-gradient(currentColor, currentColor) 50% 76% / 56% 1.5px no-repeat;
+	opacity:.42;
+}
+
+#app-list-body .browse-row.is-unread .browse-thumb-wrap::after {
+	content:"";
+	position:absolute;
+	top:-2px;
+	left:-2px;
+	width:8px;
+	height:8px;
+	border-radius:4px;
+	background:var(--accent);
+	box-shadow:0 0 0 2px var(--bg, #fff);
+}
+
 #app-article {
 	display:flex;
 	flex-direction:column;
@@ -26631,11 +26707,20 @@ header .item-action-link {
 		display:none !important;
 	}
 
-	#app-list-body .browse-row {
+	#app-list-body {
+		--thumb:44px;
+	}
+
+	#app-list-body .browse-row,
+	#app-list-body .browse-row:has(.browse-thumb-wrap) {
 		position:relative;
 		align-items:center;
 		gap:10px;
 		padding:8px 44px 8px 12px;
+	}
+
+	#app-list-body .browse-thumb-wrap {
+		margin-top:0;
 	}
 
 	#app-list-body .browse-more {
@@ -27120,6 +27205,7 @@ ${settingsPanelHTML()}
 			scrolls: { list: 0, article: 0, discussion: 0 },
 			openTotal: 0,
 			moving: false,
+			previews: new Map(),
 			savedIndex: [],
 		};
 	}
@@ -28006,6 +28092,69 @@ ${settingsPanelHTML()}
 		return view === "unread" || view === "all" || view.startsWith("source:");
 	}
 
+	function appRowThumbHTML(story) {
+		let host = "";
+
+		try {
+			host = new URL(story.url).hostname;
+		} catch {
+			return "";
+		}
+
+		const preview = appState?.previews?.get(normalizeURL(story.url) || story.url) || "";
+		const source = preview || (host ? `https://${host}/favicon.ico` : "");
+
+		return `<span class="browse-thumb-wrap${preview ? " has-preview" : ""}"><img class="browse-thumb" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-src="${escapeHTML(source)}"></span>`;
+	}
+
+	function fillAppRowThumbs(list) {
+		for (const image of list.querySelectorAll(".browse-thumb[data-src]")) {
+			const source = image.dataset.src;
+
+			delete image.dataset.src;
+
+			if (!source) {
+				image.parentElement.classList.add("is-generic");
+				continue;
+			}
+
+			image.onerror = () => {
+				image.removeAttribute("src");
+				image.parentElement.classList.add("is-generic");
+			};
+			image.src = source;
+		}
+	}
+
+	function noteAppPreview(url, image) {
+		const state = appState;
+		const address = String(image || "").trim();
+
+		if (!state || !url || !/^https?:/i.test(address)) {
+			return;
+		}
+
+		const key = normalizeURL(url) || url;
+
+		state.previews.set(key, address);
+
+		for (const row of state.ui.shadow.querySelectorAll("#app-list-body .browse-row")) {
+			const link = row.querySelector(".browse-title-link");
+			const wrap = row.querySelector(".browse-thumb-wrap");
+
+			if (!link || !wrap || (normalizeURL(link.getAttribute("href")) || link.getAttribute("href")) !== key) {
+				continue;
+			}
+
+			const picture = wrap.querySelector(".browse-thumb");
+
+			wrap.classList.remove("is-generic");
+			wrap.classList.add("has-preview");
+			picture.onerror = () => wrap.classList.remove("has-preview");
+			picture.src = address;
+		}
+	}
+
 	function openAppRowMenu(row, button) {
 		const shadow = appState?.ui.shadow;
 		const menu = shadow?.querySelector("#app-row-menu");
@@ -28826,6 +28975,8 @@ ${settingsPanelHTML()}
 	}
 
 	function decorateAppRows(list) {
+		fillAppRowThumbs(list);
+
 		for (const element of list.querySelectorAll(".browse-row")) {
 			const href = element.querySelector(".browse-title-link")?.getAttribute("href") || "";
 
@@ -29793,6 +29944,7 @@ ${settingsPanelHTML()}
 		const before = pageAddress();
 
 		setAppSubject({ url, canonical: String(data.canonical || ""), title: title || article.title });
+		noteAppPreview(article.url, data.image);
 
 		if (appState.open && !sameURL(pageAddress(), before)) {
 			appState.open.url = url;
@@ -30237,6 +30389,7 @@ ${settingsPanelHTML()}
 					type: "hi",
 					url: location.href,
 					canonical: canonicalHint(),
+					image: document.querySelector('meta[property="og:image"], meta[name="twitter:image"]')?.getAttribute("content") || "",
 					title: pageTitle(),
 					visible: frameVisibility(),
 				});
