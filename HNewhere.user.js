@@ -24380,7 +24380,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	position:absolute;
 	inset:0;
 	box-sizing:border-box;
-	padding:9px 9px 9px 0;
 	background:var(--rail-bg);
 	--rail-bg:var(--header-bg);
 	--rail-fg:var(--header-text);
@@ -24423,7 +24422,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	align-items:center;
 	gap:6px;
 	min-height:0;
-	padding:0;
+	padding:6px 0;
 	overflow:visible;
 	background:var(--rail-bg);
 }
@@ -26912,7 +26911,6 @@ header .item-action-link {
 	:host {
 		position:relative;
 		inset:auto;
-		padding:0;
 	}
 
 	#app,
