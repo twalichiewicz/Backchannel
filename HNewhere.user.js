@@ -25427,6 +25427,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	position:relative;
 	flex:1 1 auto;
 	min-height:0;
+	isolation:isolate;
 }
 
 .app-article-frame {
