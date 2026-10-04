@@ -31080,6 +31080,95 @@ ${settingsPanelHTML()}
 		}
 	}
 
+	const READER_CHROME_NAMES = /(?:^|[\s_-])(?:nav|navbar|navigation|menu|menus|breadcrumbs?|sidebar|share|shares|sharing|social|related|newsletter|subscribe|subscription|promo|promos|advert|adverts|advertisement|sponsor|sponsored|cookies?|consent|comments?|disqus|footer|masthead|toc|table-of-contents|pagination|pager|popup|modal|paywall|signup|sign-up|login)(?:$|[\s_-])/i;
+	const READER_CONTENT_NAMES = /(?:^|[\s_-])(?:article|content|post|entry|story|main|body|text|prose)(?:$|[\s_-])/i;
+	const READER_UNSEEN_NAMES = /(?:^|[\s_-])(?:sr-only|visually-hidden|visuallyhidden|screen-reader-text|screen-reader-only)(?:$|[\s_-])/i;
+	const READER_CHROME_ROLES = new Set("navigation banner complementary contentinfo search menu menubar dialog alertdialog toolbar tablist".split(" "));
+	const READER_CHROME_TAGS = new Set("DIV SECTION UL OL DL TABLE DETAILS HEADER FOOTER ASIDE NAV FORM LI P".split(" "));
+	const READER_TITLE_BREAK = "\\s+(?:[|\\u2013\\u2014\\u00b7\\u00bb-]|::)\\s+";
+
+	function readerTextLength(element) {
+		return (element?.textContent || "").replace(/\s+/g, " ").trim().length;
+	}
+
+	function readerKey(text) {
+		return String(text || "")
+			.toLowerCase()
+			.replace(/[^\p{L}\p{N}]+/gu, "");
+	}
+
+	function readerLinkShare(element) {
+		const length = readerTextLength(element);
+
+		if (!length) {
+			return 0;
+		}
+
+		let linked = 0;
+
+		for (const link of element.querySelectorAll("a")) {
+			linked += readerTextLength(link);
+		}
+
+		return linked / length;
+	}
+
+	function readerIsLinkList(element) {
+		const tag = element.nodeName.toUpperCase();
+
+		if (tag === "UL" || tag === "OL") {
+			const items = [...element.children].filter((item) => item.nodeName.toUpperCase() === "LI");
+			const linked = items.filter((item) => item.querySelector("a") && readerLinkShare(item) >= 0.9);
+
+			return items.length >= 3 && linked.length >= items.length * 0.8;
+		}
+
+		return element.querySelectorAll("a").length >= 3 && readerLinkShare(element) >= 0.8;
+	}
+
+	function readerSiteKeys(doc, url) {
+		const keys = [
+			doc.querySelector('meta[property="og:site_name"]')?.getAttribute("content"),
+			doc.querySelector('meta[name="application-name"]')?.getAttribute("content"),
+		]
+			.map(readerKey)
+			.filter((key) => key.length >= 3);
+
+		try {
+			const labels = new URL(url).hostname.split(".");
+			const at = labels.length >= 3 && /^(?:co|com|org|net|ac|gov)$/.test(labels[labels.length - 2]) ? 3 : 2;
+			const label = readerKey(labels[labels.length - at]);
+
+			if (label.length >= 5) {
+				keys.push(label);
+			}
+		} catch {}
+
+		return keys;
+	}
+
+	function readerTrimTitle(title, doc, url) {
+		const keys = readerSiteKeys(doc, url);
+		const names = (part) => {
+			const key = readerKey(part);
+
+			return key.length >= 3 && keys.some((site) => site === key || key.includes(site) || (key.length >= 5 && site.includes(key)));
+		};
+		const tail = new RegExp(`^(.*\\S)${READER_TITLE_BREAK}(\\S.*)$`).exec(title);
+
+		if (tail && tail[1].length >= 8 && names(tail[2])) {
+			return tail[1];
+		}
+
+		const head = new RegExp(`^(\\S.*?)${READER_TITLE_BREAK}(.*\\S)$`).exec(title);
+
+		if (head && head[2].length >= 8 && names(head[1])) {
+			return head[2];
+		}
+
+		return title;
+	}
+
 	function readerTitle(doc, url) {
 		for (const candidate of [
 			doc.querySelector('meta[property="og:title"]')?.getAttribute("content"),
@@ -31090,29 +31179,193 @@ ${settingsPanelHTML()}
 			const title = String(candidate || "").trim().replace(/\s+/g, " ");
 
 			if (title) {
-				return title;
+				return readerTrimTitle(title, doc, url);
 			}
 		}
 
 		return hostLabel(url);
 	}
 
-	function readerRoot(doc) {
-		const length = (element) =>
-			(element?.textContent || "").replace(/\s+/g, " ").trim().length;
+	function readerRepeatsTitle(text, title) {
+		const a = readerKey(text);
+		const b = readerKey(title);
 
+		if (!a || !b) {
+			return false;
+		}
+
+		if (a === b) {
+			return true;
+		}
+
+		const [short, long] = a.length < b.length ? [a, b] : [b, a];
+
+		return short.length >= 10 && short.length >= long.length * 0.6 && long.includes(short);
+	}
+
+	function dropReaderChrome(root) {
+		const total = readerTextLength(root);
+
+		for (const element of [...root.querySelectorAll("*")]) {
+			if (!root.contains(element)) {
+				continue;
+			}
+
+			const names = `${element.getAttribute("class") || ""} ${element.id || ""}`;
+
+			if (
+				READER_UNSEEN_NAMES.test(names) ||
+				/(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)/i.test(element.getAttribute("style") || "")
+			) {
+				element.remove();
+				continue;
+			}
+
+			if (!READER_CHROME_TAGS.has(element.nodeName.toUpperCase()) || element.closest("pre, code")) {
+				continue;
+			}
+
+			const chrome =
+				READER_CHROME_ROLES.has(String(element.getAttribute("role") || "").toLowerCase()) ||
+				READER_CHROME_NAMES.test(names);
+
+			if (chrome && !(READER_CONTENT_NAMES.test(names) && readerTextLength(element) >= total * 0.3)) {
+				element.remove();
+			}
+		}
+	}
+
+	function readerScoredRoot(doc) {
+		const scores = new Map();
+		const prose = new Map();
+
+		for (const block of doc.body.querySelectorAll("p, pre, blockquote, li")) {
+			const length = readerTextLength(block);
+
+			if (length < 60 || block.closest("nav, aside, footer, form") || readerLinkShare(block) > 0.5) {
+				continue;
+			}
+
+			let weight = 1;
+			let depth = 0;
+
+			for (let up = block.parentElement; up && up !== doc.documentElement; up = up.parentElement) {
+				prose.set(up, (prose.get(up) || 0) + length);
+
+				if (depth < 4) {
+					scores.set(up, (scores.get(up) || 0) + (1 + Math.min(3, length / 100)) * weight);
+					weight *= 0.6;
+				}
+
+				depth += 1;
+			}
+		}
+
+		let best = null;
+		let top = 0;
+
+		for (const [element, score] of scores) {
+			if (score > top) {
+				best = element;
+				top = score;
+			}
+		}
+
+		while (best && best !== doc.body && best.parentElement && (prose.get(best.parentElement) || 0) >= (prose.get(best) || 0) * 1.2) {
+			best = best.parentElement;
+		}
+
+		return best && readerTextLength(best) >= READER_MIN_CHARS ? best : null;
+	}
+
+	function readerRoot(doc) {
 		for (const [candidate, floor] of [
 			[doc.querySelector("main article"), 800],
 			[doc.querySelector("article"), 800],
 			[doc.querySelector("main"), READER_MIN_CHARS],
 			[doc.querySelector("[role='main']"), READER_MIN_CHARS],
 		]) {
-			if (candidate && length(candidate) >= floor) {
+			if (candidate && readerTextLength(candidate) >= floor) {
+				dropReaderChrome(candidate);
 				return candidate;
 			}
 		}
 
-		return doc.body;
+		if (!doc.body) {
+			return null;
+		}
+
+		dropReaderChrome(doc.body);
+
+		return readerScoredRoot(doc) || doc.body;
+	}
+
+	function tidyReaderContent(content) {
+		for (const link of content.querySelectorAll("a")) {
+			if (link.nextSibling?.nodeName === "A") {
+				link.after(" ");
+			}
+		}
+
+		let previous = "";
+
+		for (const block of [...content.querySelectorAll("p, h1, h2, h3, h4, h5, h6, li, blockquote, figcaption")]) {
+			if (block.querySelector("p, li, blockquote")) {
+				continue;
+			}
+
+			const text = (block.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
+
+			if (text.length >= 15 && text === previous) {
+				block.remove();
+				continue;
+			}
+
+			previous = text || previous;
+		}
+
+		const prose = [...content.querySelectorAll("p")].filter(
+			(paragraph) =>
+				!paragraph.querySelector("p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, table, figure") &&
+				readerTextLength(paragraph) >= 140 &&
+				readerLinkShare(paragraph) < 0.5,
+		);
+
+		if (prose.length >= 2) {
+			const first = prose[0];
+			const last = prose[prose.length - 1];
+
+			for (const element of [...content.querySelectorAll("ul, ol, p")]) {
+				if (!content.contains(element) || element.contains(first) || element.contains(last)) {
+					continue;
+				}
+
+				const outside =
+					first.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_PRECEDING ||
+					last.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING;
+
+				if (outside && readerIsLinkList(element)) {
+					element.remove();
+				}
+			}
+		}
+
+		for (let pass = 0; pass < 3; pass += 1) {
+			let removed = false;
+
+			for (const element of [...content.querySelectorAll("p, h1, h2, h3, h4, h5, h6, li, ul, ol, dl, blockquote, figure, figcaption")]) {
+				if (!element.textContent.trim() && !element.querySelector("img, pre, table, hr")) {
+					element.remove();
+					removed = true;
+				}
+			}
+
+			if (!removed) {
+				break;
+			}
+		}
+
+		return prose[0] || null;
 	}
 
 	function extractReaderArticle(html, url) {
@@ -31128,14 +31381,14 @@ ${settingsPanelHTML()}
 			junk.remove();
 		}
 
+		const title = readerTitle(doc, url);
 		const root = readerRoot(doc);
 
 		if (!root) {
 			return null;
 		}
 
-		const title = readerTitle(doc, url);
-		const byline = String(
+		let byline = String(
 			doc.querySelector('meta[name="author"]')?.getAttribute("content") || "",
 		).trim();
 		const content = doc.createElement("div");
@@ -31143,10 +31396,21 @@ ${settingsPanelHTML()}
 		content.append(...root.childNodes);
 		cleanReaderTree(content, url, doc);
 
-		const lead = content.querySelector("h1, h2");
+		const firstProse = tidyReaderContent(content);
 
-		if (lead && lead.textContent.trim().replace(/\s+/g, " ") === title) {
-			lead.remove();
+		for (const heading of [...content.querySelectorAll("h1, h2")].slice(0, 3)) {
+			if (
+				(!firstProse || firstProse.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_PRECEDING) &&
+				readerRepeatsTitle(heading.textContent, title)
+			) {
+				heading.remove();
+			}
+		}
+
+		const body = (content.textContent || "").replace(/\s+/g, " ").trim();
+
+		if (byline && body.slice(0, 600).toLowerCase().includes(byline.toLowerCase())) {
+			byline = "";
 		}
 
 		return {
@@ -31154,7 +31418,7 @@ ${settingsPanelHTML()}
 			byline,
 			site: hostLabel(url),
 			content,
-			chars: (content.textContent || "").replace(/\s+/g, " ").trim().length,
+			chars: body.length,
 		};
 	}
 
