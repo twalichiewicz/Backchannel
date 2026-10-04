@@ -207,6 +207,7 @@
 		appListWidth: "HNewhere:app_list_width",
 		appPanes: "HNewhere:app_panes",
 		appZoom: "HNewhere:app_zoom",
+		readOut: "HNewhere:read_out",
 	};
 
 	// #region hnewhere-test-export
@@ -25664,6 +25665,48 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	font-weight:bold;
 }
 
+.app-card-actions {
+	display:flex;
+	flex-direction:column;
+	align-items:stretch;
+	gap:8px;
+	margin-top:8px;
+}
+
+.app-card-button {
+	min-height:32px;
+	padding:6px 18px;
+	border:1px solid var(--border);
+	border-radius:8px;
+	background:var(--bg);
+	color:var(--text);
+	font:inherit;
+	font-weight:600;
+	cursor:pointer;
+}
+
+.app-card-button.is-primary {
+	border-color:transparent;
+	background:var(--rail-bg);
+	color:var(--rail-fg);
+}
+
+@media (hover: hover) {
+	.app-card-button:hover:not(:disabled) {
+		filter:brightness(.95);
+	}
+}
+
+.app-card-button:focus-visible {
+	outline:2px solid var(--rail-bg);
+	outline-offset:2px;
+}
+
+.app-card-button:disabled {
+	opacity:.5;
+	cursor:default;
+}
+
 #panel.app-docked > header {
 	--header-bg:var(--bg);
 	--header-text:var(--text);
@@ -30099,6 +30142,7 @@ ${settingsPanelHTML()}
 		article.frame?.remove();
 		article.frame = null;
 		pane.querySelector(".app-article-image")?.remove();
+		pane.querySelector(".app-article-note")?.remove();
 
 		if (mode === "reader") {
 			showAppReader(article);
@@ -30247,22 +30291,229 @@ ${settingsPanelHTML()}
 		const card = document.createElement("div");
 		const title = document.createElement("div");
 		const note = document.createElement("div");
-		const open = document.createElement("a");
+		const actions = document.createElement("div");
+		const open = document.createElement("button");
+		const read = document.createElement("button");
 
 		card.className = "app-article-note";
 		title.className = "app-card-title";
 		title.textContent = article.title || hostLabel(article.url);
-		note.textContent = hostLabel(article.url) + " can't be shown here.";
-		open.className = "item-action-link app-card-open";
-		open.href = article.url;
-		open.target = "_blank";
-		open.rel = "noopener";
-		open.textContent = "Open in a new tab";
+		note.className = "app-card-note";
+		note.textContent = `${hostLabel(article.url)} links can't be loaded directly.`;
+		actions.className = "app-card-actions";
+		open.type = "button";
+		open.className = "app-card-button is-primary app-card-open";
+		open.textContent = "Open in a new tab with Sidebar";
 		open.onclick = () => {
 			rememberAppArrival(article.url).catch(console.error);
+			window.open(article.url, "_blank", "noopener");
 		};
-		card.append(title, note, open);
+		read.type = "button";
+		read.className = "app-card-button app-card-read";
+		read.textContent = "Scrape link content";
+		read.onclick = () => {
+			requestAppReadOut(article, card).catch(console.error);
+		};
+		actions.append(open, read);
+		card.append(title, note, actions);
 		pane.appendChild(card);
+		loadSettings()
+			.then((settings) => {
+				if (settings.sidebarEnabled === false) {
+					open.textContent = "Open in a new tab";
+				}
+			})
+			.catch(console.error);
+	}
+
+	function readOutKey(url) {
+		return normalizeURL(url).replace(/^www\./, "");
+	}
+
+	function readOutMatches(request, href, canonical) {
+		let asked = null;
+		let page = null;
+		let named = null;
+
+		try {
+			asked = new URL(request?.url);
+			page = new URL(href);
+		} catch {
+			return false;
+		}
+
+		try {
+			named = canonical ? new URL(canonical, href) : null;
+		} catch {
+			named = null;
+		}
+
+		const site = (url) => readOutKey(`${url.protocol}//${url.hostname}/`);
+
+		if (
+			!/^https?:$/.test(asked.protocol) ||
+			site(page) !== site(asked) ||
+			page.port !== asked.port ||
+			(page.protocol !== asked.protocol && page.protocol !== "https:")
+		) {
+			return false;
+		}
+
+		const key = readOutKey(asked.href);
+
+		return (
+			readOutKey(page.href) === key ||
+			(Boolean(named) && site(named) === site(page) && readOutKey(named.href) === key)
+		);
+	}
+
+	async function requestAppReadOut(article, card) {
+		const note = card.querySelector(".app-card-note");
+		const read = card.querySelector(".app-card-read");
+		const host = hostLabel(article.url);
+		const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+		const stop = (text) => {
+			clearInterval(poll);
+			read.disabled = false;
+			note.textContent = text;
+		};
+		let busy = false;
+
+		read.disabled = true;
+		note.textContent = `Scraping ${host} in a new tab\u2026`;
+
+		const saving = save(STORAGE.readOut, {
+			id,
+			url: article.url,
+			key: readOutKey(article.url),
+			until: Date.now() + APP_READ_OUT_MS,
+		});
+
+		window.open(article.url, "_blank", "noopener");
+		await saving;
+
+		const poll = setInterval(async () => {
+			if (busy) {
+				return;
+			}
+
+			if (article.dead || article.mode !== "card") {
+				clearInterval(poll);
+				return;
+			}
+
+			busy = true;
+
+			const record = await load(STORAGE.readOut, null);
+
+			busy = false;
+
+			if (!record || record.id !== id) {
+				stop(`${host} links can't be loaded directly.`);
+				return;
+			}
+
+			if (!record.article && !record.failed && Date.now() <= record.until + 2000) {
+				return;
+			}
+
+			await save(STORAGE.readOut, null);
+
+			const reader = record.article ? readerFromStored(record.article, article.url) : null;
+
+			if (!reader || reader.chars < READER_MIN_CHARS || article.dead || article.mode !== "card") {
+				stop(`${host} couldn't be scraped either.`);
+				return;
+			}
+
+			clearInterval(poll);
+			article.reader = reader;
+			applyAppArticleMode(article, "reader");
+		}, 400);
+	}
+
+	function readerFromStored(stored, url) {
+		const doc = new DOMParser().parseFromString("", "text/html");
+		const content = doc.createElement("div");
+
+		content.innerHTML = String(stored?.html || "");
+		cleanReaderTree(content, url, doc);
+
+		return {
+			title: String(stored?.title || "") || hostLabel(url),
+			byline: String(stored?.byline || ""),
+			site: hostLabel(url),
+			content,
+			chars: (content.textContent || "").replace(/\s+/g, " ").trim().length,
+		};
+	}
+
+	async function answerReadOut() {
+		const wanted = async () => {
+			const record = await load(STORAGE.readOut, null);
+
+			if (!record || record.article || record.failed || !(Date.now() < record.until)) {
+				return null;
+			}
+
+			return readOutMatches(record, location.href, canonicalHint()) ? record : null;
+		};
+		let request = await wanted();
+
+		if (!request && history.length <= 1) {
+			await new Promise((resolve) => setTimeout(resolve, 1200));
+			request = await wanted();
+		}
+
+		if (!request) {
+			return;
+		}
+
+		await documentReady();
+
+		let reader = null;
+		let last = -1;
+
+		while (Date.now() < request.until) {
+			const current = await wanted();
+
+			if (!current || current.id !== request.id) {
+				return;
+			}
+
+			const copy = document.cloneNode(true);
+
+			for (const own of copy.querySelectorAll(`${OWN_SURFACE_SELECTOR},#hn-collapse-button,#hn-submit-button,#${BUTTON_PENDING_ID}`)) {
+				own.remove();
+			}
+
+			const found = readerFromDocument(copy, location.href);
+			const chars = found?.chars || 0;
+
+			if (chars >= READER_MIN_CHARS && chars === last && document.readyState === "complete") {
+				reader = found;
+				break;
+			}
+
+			last = chars;
+			await new Promise((resolve) => setTimeout(resolve, 500));
+		}
+
+		if (!reader) {
+			await save(STORAGE.readOut, { ...request, failed: true });
+			return;
+		}
+
+		await save(STORAGE.readOut, {
+			...request,
+			article: {
+				title: reader.title,
+				byline: reader.byline,
+				html: reader.content.innerHTML,
+				chars: reader.chars,
+			},
+		});
+		window.close();
 	}
 
 	function postToFrame(message) {
@@ -30844,6 +31095,7 @@ ${settingsPanelHTML()}
 	const APP_LOAD_GRACE_MS = 600;
 	const APP_HIDDEN_GRACE_MS = 2000;
 	const APP_FRAME_CAP_MS = 8000;
+	const APP_READ_OUT_MS = 25000;
 	const APP_FRAME_FIT_STEPS = 4;
 	const APP_FRAME_HEIGHT_STEPS = 6;
 	const APP_FRAME_HEIGHT_PROBE = 100;
@@ -31508,8 +31760,10 @@ ${settingsPanelHTML()}
 			return null;
 		}
 
-		const doc = new DOMParser().parseFromString(text, "text/html");
+		return readerFromDocument(new DOMParser().parseFromString(text, "text/html"), url);
+	}
 
+	function readerFromDocument(doc, url) {
 		for (const junk of doc.querySelectorAll("script, style, noscript, template")) {
 			junk.remove();
 		}
@@ -31795,6 +32049,7 @@ ${settingsPanelHTML()}
 			return;
 		}
 
+		answerReadOut().catch(console.error);
 		watchSoftNavigation();
 
 		await runPagePass();
