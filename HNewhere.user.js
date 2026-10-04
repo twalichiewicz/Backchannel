@@ -26180,11 +26180,9 @@ header .item-action-link {
 #app-bar-back,
 #app-search,
 #app-search-page,
-#app-save-menu,
 #app-row-menu,
 #app-list-foot,
 #app-list-heading,
-.app-view-open-slot,
 .browse-more,
 .browse-sources-total,
 .app-settings-version,
@@ -26489,8 +26487,12 @@ header .item-action-link {
 		fill:currentColor;
 	}
 
-	#app-bar-more[aria-expanded="true"],
-	#app-bar-save[aria-expanded="true"],
+	.app-stack-button[hidden] {
+		display:none;
+	}
+
+	#app-bar-save[aria-pressed="true"],
+	#app-bar-like[aria-pressed="true"],
 	#app-bar-discussion[aria-pressed="true"] {
 		background:var(--rail-bg);
 		box-shadow:0 1px 2px rgba(0,0,0,.16), 0 6px 14px rgba(0,0,0,.16);
@@ -26512,64 +26514,6 @@ header .item-action-link {
 		box-shadow:none;
 		color:inherit;
 		font:600 10px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, sans-serif;
-	}
-
-	#app-save-menu {
-		display:block !important;
-	}
-
-	#app-save-menu[hidden] {
-		display:none !important;
-	}
-
-	.app-save-row {
-		display:flex;
-		align-items:center;
-		gap:4px;
-	}
-
-	.app-save-row .app-article-actions {
-		display:inline-flex;
-		align-items:center;
-		gap:4px;
-	}
-
-	.app-save-row .app-head-icon {
-		width:40px;
-		height:40px;
-	}
-
-	.app-view-open-slot {
-		display:block !important;
-		margin-top:8px;
-		padding-top:8px;
-		border-top:1px solid var(--surface-border);
-	}
-
-	#app-view-menu.app-view-plain .settings-head,
-	#app-view-menu.app-view-plain .settings-field:not(.app-view-open-slot) {
-		display:none;
-	}
-
-	#app-view-menu.app-view-plain .app-view-open-slot {
-		margin-top:0;
-		padding-top:0;
-		border-top:0;
-	}
-
-	.app-view-open-slot #app-article-open {
-		display:inline-flex;
-		align-items:center;
-		gap:8px;
-		width:auto;
-		height:auto;
-		padding:4px 0;
-		color:var(--surface-text);
-	}
-
-	.app-view-open-slot #app-article-open::after {
-		content:attr(aria-label);
-		font-size:12px;
 	}
 
 	#app:not([data-stage="list"]) #app-article {
@@ -27226,7 +27170,6 @@ ${APP_VIEWS.filter((view) => APP_FILLED_VIEWS.includes(view.id))
 <button id="app-zoom-in" type="button" class="stepper-button" aria-label="Bigger text">+</button>
 </div>
 </div>
-<div class="settings-field app-view-open-slot"></div>
 </div>
 <button id="app-search" class="app-stack-button" type="button" aria-label="Search the list" aria-expanded="false" aria-controls="app-search-bar" hidden>${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</button>
 <div id="app-search-page" class="app-search-page" role="dialog" aria-label="Search Backchannel" hidden><div class="app-search-head"><input id="app-search-input" class="app-search-input" type="search" placeholder="Search Backchannel" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search Backchannel"><button id="app-search-close" class="app-search-close" type="button">Cancel</button></div><div id="app-search-results" class="app-search-results"></div></div>
@@ -27240,8 +27183,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 </nav>
 <button id="app-bar-back" class="app-stack-button" type="button" aria-label="Back to the articles" data-glyph="down" hidden>${APP_ICON('<path d="M2.2 5.1a1 1 0 0 1 1.4-.1L8 9l4.4-4a1 1 0 0 1 1.3 1.5l-5 4.6a1 1 0 0 1-1.4 0l-5-4.6a1 1 0 0 1-.1-1.4z"/>')}</button>
 <div id="app-row-menu" class="app-view-menu app-row-menu" role="menu" aria-label="This article" hidden></div>
-<div id="app-bar" class="app-bar" hidden><button id="app-bar-more" class="app-stack-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="More">${APP_ICON('<circle cx="8" cy="2.6" r="2.1"/><circle cx="8" cy="8" r="2.1"/><circle cx="8" cy="13.4" r="2.1"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-save-menu" aria-label="Save or watch">${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
-<div id="app-save-menu" class="app-view-menu app-save-menu" role="menu" aria-label="Save or watch" hidden><span class="app-save-row"></span></div>
+<div id="app-bar" class="app-bar" hidden><button id="app-bar-open" class="app-stack-button" type="button" aria-label="Open the original page" hidden>${APP_ICON('<path d="M9 2h5v5h-1.7V4.9L7.7 9.5 6.5 8.3l4.6-4.6H9z"/><path d="M3.5 4H7v1.7H4.7v5.6h5.6V9H12v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-pressed="false" aria-label="Favorite" hidden>${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-like" class="app-stack-button" type="button" aria-pressed="false" aria-label="Like" hidden>${APP_ICON('<path d="M2 7.2h2.6V14H2.5a.5.5 0 0 1-.5-.5z"/><path d="M5.8 14V6.7l2.5-4.4a1.2 1.2 0 0 1 2.2.9L10 6h3a1.4 1.4 0 0 1 1.37 1.7l-1 4.7A2 2 0 0 1 11.4 14z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
 <section id="app-list" aria-label="Articles">
 <div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="app-head-icon" type="button" aria-label="Mark all as read" title="Mark all as read">${APP_MARK_READ_ICON}</button><button id="app-list-sync" class="app-head-icon" type="button" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button></span></div>
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
@@ -27531,7 +27473,7 @@ ${settingsPanelHTML()}
 		const paintAppZoom = () => {
 			const zoom = APP_ZOOM_STEPS[zoomAt];
 
-			shadow.host.style.setProperty("--app-zoom", String(zoom));
+			shadow.host.style.setProperty("--app-zoom", String(appIsPhone() ? 1 : zoom));
 			zoomLevel.value = String(Math.round(zoom * 100));
 			zoomOut.disabled = zoomAt === 0;
 			zoomIn.disabled = zoomAt === APP_ZOOM_STEPS.length - 1;
@@ -27641,9 +27583,8 @@ ${settingsPanelHTML()}
 				}
 
 				settleAppList();
-				homeAppArticleActions();
 				setAppViewMenuOpen(false);
-				setAppSaveMenuOpen(false);
+				paintAppZoom();
 				setAppSearchOpen(false);
 
 				if (!appIsPhone() && appRoot.dataset.stage !== "list") {
@@ -27831,27 +27772,18 @@ ${settingsPanelHTML()}
 
 		shadow.querySelector("#app-bar-back").onclick = () => setAppStage("list");
 		shadow.querySelector("#app-bar-discussion").onclick = () => setAppStage(appRoot.dataset.stage === "discussion" ? "article" : "discussion");
-		homeAppArticleActions();
-
-		const saveButton = shadow.querySelector("#app-bar-save");
-		const saveMenu = shadow.querySelector("#app-save-menu");
-
-		saveButton.onclick = () => setAppSaveMenuOpen(saveMenu.hidden);
 		shadow.addEventListener("pointerdown", (event) => {
 			const path = event.composedPath();
-
-			if (!saveMenu.hidden && !path.includes(saveMenu) && !path.includes(saveButton)) {
-				setAppSaveMenuOpen(false);
-			}
-
 			const rowMenu = shadow.querySelector("#app-row-menu");
 
 			if (!rowMenu.hidden && !path.includes(rowMenu) && !path.some((node) => node?.classList?.contains("browse-more"))) {
 				closeAppRowMenu();
 			}
 		});
-		shadow.querySelector("#app-bar-more").onclick = () => setAppViewMenuOpen(shadow.querySelector("#app-view-menu").hidden);
-		window.addEventListener("blur", () => setAppSaveMenuOpen(false));
+		shadow.querySelector("#app-bar-open").onclick = () => shadow.querySelector("#app-article-open").click();
+		shadow.querySelector("#app-bar-save").onclick = () => shadow.querySelector('#app-article-actions [data-item-action="fave"]')?.click();
+		shadow.querySelector("#app-bar-like").onclick = () => shadow.querySelector("#app-article-actions .app-head-votes:not(.hidden) .app-head-thumb-up")?.click();
+		new MutationObserver(() => paintAppBarActions()).observe(shadow.querySelector(".app-pane-middle"), { attributes: true, childList: true, characterData: true, subtree: true });
 		const searchButton = shadow.querySelector("#app-search");
 		const searchBar = shadow.querySelector("#app-search-page");
 		const searchInput = shadow.querySelector("#app-search-input");
@@ -28588,7 +28520,6 @@ ${settingsPanelHTML()}
 
 		noteAppStageScroll(was);
 		appState.moving = true;
-		setAppSaveMenuOpen(false);
 		setAppViewMenuOpen(false);
 
 		const raiseSheet = () => {
@@ -28693,57 +28624,26 @@ ${settingsPanelHTML()}
 		target.addEventListener("touchend", (event) => end(event.changedTouches[0]?.clientY ?? -1), { passive: true });
 	}
 
-	function homeAppArticleActions() {
+	function paintAppBarActions() {
 		const shadow = appState?.ui.shadow;
-		const middle = shadow?.querySelector(".app-pane-middle");
+		const save = shadow?.querySelector("#app-bar-save");
 
-		if (!middle) {
+		if (!save) {
 			return;
 		}
 
-		const actions = shadow.querySelector("#app-article-actions");
-		const toggle = shadow.querySelector("#app-view-toggle");
-		const open = shadow.querySelector("#app-article-open");
-		const sep = shadow.querySelector("#app-article-tools-sep");
+		const favorite = shadow.querySelector('#app-article-actions [data-item-action="fave"]');
+		const vote = shadow.querySelector("#app-article-actions .app-head-votes:not(.hidden) .app-head-thumb-up");
+		const like = shadow.querySelector("#app-bar-like");
+		const saved = favorite?.textContent.trim() === "unfavorite";
 
-		if (appIsPhone()) {
-			shadow.querySelector("#app-save-menu .app-save-row").append(actions);
-			shadow.querySelector("#app-view-menu .app-view-open-slot").append(open);
-			return;
-		}
-
-		if (actions.parentElement !== middle) {
-			sep.before(actions);
-			toggle.after(open);
-		}
-	}
-
-	function setAppSaveMenuOpen(open) {
-		const shadow = appState?.ui.shadow;
-		const menu = shadow?.querySelector("#app-save-menu");
-		const button = shadow?.querySelector("#app-bar-save");
-
-		if (!menu || !button) {
-			return;
-		}
-
-		const show = Boolean(open);
-
-		menu.hidden = !show;
-		button.setAttribute("aria-expanded", String(show));
-
-		if (!show) {
-			return;
-		}
-
-		hideAppTip();
-
-		const box = button.getBoundingClientRect();
-		const width = menu.offsetWidth;
-
-		menu.style.left = `${Math.round(Math.max(8, Math.min(box.left + box.width / 2 - width / 2, window.innerWidth - width - 8)))}px`;
-		menu.style.top = "auto";
-		menu.style.bottom = `${Math.round(window.innerHeight - box.top + 10)}px`;
+		save.hidden = !favorite;
+		save.setAttribute("aria-pressed", String(saved));
+		save.setAttribute("aria-label", saved ? "Unfavorite" : "Favorite");
+		like.hidden = !vote;
+		like.setAttribute("aria-pressed", vote?.getAttribute("aria-pressed") || "false");
+		like.setAttribute("aria-label", vote?.title || "Like");
+		shadow.querySelector("#app-bar-open").hidden = shadow.querySelector("#app-article-open").hidden;
 	}
 
 	function compactCount(count) {
@@ -28798,6 +28698,7 @@ ${settingsPanelHTML()}
 
 		discussion.setAttribute("aria-pressed", String(stage === "discussion"));
 		discussion.querySelector(".rail-badge").textContent = total ? compactCount(total) : "";
+		paintAppBarActions();
 		const rail = shadow.querySelector("#app-rail");
 
 		shadow.querySelector("#app").style.setProperty("--app-rail-height", `${rail.offsetHeight}px`);
@@ -29520,14 +29421,12 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		const show = Boolean(open) && (!toggle.hidden || appIsPhone());
+		const show = Boolean(open) && !toggle.hidden && !appIsPhone();
 
 		menu.hidden = !show;
-		menu.classList.toggle("app-view-plain", toggle.hidden);
 		shadow.querySelector("#app-view-arrow")?.toggleAttribute("hidden", !show);
 		toggle.setAttribute("aria-expanded", String(show));
 		toggle.classList.toggle("is-open", show);
-		shadow.querySelector("#app-bar-more")?.setAttribute("aria-expanded", String(show));
 
 		if (show) {
 			placeAppViewMenu();
@@ -29544,9 +29443,8 @@ ${settingsPanelHTML()}
 			return;
 		}
 
-		const phone = appIsPhone();
-		const box = (phone ? shadow.querySelector("#app-bar-more") : toggle).getBoundingClientRect();
-		const room = phone ? { left: 0, right: window.innerWidth } : pane.getBoundingClientRect();
+		const box = toggle.getBoundingClientRect();
+		const room = pane.getBoundingClientRect();
 		const width = menu.offsetWidth;
 		const left = Math.min(
 			Math.max(box.left + box.width / 2 - width / 2, room.left + 8),
@@ -29556,12 +29454,11 @@ ${settingsPanelHTML()}
 		const arrow = shadow.querySelector("#app-view-arrow");
 
 		menu.style.left = `${Math.round(left)}px`;
-		menu.style.top = phone ? `${Math.round(box.top - menu.offsetHeight - 9)}px` : `${Math.round(box.bottom + 9)}px`;
+		menu.style.top = `${Math.round(box.bottom + 9)}px`;
 
 		if (arrow) {
 			arrow.style.left = `${Math.round(box.left + box.width / 2 - 5)}px`;
-			arrow.style.top = phone ? `${Math.round(box.top - 10)}px` : `${Math.round(box.bottom + 4)}px`;
-			arrow.classList.toggle("is-down", phone);
+			arrow.style.top = `${Math.round(box.bottom + 4)}px`;
 		}
 	}
 
@@ -30254,10 +30151,9 @@ ${settingsPanelHTML()}
 		if (event.key === "Escape") {
 			const shadow = appState.ui.shadow;
 
-			if (!shadow.querySelector("#app-saved-menu").hidden || !shadow.querySelector("#app-view-menu").hidden || !shadow.querySelector("#app-save-menu").hidden || !shadow.querySelector("#app-search-page").hidden || !shadow.querySelector("#app-row-menu").hidden) {
+			if (!shadow.querySelector("#app-saved-menu").hidden || !shadow.querySelector("#app-view-menu").hidden || !shadow.querySelector("#app-search-page").hidden || !shadow.querySelector("#app-row-menu").hidden) {
 				setAppSavedMenuOpen(false);
 				setAppViewMenuOpen(false);
-				setAppSaveMenuOpen(false);
 				setAppSearchOpen(false);
 				closeAppRowMenu();
 				return;
