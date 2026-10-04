@@ -361,6 +361,7 @@
 		annotationsWhenSidebarClosed: false,
 		notepad: true,
 		pdfReader: false,
+		sidebarEnabled: true,
 		autoOpenSidebar: false,
 		autoOpenSidebarOnlyFromHN: false,
 		hideWithoutDiscussion: false,
@@ -12424,6 +12425,42 @@ header button svg {
 	transform:translateY(-1px) rotate(-45deg);
 }
 
+.settings-option input[type="checkbox"].settings-switch {
+	position:relative;
+	display:inline-block;
+	width:26px;
+	margin:0;
+	border-color:transparent;
+	border-radius:999px;
+	color:inherit;
+	background:#b9b9b0;
+	background:color-mix(in srgb, currentColor 32%, transparent);
+}
+
+.settings-option input[type="checkbox"].settings-switch:checked {
+	background:#0b63ce;
+	background:AccentColor;
+}
+
+.settings-option input[type="checkbox"].settings-switch::after {
+	content:"";
+	position:absolute;
+	top:1px;
+	left:1px;
+	width:11px;
+	height:11px;
+	border:0;
+	border-radius:50%;
+	background:#fff;
+	box-shadow:0 1px 2px rgba(0,0,0,.25);
+	transform:none;
+	transition:transform .16s ease;
+}
+
+.settings-option input[type="checkbox"].settings-switch:checked::after {
+	transform:translateX(11px);
+}
+
 .settings-option input[type="checkbox"]:focus-visible {
 	outline:2px solid #0b63ce;
 	outline:2px solid AccentColor;
@@ -12947,6 +12984,47 @@ header button svg {
 
 .settings-option-hint-slow {
 	margin:6px 0 0;
+}
+
+.settings-app-only {
+	display:none;
+}
+
+#app-settings-content .settings-app-only {
+	display:block;
+}
+
+#app-settings-modal[data-section="sidebar"] #app-settings-heading {
+	display:none;
+}
+
+.settings-sidebar-head {
+	display:flex;
+	align-items:center;
+	gap:10px;
+	margin:0 0 4px;
+	cursor:pointer;
+}
+
+.settings-sidebar-title {
+	font-size:13px;
+	font-weight:600;
+}
+
+.settings-sidebar-hint {
+	margin:0 0 14px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.4;
+}
+
+.settings-panel.sidebar-off .settings-sidebar-hint {
+	margin-bottom:0;
+}
+
+.settings-panel.sidebar-off .settings-group:has(#setting-sidebar-enabled) > :not(.settings-app-only),
+.settings-panel.sidebar-off .settings-field:has(.button-designer) {
+	display:none;
 }
 
 .settings-notice {
@@ -13609,6 +13687,10 @@ ${
 <div id="settings-pdf-notice" class="settings-notice" hidden>Backchannel not supported in Firefox's PDF viewer</div>
 
 <div class="settings-group">
+<div class="settings-app-only">
+<label class="settings-option settings-sidebar-head"><span class="settings-sidebar-title">Sidebar</span><input id="setting-sidebar-enabled" class="settings-switch" role="switch" data-setting="sidebarEnabled" type="checkbox" aria-describedby="settings-sidebar-hint"></label>
+<div id="settings-sidebar-hint" class="settings-sidebar-hint">Sidebar allows you to access Backchannel features like discussions and frontpages directly onto the sites you visit.</div>
+</div>
 <label class="settings-option">
 <input id="setting-auto-open-sidebar" data-setting="autoOpenSidebar" type="checkbox">
 <span>Automatically open the Sidebar when a discussion exists</span>
@@ -13686,7 +13768,7 @@ All stored locally.
 <div class="settings-field">
 <div class="button-designer">
 <div class="button-designer-controls">
-<div class="settings-field-label">Button</div>
+<div class="settings-field-label">Backchannel toggle</div>
 <div class="segmented">
 <label class="segment"><input type="radio" name="hnewhere-button-shape" data-setting="buttonShape" value="circle"><span>Circle</span></label>
 <label class="segment"><input type="radio" name="hnewhere-button-shape" data-setting="buttonShape" value="squircle"><span>Squircle</span></label>
@@ -13822,6 +13904,7 @@ ${[
 		}
 
 		const settingsInputs = {
+			sidebarEnabled: shadow.querySelector("#setting-sidebar-enabled"),
 			autoOpenSidebar: shadow.querySelector("#setting-auto-open-sidebar"),
 			hideWithoutDiscussion: shadow.querySelector(
 				"#setting-hide-without-discussion",
@@ -13990,6 +14073,8 @@ ${[
 					input.disabled = !enabled;
 				}
 			}
+
+			settingsPanel.classList.toggle("sidebar-off", settings.sidebarEnabled === false);
 
 			if (pdfViewerRefusesExtensions()) {
 				const option = settingsInputs.pdfReader?.closest(".settings-option");
@@ -24993,6 +25078,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	}
 }
 
+#app-settings-modal:has(.settings-panel.sidebar-off) .app-settings-tab[data-settings-section="sidebar"] {
+	opacity:.7;
+}
+
 .app-settings-tab:not([aria-current="page"]):active {
 	background:var(--active-tint);
 }
@@ -31204,7 +31293,7 @@ ${settingsPanelHTML()}
 			load(STORAGE.last, null),
 		]);
 
-		if (blocked) {
+		if (blocked || settings.sidebarEnabled === false) {
 			return;
 		}
 
