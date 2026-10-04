@@ -24396,8 +24396,9 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	all:initial;
 	position:relative;
 	overscroll-behavior:none;
+	--rail-column:50px;
 	display:grid;
-	grid-template-columns:44px var(--app-list-width, 300px) minmax(0, 1fr) auto;
+	grid-template-columns:var(--rail-column) var(--app-list-width, 300px) minmax(0, 1fr) auto;
 	grid-template-rows:minmax(0, 1fr);
 	width:100%;
 	height:100%;
@@ -24422,7 +24423,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	align-items:center;
 	gap:6px;
 	min-height:0;
-	padding:6px 0;
+	padding:6px 12px 6px 6px;
 	overflow:visible;
 	background:var(--rail-bg);
 }
@@ -25018,7 +25019,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 }
 
 #app.list-moving #app-list {
-	left:44px;
+	left:var(--rail-column);
 }
 
 #app.list-moving #app-rail {
@@ -25031,7 +25032,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 }
 
 #app.list-out #app-list {
-	transform:translateX(calc(-100% - 44px));
+	transform:translateX(calc(-100% - var(--rail-column)));
 }
 
 #app.discussion-out #panel.app-docked {
@@ -26410,14 +26411,14 @@ header .item-action-link {
 
 @media (max-width: 1100px) {
 	#app {
-		grid-template-columns:44px minmax(0, 1fr) auto;
+		grid-template-columns:var(--rail-column) minmax(0, 1fr) auto;
 	}
 
 	#app-list {
 		position:absolute;
 		top:0;
 		bottom:0;
-		left:44px;
+		left:var(--rail-column);
 		z-index:4;
 		width:var(--app-list-width, 300px);
 		box-shadow:6px 0 18px rgba(0,0,0,.18);
