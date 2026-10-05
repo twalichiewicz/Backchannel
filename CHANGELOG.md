@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.15.1] — 2026-10-04
+
+### Fixed
+
+- **A row shows its article's preview once you have opened it.** 1.6.15 was
+  meant to swap a row's site icon for the preview image the article names, and
+  the row never changed. It does now. A preview that will not load leaves the
+  row as it was.
+
+- **Scrape link content leaves excluded pages alone.** A sign-in, account,
+  checkout or similar page, where Backchannel otherwise does nothing, was read
+  out if it was the address you asked to scrape, and a sign-in wall could be
+  read out in place of the article behind it. Such a page is no longer read,
+  and the card for one offers only Open in a new tab.
+
 ## [1.6.15] — 2026-10-04
 
 ### Added
