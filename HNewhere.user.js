@@ -24208,17 +24208,22 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				return;
 			}
 
-			const already = new Set();
-			const containers = groups.map((group) =>
-				nearestElement(group.range?.commonAncestorContainer),
-			);
+			const watched = new Set([overlayHost]);
 
-			for (const element of [overlayHost, ...containers]) {
-				if (!element || already.has(element) || overlay.contains(element)) {
+			for (const group of groups) {
+				for (
+					let element = nearestElement(group.range?.commonAncestorContainer);
+					element && !watched.has(element);
+					element = element.parentElement
+				) {
+					watched.add(element);
+				}
+			}
+
+			for (const element of watched) {
+				if (!element || overlay.contains(element)) {
 					continue;
 				}
-
-				already.add(element);
 
 				const box = element.getBoundingClientRect();
 
