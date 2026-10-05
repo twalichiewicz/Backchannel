@@ -30332,6 +30332,7 @@ ${settingsPanelHTML()}
 		const actions = document.createElement("div");
 		const open = document.createElement("button");
 		const read = document.createElement("button");
+		const excluded = isHiddenSite(article.url);
 
 		card.className = "app-article-note";
 		title.className = "app-card-title";
@@ -30341,7 +30342,7 @@ ${settingsPanelHTML()}
 		actions.className = "app-card-actions";
 		open.type = "button";
 		open.className = "app-card-button is-primary app-card-open";
-		open.textContent = "Open in a new tab with Sidebar";
+		open.textContent = excluded ? "Open in a new tab" : "Open in a new tab with Sidebar";
 		open.onclick = () => {
 			rememberAppArrival(article.url).catch(console.error);
 			window.open(article.url, "_blank", "noopener");
@@ -30352,7 +30353,12 @@ ${settingsPanelHTML()}
 		read.onclick = () => {
 			requestAppReadOut(article, card).catch(console.error);
 		};
-		actions.append(open, read);
+		actions.append(open);
+
+		if (!excluded) {
+			actions.append(read);
+		}
+
 		card.append(title, note, actions);
 		pane.appendChild(card);
 		loadSettings()
@@ -30390,6 +30396,8 @@ ${settingsPanelHTML()}
 
 		if (
 			!/^https?:$/.test(asked.protocol) ||
+			isHiddenSite(asked.href) ||
+			isHiddenSite(page.href) ||
 			site(page) !== site(asked) ||
 			page.port !== asked.port ||
 			(page.protocol !== asked.protocol && page.protocol !== "https:")
