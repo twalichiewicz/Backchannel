@@ -23363,6 +23363,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			border:${options.interactive ? "none" : "0"};
 			border-radius:${style.borderRadius};
 			background:${style.background};
+			margin:0;
 			padding:0;
 			cursor:${options.interactive ? "pointer" : "default"};
 			pointer-events:${options.interactive ? "auto" : "none"};
@@ -23933,6 +23934,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			left:0;
 			top:0;
 			width:100%;
+			margin:0;
 			pointer-events:none;
 			z-index:2147483645;
 		`;
