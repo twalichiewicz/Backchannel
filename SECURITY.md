@@ -155,9 +155,12 @@ Worth stating plainly, because the permissions are broad by necessity:
   that frame, inside the reader on backchnnl.app, it answers only messages from
   `https://backchnnl.app`, and tells that page only the frame's address, its
   title, its size, the address of its preview image, whether it is showing,
-  whether it is a picture, which quotes it found, which link was pressed, and a
-  pull down from the top of the page. It performs no lookup there and writes
-  nothing to storage.
+  whether it is a picture, which quotes it found, which link was pressed, a
+  passage you pressed **Add note** on, and a pull down from the top of the page.
+  It performs no lookup there and writes nothing to storage; it reads your
+  settings to know whether to offer **Add note**. A page in that frame could
+  send the reader a passage of its own choosing: the reader would open its note
+  box quoting it, and nothing is saved unless you write a note and save it.
 - **The reader frames pages under a sandbox**, with no referrer and without
   permission to navigate the reader itself, so a page that tries to break out of
   its frame stays in it. A page read out instead is reduced by an allowlist to
