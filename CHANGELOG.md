@@ -20,6 +20,15 @@ use to detect updates, so every release bumps it.
 
 ### Changed
 
+- **The Sidebar's focused-discussion banner looks like the Reader app's.**
+  Focusing a comment or a quote now shows a bar in the header's color over
+  the focused text, with an icon that opens the discussion where it lives and
+  one that shows every comment again, in place of "show all comments".
+
+- **Menus open 3px under their button.** The settings panel and the hide menu
+  sat about 9px under the header's buttons, and the sources and comment menus
+  4px under theirs. All four now open 3px under the button that opens them.
+
 - **Hacker News lookups are kept for an hour, thirty pages at most.** Every
   page looked up on Hacker News used to leave a stored value of its own, named
   for the page's address, and none was ever removed. They now share one value
