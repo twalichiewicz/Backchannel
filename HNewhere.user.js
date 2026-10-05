@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.15.1
+// @version      1.6.15.2
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -363,6 +363,7 @@
 		annotations: false,
 		annotationsWhenSidebarClosed: false,
 		notepad: true,
+		noteOnSelection: true,
 		pdfReader: false,
 		sidebarEnabled: true,
 		autoOpenSidebar: false,
@@ -4340,7 +4341,7 @@ button {
 	function noteSelectionContext(range) {
 		const container =
 			nearestElement(range.commonAncestorContainer)?.closest(
-				".textLayer, article, main, body",
+				".textLayer, .bc-reader, article, main, body",
 			) || document.body;
 		const before = document.createRange();
 		const after = document.createRange();
@@ -4368,7 +4369,8 @@ button {
 
 		if (
 			!element ||
-			element.closest("[data-hnewhere-sidebar], [data-hnewhere-note-composer]")
+			element.closest("[data-hnewhere-note-composer]") ||
+			(element.closest("[data-hnewhere-sidebar]") && !element.closest(".bc-reader"))
 		) {
 			return null;
 		}
@@ -4985,6 +4987,20 @@ button {
 		wrapper.appendChild(
 			pdfReaderButton("Add note", () => {
 				removeNoteAffordance();
+
+				if (frameAgentActive) {
+					postToApp({
+						type: "note",
+						exact: chosen.exact,
+						prefix: chosen.prefix,
+						suffix: chosen.suffix,
+						left: chosen.left,
+						top: chosen.top,
+					});
+					window.getSelection()?.removeAllRanges();
+					return;
+				}
+
 				openNoteComposer(chosen).catch(console.error);
 			}),
 		);
@@ -4992,12 +5008,49 @@ button {
 		document.documentElement.appendChild(wrapper);
 	}
 
+	let noteSelectionOffered = false;
+	let noteSelectionWatched = false;
+
 	function watchNoteSelection(settings) {
-		if (!enabledSourceIds(settings, registeredSourceIds()).includes("notes")) {
+		noteSelectionOffered = Boolean(settings.notepad && settings.noteOnSelection);
+
+		if (!noteSelectionOffered) {
+			removeNoteAffordance();
 			return;
 		}
 
-		const later = () => window.setTimeout(syncNoteAffordance, 0);
+		listenForNoteSelection(() => {
+			if (noteSelectionOffered) {
+				syncNoteAffordance();
+			}
+		});
+	}
+
+	function watchFrameNoteSelection() {
+		listenForNoteSelection(async () => {
+			if (window.getSelection()?.isCollapsed !== false) {
+				removeNoteAffordance();
+				return;
+			}
+
+			const settings = await loadSettings();
+
+			if (settings.notepad && settings.noteOnSelection) {
+				syncNoteAffordance();
+			} else {
+				removeNoteAffordance();
+			}
+		});
+	}
+
+	function listenForNoteSelection(sync) {
+		if (noteSelectionWatched) {
+			return;
+		}
+
+		noteSelectionWatched = true;
+
+		const later = () => window.setTimeout(sync, 0);
 
 		document.addEventListener("pointerup", later);
 		document.addEventListener("keyup", (event) => {
@@ -5745,6 +5798,26 @@ button {
 
 		return oldest;
 	}
+
+	const DISCOVERY_CACHE_KEY = "HNewhere:discovery_cache";
+	const DISCOVERY_CACHE_TTL = 60 * 60 * 1000;
+	const DISCOVERY_CACHE_MAX = 30;
+
+	function keptDiscoveries(stored, now) {
+		const held = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+
+		return Object.fromEntries(
+			Object.entries(held)
+				.filter(
+					([, entry]) =>
+						Array.isArray(entry?.results) &&
+						typeof entry.timestamp === "number" &&
+						now - entry.timestamp < DISCOVERY_CACHE_TTL,
+				)
+				.sort((left, right) => right[1].timestamp - left[1].timestamp)
+				.slice(0, DISCOVERY_CACHE_MAX),
+		);
+	}
 	// #endregion hnewhere-test-export
 
 	const threadCache = new Map();
@@ -5810,12 +5883,10 @@ button {
 			return [];
 		}
 
-		const cacheKey = "HNewhere:hn_cache:" + target;
+		const cached = keptDiscoveries(await load(DISCOVERY_CACHE_KEY, null), Date.now());
 
-		const cached = await load(cacheKey, null);
-
-		if (cached && Date.now() - cached.timestamp < 3600000) {
-			return [...cached.results].sort(compareStoriesByDiscussion);
+		if (Object.prototype.hasOwnProperty.call(cached, target)) {
+			return [...cached[target].results].sort(compareStoriesByDiscussion);
 		}
 
 		const queries = [url, target];
@@ -5846,10 +5917,18 @@ button {
 		const sorted = [...matches.values()].sort(compareStoriesByDiscussion);
 
 		if (shouldCacheDiscovery(answered)) {
-			await save(cacheKey, {
-				timestamp: Date.now(),
-				results: sorted,
-			});
+			const now = Date.now();
+
+			await save(
+				DISCOVERY_CACHE_KEY,
+				keptDiscoveries(
+					{
+						...(await load(DISCOVERY_CACHE_KEY, null)),
+						[target]: { timestamp: now, results: sorted },
+					},
+					now,
+				),
+			);
 		}
 
 		return sorted;
@@ -7371,6 +7450,46 @@ button {
 	// #region hnewhere-test-export
 	function commentURL(storyID) {
 		return HN_ORIGIN + "/item?id=" + storyID;
+	}
+
+	const COMMENT_PERMALINKS = {
+		hn: (id) => commentURL(id),
+		reddit: (id, comment, discussion) => {
+			const thread = String(discussion?.permalink || "");
+
+			return thread.includes("/comments/")
+				? thread.replace(/\/?$/, "/") + encodeURIComponent(id) + "/"
+				: "";
+		},
+		bsky: (id) => {
+			const cut = id.lastIndexOf("/");
+
+			return cut > 0 && cut < id.length - 1
+				? "https://bsky.app/profile/" +
+						encodeURI(id.slice(0, cut)) +
+						"/post/" +
+						encodeURIComponent(id.slice(cut + 1))
+				: "";
+		},
+		lobsters: (id) => "https://lobste.rs/c/" + encodeURIComponent(id),
+		lemmy: (id) => "https://lemmy.world/comment/" + encodeURIComponent(id),
+		hypothesis: (id) => "https://hypothes.is/a/" + encodeURIComponent(id),
+		wikipedia: (id) =>
+			id.startsWith("c-")
+				? "https://en.wikipedia.org/wiki/Special:GoToComment/" + encodeURIComponent(id)
+				: "",
+		mastodon: (id, comment) => parseSourceKey(comment.key)?.id || "",
+	};
+
+	function commentPermalink(comment, discussion) {
+		const id = String(comment?.id ?? "");
+		const build =
+			id && Object.prototype.hasOwnProperty.call(COMMENT_PERMALINKS, comment.source)
+				? COMMENT_PERMALINKS[comment.source]
+				: null;
+		const url = build ? build(id, comment, discussion) : "";
+
+		return /^https?:\/\//i.test(url) ? url : null;
 	}
 	// #endregion hnewhere-test-export
 
@@ -11574,7 +11693,7 @@ header {
 
 .hide-menu {
 	position:absolute;
-	top:46px;
+	top:calc(50% + 18px);
 	right:8px;
 	z-index:5;
 	display:flex;
@@ -12393,7 +12512,7 @@ header {
 
 .settings-panel {
 	position:absolute;
-	top:46px;
+	top:calc(50% + 18px);
 	right:8px;
 	width:240px;
 	background:var(--surface);
@@ -12419,6 +12538,10 @@ header {
 
 header button svg {
 	display:block;
+}
+
+header > .settings-panel {
+	font-weight:normal;
 }
 
 #settings-toggle.is-open,
@@ -12644,7 +12767,7 @@ header button svg {
 .source-menu {
 	position:absolute;
 	left:0;
-	top:calc(100% + 4px);
+	top:calc(100% + 3px);
 	z-index:4;
 	min-width:180px;
 	max-width:270px;
@@ -13724,7 +13847,7 @@ ${
 <button id="close-pdf-reader" type="button" role="menuitem" data-pdf-reader-only hidden>Close the PDF reader</button>
 </div>` : ""
 }
-
+${settings ? settingsPanelHTML() : ""}
 </header>
 `;
 	}
@@ -13816,6 +13939,12 @@ All stored locally.
 <span id="settings-notes-count">0 notes</span>
 <span class="settings-byline-sep">|</span>
 <button id="settings-notes-export" class="settings-byline-action" type="button">export</button>
+</div>
+<div class="settings-suboptions" data-suboptions-of="notepad">
+<label class="settings-option sub-option">
+<input id="setting-note-on-selection" data-setting="noteOnSelection" type="checkbox">
+<span>Show “Add note” when selecting text</span>
+</label>
 </div>
 </div>
 
@@ -13980,6 +14109,7 @@ ${[
 			),
 			pdfReader: shadow.querySelector("#setting-pdf-reader"),
 			notepad: shadow.querySelector("#setting-notepad"),
+			noteOnSelection: shadow.querySelector("#setting-note-on-selection"),
 			autoOpenSidebarOnlyFromHN: shadow.querySelector(
 				"#setting-auto-open-only-from-hn",
 			),
@@ -14366,7 +14496,13 @@ ${[
 			}
 
 			if (setting === "notepad") {
+				watchNoteSelection(settings);
 				await reopenForNotes();
+				return;
+			}
+
+			if (setting === "noteOnSelection") {
+				watchNoteSelection(settings);
 				return;
 			}
 
@@ -14972,27 +15108,66 @@ ${SUBMIT_FORM_CSS}
 
 .filter-banner-head {
 	display:flex;
-	flex-wrap:wrap;
-	align-items:baseline;
-	color:var(--meta);
-	font-family:Verdana, Geneva, sans-serif;
-	font-size:11px;
+	flex-wrap:nowrap;
+	align-items:center;
+	gap:2px;
+	min-height:24px;
+	box-sizing:border-box;
+	padding:2px 2px 2px 9px;
+	border-radius:8px 8px 0 0;
+	background:var(--header-bg);
+	color:rgba(255,255,255,.72);
+	font:11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
 }
 
 .filter-banner-title {
-	color:var(--text);
+	flex:1 1 auto;
+	min-width:0;
+	color:inherit;
+	font:inherit;
 }
 
-.filter-banner-close::before {
-	content:"|";
-	margin:0 5px;
+.filter-banner-icon {
+	flex:0 0 auto;
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	width:20px;
+	height:20px;
+	padding:0;
+	border:0;
+	border-radius:4px;
+	background:none;
+	color:inherit;
+	text-decoration:none;
+	cursor:pointer;
+}
+
+.filter-banner-icon[hidden] {
+	display:none;
+}
+
+.filter-banner-icon svg {
+	display:block;
+}
+
+@media (hover: hover) {
+	.filter-banner-icon:hover {
+		background:rgba(255,255,255,.16);
+		color:#fff;
+	}
+}
+
+.filter-banner-icon:active {
+	background:rgba(255,255,255,.26);
+	color:#fff;
 }
 
 .filter-banner-quote {
-	margin-top:6px;
+	margin-top:0;
 	padding:7px 8px;
 	border:1px solid var(--help-border);
-	border-radius:4px;
+	border-radius:0 0 8px 8px;
 	background:var(--help-bg);
 	color:var(--quote-text);
 	font-size:13px;
@@ -15041,27 +15216,6 @@ ${SUBMIT_FORM_CSS}
 	display:none;
 }
 
-.filter-banner-close {
-	border:0;
-	padding:0;
-	background:none;
-	color:var(--meta);
-	cursor:pointer;
-	font-family:Verdana, Geneva, sans-serif;
-	font-size:11px;
-	text-decoration:none;
-	text-underline-offset:2px;
-}
-
-.filter-banner-close:focus-visible {
-	text-decoration:underline;
-}
-
-@media (hover: hover) {
-	.filter-banner-close:hover {
-		text-decoration:underline;
-	}
-}
 
 .comment {
 	margin:12px 0 0 8px;
@@ -16021,7 +16175,7 @@ blockquote.comment-quote-redundant {
 .compose-targets {
 	position:absolute;
 	right:0;
-	top:calc(100% + 4px);
+	top:calc(100% + 3px);
 	max-height:180px;
 	overflow-y:auto;
 	z-index:2;
@@ -16248,11 +16402,10 @@ ${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-dock
 
 ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMode, settings: !appMode, title: appMode ? "Discussion" : "" })}
 <div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><button id="compose-dock-close" class="compose-dock-close" type="button" aria-label="Close the composer" title="Close">&times;</button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
-${appMode ? "" : settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
 <div class="filter-banner-head">
-<span class="filter-banner-title">Focused discussion</span><button id="clear-filter" class="filter-banner-close" type="button">show all comments</button>
+<span class="filter-banner-title">Focused discussion</span><a id="filter-banner-open" class="filter-banner-icon" target="_blank" rel="noopener" hidden>${APP_OPEN_ICON}</a><button id="clear-filter" class="filter-banner-icon" type="button" aria-label="Show all comments" title="Show all comments">${APP_CLOSE_ICON}</button>
 </div>
 <div id="filter-banner-quote" class="filter-banner-quote"></div>
 </div>
@@ -17983,6 +18136,7 @@ ${appMode ? "" : settingsPanelHTML()}
 		const voteSourceID = String(comment.source || "hn");
 		const commentCanVote =
 			!isLocalSource && Boolean(getSource(voteSourceID)?.capabilities.vote);
+		const permalink = commentPermalink(comment, discussion);
 
 		div.innerHTML = `
       <div class="comment-layout">
@@ -18013,7 +18167,11 @@ ${appMode ? "" : settingsPanelHTML()}
 					: ""
 			}
 
-		<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span><span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
+		${
+			permalink
+				? `<a class="item-age" data-age-id="${escapeHTML(commentID)}" target="_blank" rel="noopener noreferrer" href="${escapeHTML(permalink)}">${timeAgo(comment.createdAt)}</a>`
+				: `<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span>`
+		}<span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
 
 		${
 				capabilities.reply
@@ -21326,6 +21484,18 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		};
 	}
 
+	function outweighedByAnotherArticle(candidate) {
+		const size = candidate.textContent.length;
+
+		return [...document.querySelectorAll("article")].some(
+			(other) =>
+				other !== candidate &&
+				!other.contains(candidate) &&
+				!candidate.contains(other) &&
+				other.textContent.length > size,
+		);
+	}
+
 	function getArticleSearchRoot() {
 		const candidates = [
 			document.querySelector("main article"),
@@ -21356,7 +21526,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				bestLength = length;
 			}
 
-			if (candidate.tagName === "ARTICLE" && length > 800) {
+			if (
+				candidate.tagName === "ARTICLE" &&
+				length > 800 &&
+				!outweighedByAnotherArticle(candidate)
+			) {
 				return candidate;
 			}
 		}
@@ -23318,6 +23492,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			border:${options.interactive ? "none" : "0"};
 			border-radius:${style.borderRadius};
 			background:${style.background};
+			margin:0;
 			padding:0;
 			cursor:${options.interactive ? "pointer" : "default"};
 			pointer-events:${options.interactive ? "auto" : "none"};
@@ -23538,7 +23713,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 					sidebarUI.filterBanner.classList.remove("hidden", "app-pinned");
 					sidebarUI.filterBannerQuote.classList.remove("app-focus-post");
 					paintBanner(sidebarUI.filterBannerQuote);
-					syncAppFocusControls();
+					syncFocusControls();
 				}
 			}
 
@@ -23662,7 +23837,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		quote.innerHTML = `<div class="app-focus-post-title">${escapeHTML(story.title || label)} <span class="app-focus-post-site">(${escapeHTML([label, time ? timeAgo(time) : ""].filter(Boolean).join(", "))})</span></div><div class="app-focus-post-meta">${meta}</div>`;
 	}
 
-	function appFocusedDiscussion() {
+	function focusedDiscussion() {
 		const only = renderedDiscussions.length === 1 ? renderedDiscussions[0] : null;
 		const byKey = (key) => renderedDiscussions.find((discussion) => discussion.key === key) || null;
 
@@ -23684,8 +23859,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		return only;
 	}
 
-	function syncAppFocusControls() {
-		const shadow = appState?.ui.shadow;
+	function syncFocusControls() {
+		const shadow = sidebarUI?.shadow;
 		const open = shadow?.querySelector("#filter-banner-open");
 		const close = shadow?.querySelector("#clear-filter");
 
@@ -23693,7 +23868,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			return;
 		}
 
-		const story = appFocusedDiscussion();
+		const story = focusedDiscussion();
 		const href = story ? discussionURL(story) : null;
 		const label = story ? `Open this discussion on ${sourceShortLabel(story)}` : "";
 
@@ -23723,7 +23898,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		paintAppDiscussionPost(quote, story);
 		banner.classList.add("app-pinned");
 		banner.classList.remove("hidden");
-		syncAppFocusControls();
+		syncFocusControls();
 
 		return true;
 	}
@@ -23888,6 +24063,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			left:0;
 			top:0;
 			width:100%;
+			margin:0;
 			pointer-events:none;
 			z-index:2147483645;
 		`;
@@ -24000,8 +24176,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			return node;
 		};
 
+		let renderedHeight = 0;
+
 		const render = () => {
 			overlay.style.height = source.heightFor(overlayHost) + "px";
+			renderedHeight = source.heightFor(overlayHost);
 			baseLayer.replaceChildren();
 			heatLayer.replaceChildren();
 			rectsByGroup.clear();
@@ -24116,17 +24295,22 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				return;
 			}
 
-			const already = new Set();
-			const containers = groups.map((group) =>
-				nearestElement(group.range?.commonAncestorContainer),
-			);
+			const watched = new Set([overlayHost]);
 
-			for (const element of [overlayHost, ...containers]) {
-				if (!element || already.has(element) || overlay.contains(element)) {
+			for (const group of groups) {
+				for (
+					let element = nearestElement(group.range?.commonAncestorContainer);
+					element && !watched.has(element);
+					element = element.parentElement
+				) {
+					watched.add(element);
+				}
+			}
+
+			for (const element of watched) {
+				if (!element || overlay.contains(element)) {
 					continue;
 				}
-
-				already.add(element);
 
 				const box = element.getBoundingClientRect();
 
@@ -24137,6 +24321,13 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 		const onFontsSettled = () => scheduleRender();
 
+		const onScroll = () => {
+			if (source.heightFor(overlayHost) !== renderedHeight) {
+				scheduleRender();
+			}
+		};
+
+		window.addEventListener("scroll", onScroll, { passive: true });
 		window.addEventListener("resize", scheduleRender);
 		window.addEventListener("load", scheduleRender, true);
 		document.fonts?.addEventListener?.("loadingdone", onFontsSettled);
@@ -24161,6 +24352,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			},
 			cleanup() {
 				clearTimeout(leaveTimer);
+				window.removeEventListener("scroll", onScroll);
 				window.removeEventListener("resize", scheduleRender);
 				window.removeEventListener("load", scheduleRender, true);
 				document.fonts?.removeEventListener?.("loadingdone", onFontsSettled);
@@ -26120,67 +26312,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	margin-top:0;
 }
 
-#panel.app-docked .filter-banner-head {
-	flex-wrap:nowrap;
-	align-items:center;
-	gap:2px;
-	min-height:24px;
-	box-sizing:border-box;
-	padding:2px 2px 2px 9px;
-	border-radius:8px 8px 0 0;
-	background:var(--rail-bg);
-	color:rgba(255,255,255,.72);
-	font:11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-}
-
-#panel.app-docked .filter-banner-title {
-	flex:1 1 auto;
-	min-width:0;
-	color:inherit;
-	font:inherit;
-}
-
-#panel.app-docked .filter-banner-icon {
-	flex:0 0 auto;
-	display:inline-flex;
-	align-items:center;
-	justify-content:center;
-	width:20px;
-	height:20px;
-	padding:0;
-	border:0;
-	border-radius:4px;
-	background:none;
-	color:inherit;
-	text-decoration:none;
-	cursor:pointer;
-}
-
-#panel.app-docked .filter-banner-icon svg {
-	display:block;
-}
-
-#panel.app-docked .filter-banner-close::before {
-	content:none;
-}
-
-@media (hover: hover) {
-	#panel.app-docked .filter-banner-icon:hover {
-		background:rgba(255,255,255,.16);
-		color:#fff;
-	}
-}
-
-#panel.app-docked .filter-banner-icon:active {
-	background:rgba(255,255,255,.26);
-	color:#fff;
-}
-
-#panel.app-docked .filter-banner-quote {
-	margin-top:0;
-	border-radius:0 0 8px 8px;
-}
-
 #panel.app-docked .filter-banner-quote.app-focus-post {
 	padding:8px 12px 9px;
 	color:var(--meta);
@@ -27561,6 +27692,7 @@ ${settingsPanelHTML()}
 		wireApp(ui);
 		renderAppDiscussionEmpty();
 		setAppDrawer(true);
+		watchNoteSelection(await loadSettings());
 		await refreshAppSources();
 	}
 
@@ -27574,24 +27706,6 @@ ${settingsPanelHTML()}
 
 		if (dock) {
 			shadow.querySelector("#panel").appendChild(dock);
-		}
-
-		const clearFilter = shadow.querySelector("#clear-filter");
-
-		if (clearFilter) {
-			const openFocused = document.createElement("a");
-
-			openFocused.id = "filter-banner-open";
-			openFocused.className = "filter-banner-icon";
-			openFocused.target = "_blank";
-			openFocused.rel = "noopener";
-			openFocused.hidden = true;
-			openFocused.innerHTML = APP_OPEN_ICON;
-			clearFilter.classList.add("filter-banner-icon");
-			clearFilter.innerHTML = APP_CLOSE_ICON;
-			clearFilter.setAttribute("aria-label", "Show all comments");
-			clearFilter.title = "Show all comments";
-			clearFilter.before(openFocused);
 		}
 
 		if (commentToggle) {
@@ -30650,6 +30764,11 @@ ${settingsPanelHTML()}
 			return;
 		}
 
+		if (data.type === "note") {
+			openFrameNote(article, data).catch(console.error);
+			return;
+		}
+
 		if (data.type === "focus-quote") {
 			applyCommentFilter(String(data.key || ""));
 
@@ -30684,6 +30803,29 @@ ${settingsPanelHTML()}
 			type: "annotate",
 			comments: renderedComments.map(frameCommentPayload),
 			settings,
+		});
+	}
+
+	async function openFrameNote(article, data) {
+		const settings = await loadSettings();
+		const exact = String(data.exact || "").replace(/\s+/g, " ").trim();
+		const left = Number(data.left);
+		const top = Number(data.top);
+
+		if (!settings.notepad || !settings.noteOnSelection || !exact || !Number.isFinite(left) || !Number.isFinite(top)) {
+			return;
+		}
+
+		const box = article.frame.getBoundingClientRect();
+
+		await openNoteComposer({
+			exact,
+			prefix: String(data.prefix || "").slice(-NOTE_CONTEXT_CHARS),
+			suffix: String(data.suffix || "").slice(0, NOTE_CONTEXT_CHARS),
+			anchorable: normalizeSearchText(exact).text.length >= QUOTE_MIN_CHARS,
+			page: null,
+			left: box.left + left,
+			top: box.top + top,
 		});
 	}
 
@@ -31013,6 +31155,7 @@ ${settingsPanelHTML()}
 	function installFrameAgent() {
 		frameAgentActive = true;
 		watchPullDown(window, () => postToApp({ type: "collapse" }));
+		watchFrameNoteSelection();
 
 		window.addEventListener("message", (event) => {
 			if (event.source !== window.parent || event.origin !== START_PAGE_ORIGIN) {

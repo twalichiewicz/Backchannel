@@ -6,10 +6,10 @@ Backchannel (formerly HNewhere) is distributed as a single userscript that auto-
 Only the latest release is supported -- there are no maintenance branches, and a
 fix ships as a new version that existing installs pick up automatically.
 
-| Version | Supported |
-| ------- | --------- |
-| 1.6.8   | Yes       |
-| < 1.6.8 | No        |
+| Version    | Supported |
+| ---------- | --------- |
+| 1.6.15.2   | Yes       |
+| < 1.6.15.2 | No        |
 
 Your installed version is shown at the bottom of the settings panel.
 
@@ -102,6 +102,17 @@ Worth stating plainly, because the permissions are broad by necessity:
   the same storage on its way from its tab: the reader removes it once it is
   shown, and if the reader has gone by then it stays until the next scrape
   replaces it. Nothing is sent anywhere except the hosts above.
+- **It keeps what Hacker News answered about the last pages you looked up**, so
+  a page reopened within the hour is not asked about again. Since 1.6.15.2 that
+  is one stored value holding thirty pages at most, by address. A page is used
+  for an hour and dropped the next time a lookup is saved, so the value can
+  still name a page for longer than that if you look nothing up in between.
+  Before 1.6.15.2 every page had a stored value of its own, named
+  `HNewhere:hn_cache:` followed by its address, and none was removed. Those are
+  still in your userscript manager's storage: the script is granted no way to
+  list or delete stored values, so it cannot remove them. Clearing the script's
+  stored data in the manager removes them, and your settings and notes with
+  them.
 - **The notepad stays on the machine you wrote it on.** Notes live in your
   userscript manager's storage, keyed by page address or, on a PDF, by the
   document's fingerprint. Nothing is uploaded and no source is told they exist.
@@ -144,9 +155,12 @@ Worth stating plainly, because the permissions are broad by necessity:
   that frame, inside the reader on backchnnl.app, it answers only messages from
   `https://backchnnl.app`, and tells that page only the frame's address, its
   title, its size, the address of its preview image, whether it is showing,
-  whether it is a picture, which quotes it found, which link was pressed, and a
-  pull down from the top of the page. It performs no lookup there and writes
-  nothing to storage.
+  whether it is a picture, which quotes it found, which link was pressed, a
+  passage you pressed **Add note** on, and a pull down from the top of the page.
+  It performs no lookup there and writes nothing to storage; it reads your
+  settings to know whether to offer **Add note**. A page in that frame could
+  send the reader a passage of its own choosing: the reader would open its note
+  box quoting it, and nothing is saved unless you write a note and save it.
 - **The reader frames pages under a sandbox**, with no referrer and without
   permission to navigate the reader itself, so a page that tries to break out of
   its frame stays in it. A page read out instead is reduced by an allowlist to

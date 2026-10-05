@@ -8,6 +8,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.15.2] — 2026-10-05
+
+### Added
+
+- **A comment's age links to the comment (#146).** The time beside a comment's
+  author opens that comment where it lives, in a new tab: on Hacker News,
+  Reddit, Bluesky, Lobsters, Lemmy, Mastodon and Hypothes.is, and on a
+  Wikipedia talk page. A note of your own has nowhere to link to and keeps a
+  plain age.
+
+### Changed
+
+- **The Sidebar's focused-discussion banner looks like the Reader app's.**
+  Focusing a comment or a quote now shows a bar in the header's color over
+  the focused text, with an icon that opens the discussion where it lives and
+  one that shows every comment again, in place of "show all comments".
+
+- **Menus open 3px under their button.** The settings panel and the hide menu
+  sat about 9px under the header's buttons, and the sources and comment menus
+  4px under theirs. All four now open 3px under the button that opens them.
+
+- **Hacker News lookups are kept for an hour, thirty pages at most.** Every
+  page looked up on Hacker News used to leave a stored value of its own, named
+  for the page's address, and none was ever removed. They now share one value
+  that drops a page an hour after it was looked up. The values an earlier
+  version left are still in your userscript manager's storage: the script has
+  no permission to list or delete them. Clearing the script's stored data in
+  the manager removes them, and your settings and notes with them, so export
+  the notepad first.
+
+### Fixed
+
+- **Selecting a passage offers Add note.** The notepad is meant to offer a note
+  on any passage you select, and the offer never appeared. With the notepad on,
+  select a passage and **Add note** appears beside it, on a page and in an
+  article open on backchnnl.app, framed or read out. To stop it, turn off
+  **Show "Add note" when selecting text** under **Enable notepad**.
+
+- **Highlights sit on their text on a page that margins every element.** Where
+  a page's stylesheet gives each element after the first a top margin, every
+  highlight sat a line below the passage it marks.
+
+- **Highlights follow their text when a page changes under them.** On a page
+  that adds content above a passage after it has loaded, or resizes a block
+  above it, the highlight was left where the passage had been.
+
+- **A live blog is searched whole.** On a page made of many articles whose
+  first is a short lead, only the lead was searched for quoted passages, so a
+  quote of an entry under it drew no highlight.
+
 ## [1.6.15.1] — 2026-10-04
 
 ### Fixed
