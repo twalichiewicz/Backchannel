@@ -28472,24 +28472,29 @@ ${settingsPanelHTML()}
 		}
 
 		const key = normalizeURL(url) || url;
+		const probe = document.createElement("img");
 
-		state.previews.set(key, address);
+		probe.referrerPolicy = "no-referrer";
+		probe.onload = () => {
+			state.previews.set(key, address);
 
-		for (const row of state.ui.shadow.querySelectorAll("#app-list-body .browse-row")) {
-			const link = row.querySelector(".browse-title-link");
-			const wrap = row.querySelector(".browse-thumb-wrap");
+			for (const row of state.ui.shadow.querySelectorAll("#app-list-body .browse-row")) {
+				const link = row.querySelector(".browse-title-link");
+				const wrap = row.querySelector(".browse-thumb-wrap");
 
-			if (!link || !wrap || (normalizeURL(link.getAttribute("href")) || link.getAttribute("href")) !== key) {
-				continue;
+				if (!link || !wrap || (normalizeURL(link.getAttribute("href")) || link.getAttribute("href")) !== key) {
+					continue;
+				}
+
+				const picture = wrap.querySelector(".browse-thumb");
+
+				wrap.classList.remove("is-generic");
+				wrap.classList.add("has-preview");
+				picture.onerror = () => wrap.classList.remove("has-preview");
+				picture.src = address;
 			}
-
-			const picture = wrap.querySelector(".browse-thumb");
-
-			wrap.classList.remove("is-generic");
-			wrap.classList.add("has-preview");
-			picture.onerror = () => wrap.classList.remove("has-preview");
-			picture.src = address;
-		}
+		};
+		probe.src = address;
 	}
 
 	function openAppRowMenu(row, button) {
@@ -30571,7 +30576,7 @@ ${settingsPanelHTML()}
 		const before = pageAddress();
 
 		setAppSubject({ url, canonical: String(data.canonical || ""), title: title || article.title });
-		noteAppPreview(article.url, data.image);
+		noteAppPreview(article.url, data.preview);
 
 		if (appState.open && !sameURL(pageAddress(), before)) {
 			appState.open.url = url;
@@ -31018,7 +31023,7 @@ ${settingsPanelHTML()}
 					type: "hi",
 					url: location.href,
 					canonical: canonicalHint(),
-					image: document.querySelector('meta[property="og:image"], meta[name="twitter:image"]')?.getAttribute("content") || "",
+					preview: document.querySelector('meta[property="og:image"], meta[name="twitter:image"]')?.getAttribute("content") || "",
 					title: pageTitle(),
 					visible: frameVisibility(),
 					image: /^image\//i.test(document.contentType || ""),
