@@ -8,8 +8,26 @@
 <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
 <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="src/patrick-hand.woff2" as="font" type="font/woff2" crossorigin>
 
 <style>
+  @font-face {
+    font-family: "Patrick Hand";
+    src: url("src/patrick-hand.woff2") format("woff2");
+    font-display: swap;
+  }
+
+  :root {
+    --paper: #efece6;
+    --ink: #164a2b;
+    --leaf: #24663d;
+    --art: #d9e6cc;
+    --bar: #9fbf96;
+    --mark: #f2cf5b;
+    --hand: "Patrick Hand", "Chalkboard SE", "Comic Sans MS", cursive;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
   * {
     box-sizing: border-box;
   }
@@ -40,9 +58,6 @@
     position: relative;
     flex: 1;
     min-height: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
     overflow: auto;
     background: rgb(28, 94, 53);
   }
@@ -268,26 +283,90 @@
     }
   }
 
-  .demo {
-    width: 620px;
+  [data-backchannel-promo][hidden] {
+    display: none;
+  }
+
+  .defs {
+    position: absolute;
+    width: 0;
+    height: 0;
+  }
+
+  .hero {
+    --gap: clamp(6px, 4.1vw, 58px);
+    --perch: clamp(40px, min(4.25vw, 5.5vh), 56px);
+    --vh: 100vh;
+    --fit: 592;
+    --u: max(.42px, min(1px, (100vw - 48px - 2 * var(--gap)) / var(--fit), (var(--vh) - 405px - var(--perch) * 1.72) / 268));
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    min-height: calc(100% - 44px);
+    padding: 32px 16px calc(var(--perch) * 1.72 + 14px);
     text-align: center;
-    margin-bottom: 15dvh;
+  }
+
+  @supports (height: 100dvh) {
+    .hero {
+      --vh: 100dvh;
+    }
+  }
+
+  .wordmark {
+    position: relative;
+    display: inline-block;
+    margin: 0;
+    font: 400 min(15.4vw, 3.54vw + 46px, 96px)/.92 var(--hand);
+    letter-spacing: 1px;
+    color: var(--paper);
+  }
+
+  .wordmark span {
+    -webkit-text-stroke: clamp(3px, .36vw, 5px) var(--paper);
+  }
+
+  .ticks {
+    flex: none;
+    width: clamp(20px, 6vw, 44px);
+    height: clamp(20px, 6vw, 44px);
+    color: var(--paper);
+  }
+
+  .ticks.is-flipped {
+    transform: scaleX(-1);
+  }
+
+  .wordmark .ticks {
+    position: absolute;
+    right: 100%;
+    bottom: 66%;
+    width: .46em;
+    height: .46em;
+  }
+
+  .wordmark .ticks.is-flipped {
+    right: auto;
+    left: 100%;
   }
 
   .birds {
     display: flex;
-    gap: 16px;
+    align-items: flex-end;
+    justify-content: center;
+    gap: var(--gap);
+    margin: 2px 0 10px;
+    padding-top: calc(78 * var(--u));
   }
 
   .bird {
     position: relative;
-    flex: 1;
-    height: 220px;
+    flex: none;
     border: none;
     background: transparent;
-    display: flex;
-    align-items: flex-end;
-    justify-content: center;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
@@ -302,14 +381,17 @@
   .bubble {
     position: absolute;
     left: 50%;
-    bottom: 132px;
-    width: 64px;
-    height: 64px;
-    object-fit: contain;
+    bottom: calc(100% - 4 * var(--u));
+    width: calc(84 * var(--u));
+    height: auto;
     transform: translateX(-50%);
     opacity: 0;
     pointer-events: none;
     transition: opacity .1s;
+  }
+
+  .bird[data-part="bass"] .bubble {
+    left: 27%;
   }
 
   .bird.is-open .bubble {
@@ -317,10 +399,21 @@
   }
 
   .bird-image {
-    width: 120px;
-    height: 120px;
-    object-fit: contain;
+    display: block;
+    height: auto;
     pointer-events: none;
+  }
+
+  .bird[data-part="melody"] .bird-image {
+    width: calc(196 * var(--u));
+  }
+
+  .bird[data-part="harmony"] .bird-image {
+    width: calc(178 * var(--u));
+  }
+
+  .bird[data-part="bass"] .bird-image {
+    width: calc(218 * var(--u));
   }
 
   .bird-image.open {
@@ -336,13 +429,14 @@
   }
 
   .tagline {
-    margin: 24px 0;
-    font-size: 18px;
+    margin: 0;
+    font: 400 clamp(23px, 1.1vw + 18.6px, 30px)/1.1 var(--hand);
+    letter-spacing: .5px;
+    color: var(--paper);
   }
 
   .byline {
-    text-align: center;
-    margin: 9px 0;
+    margin: 0;
     font-size: 12px;
     color: rgba(255, 255, 255, .66);
   }
@@ -362,28 +456,302 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 100%;
-    max-width: 300px;
-    height: 45px;
-    border: 0;
+    width: min(340px, 100%);
+    height: clamp(50px, .6vw + 47.7px, 56px);
     border-radius: 50px;
-    background: white;
-    color: rgb(35, 113, 64);
-    font: inherit;
-    font-size: 18px;
-    font-weight: 600;
+    background: var(--paper);
+    box-shadow: 0 2px 2px rgba(0, 0, 0, .2);
+    color: var(--ink);
+    font: 500 24px/1 var(--sans);
     text-decoration: none;
     cursor: pointer;
-    transition: all .15s;
-    outline: 3px solid transparent;
+    outline: 1px solid transparent;
+    outline-offset: 3px;
+    transition: outline-color .15s;
     -webkit-tap-highlight-color: transparent;
   }
 
   .song-button:hover {
-    background: #f9f9f9;
-    outline: 1px solid white;
+    outline-color: var(--paper);
+  }
+
+  .percher {
+    position: absolute;
+    left: clamp(26px, 10.6vw, 150px);
+    bottom: calc(-1px - var(--ground, 6px) - var(--perch) * .0502);
+    z-index: 1;
+    width: var(--perch);
+    height: auto;
+    pointer-events: none;
+  }
+
+  .perch-note {
+    position: absolute;
+    left: calc(clamp(26px, 10.6vw, 150px) + var(--perch) * .92 + 4px);
+    bottom: calc(var(--perch) * 1.3 - 16px);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+    font: 400 clamp(18px, .5vw + 16px, 22px)/1.12 var(--hand);
+    letter-spacing: .5px;
+    color: var(--paper);
+    transform: rotate(-6deg);
+    transform-origin: 0 50%;
+  }
+
+  .perch-note .ticks {
+    width: 15px;
+    height: 15px;
+    transform: rotate(45deg) scaleX(-1);
+  }
+
+  .sheet {
+    --pigeon: clamp(108px, 2.4vw + 98.6px, 132px);
+    position: relative;
+    isolation: isolate;
+    margin: 0 clamp(10px, 2.1vw, 30px) clamp(22px, 2.4vw, 34px);
+    padding: 26px clamp(20px, 5.4vw, 76px) clamp(52px, 5.4vw, 76px);
+    color: var(--ink);
+  }
+
+  .sheet::before,
+  .sheet::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: 10px;
+  }
+
+  .sheet::before {
+    background: white;
+    clip-path: var(--tear-fiber, none);
+  }
+
+  .sheet::after {
+    background:
+      url("src/paper-grain.webp") 0 0 / 80px,
+      url("src/paper-grain.webp") 31px 17px / 113px,
+      var(--paper);
+    clip-path: var(--tear, none);
+  }
+
+  .features {
+    --row: clamp(30px, 3.4vw, 44px);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--row);
+    max-width: 1180px;
+    margin: 0 auto;
+    padding-top: 34px;
+  }
+
+  .feature-text {
+    align-self: start;
+  }
+
+  .feature-text h2 {
+    margin: 0;
+    font: 400 clamp(32px, 1.4vw + 26.5px, 46px)/1.05 var(--hand);
+    -webkit-text-stroke: .9px currentColor;
+    text-wrap: balance;
+  }
+
+  .feature-text p {
+    max-width: 60ch;
+    margin: 14px 0 0;
+    font: 400 clamp(20px, .4vw + 18.5px, 24px)/1.28 var(--hand);
+    letter-spacing: .3px;
+  }
+
+  .feature-text.is-1 {
+    order: 3;
+  }
+
+  .feature-text.is-2 {
+    order: 6;
+  }
+
+  .feature-text.is-3 {
+    order: 9;
+  }
+
+  .stander {
+    position: relative;
+    z-index: 2;
+    align-self: end;
+    width: var(--bw);
+    height: auto;
+    margin-bottom: calc(-1 * var(--row) - var(--bw) * var(--rest) - .5px);
+    pointer-events: none;
+  }
+
+  .stander.is-pigeon {
+    --bw: var(--pigeon);
+    --rest: .0282;
+    order: 1;
+    justify-self: end;
+    margin-right: clamp(20px, 5.4vw, 76px);
+  }
+
+  .stander.is-round {
+    --bw: clamp(112px, 2.75vw + 101.3px, 140px);
+    --rest: .0254;
+    order: 4;
+    justify-self: start;
+    margin-left: clamp(24px, 6vw, 84px);
+  }
+
+  .stander.is-pelican {
+    --bw: clamp(120px, 2.95vw + 108.5px, 150px);
+    --rest: .0227;
+    order: 7;
+    justify-self: end;
+    margin-right: clamp(16px, 4.7vw - 2.4px, 64px);
+  }
+
+  .shot {
+    position: relative;
+    z-index: 1;
+    display: flow-root;
+    align-self: start;
+    width: 100%;
+    margin: 0;
+  }
+
+  .shot.is-1 {
+    order: 2;
+  }
+
+  .shot.is-2 {
+    order: 5;
+  }
+
+  .shot.is-3 {
+    order: 8;
+  }
+
+  .shot a {
+    display: flow-root;
+    border-radius: 8px;
+    cursor: zoom-in;
+  }
+
+  .shot a:focus-visible {
+    outline: 3px solid var(--ink);
     outline-offset: 3px;
-    transition: all .15s;
+  }
+
+  .shot img {
+    display: block;
+    width: calc(100% * var(--w) / (var(--w) - 112));
+    max-width: none;
+    height: auto;
+    margin: calc(-100% * 38 / (var(--w) - 112)) 0 calc(-100% * 74 / (var(--w) - 112)) calc(-100% * 56 / (var(--w) - 112));
+  }
+
+  @media (min-width: 901px) {
+    .features {
+      grid-template-columns: minmax(0, 5fr) minmax(0, 2fr) minmax(0, 5fr);
+      column-gap: clamp(28px, 5.4vw, 76px);
+    }
+
+    .feature-text p {
+      max-width: 34ch;
+    }
+
+    .feature-text.is-1 {
+      grid-area: 2 / 1;
+    }
+
+    .feature-text.is-2 {
+      grid-area: 4 / 3;
+    }
+
+    .feature-text.is-3 {
+      grid-area: 6 / 1;
+    }
+
+    .stander.is-pigeon {
+      grid-area: 1 / 3;
+    }
+
+    .stander.is-round {
+      grid-area: 3 / 1;
+    }
+
+    .stander.is-pelican {
+      grid-area: 5 / 3;
+    }
+
+    .shot {
+      max-width: 680px;
+    }
+
+    .shot.is-1 {
+      grid-area: 2 / 2 / span 2 / span 2;
+      justify-self: end;
+    }
+
+    .shot.is-2 {
+      grid-area: 4 / 1 / span 2 / span 2;
+      justify-self: start;
+    }
+
+    .shot.is-3 {
+      grid-area: 6 / 2 / span 1 / span 2;
+      justify-self: end;
+    }
+  }
+
+  .zoom {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    margin: 0;
+    padding: 24px 16px;
+    border: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    background: rgba(12, 40, 23, .92);
+    cursor: zoom-out;
+  }
+
+  .zoom[open] {
+    display: flex;
+  }
+
+  .zoom::backdrop {
+    background: transparent;
+  }
+
+  .zoom img {
+    display: block;
+    flex: none;
+    width: calc(var(--w) * 1px);
+    max-width: none;
+    height: auto;
+    margin: auto;
+  }
+
+  .zoom-close {
+    position: fixed;
+    top: calc(10px + env(safe-area-inset-top, 0px));
+    right: 12px;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--paper);
+    box-shadow: 0 2px 2px rgba(0, 0, 0, .2);
+    color: var(--ink);
+    font: 500 22px/1 var(--sans);
+    cursor: pointer;
   }
 
   @media (max-width: 700px) {
@@ -400,32 +768,45 @@
     html[data-backchannel-installed]:has([data-hnewhere-app]) .chin {
       display: none;
     }
+
+    html:not([data-backchannel-installed]) body {
+      height: auto;
+      min-height: 100%;
+      background: rgb(28, 94, 53);
+    }
+
+    html:not([data-backchannel-installed]) .bezel {
+      position: static;
+      display: block;
+      padding-bottom: calc(30px + env(safe-area-inset-bottom, 0px));
+      background: none;
+    }
+
+    html:not([data-backchannel-installed]) .screen {
+      overflow: visible;
+    }
+
+    html:not([data-backchannel-installed]) .hero {
+      --fit: 700;
+      min-height: calc(var(--vh) - 74px);
+    }
+
+    html:not([data-backchannel-installed]) .chin {
+      position: fixed;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 3;
+      background: rgb(35, 113, 64);
+    }
+
+    @supports (height: 100svh) {
+      html:not([data-backchannel-installed]) .hero {
+        --vh: 100svh;
+      }
+    }
   }
 
-  @media (max-width: 640px) {
-    .demo {
-      width: calc(100% - 32px);
-    }
-
-    .birds {
-      gap: 4px;
-    }
-
-    .bird {
-      height: 190px;
-    }
-
-    .bird-image {
-      width: 100px;
-      height: 100px;
-    }
-
-    .bubble {
-      bottom: 108px;
-      width: 85px;
-      height: 85px;
-    }
-  }
 </style>
 </head>
 
@@ -435,33 +816,47 @@
 
 <main class="screen" id="backchannel-screen">
 
-<div class="demo" data-backchannel-promo>
+<section class="hero" data-backchannel-promo>
+
+  <svg class="defs" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="ticks" viewBox="0 0 44 44">
+        <path d="M33.1 36.9 13.8 24.4M36.9 33.1 22.2 10.4" fill="none" stroke="currentColor" stroke-width="4.6" stroke-linecap="round"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <h1 class="wordmark">
+    <svg class="ticks" aria-hidden="true"><use href="#ticks"/></svg>
+    <span>Backchannel</span>
+    <svg class="ticks is-flipped" aria-hidden="true"><use href="#ticks"/></svg>
+  </h1>
 
   <div class="birds">
 
     <div class="bird" data-part="melody">
-      <img class="bubble" src="src/bubble.png" alt="">
-      <img class="bird-image closed" src="src/birb-1.png" alt="">
-      <img class="bird-image open" src="src/birb-1-open.png" alt="">
+      <img class="bubble" src="src/paper-bubble.webp" width="183" height="205" alt="">
+      <img class="bird-image closed" src="src/paper-birb-1.webp" width="394" height="310" alt="">
+      <img class="bird-image open" src="src/paper-birb-1-open.webp" width="394" height="310" alt="">
     </div>
 
     <div class="bird" data-part="harmony">
-      <img class="bubble" src="src/bubble.png" alt="">
-      <img class="bird-image closed" src="src/birb-2.png" alt="">
-      <img class="bird-image open" src="src/birb-2-open.png" alt="">
+      <img class="bubble" src="src/paper-bubble.webp" width="183" height="205" alt="">
+      <img class="bird-image closed" src="src/paper-birb-2.webp" width="390" height="380" alt="">
+      <img class="bird-image open" src="src/paper-birb-2-open.webp" width="390" height="380" alt="">
     </div>
 
     <div class="bird" data-part="bass">
-      <img class="bubble" src="src/bubble.png" alt="">
-      <img class="bird-image closed" src="src/birb-3.png" alt="">
-      <img class="bird-image open" src="src/birb-3-open.png" alt="">
+      <img class="bubble" src="src/paper-bubble.webp" width="183" height="205" alt="">
+      <img class="bird-image closed" src="src/paper-birb-3.webp" width="441" height="393" alt="">
+      <img class="bird-image open" src="src/paper-birb-3-open.webp" width="441" height="393" alt="">
     </div>
 
   </div>
 
-  <div class="tagline">
+  <p class="tagline">
     The internet's commentary track.
-  </div>
+  </p>
 
   <a
     class="song-button"
@@ -471,7 +866,7 @@
     Install Backchannel
   </a>
 
-  <div class="byline">
+  <p class="byline">
     Requires a userscript plugin
     |
     <a
@@ -481,9 +876,67 @@
     >
       Learn more
     </a>
+  </p>
+
+  <img class="percher" src="src/paper-man.webp" width="219" height="372" alt="">
+
+  <p class="perch-note">
+    <svg class="ticks" aria-hidden="true"><use href="#ticks"/></svg>
+    How does it work?
+  </p>
+
+</section>
+
+<section class="sheet" data-backchannel-promo>
+
+  <div class="features">
+
+    <div class="feature-text is-1">
+      <h2>Bring the discussion to you</h2>
+      <p>Stop doing the two-tab tango between what you're reading and the discussion about it. Backchannel puts the conversation right beside the page, with a customizable, repositionable toggle to show it when you want it and hide it when you don't.</p>
+    </div>
+
+    <img class="stander is-pigeon" src="src/paper-birb-2-green.webp" width="390" height="380" alt="" loading="lazy">
+
+    <figure class="shot is-1" style="--w: 1006">
+      <a href="src/shot-sidebar.webp" aria-haspopup="dialog">
+        <img src="src/shot-sidebar.webp" width="1006" height="648" alt="A browser on a GitHub repository with the Backchannel sidebar open beside it, showing a discussion of 343 comments." loading="lazy">
+      </a>
+    </figure>
+
+    <div class="feature-text is-2">
+      <h2>See where the conversation is focused</h2>
+      <p>Quoted and heavily discussed passages are highlighted automatically, so you can see where the conversation is concentrated as you read. Click a highlight to jump straight to the comments about that passage.</p>
+    </div>
+
+    <img class="stander is-round" src="src/paper-birb-1-green.webp" width="394" height="310" alt="" loading="lazy">
+
+    <figure class="shot is-2" style="--w: 1006">
+      <a href="src/shot-annotations.webp" aria-haspopup="dialog">
+        <img src="src/shot-annotations.webp" width="1006" height="648" alt="A browser on an article with a quoted passage highlighted, and the sidebar focused on the comments that quote it." loading="lazy">
+      </a>
+    </figure>
+
+    <div class="feature-text is-3">
+      <h2>A new front page of the internet</h2>
+      <p>Don't let silos stop you from finding your next great read. Backchannel blends the sources you choose into a single front page, so what's worth reading can come from anywhere you follow.</p>
+    </div>
+
+    <img class="stander is-pelican" src="src/paper-birb-3-green.webp" width="441" height="393" alt="" loading="lazy">
+
+    <figure class="shot is-3" style="--w: 1077">
+      <a href="src/shot-reader.webp" aria-haspopup="dialog">
+        <img src="src/shot-reader.webp" width="1077" height="687" alt="The Backchannel reader at backchnnl.app: a list of unread stories with one open beside it." loading="lazy">
+      </a>
+    </figure>
+
   </div>
 
-</div>
+  <dialog class="zoom" aria-label="Screenshot, full size">
+    <button class="zoom-close" type="button" aria-label="Close">&times;</button>
+  </dialog>
+
+</section>
 
 </main>
 
@@ -1028,6 +1481,152 @@
 
   window.addEventListener("hashchange", openPrivacyFromHash);
   openPrivacyFromHash();
+
+  /*
+   * Torn edge of the paper sheet.
+   */
+  const sheet = document.querySelector(".sheet");
+  let tearQueued = false;
+
+  function tearNoise(at, seed) {
+    const cell = Math.floor(at);
+    const part = at - cell;
+    const value = n => {
+      const x = Math.sin((n + seed) * 127.1) * 43758.5453;
+      return x - Math.floor(x);
+    };
+
+    return value(cell) + (value(cell + 1) - value(cell)) * part * part * (3 - 2 * part);
+  }
+
+  function tearSheet() {
+    tearQueued = false;
+
+    const width = sheet.offsetWidth;
+    const height = sheet.offsetHeight;
+
+    if (!width || !height) {
+      return;
+    }
+
+    const step = 5;
+    const corner = 10;
+    const paper = [];
+    const fiber = [];
+    const tearInset = distance =>
+      3 +
+      6 * tearNoise(distance / 46, 4) +
+      2.6 * tearNoise(distance / 11, 31) +
+      1.4 * tearNoise(distance / step, 57);
+
+    function add(distance, place) {
+      const inset = tearInset(distance);
+      const rim = inset - .4 - 2.8 * tearNoise(distance / 8, 83);
+
+      paper.push(place(inset));
+      fiber.push(place(rim));
+    }
+
+    for (let x = corner; x <= width - corner; x += step) {
+      add(x, inset => [x, inset]);
+    }
+
+    for (let y = corner; y <= height - corner; y += step) {
+      add(width + y, inset => [width - inset, y]);
+    }
+
+    for (let x = width - corner; x >= corner; x -= step) {
+      add(2 * width + height - x, inset => [x, height - inset]);
+    }
+
+    for (let y = height - corner; y >= corner; y -= step) {
+      add(2 * width + 2 * height - y, inset => [inset, y]);
+    }
+
+    const polygon = points =>
+      "polygon(" + points.map(([x, y]) => x.toFixed(1) + "px " + y.toFixed(1) + "px").join(",") + ")";
+
+    sheet.style.setProperty("--tear", polygon(paper));
+    sheet.style.setProperty("--tear-fiber", polygon(fiber));
+
+    const percher = document.querySelector(".percher");
+    const from = percher.offsetLeft - sheet.offsetLeft;
+    let ground = 0;
+    let samples = 0;
+
+    for (let x = Math.max(corner, from); x <= from + percher.offsetWidth; x += step) {
+      ground += tearInset(x);
+      samples += 1;
+    }
+
+    if (samples) {
+      percher.style.setProperty("--ground", (ground / samples).toFixed(1) + "px");
+    }
+  }
+
+  function queueTear() {
+    if (!tearQueued) {
+      tearQueued = true;
+      requestAnimationFrame(tearSheet);
+    }
+  }
+
+  tearSheet();
+
+  if (window.ResizeObserver) {
+    new ResizeObserver(queueTear).observe(sheet);
+  } else {
+    window.addEventListener("resize", queueTear);
+  }
+
+  /*
+   * Full-size screenshots.
+   */
+  const zoom = document.querySelector(".zoom");
+  let zoomImage = null;
+  let zoomOpener = null;
+
+  document.querySelectorAll(".shot a").forEach(link => {
+    link.addEventListener("click", event => {
+      if (
+        event.metaKey || event.ctrlKey || event.shiftKey || event.altKey ||
+        event.button !== 0 ||
+        typeof zoom.showModal !== "function"
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+
+      const small = link.querySelector("img");
+
+      if (!zoomImage) {
+        zoomImage = new Image();
+        zoom.append(zoomImage);
+      }
+
+      zoomImage.src = link.href;
+      zoomImage.alt = small.alt;
+      zoomImage.setAttribute("width", small.getAttribute("width"));
+      zoomImage.setAttribute("height", small.getAttribute("height"));
+      zoomImage.style.setProperty("--w", small.getAttribute("width"));
+
+      zoomOpener = link;
+      zoom.showModal();
+      zoom.scrollTop = 0;
+      zoom.scrollLeft = (zoom.scrollWidth - zoom.clientWidth) / 2;
+    });
+  });
+
+  zoom.addEventListener("click", () => {
+    zoom.close();
+  });
+
+  zoom.addEventListener("close", () => {
+    if (zoomOpener) {
+      zoomOpener.focus({ preventScroll: true });
+    }
+  });
 
   /*
    * Initialize Web Audio after the first user interaction.
