@@ -8,6 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.15.2] — 2026-10-05
+
+### Added
+
+- **A comment's age links to the comment (#146).** The time beside a comment's
+  author opens that comment where it lives, in a new tab: on Hacker News,
+  Reddit, Bluesky, Lobsters, Lemmy, Mastodon and Hypothes.is, and on a
+  Wikipedia talk page. A note of your own has nowhere to link to and keeps a
+  plain age.
+
+### Changed
+
+- **Hacker News lookups are kept for an hour, thirty pages at most.** Every
+  page looked up on Hacker News used to leave a stored value of its own, named
+  for the page's address, and none was ever removed. They now share one value
+  that drops a page an hour after it was looked up. The values an earlier
+  version left are still in your userscript manager's storage: the script has
+  no permission to list or delete them. Clearing the script's stored data in
+  the manager removes them, and your settings and notes with them, so export
+  the notepad first.
+
+### Fixed
+
+- **Selecting a passage offers Add note.** The notepad is meant to offer a note
+  on any passage you select, and the offer never appeared. With the notepad on,
+  select a passage and **Add note** appears beside it.
+
+- **Highlights sit on their text on a page that margins every element.** Where
+  a page's stylesheet gives each element after the first a top margin, every
+  highlight sat a line below the passage it marks.
+
+- **Highlights follow their text when a page changes under them.** On a page
+  that adds content above a passage after it has loaded, or resizes a block
+  above it, the highlight was left where the passage had been.
+
+- **A live blog is searched whole.** On a page made of many articles whose
+  first is a short lead, only the lead was searched for quoted passages, so a
+  quote of an entry under it drew no highlight.
+
 ## [1.6.15.1] — 2026-10-04
 
 ### Fixed

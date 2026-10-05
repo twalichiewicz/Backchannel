@@ -6,10 +6,10 @@ Backchannel (formerly HNewhere) is distributed as a single userscript that auto-
 Only the latest release is supported -- there are no maintenance branches, and a
 fix ships as a new version that existing installs pick up automatically.
 
-| Version | Supported |
-| ------- | --------- |
-| 1.6.8   | Yes       |
-| < 1.6.8 | No        |
+| Version    | Supported |
+| ---------- | --------- |
+| 1.6.15.2   | Yes       |
+| < 1.6.15.2 | No        |
 
 Your installed version is shown at the bottom of the settings panel.
 
@@ -102,6 +102,17 @@ Worth stating plainly, because the permissions are broad by necessity:
   the same storage on its way from its tab: the reader removes it once it is
   shown, and if the reader has gone by then it stays until the next scrape
   replaces it. Nothing is sent anywhere except the hosts above.
+- **It keeps what Hacker News answered about the last pages you looked up**, so
+  a page reopened within the hour is not asked about again. Since 1.6.15.2 that
+  is one stored value holding thirty pages at most, by address. A page is used
+  for an hour and dropped the next time a lookup is saved, so the value can
+  still name a page for longer than that if you look nothing up in between.
+  Before 1.6.15.2 every page had a stored value of its own, named
+  `HNewhere:hn_cache:` followed by its address, and none was removed. Those are
+  still in your userscript manager's storage: the script is granted no way to
+  list or delete stored values, so it cannot remove them. Clearing the script's
+  stored data in the manager removes them, and your settings and notes with
+  them.
 - **The notepad stays on the machine you wrote it on.** Notes live in your
   userscript manager's storage, keyed by page address or, on a PDF, by the
   document's fingerprint. Nothing is uploaded and no source is told they exist.
