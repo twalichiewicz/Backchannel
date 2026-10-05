@@ -4341,7 +4341,7 @@ button {
 	function noteSelectionContext(range) {
 		const container =
 			nearestElement(range.commonAncestorContainer)?.closest(
-				".textLayer, article, main, body",
+				".textLayer, .bc-reader, article, main, body",
 			) || document.body;
 		const before = document.createRange();
 		const after = document.createRange();
@@ -4369,7 +4369,8 @@ button {
 
 		if (
 			!element ||
-			element.closest("[data-hnewhere-sidebar], [data-hnewhere-note-composer]")
+			element.closest("[data-hnewhere-note-composer]") ||
+			(element.closest("[data-hnewhere-sidebar]") && !element.closest(".bc-reader"))
 		) {
 			return null;
 		}
@@ -4986,6 +4987,20 @@ button {
 		wrapper.appendChild(
 			pdfReaderButton("Add note", () => {
 				removeNoteAffordance();
+
+				if (frameAgentActive) {
+					postToApp({
+						type: "note",
+						exact: chosen.exact,
+						prefix: chosen.prefix,
+						suffix: chosen.suffix,
+						left: chosen.left,
+						top: chosen.top,
+					});
+					window.getSelection()?.removeAllRanges();
+					return;
+				}
+
 				openNoteComposer(chosen).catch(console.error);
 			}),
 		);
@@ -5004,18 +5019,38 @@ button {
 			return;
 		}
 
+		listenForNoteSelection(() => {
+			if (noteSelectionOffered) {
+				syncNoteAffordance();
+			}
+		});
+	}
+
+	function watchFrameNoteSelection() {
+		listenForNoteSelection(async () => {
+			if (window.getSelection()?.isCollapsed !== false) {
+				removeNoteAffordance();
+				return;
+			}
+
+			const settings = await loadSettings();
+
+			if (settings.notepad && settings.noteOnSelection) {
+				syncNoteAffordance();
+			} else {
+				removeNoteAffordance();
+			}
+		});
+	}
+
+	function listenForNoteSelection(sync) {
 		if (noteSelectionWatched) {
 			return;
 		}
 
 		noteSelectionWatched = true;
 
-		const later = () =>
-			window.setTimeout(() => {
-				if (noteSelectionOffered) {
-					syncNoteAffordance();
-				}
-			}, 0);
+		const later = () => window.setTimeout(sync, 0);
 
 		document.addEventListener("pointerup", later);
 		document.addEventListener("keyup", (event) => {
@@ -27657,6 +27692,7 @@ ${settingsPanelHTML()}
 		wireApp(ui);
 		renderAppDiscussionEmpty();
 		setAppDrawer(true);
+		watchNoteSelection(await loadSettings());
 		await refreshAppSources();
 	}
 
@@ -30728,6 +30764,11 @@ ${settingsPanelHTML()}
 			return;
 		}
 
+		if (data.type === "note") {
+			openFrameNote(article, data).catch(console.error);
+			return;
+		}
+
 		if (data.type === "focus-quote") {
 			applyCommentFilter(String(data.key || ""));
 
@@ -30762,6 +30803,29 @@ ${settingsPanelHTML()}
 			type: "annotate",
 			comments: renderedComments.map(frameCommentPayload),
 			settings,
+		});
+	}
+
+	async function openFrameNote(article, data) {
+		const settings = await loadSettings();
+		const exact = String(data.exact || "").replace(/\s+/g, " ").trim();
+		const left = Number(data.left);
+		const top = Number(data.top);
+
+		if (!settings.notepad || !settings.noteOnSelection || !exact || !Number.isFinite(left) || !Number.isFinite(top)) {
+			return;
+		}
+
+		const box = article.frame.getBoundingClientRect();
+
+		await openNoteComposer({
+			exact,
+			prefix: String(data.prefix || "").slice(-NOTE_CONTEXT_CHARS),
+			suffix: String(data.suffix || "").slice(0, NOTE_CONTEXT_CHARS),
+			anchorable: normalizeSearchText(exact).text.length >= QUOTE_MIN_CHARS,
+			page: null,
+			left: box.left + left,
+			top: box.top + top,
 		});
 	}
 
@@ -31091,6 +31155,7 @@ ${settingsPanelHTML()}
 	function installFrameAgent() {
 		frameAgentActive = true;
 		watchPullDown(window, () => postToApp({ type: "collapse" }));
+		watchFrameNoteSelection();
 
 		window.addEventListener("message", (event) => {
 			if (event.source !== window.parent || event.origin !== START_PAGE_ORIGIN) {
