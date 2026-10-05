@@ -11640,7 +11640,7 @@ header {
 
 .hide-menu {
 	position:absolute;
-	top:46px;
+	top:calc(50% + 18px);
 	right:8px;
 	z-index:5;
 	display:flex;
@@ -12459,7 +12459,7 @@ header {
 
 .settings-panel {
 	position:absolute;
-	top:46px;
+	top:calc(50% + 18px);
 	right:8px;
 	width:240px;
 	background:var(--surface);
@@ -12485,6 +12485,10 @@ header {
 
 header button svg {
 	display:block;
+}
+
+header > .settings-panel {
+	font-weight:normal;
 }
 
 #settings-toggle.is-open,
@@ -12710,7 +12714,7 @@ header button svg {
 .source-menu {
 	position:absolute;
 	left:0;
-	top:calc(100% + 4px);
+	top:calc(100% + 3px);
 	z-index:4;
 	min-width:180px;
 	max-width:270px;
@@ -13790,7 +13794,7 @@ ${
 <button id="close-pdf-reader" type="button" role="menuitem" data-pdf-reader-only hidden>Close the PDF reader</button>
 </div>` : ""
 }
-
+${settings ? settingsPanelHTML() : ""}
 </header>
 `;
 	}
@@ -16087,7 +16091,7 @@ blockquote.comment-quote-redundant {
 .compose-targets {
 	position:absolute;
 	right:0;
-	top:calc(100% + 4px);
+	top:calc(100% + 3px);
 	max-height:180px;
 	overflow-y:auto;
 	z-index:2;
@@ -16314,7 +16318,6 @@ ${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-dock
 
 ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMode, settings: !appMode, title: appMode ? "Discussion" : "" })}
 <div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><button id="compose-dock-close" class="compose-dock-close" type="button" aria-label="Close the composer" title="Close">&times;</button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
-${appMode ? "" : settingsPanelHTML()}
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
 <div class="filter-banner-head">
