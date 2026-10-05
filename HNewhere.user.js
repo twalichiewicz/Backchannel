@@ -9471,13 +9471,16 @@ button {
 			panel.classList.toggle("browsing", on);
 			refreshSidebarSubtitle(ui);
 
-			const stranded = on && !sidebarHasDiscussion;
+			const picking = Boolean(ui.body?.querySelector(".source-picker"));
+			const stranded = on && !sidebarHasDiscussion && !picking;
 
 			toggle.disabled = panel.classList.contains("queue-only") || stranded;
 			toggle.title = stranded
 				? "No discussion found for this page"
 				: on
-					? "Back to this page's discussion"
+					? picking
+						? "Back to choosing sources"
+						: "Back to this page's discussion"
 					: browseLabel();
 
 			panel.classList.remove("submitting");
@@ -24435,6 +24438,12 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		const generation = ++sidebarGeneration;
 		const comments = ui.shadow?.querySelector("#comments");
 		const settings = await loadSettings();
+		const wasPicking = Boolean(ui.body?.querySelector(".source-picker"));
+		const leaveBrowsing = () => {
+			if (ui.shadow?.querySelector("#panel")?.classList.contains("browsing")) {
+				setBrowseMode(ui, false);
+			}
+		};
 
 		const render = () => {
 			if (generation !== sidebarGeneration) {
@@ -24447,6 +24456,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				if (!enabledSourceIds(settings, registeredSourceIds()).length) {
 					sidebarHasDiscussion = false;
 					renderSourcePicker(ui);
+					leaveBrowsing();
 					return;
 				}
 
@@ -24475,6 +24485,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				setSidebarStage(ui, "comments");
 				await renderDiscussions(discussions, ui);
 				await refreshSubmitAffordance(ui.shadow);
+
+				if (wasPicking) {
+					leaveBrowsing();
+				}
 
 				if (generation === sidebarGeneration) {
 					await refreshArticleAnnotations();
