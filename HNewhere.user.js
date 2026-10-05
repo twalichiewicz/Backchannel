@@ -4993,7 +4993,7 @@ button {
 	}
 
 	function watchNoteSelection(settings) {
-		if (!enabledSourceIds(settings, registeredSourceIds()).includes("notes")) {
+		if (!settings.notepad) {
 			return;
 		}
 
