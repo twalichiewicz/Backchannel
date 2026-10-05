@@ -11409,6 +11409,12 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 	}
 
 	function renderSourcePicker(ui) {
+		const control = ui.shadow?.querySelector("#comment-toggle");
+
+		if (control) {
+			control.hidden = true;
+		}
+
 		ui.body.innerHTML = `
 <div class="source-picker">
 <div class="source-picker-title">Where should comments come from?</div>
@@ -12172,7 +12178,8 @@ header {
 	display:none;
 }
 
-#header-submit[hidden] {
+#header-submit[hidden],
+#comment-toggle[hidden] {
 	display:none;
 }
 
