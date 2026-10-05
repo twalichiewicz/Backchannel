@@ -5745,6 +5745,26 @@ button {
 
 		return oldest;
 	}
+
+	const DISCOVERY_CACHE_KEY = "HNewhere:discovery_cache";
+	const DISCOVERY_CACHE_TTL = 60 * 60 * 1000;
+	const DISCOVERY_CACHE_MAX = 30;
+
+	function keptDiscoveries(stored, now) {
+		const held = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+
+		return Object.fromEntries(
+			Object.entries(held)
+				.filter(
+					([, entry]) =>
+						Array.isArray(entry?.results) &&
+						typeof entry.timestamp === "number" &&
+						now - entry.timestamp < DISCOVERY_CACHE_TTL,
+				)
+				.sort((left, right) => right[1].timestamp - left[1].timestamp)
+				.slice(0, DISCOVERY_CACHE_MAX),
+		);
+	}
 	// #endregion hnewhere-test-export
 
 	const threadCache = new Map();
@@ -5810,12 +5830,10 @@ button {
 			return [];
 		}
 
-		const cacheKey = "HNewhere:hn_cache:" + target;
+		const cached = keptDiscoveries(await load(DISCOVERY_CACHE_KEY, null), Date.now());
 
-		const cached = await load(cacheKey, null);
-
-		if (cached && Date.now() - cached.timestamp < 3600000) {
-			return [...cached.results].sort(compareStoriesByDiscussion);
+		if (Object.prototype.hasOwnProperty.call(cached, target)) {
+			return [...cached[target].results].sort(compareStoriesByDiscussion);
 		}
 
 		const queries = [url, target];
@@ -5846,10 +5864,18 @@ button {
 		const sorted = [...matches.values()].sort(compareStoriesByDiscussion);
 
 		if (shouldCacheDiscovery(answered)) {
-			await save(cacheKey, {
-				timestamp: Date.now(),
-				results: sorted,
-			});
+			const now = Date.now();
+
+			await save(
+				DISCOVERY_CACHE_KEY,
+				keptDiscoveries(
+					{
+						...(await load(DISCOVERY_CACHE_KEY, null)),
+						[target]: { timestamp: now, results: sorted },
+					},
+					now,
+				),
+			);
 		}
 
 		return sorted;
