@@ -54,7 +54,7 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Hypothes.is | `api.hypothes.is` | the URL of each page you visit, to find public annotations on it. No account, signed in or out |
   | *no source enabled* | none | nothing -- the script performs no lookup at all. Kind of weird to use it this way, but no judgements. |
 
-  Six sit outside that table because they are not lookups:
+  Seven sit outside that table because they are not lookups:
 
   | Host | When | What it is told |
   | --- | --- | --- |
@@ -62,6 +62,7 @@ Worth stating plainly, because the permissions are broad by necessity:
   | `cdn.jsdelivr.net` | when your manager fetches the script's declared resources, and again from the page itself if it did not | nothing about you -- it is a file download of a fixed, versioned URL |
   | the page you open in the reader on backchnnl.app | only when that page gives no answer from inside its frame | nothing but the request itself: one `GET` without cookies, to read whether it may be framed, whether it is a picture and, if it may not be framed, its text |
   | the site of each article in the reader's list on backchnnl.app | when the list shows the article, since 1.6.15 | nothing but a request for its icon, `/favicon.ico`, sent without a referrer |
+  | wherever a page you open in the reader says its preview image is | once that page has loaded in the reader, since 1.6.15.1 | nothing but the request for the image, sent without a referrer |
   | wherever an image in a comment is hosted | only with *Show images in comments* on, and it is off until you turn it on | nothing but the request for the image, over https and without a referrer |
   | the page you ask the reader to scrape | only when you press *Scrape link content* | what any visit tells it: the page opens in a tab of your own browser, signed in if you are |
 
@@ -117,9 +118,7 @@ Worth stating plainly, because the permissions are broad by necessity:
   single-label hostnames, and a list covering webmail, banking, auth flows and
   cloud consoles -- matched on the hostname and on the path, so a sign-in page
   is caught on a host that is otherwise fine. A blocked page
-  performs no lookup, renders nothing, and writes no stored state, with one
-  exception since 1.6.15: a page you have just asked the reader to scrape is
-  read, as described below. PDFs were on
+  performs no lookup, renders nothing, and writes no stored state. PDFs were on
   that list until 1.6.7; they are read like any other page now, and a PDF on an
   excluded host stays excluded.
 - **Credentials never leave the site they belong to.** Everything that writes --
@@ -144,9 +143,10 @@ Worth stating plainly, because the permissions are broad by necessity:
   except a frame named `backchannel-article` it stops on its first statement. In
   that frame, inside the reader on backchnnl.app, it answers only messages from
   `https://backchnnl.app`, and tells that page only the frame's address, its
-  title, its size, whether it is showing, whether it is a picture, which quotes
-  it found, which link was pressed, and a pull down from the top of the page.
-  It performs no lookup there and writes nothing to storage.
+  title, its size, the address of its preview image, whether it is showing,
+  whether it is a picture, which quotes it found, which link was pressed, and a
+  pull down from the top of the page. It performs no lookup there and writes
+  nothing to storage.
 - **The reader frames pages under a sandbox**, with no referrer and without
   permission to navigate the reader itself, so a page that tries to break out of
   its frame stays in it. A page read out instead is reduced by an allowlist to
@@ -157,12 +157,12 @@ Worth stating plainly, because the permissions are broad by necessity:
   address you asked for and opens it in a tab. The script in that tab answers
   only within 25 seconds, only on the host that address names, and only for
   that address or a page there that names it as its canonical address; a page
-  on another site that claims the address is ignored. What comes back is reduced
-  by the same allowlist as any other reading view before it is shown. It is
-  also the one thing the script does on a page it otherwise leaves alone: a
-  page the runtime exclusions cover, a site you have hidden, or any site while
-  the Sidebar is switched off is still read if it is the address you asked
-  for.
+  on another site that claims the address is ignored. What comes back is
+  reduced by the same allowlist as any other reading view before it is shown.
+  An excluded page is never read this way: a tab on one does not answer, and
+  the reader does not offer to scrape one. A site you have hidden, and any site
+  while the Sidebar is switched off, is still read if it is the address you
+  asked for.
 - **The Sidebar can be switched off.** With the switch in the reader's
   settings off, a page you visit gets no lookup, no button and no Sidebar.
 
@@ -193,6 +193,7 @@ source you have not switched on issues none of these.
 | Hypothes.is | `GET api.hypothes.is/api/search?url=<page>&limit=200` | `<page>` | No |
 | backchnnl.app reader, not a source | `GET <the page you opened>`, only when it gives no answer from its frame | nothing but the request itself | No, it is sent without cookies |
 | backchnnl.app reader's list, not a source | `GET <article's site>/favicon.ico`, as an image, one for each article the list shows | nothing but the request itself, with no referrer | Only as far as your browser sends that site's cookies with an image on another site's page; browsers differ |
+| backchnnl.app reader's list, not a source | `GET <the preview image an opened page names>`, as an image, once that page has loaded in the reader | nothing but the request itself, with no referrer | The same: whatever cookies your browser sends with an image on another site's page |
 | Images in comments, not a source | `GET <the image>`, for each https image in the comments shown, only with *Show images in comments* on | nothing but the request itself, with no referrer | The same: whatever cookies your browser sends with an image on another site's page |
 | Scrape link content, not a source | a tab on `<the page you asked for>`, only when you press the button | what any visit to that page carries | Yes. It is your browser opening the page, with the session you have there |
 | pdf.js, not a source | `GET cdn.jsdelivr.net/npm/pdfjs-dist@<version>/legacy/build/pdf.min.mjs` and `pdf.worker.min.mjs` | nothing about you, two fixed files at a pinned version | No |
