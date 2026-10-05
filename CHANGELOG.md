@@ -42,7 +42,8 @@ use to detect updates, so every release bumps it.
 
 - **Selecting a passage offers Add note.** The notepad is meant to offer a note
   on any passage you select, and the offer never appeared. With the notepad on,
-  select a passage and **Add note** appears beside it.
+  select a passage and **Add note** appears beside it. To stop it, turn off
+  **Show "Add note" when selecting text** under **Enable notepad**.
 
 - **Highlights sit on their text on a page that margins every element.** Where
   a page's stylesheet gives each element after the first a top margin, every
