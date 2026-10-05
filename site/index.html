@@ -475,15 +475,6 @@
     outline-color: var(--paper);
   }
 
-  .song-button.is-ink {
-    background: var(--ink);
-    color: var(--paper);
-  }
-
-  .song-button.is-ink:hover {
-    outline-color: var(--ink);
-  }
-
   .percher {
     position: absolute;
     left: clamp(26px, 10.6vw, 150px);
@@ -520,7 +511,7 @@
     position: relative;
     isolation: isolate;
     margin: 0 clamp(10px, 2.1vw, 30px) clamp(22px, 2.4vw, 34px);
-    padding: 26px clamp(20px, 5.4vw, 76px) 44px;
+    padding: 26px clamp(20px, 5.4vw, 76px) clamp(52px, 5.4vw, 76px);
     color: var(--ink);
   }
 
@@ -763,13 +754,6 @@
     cursor: pointer;
   }
 
-  .again {
-    display: flex;
-    justify-content: center;
-    margin: 0;
-    padding: 56px 0 4px;
-  }
-
   @media (max-width: 700px) {
     html[data-backchannel-installed]:has([data-hnewhere-app]) .bezel {
       position: relative;
@@ -947,12 +931,6 @@
     </figure>
 
   </div>
-
-  <p class="again">
-    <a class="song-button is-ink" href="https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js">
-      Install Backchannel
-    </a>
-  </p>
 
   <dialog class="zoom" aria-label="Screenshot, full size">
     <button class="zoom-close" type="button" aria-label="Close">&times;</button>
