@@ -363,6 +363,7 @@
 		annotations: false,
 		annotationsWhenSidebarClosed: false,
 		notepad: true,
+		noteOnSelection: true,
 		pdfReader: false,
 		sidebarEnabled: true,
 		autoOpenSidebar: false,
@@ -4992,12 +4993,29 @@ button {
 		document.documentElement.appendChild(wrapper);
 	}
 
+	let noteSelectionOffered = false;
+	let noteSelectionWatched = false;
+
 	function watchNoteSelection(settings) {
-		if (!settings.notepad) {
+		noteSelectionOffered = Boolean(settings.notepad && settings.noteOnSelection);
+
+		if (!noteSelectionOffered) {
+			removeNoteAffordance();
 			return;
 		}
 
-		const later = () => window.setTimeout(syncNoteAffordance, 0);
+		if (noteSelectionWatched) {
+			return;
+		}
+
+		noteSelectionWatched = true;
+
+		const later = () =>
+			window.setTimeout(() => {
+				if (noteSelectionOffered) {
+					syncNoteAffordance();
+				}
+			}, 0);
 
 		document.addEventListener("pointerup", later);
 		document.addEventListener("keyup", (event) => {
@@ -13887,6 +13905,12 @@ All stored locally.
 <span class="settings-byline-sep">|</span>
 <button id="settings-notes-export" class="settings-byline-action" type="button">export</button>
 </div>
+<div class="settings-suboptions" data-suboptions-of="notepad">
+<label class="settings-option sub-option">
+<input id="setting-note-on-selection" data-setting="noteOnSelection" type="checkbox">
+<span>Show “Add note” when selecting text</span>
+</label>
+</div>
 </div>
 
 <div class="settings-group">
@@ -14050,6 +14074,7 @@ ${[
 			),
 			pdfReader: shadow.querySelector("#setting-pdf-reader"),
 			notepad: shadow.querySelector("#setting-notepad"),
+			noteOnSelection: shadow.querySelector("#setting-note-on-selection"),
 			autoOpenSidebarOnlyFromHN: shadow.querySelector(
 				"#setting-auto-open-only-from-hn",
 			),
@@ -14436,7 +14461,13 @@ ${[
 			}
 
 			if (setting === "notepad") {
+				watchNoteSelection(settings);
 				await reopenForNotes();
+				return;
+			}
+
+			if (setting === "noteOnSelection") {
+				watchNoteSelection(settings);
 				return;
 			}
 
