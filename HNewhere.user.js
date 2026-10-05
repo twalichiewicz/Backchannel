@@ -15042,27 +15042,66 @@ ${SUBMIT_FORM_CSS}
 
 .filter-banner-head {
 	display:flex;
-	flex-wrap:wrap;
-	align-items:baseline;
-	color:var(--meta);
-	font-family:Verdana, Geneva, sans-serif;
-	font-size:11px;
+	flex-wrap:nowrap;
+	align-items:center;
+	gap:2px;
+	min-height:24px;
+	box-sizing:border-box;
+	padding:2px 2px 2px 9px;
+	border-radius:8px 8px 0 0;
+	background:var(--header-bg);
+	color:rgba(255,255,255,.72);
+	font:11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
 }
 
 .filter-banner-title {
-	color:var(--text);
+	flex:1 1 auto;
+	min-width:0;
+	color:inherit;
+	font:inherit;
 }
 
-.filter-banner-close::before {
-	content:"|";
-	margin:0 5px;
+.filter-banner-icon {
+	flex:0 0 auto;
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	width:20px;
+	height:20px;
+	padding:0;
+	border:0;
+	border-radius:4px;
+	background:none;
+	color:inherit;
+	text-decoration:none;
+	cursor:pointer;
+}
+
+.filter-banner-icon[hidden] {
+	display:none;
+}
+
+.filter-banner-icon svg {
+	display:block;
+}
+
+@media (hover: hover) {
+	.filter-banner-icon:hover {
+		background:rgba(255,255,255,.16);
+		color:#fff;
+	}
+}
+
+.filter-banner-icon:active {
+	background:rgba(255,255,255,.26);
+	color:#fff;
 }
 
 .filter-banner-quote {
-	margin-top:6px;
+	margin-top:0;
 	padding:7px 8px;
 	border:1px solid var(--help-border);
-	border-radius:4px;
+	border-radius:0 0 8px 8px;
 	background:var(--help-bg);
 	color:var(--quote-text);
 	font-size:13px;
@@ -15111,27 +15150,6 @@ ${SUBMIT_FORM_CSS}
 	display:none;
 }
 
-.filter-banner-close {
-	border:0;
-	padding:0;
-	background:none;
-	color:var(--meta);
-	cursor:pointer;
-	font-family:Verdana, Geneva, sans-serif;
-	font-size:11px;
-	text-decoration:none;
-	text-underline-offset:2px;
-}
-
-.filter-banner-close:focus-visible {
-	text-decoration:underline;
-}
-
-@media (hover: hover) {
-	.filter-banner-close:hover {
-		text-decoration:underline;
-	}
-}
 
 .comment {
 	margin:12px 0 0 8px;
@@ -16321,7 +16339,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
 <div class="filter-banner-head">
-<span class="filter-banner-title">Focused discussion</span><button id="clear-filter" class="filter-banner-close" type="button">show all comments</button>
+<span class="filter-banner-title">Focused discussion</span><a id="filter-banner-open" class="filter-banner-icon" target="_blank" rel="noopener" hidden>${APP_OPEN_ICON}</a><button id="clear-filter" class="filter-banner-icon" type="button" aria-label="Show all comments" title="Show all comments">${APP_CLOSE_ICON}</button>
 </div>
 <div id="filter-banner-quote" class="filter-banner-quote"></div>
 </div>
@@ -23629,7 +23647,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 					sidebarUI.filterBanner.classList.remove("hidden", "app-pinned");
 					sidebarUI.filterBannerQuote.classList.remove("app-focus-post");
 					paintBanner(sidebarUI.filterBannerQuote);
-					syncAppFocusControls();
+					syncFocusControls();
 				}
 			}
 
@@ -23753,7 +23771,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		quote.innerHTML = `<div class="app-focus-post-title">${escapeHTML(story.title || label)} <span class="app-focus-post-site">(${escapeHTML([label, time ? timeAgo(time) : ""].filter(Boolean).join(", "))})</span></div><div class="app-focus-post-meta">${meta}</div>`;
 	}
 
-	function appFocusedDiscussion() {
+	function focusedDiscussion() {
 		const only = renderedDiscussions.length === 1 ? renderedDiscussions[0] : null;
 		const byKey = (key) => renderedDiscussions.find((discussion) => discussion.key === key) || null;
 
@@ -23775,8 +23793,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		return only;
 	}
 
-	function syncAppFocusControls() {
-		const shadow = appState?.ui.shadow;
+	function syncFocusControls() {
+		const shadow = sidebarUI?.shadow;
 		const open = shadow?.querySelector("#filter-banner-open");
 		const close = shadow?.querySelector("#clear-filter");
 
@@ -23784,7 +23802,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			return;
 		}
 
-		const story = appFocusedDiscussion();
+		const story = focusedDiscussion();
 		const href = story ? discussionURL(story) : null;
 		const label = story ? `Open this discussion on ${sourceShortLabel(story)}` : "";
 
@@ -23814,7 +23832,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		paintAppDiscussionPost(quote, story);
 		banner.classList.add("app-pinned");
 		banner.classList.remove("hidden");
-		syncAppFocusControls();
+		syncFocusControls();
 
 		return true;
 	}
@@ -26228,67 +26246,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	margin-top:0;
 }
 
-#panel.app-docked .filter-banner-head {
-	flex-wrap:nowrap;
-	align-items:center;
-	gap:2px;
-	min-height:24px;
-	box-sizing:border-box;
-	padding:2px 2px 2px 9px;
-	border-radius:8px 8px 0 0;
-	background:var(--rail-bg);
-	color:rgba(255,255,255,.72);
-	font:11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-}
-
-#panel.app-docked .filter-banner-title {
-	flex:1 1 auto;
-	min-width:0;
-	color:inherit;
-	font:inherit;
-}
-
-#panel.app-docked .filter-banner-icon {
-	flex:0 0 auto;
-	display:inline-flex;
-	align-items:center;
-	justify-content:center;
-	width:20px;
-	height:20px;
-	padding:0;
-	border:0;
-	border-radius:4px;
-	background:none;
-	color:inherit;
-	text-decoration:none;
-	cursor:pointer;
-}
-
-#panel.app-docked .filter-banner-icon svg {
-	display:block;
-}
-
-#panel.app-docked .filter-banner-close::before {
-	content:none;
-}
-
-@media (hover: hover) {
-	#panel.app-docked .filter-banner-icon:hover {
-		background:rgba(255,255,255,.16);
-		color:#fff;
-	}
-}
-
-#panel.app-docked .filter-banner-icon:active {
-	background:rgba(255,255,255,.26);
-	color:#fff;
-}
-
-#panel.app-docked .filter-banner-quote {
-	margin-top:0;
-	border-radius:0 0 8px 8px;
-}
-
 #panel.app-docked .filter-banner-quote.app-focus-post {
 	padding:8px 12px 9px;
 	color:var(--meta);
@@ -27682,24 +27639,6 @@ ${settingsPanelHTML()}
 
 		if (dock) {
 			shadow.querySelector("#panel").appendChild(dock);
-		}
-
-		const clearFilter = shadow.querySelector("#clear-filter");
-
-		if (clearFilter) {
-			const openFocused = document.createElement("a");
-
-			openFocused.id = "filter-banner-open";
-			openFocused.className = "filter-banner-icon";
-			openFocused.target = "_blank";
-			openFocused.rel = "noopener";
-			openFocused.hidden = true;
-			openFocused.innerHTML = APP_OPEN_ICON;
-			clearFilter.classList.add("filter-banner-icon");
-			clearFilter.innerHTML = APP_CLOSE_ICON;
-			clearFilter.setAttribute("aria-label", "Show all comments");
-			clearFilter.title = "Show all comments";
-			clearFilter.before(openFocused);
 		}
 
 		if (commentToggle) {
