@@ -1,6 +1,6 @@
 <p align="center">
 <picture>
-  <img width="120" height="120" alt="backchannel-birb" src="https://github.com/user-attachments/assets/1419b9a3-6172-4d13-b634-0a8fa2cba84f" />
+  <img width="120" height="120" alt="backchannel-birb" src="site/icon-360.png" />
 </picture>
   <br/><em>The internet's commentary track</em>
 </p>
