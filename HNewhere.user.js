@@ -7372,6 +7372,46 @@ button {
 	function commentURL(storyID) {
 		return HN_ORIGIN + "/item?id=" + storyID;
 	}
+
+	const COMMENT_PERMALINKS = {
+		hn: (id) => commentURL(id),
+		reddit: (id, comment, discussion) => {
+			const thread = String(discussion?.permalink || "");
+
+			return thread.includes("/comments/")
+				? thread.replace(/\/?$/, "/") + encodeURIComponent(id) + "/"
+				: "";
+		},
+		bsky: (id) => {
+			const cut = id.lastIndexOf("/");
+
+			return cut > 0 && cut < id.length - 1
+				? "https://bsky.app/profile/" +
+						encodeURI(id.slice(0, cut)) +
+						"/post/" +
+						encodeURIComponent(id.slice(cut + 1))
+				: "";
+		},
+		lobsters: (id) => "https://lobste.rs/c/" + encodeURIComponent(id),
+		lemmy: (id) => "https://lemmy.world/comment/" + encodeURIComponent(id),
+		hypothesis: (id) => "https://hypothes.is/a/" + encodeURIComponent(id),
+		wikipedia: (id) =>
+			id.startsWith("c-")
+				? "https://en.wikipedia.org/wiki/Special:GoToComment/" + encodeURIComponent(id)
+				: "",
+		mastodon: (id, comment) => parseSourceKey(comment.key)?.id || "",
+	};
+
+	function commentPermalink(comment, discussion) {
+		const id = String(comment?.id ?? "");
+		const build =
+			id && Object.prototype.hasOwnProperty.call(COMMENT_PERMALINKS, comment.source)
+				? COMMENT_PERMALINKS[comment.source]
+				: null;
+		const url = build ? build(id, comment, discussion) : "";
+
+		return /^https?:\/\//i.test(url) ? url : null;
+	}
 	// #endregion hnewhere-test-export
 
 	function submitURL(url, title) {
@@ -17983,6 +18023,7 @@ ${appMode ? "" : settingsPanelHTML()}
 		const voteSourceID = String(comment.source || "hn");
 		const commentCanVote =
 			!isLocalSource && Boolean(getSource(voteSourceID)?.capabilities.vote);
+		const permalink = commentPermalink(comment, discussion);
 
 		div.innerHTML = `
       <div class="comment-layout">
@@ -18013,7 +18054,11 @@ ${appMode ? "" : settingsPanelHTML()}
 					: ""
 			}
 
-		<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span><span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
+		${
+			permalink
+				? `<a class="item-age" data-age-id="${escapeHTML(commentID)}" target="_blank" rel="noopener noreferrer" href="${escapeHTML(permalink)}">${timeAgo(comment.createdAt)}</a>`
+				: `<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span>`
+		}<span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
 
 		${
 				capabilities.reply
