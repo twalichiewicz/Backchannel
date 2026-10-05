@@ -21371,6 +21371,18 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		};
 	}
 
+	function outweighedByAnotherArticle(candidate) {
+		const size = candidate.textContent.length;
+
+		return [...document.querySelectorAll("article")].some(
+			(other) =>
+				other !== candidate &&
+				!other.contains(candidate) &&
+				!candidate.contains(other) &&
+				other.textContent.length > size,
+		);
+	}
+
 	function getArticleSearchRoot() {
 		const candidates = [
 			document.querySelector("main article"),
@@ -21401,7 +21413,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				bestLength = length;
 			}
 
-			if (candidate.tagName === "ARTICLE" && length > 800) {
+			if (
+				candidate.tagName === "ARTICLE" &&
+				length > 800 &&
+				!outweighedByAnotherArticle(candidate)
+			) {
 				return candidate;
 			}
 		}
