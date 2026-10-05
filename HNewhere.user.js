@@ -16643,6 +16643,8 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 				if (sidebarHasDiscussion) {
 					await saveSidebarState("collapsed");
 					await createRestoreButton();
+				} else if (!enabledSourceIds(await loadSettings(), registeredSourceIds()).length) {
+					await createSetupButton();
 				} else if (location.hostname === "news.ycombinator.com") {
 					await offerQueueOnHN();
 				} else {
