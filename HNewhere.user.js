@@ -24047,8 +24047,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			return node;
 		};
 
+		let renderedHeight = 0;
+
 		const render = () => {
 			overlay.style.height = source.heightFor(overlayHost) + "px";
+			renderedHeight = source.heightFor(overlayHost);
 			baseLayer.replaceChildren();
 			heatLayer.replaceChildren();
 			rectsByGroup.clear();
@@ -24184,6 +24187,13 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 		const onFontsSettled = () => scheduleRender();
 
+		const onScroll = () => {
+			if (source.heightFor(overlayHost) !== renderedHeight) {
+				scheduleRender();
+			}
+		};
+
+		window.addEventListener("scroll", onScroll, { passive: true });
 		window.addEventListener("resize", scheduleRender);
 		window.addEventListener("load", scheduleRender, true);
 		document.fonts?.addEventListener?.("loadingdone", onFontsSettled);
@@ -24208,6 +24218,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			},
 			cleanup() {
 				clearTimeout(leaveTimer);
+				window.removeEventListener("scroll", onScroll);
 				window.removeEventListener("resize", scheduleRender);
 				window.removeEventListener("load", scheduleRender, true);
 				document.fonts?.removeEventListener?.("loadingdone", onFontsSettled);
