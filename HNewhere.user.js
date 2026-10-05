@@ -13168,11 +13168,11 @@ header > .settings-panel {
 	display:none;
 }
 
-#app-settings-content .settings-app-only {
+:host([data-hnewhere-app]) #app-settings-content .settings-app-only {
 	display:block;
 }
 
-#app-settings-modal[data-section="sidebar"] #app-settings-heading {
+:host([data-hnewhere-app]) #app-settings-modal[data-section="sidebar"] #app-settings-heading {
 	display:none;
 }
 
@@ -16403,7 +16403,7 @@ blockquote.comment-quote-redundant {
 	text-decoration-color:currentColor;
 }
 
-${appMode ? APP_CSS : ""}
+${appMode ? APP_CSS : SIDEBAR_SETTINGS_MODAL_CSS}
 </style>
 
 ${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-docked"' : pageMode ? ' class="page-mode"' : ""}>
@@ -16454,6 +16454,11 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		const { setSettingsOpen } = await wireSettingsPanel(shadow, {
 			onAnnotationChange: refreshArticleAnnotations,
 		});
+
+		if (!appMode) {
+			shadow.querySelector("#panel").insertAdjacentHTML("afterend", settingsModalHTML());
+			wireSettingsModal(shadow);
+		}
 
 		clearFilterButton.onclick = (event) => {
 			event.preventDefault();
@@ -24607,6 +24612,334 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	const APP_ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 	const APP_PULL_MAX = 96;
 
+	const APP_ICON_CSS = `
+.app-head-icon {
+	flex:0 0 auto;
+	position:relative;
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	width:24px;
+	height:24px;
+	padding:0;
+	border:0;
+	border-radius:5px;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+}
+
+.app-head-icon[hidden] {
+	display:none;
+}
+
+.app-head-icon svg {
+	display:block;
+}
+
+:host {
+	--icon-fill:#fff;
+	--icon-on:var(--text);
+	--icon-knock:var(--text);
+	--icon-solid:none;
+	--icon-hollow:inline;
+}
+
+:host(.${DARK_CLASS}) {
+	--icon-on:#fff;
+	--icon-knock:var(--bg);
+	--icon-solid:inline;
+	--icon-hollow:none;
+}
+`;
+
+	const SETTINGS_MODAL_CSS = `
+.app-settings-modal {
+	position:fixed;
+	inset:0;
+	z-index:60;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	box-sizing:border-box;
+	padding:32px;
+	background:rgba(0,0,0,.45);
+}
+
+.app-settings-modal[hidden] {
+	display:none;
+}
+
+.app-settings-dialog {
+	display:flex;
+	flex-direction:column;
+	box-sizing:border-box;
+	width:min(678px, 100%);
+	height:min(520px, 100%);
+	overflow:hidden;
+	border:1px solid var(--surface-border);
+	border-radius:10px;
+	background:var(--surface);
+	color:var(--surface-text);
+	box-shadow:0 24px 64px rgba(0,0,0,.35);
+	font-size:12px;
+	line-height:1.35;
+	text-align:left;
+}
+
+.app-settings-top {
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	padding:6px 6px 6px 14px;
+	border-bottom:1px solid var(--surface-divider);
+}
+
+.app-settings-title {
+	font-size:13px;
+	font-weight:600;
+}
+
+.app-settings-body {
+	display:flex;
+	flex:1 1 auto;
+	min-height:0;
+}
+
+.app-settings-nav {
+	flex:0 0 200px;
+	display:flex;
+	flex-direction:column;
+	gap:1px;
+	box-sizing:border-box;
+	padding:8px 8px;
+	border-right:1px solid var(--surface-divider);
+	background:var(--help-bg);
+}
+
+.app-settings-tab {
+	display:flex;
+	align-items:center;
+	gap:8px;
+	white-space:nowrap;
+	padding:5px 8px;
+	border:0;
+	border-radius:6px;
+	background:none;
+	color:var(--surface-text);
+	font:inherit;
+	font-size:12px;
+	text-align:left;
+	cursor:pointer;
+}
+
+.app-settings-tab svg {
+	flex:0 0 auto;
+	color:var(--meta);
+}
+
+.app-settings-tab[aria-current="page"] {
+	background:var(--active-tint);
+	font-weight:600;
+}
+
+.app-settings-tab[aria-current="page"] svg {
+	color:var(--surface-text);
+}
+
+@media (hover: hover) {
+	.app-settings-tab:not([aria-current="page"]):hover {
+		background:var(--hover-tint);
+	}
+}
+
+#app-settings-modal:has(.settings-panel.sidebar-off) .app-settings-tab[data-settings-section="sidebar"] {
+	opacity:.7;
+}
+
+.app-settings-tab:not([aria-current="page"]):active {
+	background:var(--active-tint);
+}
+
+.settings-credits-mark {
+	display:none;
+}
+
+.app-settings-nav .settings-credits {
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	gap:6px;
+	margin-top:auto;
+	padding:6px 0 0 8px;
+}
+
+.app-settings-nav .settings-credits-label {
+	display:none;
+}
+
+.app-settings-nav .settings-credits-mark {
+	display:block;
+}
+
+.app-settings-nav .settings-credits a[href$="/issues"] {
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	width:24px;
+	height:24px;
+	border-radius:5px;
+	color:var(--meta);
+	text-decoration:none;
+}
+
+@media (hover: hover) {
+	.app-settings-nav .settings-credits a[href$="/issues"]:hover {
+		background:var(--hover-tint);
+		color:var(--text);
+	}
+}
+
+.app-settings-nav .settings-credits a[href$="/issues"]:active {
+	background:var(--active-tint);
+	color:var(--icon-on);
+}
+
+.app-settings-content {
+	flex:1 1 auto;
+	min-width:0;
+	overflow-y:auto;
+	padding:12px 18px 16px;
+}
+
+.app-settings-heading {
+	margin:0 0 10px;
+	font-size:13px;
+	font-weight:600;
+}
+
+#app-settings-content .settings-panel {
+	position:static;
+	width:auto;
+	max-width:440px;
+	max-height:none;
+	overflow:visible;
+	padding:0;
+	border:0;
+	border-radius:0;
+	background:none;
+	box-shadow:none;
+	z-index:auto;
+}
+
+#app-settings-content .settings-head,
+#app-settings-content [data-app-section="links"],
+#app-settings-modal[data-section="general"] [data-app-section="sidebar"],
+#app-settings-modal[data-section="sidebar"] [data-app-section="general"] {
+	display:none;
+}
+
+#app-settings-content .settings-panes {
+	display:block;
+	width:100%;
+	height:auto !important;
+	overflow:visible;
+	transform:none !important;
+	transition:none;
+}
+
+#app-settings-content .settings-pane {
+	width:100%;
+	visibility:visible;
+}
+
+#app-settings-content .settings-panes.is-secondary > .settings-pane-primary,
+#app-settings-content .settings-panes:not(.is-secondary) > .settings-pane-secondary {
+	display:none;
+}
+
+#app-settings-content .settings-group + .settings-group {
+	margin-top:0;
+	padding-top:0;
+	border-top:0;
+}
+
+#app-settings-content .settings-group {
+	margin-bottom:12px;
+}
+`;
+
+	const SETTINGS_MODAL_PHONE_CSS = `
+	#app-settings-modal {
+		padding:calc(12px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px));
+	}
+
+	.app-settings-dialog {
+		width:100%;
+		height:100%;
+		border-radius:14px;
+	}
+
+
+	.app-settings-body {
+		flex-direction:column;
+	}
+
+	.app-settings-nav {
+		flex:0 0 auto;
+		flex-direction:row;
+		gap:4px;
+		overflow-x:auto;
+		padding:8px 10px;
+		border-right:0;
+		border-bottom:1px solid var(--surface-divider);
+	}
+
+	.app-settings-tab {
+		flex:0 0 auto;
+	}
+
+	#app-settings-content {
+		padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px));
+	}
+
+	.app-settings-version {
+		display:inline !important;
+		margin-left:8px;
+		color:var(--meta);
+		font-size:12px;
+	}
+
+	.app-settings-top a[href$="/issues"] {
+		display:inline-flex;
+		align-items:center;
+		justify-content:center;
+		width:32px;
+		height:32px;
+		margin-right:2px;
+		border-radius:16px;
+		color:var(--surface-text);
+	}
+
+	.app-settings-top .settings-credits-mark {
+		display:block;
+		width:16px;
+		height:16px;
+	}
+`;
+
+	const SIDEBAR_SETTINGS_MODAL_CSS = `${APP_ICON_CSS}${SETTINGS_MODAL_CSS}
+#app-settings-modal {
+	z-index:2147483647;
+	line-height:1.4;
+	color:var(--text);
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+	font-size:13px;
+}
+
+@media (max-width: 700px) {${SETTINGS_MODAL_PHONE_CSS}}
+`;
+
 	const APP_CSS = `
 :host {
 	display:block;
@@ -24869,44 +25202,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	margin-left:auto;
 }
 
-.app-head-icon {
-	flex:0 0 auto;
-	position:relative;
-	display:inline-flex;
-	align-items:center;
-	justify-content:center;
-	width:24px;
-	height:24px;
-	padding:0;
-	border:0;
-	border-radius:5px;
-	background:none;
-	color:var(--meta);
-	cursor:pointer;
-}
-
-.app-head-icon[hidden] {
-	display:none;
-}
-
-.app-head-icon svg {
-	display:block;
-}
-
-:host {
-	--icon-fill:#fff;
-	--icon-on:var(--text);
-	--icon-knock:var(--text);
-	--icon-solid:none;
-	--icon-hollow:inline;
-}
-
-:host(.${DARK_CLASS}) {
-	--icon-on:#fff;
-	--icon-knock:var(--bg);
-	--icon-solid:inline;
-	--icon-hollow:none;
-}
+${APP_ICON_CSS}
 
 .app-sync-glyph {
 	display:block;
@@ -25304,219 +25600,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	font-size:10px;
 }
 
-.app-settings-modal {
-	position:fixed;
-	inset:0;
-	z-index:60;
-	display:flex;
-	align-items:center;
-	justify-content:center;
-	box-sizing:border-box;
-	padding:32px;
-	background:rgba(0,0,0,.45);
-}
-
-.app-settings-modal[hidden] {
-	display:none;
-}
-
-.app-settings-dialog {
-	display:flex;
-	flex-direction:column;
-	box-sizing:border-box;
-	width:min(678px, 100%);
-	height:min(520px, 100%);
-	overflow:hidden;
-	border:1px solid var(--surface-border);
-	border-radius:10px;
-	background:var(--surface);
-	color:var(--surface-text);
-	box-shadow:0 24px 64px rgba(0,0,0,.35);
-	font-size:12px;
-	line-height:1.35;
-	text-align:left;
-}
-
-.app-settings-top {
-	display:flex;
-	align-items:center;
-	justify-content:space-between;
-	padding:6px 6px 6px 14px;
-	border-bottom:1px solid var(--surface-divider);
-}
-
-.app-settings-title {
-	font-size:13px;
-	font-weight:600;
-}
-
-.app-settings-body {
-	display:flex;
-	flex:1 1 auto;
-	min-height:0;
-}
-
-.app-settings-nav {
-	flex:0 0 200px;
-	display:flex;
-	flex-direction:column;
-	gap:1px;
-	box-sizing:border-box;
-	padding:8px 8px;
-	border-right:1px solid var(--surface-divider);
-	background:var(--help-bg);
-}
-
-.app-settings-tab {
-	display:flex;
-	align-items:center;
-	gap:8px;
-	white-space:nowrap;
-	padding:5px 8px;
-	border:0;
-	border-radius:6px;
-	background:none;
-	color:var(--surface-text);
-	font:inherit;
-	font-size:12px;
-	text-align:left;
-	cursor:pointer;
-}
-
-.app-settings-tab svg {
-	flex:0 0 auto;
-	color:var(--meta);
-}
-
-.app-settings-tab[aria-current="page"] {
-	background:var(--active-tint);
-	font-weight:600;
-}
-
-.app-settings-tab[aria-current="page"] svg {
-	color:var(--surface-text);
-}
-
-@media (hover: hover) {
-	.app-settings-tab:not([aria-current="page"]):hover {
-		background:var(--hover-tint);
-	}
-}
-
-#app-settings-modal:has(.settings-panel.sidebar-off) .app-settings-tab[data-settings-section="sidebar"] {
-	opacity:.7;
-}
-
-.app-settings-tab:not([aria-current="page"]):active {
-	background:var(--active-tint);
-}
-
-.settings-credits-mark {
-	display:none;
-}
-
-.app-settings-nav .settings-credits {
-	display:flex;
-	align-items:center;
-	justify-content:space-between;
-	gap:6px;
-	margin-top:auto;
-	padding:6px 0 0 8px;
-}
-
-.app-settings-nav .settings-credits-label {
-	display:none;
-}
-
-.app-settings-nav .settings-credits-mark {
-	display:block;
-}
-
-.app-settings-nav .settings-credits a[href$="/issues"] {
-	display:inline-flex;
-	align-items:center;
-	justify-content:center;
-	width:24px;
-	height:24px;
-	border-radius:5px;
-	color:var(--meta);
-	text-decoration:none;
-}
-
-@media (hover: hover) {
-	.app-settings-nav .settings-credits a[href$="/issues"]:hover {
-		background:var(--hover-tint);
-		color:var(--text);
-	}
-}
-
-.app-settings-nav .settings-credits a[href$="/issues"]:active {
-	background:var(--active-tint);
-	color:var(--icon-on);
-}
-
-.app-settings-content {
-	flex:1 1 auto;
-	min-width:0;
-	overflow-y:auto;
-	padding:12px 18px 16px;
-}
-
-.app-settings-heading {
-	margin:0 0 10px;
-	font-size:13px;
-	font-weight:600;
-}
-
-#app-settings-content .settings-panel {
-	position:static;
-	width:auto;
-	max-width:440px;
-	max-height:none;
-	overflow:visible;
-	padding:0;
-	border:0;
-	border-radius:0;
-	background:none;
-	box-shadow:none;
-	z-index:auto;
-}
-
-#app-settings-content .settings-head,
-#app-settings-content [data-app-section="links"],
-#app-settings-modal[data-section="general"] [data-app-section="sidebar"],
-#app-settings-modal[data-section="sidebar"] [data-app-section="general"] {
-	display:none;
-}
-
-#app-settings-content .settings-panes {
-	display:block;
-	width:100%;
-	height:auto !important;
-	overflow:visible;
-	transform:none !important;
-	transition:none;
-}
-
-#app-settings-content .settings-pane {
-	width:100%;
-	visibility:visible;
-}
-
-#app-settings-content .settings-panes.is-secondary > .settings-pane-primary,
-#app-settings-content .settings-panes:not(.is-secondary) > .settings-pane-secondary {
-	display:none;
-}
-
-#app-settings-content .settings-group + .settings-group {
-	margin-top:0;
-	padding-top:0;
-	border-top:0;
-}
-
-#app-settings-content .settings-group {
-	margin-bottom:12px;
-}
+${SETTINGS_MODAL_CSS}
 
 #app > .settings-panel {
 	position:fixed;
@@ -27272,62 +27356,7 @@ header .item-action-link {
 		overflow:visible;
 	}
 
-	#app-settings-modal {
-		padding:calc(12px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px));
-	}
-
-	.app-settings-dialog {
-		width:100%;
-		height:100%;
-		border-radius:14px;
-	}
-
-
-	.app-settings-body {
-		flex-direction:column;
-	}
-
-	.app-settings-nav {
-		flex:0 0 auto;
-		flex-direction:row;
-		gap:4px;
-		overflow-x:auto;
-		padding:8px 10px;
-		border-right:0;
-		border-bottom:1px solid var(--surface-divider);
-	}
-
-	.app-settings-tab {
-		flex:0 0 auto;
-	}
-
-	#app-settings-content {
-		padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px));
-	}
-
-	.app-settings-version {
-		display:inline !important;
-		margin-left:8px;
-		color:var(--meta);
-		font-size:12px;
-	}
-
-	.app-settings-top a[href$="/issues"] {
-		display:inline-flex;
-		align-items:center;
-		justify-content:center;
-		width:32px;
-		height:32px;
-		margin-right:2px;
-		border-radius:16px;
-		color:var(--surface-text);
-	}
-
-	.app-settings-top .settings-credits-mark {
-		display:block;
-		width:16px;
-		height:16px;
-	}
+${SETTINGS_MODAL_PHONE_CSS}
 }
 `;
 
@@ -27589,6 +27618,25 @@ header .item-action-link {
 		return `<button class="rail-button${APP_FILLED_VIEWS.includes(id) ? " rail-empty" : ""}" type="button" data-app-view="${escapeHTML(id)}" data-tip="${escapeHTML(label)}" aria-label="${escapeHTML(label)}" aria-pressed="false"><span class="rail-icon">${inner}<span class="rail-badge" data-app-badge="${escapeHTML(id)}"></span></span><span class="rail-label" aria-hidden="true">${escapeHTML(label)}</span></button>`;
 	}
 
+	function settingsModalHTML() {
+		return `
+<div id="app-settings-modal" class="app-settings-modal" hidden>
+<div class="app-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
+<div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><span class="app-settings-version" hidden></span><span class="app-settings-top-spacer"></span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
+<div class="app-settings-body">
+<nav class="app-settings-nav" aria-label="Settings sections">
+<button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="blocked"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12 12 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Manage disabled/hidden</span></button>
+</nav>
+<div id="app-settings-content" class="app-settings-content"><div id="app-settings-heading" class="app-settings-heading">General</div></div>
+</div>
+</div>
+</div>
+`;
+	}
+
 	function appShellOpenHTML() {
 		return `<div id="app" data-stage="list">
 <div id="app-tip" class="app-tip" role="tooltip" hidden></div>
@@ -27645,20 +27693,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div id="app-next" class="app-next" hidden><span class="app-next-label">Read next</span><button id="app-next-link" class="app-next-link" type="button"><span class="app-next-title"></span><span class="app-next-meta"></span></button></div>
 </section>
 ${settingsPanelHTML()}
-<div id="app-settings-modal" class="app-settings-modal" hidden>
-<div class="app-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
-<div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><span class="app-settings-version" hidden></span><span class="app-settings-top-spacer"></span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
-<div class="app-settings-body">
-<nav class="app-settings-nav" aria-label="Settings sections">
-<button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
-<button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
-<button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
-<button type="button" class="app-settings-tab" data-settings-section="blocked"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12 12 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Manage disabled/hidden</span></button>
-</nav>
-<div id="app-settings-content" class="app-settings-content"><div id="app-settings-heading" class="app-settings-heading">General</div></div>
-</div>
-</div>
-</div>
+${settingsModalHTML()}
 `;
 	}
 
@@ -28343,19 +28378,18 @@ ${settingsPanelHTML()}
 		rail.addEventListener("scroll", hideAppTip);
 		rail.addEventListener("click", hideAppTip);
 
-		wireAppSettingsModal(shadow);
+		wireSettingsModal(shadow);
 		document.addEventListener("keydown", onAppKey);
 		window.addEventListener("message", onAppMessage);
 	}
 
-	function wireAppSettingsModal(shadow) {
+	function wireSettingsModal(shadow) {
 		const modal = shadow.querySelector("#app-settings-modal");
 		const content = shadow.querySelector("#app-settings-content");
 		const panel = shadow.querySelector("#settings-panel");
 		const gear = shadow.querySelector("#settings-toggle");
-		const app = shadow.querySelector("#app");
 
-		if (!modal || !content || !panel || !gear || !app) {
+		if (!modal || !content || !panel || !gear) {
 			return;
 		}
 
