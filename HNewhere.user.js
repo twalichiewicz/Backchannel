@@ -11408,14 +11408,14 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		})();
 	}
 
-	function renderSourcePicker(ui) {
+	function renderSourcePicker(ui, target = ui.body) {
 		const control = ui.shadow?.querySelector("#comment-toggle");
 
 		if (control) {
 			control.hidden = true;
 		}
 
-		ui.body.innerHTML = `
+		target.innerHTML = `
 <div class="source-picker">
 <div class="source-picker-title">Where should comments come from?</div>
 <div class="source-picker-intro">Pick at least one. Nothing is contacted until you do.</div>
@@ -11425,8 +11425,8 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 </div>
 </div>`;
 
-		const list = ui.body.querySelector(".source-picker-list");
-		const save = ui.body.querySelector(".source-picker-save");
+		const list = target.querySelector(".source-picker-list");
+		const save = target.querySelector(".source-picker-save");
 
 		const syncSave = () => {
 			save.disabled = !list.querySelector("input[data-source]:checked");
@@ -28496,14 +28496,11 @@ ${settingsPanelHTML()}
 		const settings = await loadSettings();
 
 		state.sourceIds = frontPageSourceIds(settings);
+		state.noSources = !enabledSourceIds(settings, registeredSourceIds()).length;
 		renderAppRailSources();
 
-		if (!enabledSourceIds(settings, registeredSourceIds()).length) {
+		if (state.noSources) {
 			sidebarHasDiscussion = false;
-			renderSourcePicker(state.ui);
-			renderAppListMessage("Pick where comments come from, and the front pages fill in here.");
-			await paintAppCounts();
-			return;
 		}
 
 		await renderAppList();
@@ -29408,6 +29405,14 @@ ${settingsPanelHTML()}
 			await renderQueueView(ui, list, { part: view === "queue" ? "queued" : "watching" });
 		} else if (view === "collection") {
 			await renderCollectionView(ui, list);
+		} else if (state.noSources) {
+			state.rows = [];
+			state.rowsByURL = new Map();
+
+			if (!list.querySelector(".source-picker")) {
+				renderSourcePicker(ui, list);
+				resetAppListScroll();
+			}
 		} else {
 			if (state.listView !== view || !list.childElementCount) {
 				renderBrowseSkeleton(list, "Loading front pages…");
