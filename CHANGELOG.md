@@ -8,6 +8,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.15] — 2026-10-04
+
+### Added
+
+- **backchnnl.app has a reader built for a phone (#144).** The list is the
+  page: it opens with its view's title and runs under a floating tab bar of
+  Unread, All articles, Saved and Settings. Saved opens Queue, Watching and
+  Collection with their counts. A row keeps queue, favorite and hide in a menu
+  and labels its comments with the number of sources. Picking an article slides
+  it up over the list, where it scrolls with the page and runs under Safari's
+  bars. Its buttons sit on small discs that fade while the page scrolls: Back,
+  Open the original page, Save, Like where the story can be voted on, and
+  Discussion, which carries the comment count, in thousands past 999, and
+  slides the comments up as a sheet over the article. Save is one tap for a
+  favorite; Watch and the text size menu are not offered from the article on a
+  phone, and a stored text size no longer applies there. Every article ends
+  with Read next, which opens the next one in the list in place. Settings opens
+  as a window.
+
+- **Search, on the phone and the desktop.** A search button sits beside the
+  phone's tab bar and below the views in the desktop rail. It looks through
+  what Backchannel already holds: the views, the loaded articles, your saved
+  items and the settings, and each result opens what it names. On the desktop
+  it takes the list's place until you pick a result or a view, or press Escape.
+
+- **Thumbnails in the list.** Each article in the reader's list shows its
+  site's icon, or a plain glyph where there is none, with the unread dot on its
+  corner.
+
+- **The Sidebar can be switched off.** Its section in the reader's settings has
+  a switch beside the title, with what the Sidebar is as a hint under it. Off,
+  the pages you visit are not looked up and neither the button nor the Sidebar
+  appears on them. backchnnl.app works as before.
+
+- **Images in comments, as a setting.** Show images in comments, under General,
+  is off by default, and an image in a comment or a post stays the link it has
+  been. On, it is shown where it was posted, linked to the full image. Only
+  https images load, lazily and without a referrer.
+
+- **Scrape link content.** An article the reader cannot load says its links
+  can't be loaded directly and offers two buttons. Open in a new tab with
+  Sidebar opens the page with the Sidebar there. Scrape link content opens the
+  page in a tab, reads the article out once it has rendered, closes the tab and
+  shows the text in the reader. A page with nothing to read is left open.
+
+### Changed
+
+- **The reading view takes the article, not the page around it.** On a page
+  with no article or main element it took the whole body, menus and promos
+  included; it now takes the block that holds the prose. Inside any page it
+  drops navigation, share links, sign-up boxes, related posts, comments, hidden
+  text and the link lists before and after the prose. The site's name comes off
+  the title, a heading that repeats the title goes, and a byline is not shown
+  twice. A picture the site will not serve, or one no bigger than an icon, is
+  removed.
+
+- **The desktop reader runs to the window's edges.** The screen has square
+  corners and no margin around it. The toggles at the ends of the article's
+  header are labeled Articles and Discussion. The rail is a little wider, so a
+  count badge no longer touches the list, and its tooltips name the view
+  without repeating the count.
+
+- **A narrow window keeps its list out of the way.** Below 1101px the header's
+  toggle opens the list as a drawer, as the rail's current view does. A window
+  narrowed with an article open tucks the list away, and a press outside the
+  drawer, or Escape, closes it.
+
+- **Settings read more evenly.** An option inset under another is the same size
+  as the rest, a hint sits closer to its checkbox, and Theme and the toggle's
+  shape fit their labels instead of stretching across the row. The Sidebar's
+  Button field is now Backchannel toggle.
+
+### Fixed
+
+- **Hacker News rows show their age again.** The front page began sending its
+  time in a form the script did not read, and every row lost its age:
+  "(developer.apple.com, )". A row with no time at all now reads "(site)".
+
+- **YouTube's header no longer covers the Sidebar's.** With StopTheMadness on,
+  youtube.com's header sat one layer above the Sidebar.
+
+- **A page that draws itself late keeps its frame.** A page that renders after
+  loading, or stays hidden until it is ready, was replaced for good by its
+  reading view or by the card. The reader now keeps asking, takes a later
+  answer, and waits two seconds after the frame loads before replacing one that
+  still has nothing to show. A refusal that arrives with an error response is
+  read as a refusal.
+
+- **A post that is a picture shows the picture.** It appeared for a moment and
+  was replaced by the "can't be shown here" card, and a host that refuses
+  framing never showed it at all. The article pane now shows the image itself.
+
+- **Highlights stay inside the article.** In the reading view they painted over
+  the Settings window, the text menu and the list when it opened over the
+  article, and took their clicks. A highlight that wraps no longer blinks as
+  the pointer moves down it.
+
+- **No empty column where a hidden list was.** A list hidden at one width
+  reopened its column, with nothing in it, when its stored width arrived.
+
 ## [1.6.14] — 2026-09-14
 
 ### Added
