@@ -26569,8 +26569,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	padding:5px 9px;
 	border-radius:6px;
 	background:var(--rail-fg);
-	color:var(--rail-bg);
-	font:600 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	color:#000;
+	font:400 11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 	white-space:nowrap;
 	box-shadow:0 4px 14px rgba(0,0,0,.22);
 	pointer-events:none;
