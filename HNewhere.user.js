@@ -11834,16 +11834,15 @@ ${frontPageChooserHTML()}
 <div class="front-page-choice">
 <label class="front-page-choice-label"><input type="radio" name="${name}" value="topics"><span>Topics you follow</span></label>
 <div class="front-page-choice-hint">Show popular links from your sources that match the topics you select.</div>
-<div class="front-page-alert" role="status" hidden>Turn on a source that covers topics to follow them.</div>
 <div class="front-page-topics-panel">
 <div class="front-page-topics" role="group" aria-label="Topics">${TOPICS.map((topic) => `<button type="button" class="front-page-topic" data-topic="${escapeHTML(topic.id)}" aria-pressed="false">${TOPIC_ICONS[topic.id]}<span>${escapeHTML(topic.label)}</span></button>`).join("")}</div>
-<div class="front-page-choice-hint front-page-needs"></div>
 </div>
 </div>
 <div class="front-page-choice">
 <label class="front-page-choice-label"><input type="radio" name="${name}" value="sources"><span>Top links from your sources</span></label>
 <div class="front-page-choice-hint front-page-top-hint"></div>
 </div>
+<div class="front-page-hover-tip" role="tooltip" hidden></div>
 </div>`;
 	}
 
@@ -11852,9 +11851,7 @@ ${frontPageChooserHTML()}
 	function wireFrontPageChooser(root, settings, { onChange } = {}) {
 		const radios = [...root.querySelectorAll('input[type="radio"]')];
 		const topicsRadio = radios.find((radio) => radio.value === "topics");
-		const alert = root.querySelector(".front-page-alert");
 		const panel = root.querySelector(".front-page-topics-panel");
-		const needs = root.querySelector(".front-page-needs");
 		const topHint = root.querySelector(".front-page-top-hint");
 		const chips = [...root.querySelectorAll(".front-page-topic")];
 		const savedMode = (next) => (next?.frontPageMode === "topics" ? "topics" : "sources");
@@ -11872,17 +11869,27 @@ ${frontPageChooserHTML()}
 		const paint = () => {
 			const enabled = enabledSourceIds(settings, registeredSourceIds());
 			const covered = (id) => TOPIC_FEED_SOURCES.some((source) => enabled.includes(source) && TOPIC_FEEDS[id]?.[source]?.length);
-			const missing = new Map();
 			const available = TOPICS.some((topic) => covered(topic.id));
+			const kept = picked.filter(covered);
+			let changed = kept.length !== picked.length;
+
+			picked = kept;
 
 			if (!available && mode === "topics") {
 				mode = "sources";
-				emit();
+				changed = true;
 			}
 
+			const topicsLabel = topicsRadio.closest(".front-page-choice-label");
+
 			topicsRadio.disabled = !available;
-			topicsRadio.closest(".front-page-choice-label").classList.toggle("is-unavailable", !available);
-			alert.hidden = available;
+			topicsLabel.classList.toggle("is-unavailable", !available);
+
+			if (available) {
+				delete topicsLabel.dataset.hoverTip;
+			} else {
+				topicsLabel.dataset.hoverTip = "Turn on a source that covers topics to follow them.";
+			}
 
 			for (const radio of radios) {
 				radio.checked = radio.value === mode;
@@ -11891,32 +11898,33 @@ ${frontPageChooserHTML()}
 			panel.hidden = mode !== "topics";
 
 			for (const chip of chips) {
-				const on = picked.includes(chip.dataset.topic);
-				const usable = covered(chip.dataset.topic);
+				const id = chip.dataset.topic;
+				const usable = covered(id);
 
-				chip.setAttribute("aria-pressed", String(on));
+				chip.setAttribute("aria-pressed", String(picked.includes(id)));
 				chip.classList.toggle("is-uncovered", !usable);
-				chip.disabled = !usable && !on;
+
+				if (usable) {
+					chip.removeAttribute("aria-disabled");
+					delete chip.dataset.hoverTip;
+				} else {
+					chip.setAttribute("aria-disabled", "true");
+					chip.dataset.hoverTip = `Needs ${joinWithAnd(
+						registeredSourceIds()
+							.filter((source) => TOPIC_FEEDS[id][source]?.length)
+							.map((source) => getSource(source)?.label || source),
+						"or",
+					)}`;
+				}
 			}
 
-			for (const topic of TOPICS.filter((topic) => !covered(topic.id))) {
-				const sources = joinWithAnd(
-					registeredSourceIds()
-						.filter((id) => TOPIC_FEEDS[topic.id][id]?.length)
-						.map((id) => getSource(id)?.label || id),
-					"or",
-				);
-
-				missing.set(sources, [...(missing.get(sources) || []), topic.label]);
-			}
-
-			needs.textContent = [...missing]
-				.map(([sources, labels]) => `${joinWithAnd(labels)} ${labels.length === 1 ? "needs" : "need"} ${sources}.`)
-				.join(" ");
-			needs.hidden = !missing.size;
 			topHint.textContent = frontPageSourceIds(settings).length
 				? "Show the most popular links from your sources, regardless of topic."
 				: "None of your sources has a front page of its own.";
+
+			if (changed) {
+				emit();
+			}
 		};
 
 		for (const radio of radios) {
@@ -11927,8 +11935,38 @@ ${frontPageChooserHTML()}
 			});
 		}
 
+		const hoverTip = root.querySelector(".front-page-hover-tip");
+
+		root.addEventListener("pointermove", (event) => {
+			const target = event.target.closest?.("[data-hover-tip]");
+
+			if (!target || !root.contains(target)) {
+				hoverTip.hidden = true;
+				return;
+			}
+
+			const box = root.getBoundingClientRect();
+			const x = event.clientX - box.left;
+
+			hoverTip.textContent = target.dataset.hoverTip;
+			hoverTip.hidden = false;
+
+			const flip = x + 14 + hoverTip.offsetWidth > box.width;
+
+			hoverTip.classList.toggle("is-flipped", flip);
+			hoverTip.style.left = `${flip ? x - 14 - hoverTip.offsetWidth : x + 14}px`;
+			hoverTip.style.top = `${event.clientY - box.top}px`;
+		});
+		root.addEventListener("pointerleave", () => {
+			hoverTip.hidden = true;
+		});
+
 		for (const chip of chips) {
 			chip.addEventListener("click", () => {
+				if (chip.getAttribute("aria-disabled") === "true") {
+					return;
+				}
+
 				picked = picked.includes(chip.dataset.topic)
 					? picked.filter((id) => id !== chip.dataset.topic)
 					: [...picked, chip.dataset.topic];
@@ -14383,15 +14421,43 @@ header > .settings-panel {
 	opacity:.45;
 }
 
-.front-page-alert {
-	margin:6px 0 0 23px;
-	padding:6px 9px;
-	border:1px solid var(--help-border);
+.front-page-choice-label.is-unavailable input[type="radio"] {
+	pointer-events:none;
+}
+
+.front-page-chooser {
+	position:relative;
+}
+
+.front-page-hover-tip {
+	position:absolute;
+	z-index:20;
+	padding:5px 9px;
 	border-radius:6px;
-	background:var(--help-bg);
-	color:var(--surface-text);
-	font-size:11px;
-	line-height:1.35;
+	background:var(--rail-fg, var(--header-text, #fff));
+	color:#000;
+	font:400 11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	white-space:nowrap;
+	box-shadow:0 4px 14px rgba(0,0,0,.22);
+	pointer-events:none;
+	transform:translateY(-50%);
+}
+
+.front-page-hover-tip::before {
+	content:"";
+	position:absolute;
+	top:50%;
+	left:-4px;
+	width:8px;
+	height:8px;
+	margin-top:-4px;
+	background:inherit;
+	transform:rotate(45deg);
+}
+
+.front-page-hover-tip.is-flipped::before {
+	right:-4px;
+	left:auto;
 }
 
 .front-page-choice-hint {
@@ -14413,6 +14479,7 @@ header > .settings-panel {
 }
 
 .front-page-topic {
+	position:relative;
 	display:inline-flex;
 	align-items:center;
 	gap:5px;
@@ -14444,12 +14511,13 @@ header > .settings-panel {
 	color:inherit;
 }
 
-.front-page-topic.is-uncovered {
+.front-page-topic.is-uncovered > svg,
+.front-page-topic.is-uncovered > span {
 	opacity:.4;
 }
 
-.front-page-topic:disabled {
-	cursor:default;
+.front-page-topic[aria-disabled="true"] {
+	cursor:not-allowed;
 }
 
 .front-page-topic:focus-visible {
