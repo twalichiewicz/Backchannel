@@ -28625,6 +28625,20 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	const APP_BRAND_ICON = (d, rule = "nonzero", size = 18) =>
 		`<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="${rule}" d="${d}"/></svg>`;
 
+	const TOPIC_ICON = (paths) =>
+		APP_ICON(`<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${paths}</g>`);
+
+	const TOPIC_ICONS = {
+		world: TOPIC_ICON('<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.7 3.7 2.7 6S9.8 12.3 8 14M8 2C6.2 3.7 5.3 5.7 5.3 8S6.2 12.3 8 14"/>'),
+		us: TOPIC_ICON('<path d="M2.5 13.5h11M3.5 13.5V10h9v3.5M5.5 10v3.5M8 10v3.5M10.5 10v3.5M4.5 10a3.5 3.5 0 0 1 7 0M8 6.5V3M6.8 3h2.4"/>'),
+		business: TOPIC_ICON('<rect x="2" y="5" width="12" height="8.5" rx="1.5"/><path d="M5.8 5V3.8a1 1 0 0 1 1-1h2.4a1 1 0 0 1 1 1V5M2 9h12"/>'),
+		technology: TOPIC_ICON('<rect x="4.5" y="4.5" width="7" height="7" rx="1"/><path d="M6.5 2v2.5M9.5 2v2.5M6.5 11.5V14M9.5 11.5V14M2 6.5h2.5M2 9.5h2.5M11.5 6.5H14M11.5 9.5H14"/>'),
+		entertainment: TOPIC_ICON('<path d="M2 6.5h12v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/><path d="M2 6.5 1.6 4.2l10.9-2.4.5 2.3zM4.8 3.5l1.7 2.4M8.3 2.7 10 5.1"/>'),
+		sports: TOPIC_ICON('<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2v12M3.8 3.8c2.3 2.3 2.3 6.1 0 8.4M12.2 3.8c-2.3 2.3-2.3 6.1 0 8.4"/>'),
+		science: TOPIC_ICON('<path d="M6.2 2h3.6M6.8 2v4.2L3 12.6A1 1 0 0 0 3.9 14h8.2a1 1 0 0 0 .9-1.4L9.2 6.2V2M4.8 9.8h6.4"/>'),
+		health: TOPIC_ICON('<path d="M8 13.5S2.5 10.2 2.5 6.2A2.8 2.8 0 0 1 8 4.8a2.8 2.8 0 0 1 5.5 1.4C13.5 10.2 8 13.5 8 13.5z"/><path d="M4.2 8.4h1.6l1-1.6 1.4 3 1-1.4h2.6"/>'),
+	};
+
 	const APP_SOURCE_ICONS = {
 		hn: '<span class="rail-hn" aria-hidden="true">HN</span>',
 		reddit: APP_BRAND_ICON(
@@ -29619,11 +29633,7 @@ ${settingsModalHTML()}
 			...(state.topicIds || []).map((id) => {
 				const label = TOPICS.find((topic) => topic.id === id)?.label || id;
 
-				return appRailButtonHTML(
-					"topic:" + id,
-					label,
-					`<span class="rail-monogram" aria-hidden="true">${escapeHTML(label.replace(/[^A-Za-z]/g, "").slice(0, 2))}</span>`,
-				);
+				return appRailButtonHTML("topic:" + id, label, TOPIC_ICONS[id]);
 			}),
 		].join("");
 
