@@ -26130,17 +26130,17 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 .rail-badge {
 	position:absolute;
-	top:0;
-	right:-5px;
-	min-width:15px;
-	height:15px;
+	top:-6px;
+	right:-7px;
+	min-width:13px;
+	height:13px;
 	padding:0 3px;
 	box-sizing:border-box;
-	border-radius:8px;
+	border-radius:7px;
 	background:var(--rail-fg);
 	color:var(--rail-bg);
 	box-shadow:0 0 0 1.5px var(--rail-bg);
-	font:600 9px/15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	font:600 8.5px/13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 	text-align:center;
 	pointer-events:none;
 }
@@ -27857,6 +27857,12 @@ header .item-action-link {
 	#app-rail .rail-icon svg {
 		width:22px;
 		height:22px;
+	}
+
+	#app-rail .rail-badge {
+		top:-1px;
+		right:auto;
+		left:27px;
 	}
 
 	.rail-button.is-current .rail-icon {
