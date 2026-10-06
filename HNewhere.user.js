@@ -382,6 +382,8 @@
 		hideWithoutDiscussion: false,
 		showButtonWithQueue: false,
 		sources: undefined,
+		frontPageMode: undefined,
+		frontPageTopics: [],
 		theme: "auto",
 		buttonRadius: undefined,
 		buttonSize: BUTTON_SIZE_DEFAULT,
@@ -5967,7 +5969,59 @@ button {
 		{ id: "health", label: "Health" },
 	];
 
-	const TOPIC_FEEDS = {};
+	const TOPIC_FEEDS = {
+		world: {
+			reddit: ["worldnews", "europe", "geopolitics"],
+			lemmy: ["world@lemmy.world", "europe@feddit.org"],
+			bsky: ["at://did:plc:3sn6bogankaicebzdb7liro3/app.bsky.feed.generator/aaajaq4ut77am"],
+		},
+		us: {
+			reddit: ["politics", "inthenews", "news"],
+			lemmy: ["politics@lemmy.world", "news@lemmy.world"],
+			bsky: [
+				"at://did:plc:7mtqkeetxgxqfyhyi2dnyga2/app.bsky.feed.generator/aaadhh6hwvaca",
+				"at://did:plc:kkf4naxqmweop7dv4l2iqqf5/app.bsky.feed.generator/verified-news",
+			],
+		},
+		business: {
+			reddit: ["economics", "business"],
+			bsky: ["at://did:plc:cndfx4udwgvpjaakvxvh7wm5/app.bsky.feed.generator/flipboard-biz"],
+		},
+		technology: {
+			reddit: ["technology", "Futurology"],
+			lemmy: ["technology@lemmy.world"],
+			bsky: ["at://did:plc:cndfx4udwgvpjaakvxvh7wm5/app.bsky.feed.generator/flipboard-tech"],
+			lobsters: ["hottest"],
+			hn: ["news"],
+		},
+		entertainment: {
+			reddit: ["entertainment", "television", "movies", "gaming"],
+			lemmy: ["games@lemmy.world"],
+			bsky: [
+				"at://did:plc:opm7kjzippurg433jh7rt4ax/app.bsky.feed.generator/aaacvdfm2b4ig",
+				"at://did:plc:2hwwem55ce6djnk6bn62cstr/app.bsky.feed.generator/aaaotdzmoni2q",
+			],
+		},
+		sports: {
+			reddit: ["nfl", "nba", "soccer", "CFB", "formula1", "MMA", "baseball", "hockey", "sports"],
+			bsky: ["at://did:plc:lcn5zsz2e7kjwoe4ldf3chr5/app.bsky.feed.generator/aaanstr6k5dvo"],
+		},
+		science: {
+			reddit: ["science", "space"],
+			bsky: ["at://did:plc:jfhpnnst6flqway4eaeqzj2a/app.bsky.feed.generator/for-science"],
+		},
+		health: {
+			reddit: ["health"],
+			bsky: [
+				"at://did:plc:xqbbs34shcevzm326a4rvftn/app.bsky.feed.generator/aaabre5ak5ddi",
+				"at://did:plc:egtk4i4s3a2cykq3pa5nrkqr/app.bsky.feed.generator/aaaarylo7rb2e",
+			],
+		},
+	};
+
+	const TOPIC_FEED_SOURCES = ["hn", "reddit", "lemmy", "lobsters", "bsky"];
+
+	const TOPIC_ACCOUNT_SOURCES = ["hn", "reddit"];
 
 	function frontPageTopicIds(settings) {
 		const chosen = Array.isArray(settings?.frontPageTopics) ? settings.frontPageTopics : [];
@@ -5986,7 +6040,73 @@ button {
 			return frontPageIds.map((source) => ({ source, kind: "front" }));
 		}
 
-		return [];
+		const feeds = [];
+
+		for (const topic of frontPageTopicIds(settings)) {
+			for (const source of TOPIC_FEED_SOURCES) {
+				const targets = TOPIC_FEEDS[topic][source];
+
+				if (!targets?.length || (TOPIC_ACCOUNT_SOURCES.includes(source) && !enabledIds.includes(source))) {
+					continue;
+				}
+
+				if (source === "reddit") {
+					feeds.push({ topic, source, kind: "subreddits", target: targets.join("+") });
+				} else if (source === "lemmy") {
+					feeds.push(...targets.map((target) => ({ topic, source, kind: "community", target })));
+				} else if (source === "bsky") {
+					feeds.push(...targets.map((target) => ({ topic, source, kind: "feed", target })));
+				} else {
+					feeds.push({ topic, source, kind: "front" });
+				}
+			}
+		}
+
+		return feeds;
+	}
+
+	function bskyFeedStories(items) {
+		const byKey = new Map();
+
+		for (const item of items || []) {
+			const post = item?.post;
+			const external = post?.embed?.external || post?.embed?.media?.external;
+			const url = external?.uri || "";
+			const key = normalizeURL(url);
+
+			if (!key || !isOffSiteLink(url, ["bsky.app"])) {
+				continue;
+			}
+
+			const time = Math.floor(Date.parse(post.indexedAt) / 1000) || 0;
+			const score = (post.likeCount || 0) + (post.repostCount || 0);
+			const existing = byKey.get(key);
+
+			if (existing) {
+				existing.score += score;
+				existing.descendants += post.replyCount || 0;
+				existing.time = Math.min(existing.time, time);
+				continue;
+			}
+
+			const rkey = String(post.uri || "").split("/").pop();
+
+			byKey.set(key, {
+				source: "bsky",
+				key,
+				id: post.uri,
+				url,
+				title: external.title || hostLabel(url),
+				by: post.author?.handle || "",
+				score,
+				time,
+				descendants: post.replyCount || 0,
+				site: hostLabel(url),
+				permalink: post.author?.handle && rkey ? `https://bsky.app/profile/${post.author.handle}/post/${rkey}` : "",
+			});
+		}
+
+		return [...byKey.values()];
 	}
 
 	function frontPageCacheKey(feeds) {
@@ -5999,6 +6119,37 @@ button {
 		);
 	}
 	// #endregion hnewhere-test-export
+
+	async function fetchFrontPageFeed(feed) {
+		let stories = [];
+
+		if (feed.kind === "front") {
+			stories = (await getSource(feed.source).frontPage()) || [];
+		} else if (feed.kind === "subreddits") {
+			const result = await redditFetch(`/r/${feed.target}.json?limit=100`);
+
+			stories = (result?.json?.data?.children || [])
+				.map((child) => child.data)
+				.filter((post) => post?.id && isOffSiteLink(post.url, REDDIT_SELF_HOSTS))
+				.map(redditStory);
+		} else if (feed.kind === "community") {
+			const res = await lemmyJSON(
+				`https://lemmy.world/api/v3/post/list?community_name=${encodeURIComponent(feed.target)}&sort=Active&type_=All&limit=50`,
+			);
+
+			stories = (res?.posts || [])
+				.filter((view) => isOffSiteLink(view.post?.url, [], ["/pictrs/"]))
+				.map(lemmyStory);
+		} else if (feed.kind === "feed") {
+			const res = await bskyJSON(
+				`${BSKY_APPVIEW}/app.bsky.feed.getFeed?feed=${encodeURIComponent(feed.target)}&limit=100`,
+			);
+
+			stories = bskyFeedStories(res?.feed);
+		}
+
+		return feed.topic ? stories.map((story) => ({ ...story, topic: feed.topic })) : stories;
+	}
 
 	async function loadFrontPages(options = {}) {
 		const settings = options.settings || (await loadSettings());
@@ -6026,7 +6177,7 @@ button {
 		const lists = await Promise.all(
 			feeds.map(async (feed) => {
 				try {
-					return (await getSource(feed.source).frontPage()) || [];
+					return await fetchFrontPageFeed(feed);
 				} catch (e) {
 					console.warn("Backchannel " + feed.source + " front page failed:", e);
 					return [];
@@ -10779,14 +10930,17 @@ button {
 		}
 	}
 
-	function setBlendNote(ui, sources) {
-		setBrowseNote(
-			ui,
-			sources.length < 2
-				? ""
-				: "Blended from " +
-						joinWithAnd(sources.map((id) => getSource(id)?.label || id)),
-		);
+	function setBlendNote(ui, sources, topics = []) {
+		const sourceNames = joinWithAnd(sources.map((id) => getSource(id)?.label || id));
+
+		if (topics.length) {
+			const topicNames = joinWithAnd(topics.map((id) => TOPICS.find((topic) => topic.id === id)?.label || id));
+
+			setBrowseNote(ui, `${topicNames}, from ${sourceNames}`);
+			return;
+		}
+
+		setBrowseNote(ui, sources.length < 2 ? "" : "Blended from " + sourceNames);
 	}
 
 	const BROWSE_SKELETON_WIDTHS = ["92%", "74%", "86%", "63%", "81%", "70%", "88%", "58%"];
@@ -10821,7 +10975,7 @@ button {
 		}
 
 		const requested = browsePage;
-		const [{ rows: allRows, sources }, queued, hiddenKeys] = await Promise.all([
+		const [{ rows: allRows, sources, topics }, queued, hiddenKeys] = await Promise.all([
 			loadFrontPages(),
 			loadQueue(),
 			loadHiddenStoryKeys(),
@@ -10834,7 +10988,7 @@ button {
 		const queuedKeys = new Set(queued.map(queueKey));
 		const rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
 
-		setBlendNote(ui, sources);
+		setBlendNote(ui, sources, topics);
 
 		if (!allRows.length) {
 			list.textContent = "Could not reach any front page.";
