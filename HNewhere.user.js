@@ -11693,6 +11693,82 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		};
 	}
 
+	function frontPageChooserHTML() {
+		return `<div class="front-page-chooser">
+<label class="settings-option"><input type="checkbox" data-front-sources checked><span>Build my front page from my sources</span></label>
+<div class="front-page-topics" role="group" aria-label="Topics" hidden>${TOPICS.map((topic) => `<button type="button" class="front-page-topic" data-topic="${escapeHTML(topic.id)}" aria-pressed="false">${escapeHTML(topic.label)}</button>`).join("")}</div>
+<div class="settings-option-hint front-page-contacts" hidden></div>
+</div>`;
+	}
+
+	function wireFrontPageChooser(root, settings, { onChange } = {}) {
+		const box = root.querySelector("[data-front-sources]");
+		const topicsRow = root.querySelector(".front-page-topics");
+		const contacts = root.querySelector(".front-page-contacts");
+		const chips = [...root.querySelectorAll(".front-page-topic")];
+		let picked = frontPageTopicIds(settings);
+		let fromSources = frontPageMode(settings) === "sources";
+
+		const choice = () => ({
+			frontPageMode: !fromSources && picked.length ? "topics" : "sources",
+			frontPageTopics: fromSources ? [] : [...picked],
+		});
+
+		const paint = () => {
+			box.checked = fromSources;
+			topicsRow.hidden = fromSources;
+			contacts.hidden = fromSources;
+
+			for (const chip of chips) {
+				chip.setAttribute("aria-pressed", String(picked.includes(chip.dataset.topic)));
+			}
+
+			const enabled = enabledSourceIds(settings, registeredSourceIds());
+			const sources = [...new Set(frontPageFeeds({ frontPageMode: "topics", frontPageTopics: TOPICS.map((topic) => topic.id) }, [], enabled).map((feed) => feed.source))];
+			const names = joinWithAnd(sources.map((id) => getSource(id)?.label || id));
+			const account = sources.filter((id) => TOPIC_ACCOUNT_SOURCES.includes(id)).map((id) => getSource(id)?.label || id);
+
+			contacts.textContent =
+				`Topics are fetched from ${names}. None of them is sent the page you are on.` +
+				(account.length ? ` Signed in to ${account.join(" or ")}, those requests arrive as your account.` : "");
+		};
+
+		box.addEventListener("change", () => {
+			fromSources = box.checked;
+			paint();
+			onChange?.(choice());
+		});
+
+		for (const chip of chips) {
+			chip.addEventListener("click", () => {
+				picked = picked.includes(chip.dataset.topic)
+					? picked.filter((id) => id !== chip.dataset.topic)
+					: [...picked, chip.dataset.topic];
+				paint();
+				onChange?.(choice());
+			});
+		}
+
+		paint();
+
+		return { choice };
+	}
+
+	async function refreshFrontPageConsumers() {
+		if (appState) {
+			await refreshAppSources();
+			return;
+		}
+
+		if (sidebarUI) {
+			await refreshBrowseAffordances(sidebarUI.shadow);
+
+			if (sidebarUI.shadow.querySelector("#panel")?.classList.contains("browsing") && browseTab === "front") {
+				await renderBrowseView(sidebarUI);
+			}
+		}
+	}
+
 	async function createSetupButton() {
 		const button = createFloatingHNButton("hn-setup-button", "setup");
 
@@ -13785,6 +13861,40 @@ header > .settings-panel {
 	outline-offset:-2px;
 }
 
+.front-page-topics {
+	display:flex;
+	flex-wrap:wrap;
+	gap:6px;
+	margin:8px 0 0 23px;
+}
+
+.front-page-topic {
+	height:26px;
+	padding:0 11px;
+	border:1px solid var(--field-border);
+	border-radius:13px;
+	background:var(--field-bg);
+	color:var(--surface-text);
+	font:inherit;
+	font-size:12px;
+	cursor:pointer;
+}
+
+.front-page-topic[aria-pressed="true"] {
+	border-color:var(--accent);
+	background:var(--accent);
+	color:var(--accent-ink);
+}
+
+.front-page-topic:focus-visible {
+	outline:2px solid var(--accent);
+	outline-offset:2px;
+}
+
+.front-page-contacts {
+	margin-top:8px;
+}
+
 .button-designer {
 	--toggle-chrome:#f8f8f7;
 	--toggle-chrome-line:#eeeeec;
@@ -14389,6 +14499,8 @@ ${settings ? settingsPanelHTML() : ""}
 <span>Keep the Sidebar the same size when a page is zoomed</span>
 </label>
 </div>
+
+<div class="settings-group">${frontPageChooserHTML()}</div>
 
 <div class="settings-group">
 <label class="settings-option">
@@ -15393,6 +15505,21 @@ ${[
 					buttonMark: BUTTON_MARK_DEFAULT,
 				});
 			};
+		}
+
+		const settingsChooser = settingsPanel.querySelector(".front-page-chooser");
+
+		if (settingsChooser) {
+			loadSettings()
+				.then((settings) =>
+					wireFrontPageChooser(settingsChooser, settings, {
+						onChange: async (choice) => {
+							await saveSettings(choice);
+							await refreshFrontPageConsumers();
+						},
+					}),
+				)
+				.catch(console.error);
 		}
 
 		const blockedList = shadow.querySelector("#settings-blocked-list");
@@ -25535,7 +25662,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 #app-settings-content .settings-head,
 #app-settings-content [data-app-section="links"],
 #app-settings-modal[data-section="general"] [data-app-section="sidebar"],
-#app-settings-modal[data-section="sidebar"] [data-app-section="general"] {
+#app-settings-modal[data-section="sidebar"] [data-app-section="general"],
+#app-settings-modal:not([data-section="frontpage"]) [data-app-section="frontpage"],
+#app-settings-modal[data-section="frontpage"] [data-app-section="general"],
+#app-settings-modal[data-section="frontpage"] [data-app-section="sidebar"] {
 	display:none;
 }
 
@@ -28326,6 +28456,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <div class="app-settings-body">
 <nav class="app-settings-nav" aria-label="Settings sections">
 <button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="frontpage"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 6h6M5 8.5h6M5 11h3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Front page</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="blocked"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12 12 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Manage disabled/hidden</span></button>
@@ -29118,6 +29249,8 @@ ${settingsModalHTML()}
 				for (const field of group.querySelectorAll(":scope > .settings-field")) {
 					field.dataset.appSection = field.querySelector(".button-designer") ? "sidebar" : "general";
 				}
+			} else if (group.querySelector(".front-page-chooser")) {
+				group.dataset.appSection = "frontpage";
 			} else {
 				group.dataset.appSection = "general";
 			}
