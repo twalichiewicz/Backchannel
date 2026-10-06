@@ -20,7 +20,7 @@ use to detect updates, so every release bumps it.
   Sports, Science and Health. Each reads a few subreddits, Lemmy communities
   and Bluesky feeds picked for it, and Technology adds Lobsters' and Hacker
   News's front pages, but only from sources you have on. A topic none of
-  them covers is dimmed, with the sources that would. Unpick the last topic
+  them covers can't be picked, and hovering it says which sources would. Unpick the last topic
   and Front Pages goes back to Top links. A story found on more than one
   source moves up. In the reader on backchnnl.app, each topic gets
   its own icon in the rail, beside the views for each source you have on.
@@ -79,8 +79,8 @@ use to detect updates, so every release bumps it.
 
 - **Topics fall back to Top links when no source covers them.** Turning off
   every source that covers topics left Topics chosen with its picks selected
-  but disabled. Topics can't be chosen until a source covers them, and a
-  note says so.
+  but disabled. Those picks are dropped, and Topics can't be chosen until a
+  source covers them; hovering it says why.
 
 - **A queue opened with no source on leads back to the picker.** With no
   source on and something queued, opening the queue from the Sidebar's title
