@@ -11033,6 +11033,12 @@ button {
 				}),
 			);
 
+		const cardSettings = await loadSettings();
+
+		if (cardSettings.frontPageMode === undefined && browseTab === "front") {
+			list.prepend(frontPageCardElement(cardSettings, () => refreshFrontPageConsumers()));
+		}
+
 		refreshFavoriteControls().catch(console.error);
 
 		renderBrowseNav(
@@ -11770,6 +11776,33 @@ ${frontPageChooserHTML()}
 		paint();
 
 		return { choice };
+	}
+
+	function frontPageCardElement(settings, onSettled) {
+		const card = document.createElement("div");
+
+		card.className = "front-page-card";
+		card.innerHTML = `<div class="front-page-card-head"><span class="front-page-card-title">Make this front page yours</span><button class="front-page-card-close" type="button" aria-label="Keep it as it is" title="Keep it as it is">${APP_CLOSE_ICON}</button></div>
+<div class="front-page-card-text">Keep it built from your sources, or pick topics.</div>
+${frontPageChooserHTML()}
+<div class="front-page-card-actions"><button class="front-page-card-done" type="button">Done</button></div>`;
+
+		const chooser = wireFrontPageChooser(card.querySelector(".front-page-chooser"), settings);
+
+		const settle = async (choice) => {
+			card.remove();
+			await saveSettings(choice);
+			await onSettled();
+		};
+
+		card.querySelector(".front-page-card-close").onclick = () => {
+			settle({ frontPageMode: "sources", frontPageTopics: [] }).catch(console.error);
+		};
+		card.querySelector(".front-page-card-done").onclick = () => {
+			settle(chooser.choice()).catch(console.error);
+		};
+
+		return card;
 	}
 
 	async function refreshFrontPageConsumers() {
@@ -13877,6 +13910,64 @@ header > .settings-panel {
 	outline:2px solid #0b63ce;
 	outline:2px solid AccentColor;
 	outline-offset:-2px;
+}
+
+.front-page-card {
+	display:grid;
+	gap:8px;
+	margin:10px 12px 12px;
+	padding:12px;
+	border:1px solid var(--surface-border);
+	border-radius:10px;
+	background:var(--help-bg);
+	color:var(--surface-text);
+	font-size:12px;
+}
+
+.front-page-card-head {
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+}
+
+.front-page-card-title {
+	font-size:13px;
+	font-weight:600;
+}
+
+.front-page-card-close {
+	display:inline-grid;
+	place-items:center;
+	width:24px;
+	height:24px;
+	padding:0;
+	border:0;
+	border-radius:5px;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+}
+
+.front-page-card-text {
+	color:var(--muted);
+	font-size:11.5px;
+}
+
+.front-page-card-actions {
+	display:flex;
+	justify-content:flex-end;
+}
+
+.front-page-card-done {
+	height:26px;
+	padding:0 14px;
+	border:0;
+	border-radius:13px;
+	background:var(--accent);
+	color:var(--accent-ink);
+	font:inherit;
+	font-weight:600;
+	cursor:pointer;
 }
 
 .front-page-topics {
@@ -30362,6 +30453,12 @@ ${settingsModalHTML()}
 				});
 
 				element.classList.toggle("is-unread", unread);
+			}
+
+			const cardSettings = await loadSettings();
+
+			if (cardSettings.frontPageMode === undefined && request === state.listSeq) {
+				list.prepend(frontPageCardElement(cardSettings, () => refreshFrontPageConsumers()));
 			}
 
 			refreshFavoriteControls().catch(console.error);
