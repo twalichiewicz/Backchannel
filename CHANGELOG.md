@@ -75,7 +75,8 @@ use to detect updates, so every release bumps it.
 
 - **A color picked in Settings colors the page around the reader**, its
   background and footer, not just its rail, and it stays after a reload; the
-  rail used to go back to green.
+  rail used to go back to green. Safari's toolbar takes the color too, from
+  the next time the page loads.
 
 - **The reader's rail buttons sit in the middle of the rail.** They were 3px
   left of it.
