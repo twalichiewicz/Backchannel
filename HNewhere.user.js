@@ -13970,6 +13970,10 @@ header > .settings-panel {
 	cursor:pointer;
 }
 
+.front-page-chooser [hidden] {
+	display:none;
+}
+
 .front-page-topics {
 	display:flex;
 	flex-wrap:wrap;
@@ -25874,6 +25878,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	color:var(--text);
 	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
 	font-size:13px;
+}
+
+#app-settings-modal [hidden] {
+	display:none !important;
 }
 
 @media (max-width: 700px) {${SETTINGS_MODAL_PHONE_CSS}}
