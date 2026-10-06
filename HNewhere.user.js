@@ -14589,7 +14589,7 @@ header > .settings-panel {
 	width:10px;
 	height:10px;
 	border-radius:50%;
-	cursor:grab;
+	cursor:crosshair;
 }
 
 .toggle-tags {
