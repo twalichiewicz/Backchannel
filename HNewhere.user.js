@@ -14066,7 +14066,9 @@ header > .settings-panel {
 }
 
 .sources-subhead {
-	margin:18px 0 0;
+	margin:16px 0 0;
+	padding-top:12px;
+	border-top:1px solid var(--surface-divider);
 	color:var(--surface-text);
 	font-size:12px;
 	font-weight:600;
