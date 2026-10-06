@@ -11846,7 +11846,7 @@ ${frontPageChooserHTML()}
 		let picked = frontPageTopicIds(settings);
 		let emitted = null;
 
-		const choice = () => ({ frontPageMode: mode === "topics" && picked.length ? "topics" : "sources", frontPageTopics: [...picked] });
+		const choice = () => ({ frontPageMode: mode, frontPageTopics: [...picked] });
 
 		const emit = () => {
 			emitted = choice();
@@ -11916,11 +11916,6 @@ ${frontPageChooserHTML()}
 				picked = picked.includes(chip.dataset.topic)
 					? picked.filter((id) => id !== chip.dataset.topic)
 					: [...picked, chip.dataset.topic];
-
-				if (!picked.length) {
-					mode = "sources";
-				}
-
 				paint();
 				emit();
 			});
