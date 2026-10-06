@@ -25876,6 +25876,16 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	z-index:2147483647;
 	line-height:1.4;
 	color:var(--text);
+	font-style:normal;
+	font-weight:normal;
+	font-variant:normal;
+	letter-spacing:normal;
+	word-spacing:normal;
+	text-transform:none;
+	text-indent:0;
+	text-align:left;
+	text-shadow:none;
+	white-space:normal;
 	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
 	font-size:13px;
 }
