@@ -13109,16 +13109,15 @@ header > .settings-panel {
 
 .settings-option input[type="checkbox"]:checked {
 	border-color:transparent;
-	background:#0b63ce;
-	background:AccentColor;
+	background:var(--accent);
 }
 
 .settings-option input[type="checkbox"]:checked::after {
 	content:"";
 	width:7px;
 	height:3.5px;
-	border-left:1.5px solid #fff;
-	border-bottom:1.5px solid #fff;
+	border-left:1.5px solid var(--accent-ink);
+	border-bottom:1.5px solid var(--accent-ink);
 	transform:translateY(-1px) rotate(-45deg);
 }
 
@@ -13135,8 +13134,7 @@ header > .settings-panel {
 }
 
 .settings-option input[type="checkbox"].settings-switch:checked {
-	background:#0b63ce;
-	background:AccentColor;
+	background:var(--accent);
 }
 
 .settings-option input[type="checkbox"].settings-switch::after {
@@ -13159,8 +13157,7 @@ header > .settings-panel {
 }
 
 .settings-option input[type="checkbox"]:focus-visible {
-	outline:2px solid #0b63ce;
-	outline:2px solid AccentColor;
+	outline:2px solid var(--accent);
 	outline-offset:1px;
 }
 
@@ -13899,8 +13896,7 @@ header > .settings-panel {
 .theme-tile input:focus-visible ~ .theme-tile-art,
 .toggle-swatch:focus-visible i,
 .toggle-swatch-any:focus-within i {
-	outline:2px solid #0b63ce;
-	outline:2px solid AccentColor;
+	outline:2px solid var(--accent);
 	outline-offset:2px;
 }
 
@@ -13969,8 +13965,7 @@ header > .settings-panel {
 }
 
 .theme-tile input:checked ~ .theme-tile-art {
-	outline:2px solid #0b63ce;
-	outline:2px solid AccentColor;
+	outline:2px solid var(--accent);
 	outline-offset:2px;
 }
 
@@ -14017,8 +14012,7 @@ header > .settings-panel {
 }
 
 .toggle-swatch[aria-pressed="true"] i {
-	outline:2px solid #0b63ce;
-	outline:2px solid AccentColor;
+	outline:2px solid var(--accent);
 	outline-offset:2px;
 }
 
@@ -14223,15 +14217,13 @@ header > .settings-panel {
 }
 
 .segment input:checked + span {
-	background:#0b63ce;
-	background:AccentColor;
-	color:#fff;
+	background:var(--accent);
+	color:var(--accent-ink);
 	font-weight:600;
 }
 
 .segment input:focus-visible + span {
-	outline:2px solid #0b63ce;
-	outline:2px solid AccentColor;
+	outline:2px solid var(--accent);
 	outline-offset:-2px;
 }
 
@@ -14331,8 +14323,7 @@ header > .settings-panel {
 
 .front-page-choice-label input[type="radio"]:checked {
 	border-color:transparent;
-	background:#0b63ce;
-	background:AccentColor;
+	background:var(--accent);
 }
 
 .front-page-choice-label input[type="radio"]:checked::after {
@@ -14340,12 +14331,11 @@ header > .settings-panel {
 	width:5px;
 	height:5px;
 	border-radius:50%;
-	background:#fff;
+	background:var(--accent-ink);
 }
 
 .front-page-choice-label input[type="radio"]:focus-visible {
-	outline:2px solid #0b63ce;
-	outline:2px solid AccentColor;
+	outline:2px solid var(--accent);
 	outline-offset:1px;
 }
 
@@ -14386,15 +14376,13 @@ header > .settings-panel {
 	flex:0 0 auto;
 	width:13px;
 	height:13px;
-	color:#0b63ce;
-	color:AccentColor;
+	color:var(--accent);
 }
 
 .front-page-topic[aria-pressed="true"] {
 	border-color:transparent;
-	background:#0b63ce;
-	background:AccentColor;
-	color:#fff;
+	background:var(--accent);
+	color:var(--accent-ink);
 }
 
 .front-page-topic[aria-pressed="true"] svg {
@@ -14410,8 +14398,7 @@ header > .settings-panel {
 }
 
 .front-page-topic:focus-visible {
-	outline:2px solid #0b63ce;
-	outline:2px solid AccentColor;
+	outline:2px solid var(--accent);
 	outline-offset:2px;
 }
 
@@ -14691,8 +14678,7 @@ header > .settings-panel {
 }
 
 .stepper-value:focus-within {
-	outline:2px solid #0b63ce;
-	outline:2px solid AccentColor;
+	outline:2px solid var(--accent);
 	outline-offset:-1px;
 }
 
@@ -14805,9 +14791,8 @@ header > .settings-panel {
 }
 
 .manage-row[aria-selected="true"] {
-	background:#0b63ce;
-	background:AccentColor;
-	color:#fff;
+	background:var(--accent);
+	color:var(--accent-ink);
 }
 
 .manage-row[aria-selected="true"] > span + span {
@@ -14828,8 +14813,7 @@ header > .settings-panel {
 	width:100%;
 	height:22px;
 	padding:0 6px;
-	border:1px solid #0b63ce;
-	border:1px solid AccentColor;
+	border:1px solid var(--accent);
 	border-radius:4px;
 	background:var(--field-bg, var(--surface));
 	color:var(--surface-text);
@@ -14873,8 +14857,7 @@ header > .settings-panel {
 }
 
 .manage-table-tools button:focus-visible {
-	outline:2px solid #0b63ce;
-	outline:2px solid AccentColor;
+	outline:2px solid var(--accent);
 	outline-offset:-2px;
 }
 `;
@@ -27759,8 +27742,7 @@ ${SETTINGS_MODAL_CSS}
 
 #panel.app-docked .app-discussion-meta .source-menu-option input[type="radio"]:checked {
 	border-color:transparent;
-	background:#0b63ce;
-	background:AccentColor;
+	background:var(--accent);
 	box-shadow:none;
 }
 
@@ -27769,7 +27751,7 @@ ${SETTINGS_MODAL_CSS}
 	width:5px;
 	height:5px;
 	border-radius:50%;
-	background:#fff;
+	background:var(--accent-ink);
 }
 
 #panel.app-docked .app-discussion-meta .choice-label {
