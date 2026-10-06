@@ -356,6 +356,8 @@
 	let commentImagesPreference = false;
 
 	function syncAppearancePreferences(settings) {
+		const before = `${themePreference} ${accentPreference}`;
+
 		themePreference = settings.theme || "auto";
 		buttonRadiusPreference = normalizeButtonRadius(
 			settings.buttonRadius,
@@ -367,6 +369,8 @@
 			typeof settings.accentColor === "string" ? settings.accentColor : null;
 		keepSidebarSizePreference = settings.keepSidebarSize !== false;
 		commentImagesPreference = settings.commentImages === true;
+
+		return `${themePreference} ${accentPreference}` !== before;
 	}
 	// #endregion hnewhere-test-export
 
@@ -567,7 +571,9 @@
 			merged.annotationsWhenSidebarClosed = false;
 		}
 
-		syncAppearancePreferences(merged);
+		if (syncAppearancePreferences(merged)) {
+			reapplyThemes();
+		}
 
 		return merged;
 	}
@@ -580,7 +586,9 @@
 
 		await save(STORAGE.settings, next);
 
-		syncAppearancePreferences(next);
+		if (syncAppearancePreferences(next)) {
+			reapplyThemes();
+		}
 
 		return next;
 	}
@@ -7129,9 +7137,61 @@ button {
 		if (host.hasAttribute("data-hnewhere-page-mode")) {
 			paintPageCanvas(host);
 		}
+
+		if (host.hasAttribute("data-hnewhere-app")) {
+			paintPageChrome(host);
+		}
+	}
+
+	const PAGE_CHROME_CSS = `
+html[data-backchannel-installed] body,
+html[data-backchannel-installed] .bezel,
+html[data-backchannel-installed] .chin {
+	background:var(--backchannel-chrome);
+}
+`;
+
+	let pageChromeStyled = false;
+
+	function stylePageChrome() {
+		if (pageChromeStyled) {
+			return;
+		}
+
+		pageChromeStyled = true;
+
+		try {
+			const sheet = new CSSStyleSheet();
+
+			sheet.replaceSync(PAGE_CHROME_CSS);
+			document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+		} catch {
+			const style = document.createElement("style");
+
+			style.textContent = PAGE_CHROME_CSS;
+			(document.head || document.documentElement).appendChild(style);
+		}
+	}
+
+	function paintPageChrome(host) {
+		const color = getComputedStyle(host).backgroundColor;
+
+		if (!color || color === "rgba(0, 0, 0, 0)" || color === "transparent") {
+			return;
+		}
+
+		document.documentElement.style.setProperty("--backchannel-chrome", color);
+		stylePageChrome();
+		document.querySelector('meta[name="theme-color"]')?.setAttribute("content", color);
 	}
 
 	const themeAppliers = new Set();
+
+	function reapplyThemes() {
+		for (const apply of themeAppliers) {
+			apply();
+		}
+	}
 
 	function watchTheme(host) {
 		const apply = () => applyThemeToHost(host);
