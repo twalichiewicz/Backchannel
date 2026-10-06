@@ -15188,10 +15188,8 @@ ${frontPageChooserHTML()}
 			const boxLeft = width - previewSpot.right + pad - box;
 			const boxTop = previewSpot.top - pad;
 			const below = boxTop + box + 9;
-			const tagsTop =
-				below + previewTags.offsetHeight > height - 6
-					? boxTop - previewTags.offsetHeight - 6
-					: below;
+			const above = boxTop - previewTags.offsetHeight - 6;
+			const tagsTop = below + previewTags.offsetHeight > height - 6 && above >= 4 ? above : below;
 
 			previewTags.style.left = `${Math.min(Math.max(boxLeft + box / 2 - previewTags.offsetWidth / 2, 6), width - previewTags.offsetWidth - 6)}px`;
 			previewTags.style.top = `${tagsTop}px`;
@@ -25992,11 +25990,33 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 	const SETTINGS_MODAL_PHONE_CSS = `
 	#app-settings-content .appearance-row {
-		grid-template-columns:minmax(0, 1fr);
+		grid-template-columns:minmax(0, 2fr) minmax(0, 3fr);
+		gap:8px 14px;
 	}
 
-	#app-settings-content .sources-grid {
-		grid-template-columns:minmax(0, 1fr);
+	#app-settings-content .theme-tiles {
+		gap:8px;
+	}
+
+	#app-settings-content .theme-tile {
+		flex:1 1 0;
+		min-width:0;
+	}
+
+	#app-settings-content .theme-tile-art {
+		width:100%;
+		height:auto;
+		aspect-ratio:3 / 2;
+	}
+
+	#app-settings-content .toggle-colors {
+		justify-content:space-between;
+	}
+
+	#app-settings-content .toggle-stage {
+		width:100%;
+		height:auto;
+		aspect-ratio:4 / 3;
 	}
 
 	#app-settings-modal {
