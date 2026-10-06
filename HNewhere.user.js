@@ -13648,8 +13648,7 @@ header > .settings-panel {
 	margin-bottom:0;
 }
 
-.settings-panel.sidebar-off .settings-group:has(#setting-sidebar-enabled) > :not(.settings-app-only),
-.settings-panel.sidebar-off .settings-field:has(.button-designer) {
+.settings-panel.sidebar-off .settings-group:has(#setting-sidebar-enabled) > :not(.settings-app-only) {
 	display:none;
 }
 
@@ -13790,18 +13789,218 @@ header > .settings-panel {
 	display:block;
 }
 
-.sources-lead,
+.settings-section-hint,
 .sources-subhint {
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
 }
 
-#app-settings-modal[data-section="sources"] #app-settings-heading {
+#app-settings-modal:is([data-section="sources"], [data-section="appearance"]) #app-settings-heading {
 	margin-bottom:4px;
 }
 
-.sources-lead {
+.appearance-row {
+	display:grid;
+	grid-template-columns:minmax(0, 1fr) auto;
+	align-items:start;
+	gap:8px 18px;
+	padding:12px 0;
+	border-top:1px solid var(--surface-divider);
+}
+
+.settings-section-hint + .appearance-row {
+	padding-top:0;
+	border-top:0;
+}
+
+.appearance-row-label {
+	font-size:12px;
+	line-height:1.35;
+}
+
+.appearance-row-hint {
+	margin-top:2px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
+}
+
+.theme-tile input:focus-visible ~ .theme-tile-art,
+.toggle-swatch:focus-visible i,
+.toggle-swatch-any:focus-within i {
+	outline:2px solid #0b63ce;
+	outline:2px solid AccentColor;
+	outline-offset:2px;
+}
+
+.theme-tiles {
+	display:flex;
+	gap:12px;
+}
+
+.theme-tile {
+	position:relative;
+	display:grid;
+	justify-items:center;
+	gap:5px;
+	cursor:pointer;
+}
+
+.theme-tile input {
+	position:absolute;
+	inset:0;
+	width:100%;
+	height:100%;
+	margin:0;
+	opacity:0;
+	cursor:pointer;
+}
+
+.theme-tile-art {
+	position:relative;
+	display:block;
+	width:60px;
+	height:40px;
+	overflow:hidden;
+	border-radius:6px;
+	box-shadow:inset 0 0 0 1px rgba(0,0,0,.14);
+}
+
+.theme-tile-art-light,
+.theme-tile-art-auto::before {
+	background:
+		linear-gradient(var(--accent), var(--accent)) 0 0 / 100% 8px no-repeat,
+		linear-gradient(#d2d2ca, #d2d2ca) 7px 14px / 62% 3px no-repeat,
+		linear-gradient(#e0e0d8, #e0e0d8) 7px 21px / 46% 3px no-repeat,
+		linear-gradient(#e0e0d8, #e0e0d8) 7px 28px / 54% 3px no-repeat,
+		#f6f6ef;
+}
+
+.theme-tile-art-dark,
+.theme-tile-art-auto::after {
+	background:
+		linear-gradient(color-mix(in srgb, var(--accent) 62%, #000), color-mix(in srgb, var(--accent) 62%, #000)) 0 0 / 100% 8px no-repeat,
+		linear-gradient(#4a4a4a, #4a4a4a) 7px 14px / 62% 3px no-repeat,
+		linear-gradient(#383838, #383838) 7px 21px / 46% 3px no-repeat,
+		linear-gradient(#383838, #383838) 7px 28px / 54% 3px no-repeat,
+		#1e1e1e;
+}
+
+.theme-tile-art-auto::before,
+.theme-tile-art-auto::after {
+	content:"";
+	position:absolute;
+	inset:0;
+}
+
+.theme-tile-art-auto::after {
+	clip-path:polygon(62% 0, 100% 0, 100% 100%, 38% 100%);
+}
+
+.theme-tile input:checked ~ .theme-tile-art {
+	outline:2px solid #0b63ce;
+	outline:2px solid AccentColor;
+	outline-offset:2px;
+}
+
+.theme-tile-name {
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.3;
+}
+
+.theme-tile input:checked ~ .theme-tile-name {
+	color:var(--surface-text);
+	font-weight:600;
+}
+
+.toggle-colors {
+	--toggle-green:${ACCENT};
+	--swatch-edge:rgba(0,0,0,.12);
+	display:flex;
+	gap:12px;
+	padding:4px 0 16px;
+}
+
+:host(.${DARK_CLASS}) .toggle-colors {
+	--toggle-green:${ACCENT_DARK};
+	--swatch-edge:rgba(255,255,255,.22);
+}
+
+.toggle-swatch {
+	position:relative;
+	display:block;
+	padding:0;
+	border:0;
+	background:none;
+	font:inherit;
+	cursor:pointer;
+}
+
+.toggle-swatch i {
+	display:block;
+	width:22px;
+	height:22px;
+	border-radius:50%;
+	box-shadow:inset 0 0 0 1px var(--swatch-edge);
+}
+
+.toggle-swatch[aria-pressed="true"] i {
+	outline:2px solid #0b63ce;
+	outline:2px solid AccentColor;
+	outline-offset:2px;
+}
+
+.toggle-swatch-green i {
+	background:var(--toggle-green);
+}
+
+.toggle-swatch-any i {
+	background:conic-gradient(#f44, #fb0, #6c4, #2bd, #48f, #a5f, #f4a, #f44);
+}
+
+.toggle-swatch-any input {
+	position:absolute;
+	inset:0;
+	width:100%;
+	height:100%;
+	padding:0;
+	border:0;
+	opacity:0;
+	cursor:pointer;
+}
+
+.toggle-swatch-name {
+	position:absolute;
+	top:29px;
+	left:50%;
+	color:var(--surface-text);
+	font-size:10px;
+	font-weight:600;
+	line-height:1.2;
+	white-space:nowrap;
+	transform:translateX(-50%);
+	visibility:hidden;
+	pointer-events:none;
+}
+
+.toggle-swatch[aria-pressed="true"] .toggle-swatch-name {
+	visibility:visible;
+}
+
+.toggle-colors .toggle-swatch:first-child .toggle-swatch-name {
+	left:0;
+	transform:none;
+}
+
+.toggle-colors .toggle-swatch:last-child .toggle-swatch-name {
+	right:0;
+	left:auto;
+	transform:none;
+}
+
+.settings-section-hint {
 	margin:0 0 14px;
 	line-height:1.4;
 }
@@ -14154,11 +14353,6 @@ header > .settings-panel {
 	--toggle-page-line:#f0f0ee;
 	--toggle-edge:#e4e4e1;
 	--toggle-select:#0a7aff;
-	--toggle-rail:#fcfcfb;
-	--toggle-rail-ink:#1d1d1f;
-	--toggle-rail-line:rgba(0,0,0,.08);
-	--toggle-rail-hover:rgba(0,0,0,.06);
-	--toggle-rail-press:rgba(0,0,0,.11);
 	--toggle-green:${ACCENT};
 	display:flex;
 	flex-direction:column;
@@ -14174,46 +14368,25 @@ header > .settings-panel {
 	--toggle-page-line:#28282b;
 	--toggle-edge:#36363a;
 	--toggle-select:#3b93ff;
-	--toggle-rail:#3a3a3c;
-	--toggle-rail-ink:#f2f2f2;
-	--toggle-rail-line:rgba(255,255,255,.10);
-	--toggle-rail-hover:rgba(255,255,255,.10);
-	--toggle-rail-press:rgba(255,255,255,.18);
 	--toggle-green:${ACCENT_DARK};
-}
-
-.button-designer-label {
-	font-size:12px;
-	line-height:1.35;
-}
-
-.button-designer-hint {
-	margin-left:0;
 }
 
 .toggle-stage {
 	position:relative;
-	height:236px;
-	margin-top:8px;
+	width:252px;
+	height:168px;
 	overflow:hidden;
 	user-select:none;
 	-webkit-user-select:none;
 }
 
-#app-settings-content .toggle-stage {
-	margin-left:-18px;
-}
-
 .toggle-window {
 	position:absolute;
-	top:0;
-	right:14px;
-	bottom:-12px;
-	left:-12px;
+	inset:0;
 	overflow:hidden;
-	border-top:1px solid var(--toggle-edge);
-	border-right:1px solid var(--toggle-edge);
-	border-top-right-radius:10px;
+	box-sizing:border-box;
+	border:1px solid var(--toggle-edge);
+	border-radius:10px;
 	background:var(--toggle-page);
 }
 
@@ -14237,7 +14410,7 @@ header > .settings-panel {
 	gap:7px;
 	min-width:0;
 	height:22px;
-	margin-left:42px;
+	margin-left:10px;
 	padding:0 8px 0 10px;
 	border-radius:7px;
 	background:var(--toggle-url);
@@ -14265,7 +14438,7 @@ header > .settings-panel {
 
 .toggle-page-copy {
 	position:absolute;
-	left:-60px;
+	left:14px;
 	right:20px;
 	top:20px;
 	display:grid;
@@ -14393,110 +14566,8 @@ header > .settings-panel {
 	background:rgba(255,255,255,.24);
 }
 
-.toggle-rail {
-	position:absolute;
-	left:50%;
-	bottom:12px;
-	display:flex;
-	align-items:center;
-	gap:6px;
-	box-sizing:border-box;
-	width:max-content;
-	max-width:calc(100% - 16px);
-	padding:3px;
-	border-radius:22px;
-	background:var(--toggle-rail);
-	color:var(--toggle-rail-ink);
-	box-shadow:0 6px 20px rgba(0,0,0,.16), inset 0 0 0 1px var(--toggle-rail-line);
-	font-size:10.5px;
-	font-weight:600;
-	transform:translateX(-50%);
-	z-index:5;
-}
-
-.toggle-colors {
-	display:inline-flex;
-	align-items:center;
-	gap:2px;
-}
-
-.toggle-swatch,
-.toggle-rail-reset {
-	position:relative;
-	display:inline-grid;
-	place-items:center;
-	height:30px;
-	padding:0;
-	border:0;
-	border-radius:15px;
-	background:none;
-	color:inherit;
-	font:inherit;
-	cursor:pointer;
-}
-
-.toggle-swatch {
-	width:30px;
-}
-
-.toggle-rail-reset {
-	padding:0 10px;
-}
-
-@media (hover: hover) {
-	.toggle-rail-reset:hover,
-	.toggle-swatch:hover:not([aria-pressed="true"]) {
-		background:var(--toggle-rail-hover);
-	}
-}
-
-.toggle-rail-reset:active,
-.toggle-swatch:active:not([aria-pressed="true"]) {
-	background:var(--toggle-rail-press);
-}
-
-.toggle-swatch i {
-	display:block;
-	width:22px;
-	height:22px;
-	border-radius:50%;
-	box-shadow:inset 0 0 0 1px rgba(0,0,0,.12);
-}
-
-.toggle-swatch[aria-pressed="true"] i {
-	box-shadow:0 0 0 2px var(--toggle-rail), 0 0 0 4px var(--toggle-rail-ink);
-}
-
-.toggle-swatch-green i {
-	background:var(--toggle-green);
-}
-
-.toggle-swatch-any i {
-	background:conic-gradient(#f44, #fb0, #6c4, #2bd, #48f, #a5f, #f4a, #f44);
-}
-
-.toggle-swatch-any input {
-	position:absolute;
-	inset:0;
-	width:100%;
-	height:100%;
-	padding:0;
-	border:0;
-	border-radius:15px;
-	opacity:0;
-	cursor:pointer;
-}
-
-.toggle-rail-rule {
-	width:1px;
-	height:18px;
-	background:var(--toggle-rail-line);
-}
-
 .toggle-preview:focus-visible,
-.toggle-handle:focus-visible,
-.toggle-swatch:focus-within,
-.toggle-rail-reset:focus-visible {
+.toggle-handle:focus-visible {
 	outline:2px solid var(--toggle-select);
 	outline-offset:2px;
 }
@@ -14801,38 +14872,40 @@ All stored locally.
 </div>
 
 <div class="settings-group">
-<div class="settings-field">
-<div class="settings-field-label">Theme</div>
-<div class="segmented">
-<label class="segment"><input type="radio" name="hnewhere-theme" data-setting="theme" value="auto"><span>Detect</span></label>
-<label class="segment"><input type="radio" name="hnewhere-theme" data-setting="theme" value="light"><span>Light</span></label>
-<label class="segment"><input type="radio" name="hnewhere-theme" data-setting="theme" value="dark"><span>Dark</span></label>
+<div class="settings-section-hint">How Backchannel looks in the Sidebar, the Reader and on the sites you visit.</div>
+<div class="appearance-row">
+<div class="appearance-row-text"><div class="appearance-row-label" id="appearance-theme-label">Theme</div><div class="appearance-row-hint">Light or dark, or Auto to match your device.</div></div>
+<div class="appearance-row-control theme-tiles" role="radiogroup" aria-labelledby="appearance-theme-label">
+<label class="theme-tile"><input type="radio" name="hnewhere-theme" data-setting="theme" value="light"><span class="theme-tile-art theme-tile-art-light" aria-hidden="true"></span><span class="theme-tile-name">Light</span></label>
+<label class="theme-tile"><input type="radio" name="hnewhere-theme" data-setting="theme" value="dark"><span class="theme-tile-art theme-tile-art-dark" aria-hidden="true"></span><span class="theme-tile-name">Dark</span></label>
+<label class="theme-tile"><input type="radio" name="hnewhere-theme" data-setting="theme" value="auto"><span class="theme-tile-art theme-tile-art-auto" aria-hidden="true"></span><span class="theme-tile-name">Auto</span></label>
 </div>
 </div>
-
-<div class="settings-field">
-<div class="button-designer">
-<div class="button-designer-label">Backchannel toggle</div>
-<div class="settings-option-hint button-designer-hint">The button in the top-right corner of every page that opens the Sidebar. It takes your color when the page has a discussion.</div>
+<div class="appearance-row">
+<div class="appearance-row-text"><div class="appearance-row-label" id="appearance-color-label">Color</div><div class="appearance-row-hint">Tints the Sidebar's header, the Reader's rail and the Sidebar toggle.</div></div>
+<div class="appearance-row-control toggle-colors" role="group" aria-labelledby="appearance-color-label">
+<label class="toggle-swatch toggle-swatch-any" title="Any color"><i></i><input id="button-color-input" type="color" aria-label="Any color" value="#7c3aed"><span class="toggle-swatch-name" aria-hidden="true">Any color</span></label>
+<button type="button" class="toggle-swatch toggle-swatch-green" data-accent="" aria-label="Backchannel green" title="Backchannel green"><i></i><span class="toggle-swatch-name" aria-hidden="true">Backchannel green</span></button>
+<button type="button" class="toggle-swatch" data-accent="#ff6600" aria-label="Hacker News orange" title="Hacker News orange"><i style="background:#ff6600"></i><span class="toggle-swatch-name" aria-hidden="true">Hacker News orange</span></button>
+<button type="button" class="toggle-swatch" data-accent="#1d1d1f" aria-label="Graphite" title="Graphite"><i style="background:#1d1d1f"></i><span class="toggle-swatch-name" aria-hidden="true">Graphite</span></button>
+</div>
+</div>
+<div class="appearance-row">
+<div class="appearance-row-text"><div class="appearance-row-label button-designer-label">Sidebar toggle</div><div class="appearance-row-hint button-designer-hint">The floating button shown on every site for opening the Sidebar.</div></div>
+<div class="appearance-row-control button-designer">
 <div class="toggle-stage">
 <div class="toggle-window">
 <div class="toggle-chrome" aria-hidden="true"><div class="toggle-url"><span class="toggle-url-text">example.com</span><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12.6 6.2A4.9 4.9 0 1 0 13 9.6"/><path d="M12.9 3.2v3.2H9.7"/></svg></div><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.4v7.4M5.4 4.9 8 2.4l2.6 2.5"/><path d="M5.6 6.8H4.4a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1h7.2a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1h-1.2"/></svg><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v10M3 8h10"/></svg><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="2.6" y="4.6" width="8.4" height="8.4" rx="1.6"/><path d="M5.2 2.8h6.6a1.6 1.6 0 0 1 1.6 1.6V11"/></svg></div>
 <div class="toggle-page">
 <div class="toggle-page-copy" aria-hidden="true"><div class="toggle-page-head"></div><div class="toggle-page-line" style="width:96%"></div><div class="toggle-page-line" style="width:88%"></div><div class="toggle-page-line" style="width:93%"></div><div class="toggle-page-line" style="width:72%"></div><div class="toggle-page-line" style="width:90%"></div><div class="toggle-page-line" style="width:84%"></div><div class="toggle-page-line" style="width:91%"></div><div class="toggle-page-line" style="width:78%"></div><div class="toggle-page-line" style="width:89%"></div><div class="toggle-page-line" style="width:82%"></div><div class="toggle-page-line" style="width:94%"></div><div class="toggle-page-line" style="width:70%"></div></div>
-<div id="toggle-preview" class="toggle-preview" tabindex="0" role="group" aria-label="Backchannel toggle preview. Drag it, or use the arrow keys, to see it elsewhere on a page."><span id="toggle-preview-mark" class="toggle-preview-mark" contenteditable="plaintext-only" spellcheck="false" role="textbox" aria-label="Toggle label, one or two characters" title="Type one or two characters">BC</span></div>
+<div id="toggle-preview" class="toggle-preview" tabindex="0" role="group" aria-label="Sidebar toggle preview. Drag it, or use the arrow keys, to see it elsewhere on a page."><span id="toggle-preview-mark" class="toggle-preview-mark" contenteditable="plaintext-only" spellcheck="false" role="textbox" aria-label="Toggle label, one or two characters" title="Type one or two characters">BC</span></div>
 <div class="toggle-selection"><span id="toggle-radius-handle" class="toggle-handle toggle-handle-radius" role="slider" tabindex="0" aria-label="Corner radius" aria-valuemin="0" aria-valuemax="${BUTTON_RADIUS_MAX}"></span><span id="toggle-size-handle" class="toggle-handle toggle-handle-size" role="slider" tabindex="0" aria-label="Toggle size" aria-valuemin="${BUTTON_SIZE_MIN}" aria-valuemax="${BUTTON_SIZE_MAX}"></span></div>
 <div class="toggle-tags"><label class="toggle-tag"><input id="button-size-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Toggle size in pixels" value="44"><span>px</span></label><label class="toggle-tag"><svg viewBox="0 0 10 10" width="9" height="9" aria-hidden="true" focusable="false"><path d="M1.5 8.5V5.5a4 4 0 0 1 4-4h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><input id="button-radius-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Corner radius in percent" value="50"><span>%</span></label></div>
 </div>
 </div>
-<div class="toggle-rail" role="toolbar" aria-label="Toggle color">
-<span class="toggle-colors" role="group" aria-label="Color"><label class="toggle-swatch toggle-swatch-any" title="Any color"><i></i><input id="button-color-input" type="color" aria-label="Any color" value="#7c3aed"></label><button type="button" class="toggle-swatch toggle-swatch-green" data-accent="" aria-label="Backchannel green" title="Backchannel green"><i></i></button><button type="button" class="toggle-swatch" data-accent="#ff6600" aria-label="Hacker News orange" title="Hacker News orange"><i style="background:#ff6600"></i></button><button type="button" class="toggle-swatch" data-accent="#1d1d1f" aria-label="Graphite" title="Graphite"><i style="background:#1d1d1f"></i></button></span>
-<span class="toggle-rail-rule" aria-hidden="true"></span>
-<button id="settings-reset-button" class="toggle-rail-reset" type="button">Reset</button>
 </div>
 </div>
 </div>
-</div>
-
 </div>
 
 <div class="settings-group">
@@ -14860,7 +14933,7 @@ All stored locally.
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
-<div class="sources-lead">Where Backchannel looks for discussions and links for Front Pages.</div>
+<div class="settings-section-hint">Where Backchannel looks for discussions and links for Front Pages.</div>
 <div class="sources-grid">${sourceListHTML({ idPrefix: "setting-source-", cells: true })}</div>
 <div class="sources-subhead">Front Pages</div>
 <div class="sources-subhint">Choose what Backchannel shows in Front Pages. Links come only from the sources you've enabled above.</div>
@@ -14923,7 +14996,6 @@ ${frontPageChooserHTML()}
 		const colorInput = shadow.querySelector("#button-color-input");
 		const anySwatch = shadow.querySelector(".toggle-swatch-any");
 		const swatches = [...settingsPanel.querySelectorAll(".toggle-swatch[data-accent]")];
-		const designerStage = shadow.querySelector(".toggle-stage");
 		const previewSpot = { right: 16, top: 16 };
 		let designerSettings = null;
 		let designerDraft = null;
@@ -14993,40 +15065,12 @@ ${frontPageChooserHTML()}
 			syncPanesHeight();
 		};
 
-		const fitDesignerStage = () => {
-			const pane = designerStage?.closest("#app-settings-content");
-
-			if (!pane || !designerStage.getClientRects().length) {
-				return;
-			}
-
-			designerStage.style.height = "";
-			designerStage.style.marginBottom = "";
-
-			const base = designerStage.offsetHeight;
-			const origin = pane.getBoundingClientRect().top - pane.scrollTop;
-			const stageBottom = () => designerStage.getBoundingClientRect().bottom - origin;
-			const fits = pane.scrollHeight <= pane.clientHeight;
-			const before = stageBottom();
-
-			if (fits) {
-				designerStage.style.height = `${base + pane.clientHeight}px`;
-			}
-
-			const trailing = pane.scrollHeight - stageBottom();
-
-			designerStage.style.height = `${base + (fits ? Math.max(0, pane.clientHeight - before) : 0)}px`;
-			designerStage.style.marginBottom = `${-trailing}px`;
-		};
-
 		const applyButtonDesigner = (settings) => {
 			designerSettings = settings;
 
 			if (!preview || !settings) {
 				return;
 			}
-
-			fitDesignerStage();
 
 			const size = designerDraft?.size ?? normalizeButtonSize(settings.buttonSize);
 			const radius =
@@ -15083,7 +15127,7 @@ ${frontPageChooserHTML()}
 			const boxTop = previewSpot.top - pad;
 			const below = boxTop + box + 9;
 			const tagsTop =
-				below + previewTags.offsetHeight > height - 52
+				below + previewTags.offsetHeight > height - 6
 					? boxTop - previewTags.offsetHeight - 6
 					: below;
 
@@ -15690,18 +15734,6 @@ ${frontPageChooserHTML()}
 				designerDraft = null;
 				saveAccent(value).catch(console.error);
 			});
-
-			shadow.querySelector("#settings-reset-button").onclick = async () => {
-				previewSpot.right = 16;
-				previewSpot.top = 16;
-				await save(STORAGE.position, null);
-				await saveAccent(null);
-				await saveDesigner({
-					buttonSize: DEFAULT_SETTINGS.buttonSize,
-					buttonRadius: BUTTON_RADIUS_DEFAULT,
-					buttonMark: BUTTON_MARK_DEFAULT,
-				});
-			};
 		}
 
 		const settingsChooser = settingsPanel.querySelector(".front-page-chooser");
@@ -25860,8 +25892,9 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 #app-settings-content .settings-head,
 #app-settings-content [data-app-section="links"],
-#app-settings-modal[data-section="general"] [data-app-section="sidebar"],
-#app-settings-modal[data-section="sidebar"] [data-app-section="general"] {
+#app-settings-modal:not([data-section="general"]) [data-app-section="general"],
+#app-settings-modal:not([data-section="appearance"]) [data-app-section="appearance"],
+#app-settings-modal:not([data-section="sidebar"]) [data-app-section="sidebar"] {
 	display:none;
 }
 
@@ -25896,6 +25929,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 `;
 
 	const SETTINGS_MODAL_PHONE_CSS = `
+	#app-settings-content .appearance-row {
+		grid-template-columns:minmax(0, 1fr);
+	}
+
 	#app-settings-content .sources-grid {
 		grid-template-columns:minmax(0, 1fr);
 	}
@@ -28694,6 +28731,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <div class="app-settings-body">
 <nav class="app-settings-nav" aria-label="Settings sections">
 <button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="appearance"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.2a5.8 5.8 0 1 0 0 11.6c.9 0 1.4-.6 1.4-1.3 0-.7-.5-1-.5-1.6 0-.7.6-1.2 1.3-1.2h1.4a2.2 2.2 0 0 0 2.2-2.2C13.8 4.5 11.2 2.2 8 2.2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5.2" cy="7.6" r=".95" fill="currentColor"/><circle cx="7.4" cy="5.1" r=".95" fill="currentColor"/><circle cx="10.5" cy="5.6" r=".95" fill="currentColor"/></svg><span>Appearance</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="blocked"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12 12 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Manage disabled/hidden</span></button>
@@ -29483,9 +29521,7 @@ ${settingsModalHTML()}
 			} else if (group.querySelector("#setting-auto-open-sidebar")) {
 				group.dataset.appSection = "sidebar";
 			} else if (group.querySelector(".button-designer")) {
-				for (const field of group.querySelectorAll(":scope > .settings-field")) {
-					field.dataset.appSection = field.querySelector(".button-designer") ? "sidebar" : "general";
-				}
+				group.dataset.appSection = "appearance";
 			} else {
 				group.dataset.appSection = "general";
 			}
@@ -30389,14 +30425,14 @@ ${settingsModalHTML()}
 
 		const seen = new Set();
 
-		for (const field of panel?.querySelectorAll(".settings-field, .settings-group label") || []) {
-			const label = (field.matches("label") ? field.textContent : field.querySelector(".settings-field-label, label")?.textContent || "").trim().split("\n")[0].trim();
+		for (const field of panel?.querySelectorAll(".settings-field, .appearance-row, .settings-group label") || []) {
+			const label = (field.matches("label") ? field.textContent : field.querySelector(".settings-field-label, .appearance-row-label, label")?.textContent || "").trim().split("\n")[0].trim();
 			const owner = field.closest("[data-app-section]");
-			const section = owner?.dataset.appSection === "sidebar" ? "sidebar" : "general";
+			const section = ["appearance", "sidebar"].includes(owner?.dataset.appSection) ? owner.dataset.appSection : "general";
 
 			if (label && label.length < 80 && !seen.has(label) && !field.closest("#app-view-menu")) {
 				seen.add(label);
-				entries.push({ group: "Settings", title: label, note: section === "sidebar" ? "Sidebar" : "General", keys: `${label} settings`, run: () => openAppSettingsSection(section) });
+				entries.push({ group: "Settings", title: label, note: { general: "General", appearance: "Appearance", sidebar: "Sidebar" }[section], keys: `${label} settings`, run: () => openAppSettingsSection(section) });
 			}
 		}
 
