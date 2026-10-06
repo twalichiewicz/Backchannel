@@ -6166,6 +6166,30 @@ button {
 		return feed.topic ? stories.map((story) => ({ ...story, topic: feed.topic })) : stories;
 	}
 
+	const FRONT_PAGE_FEED_KEY = "HNewhere:frontpage_feed:";
+
+	async function loadTopicFeed(feed, force) {
+		const key = FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`;
+		const cached = await load(key, null);
+
+		if (!force && cached?.stories?.length && Date.now() - cached.timestamp < FRONT_PAGE_TTL) {
+			return cached.stories;
+		}
+
+		try {
+			const stories = await fetchFrontPageFeed(feed);
+
+			if (stories.length) {
+				await save(key, { timestamp: Date.now(), stories });
+				return stories;
+			}
+		} catch (e) {
+			console.warn("Backchannel " + feed.source + " topic feed failed:", e);
+		}
+
+		return cached?.stories || [];
+	}
+
 	async function loadFrontPages(options = {}) {
 		const settings = options.settings || (await loadSettings());
 		const feeds = frontPageFeeds(
@@ -6176,6 +6200,16 @@ button {
 
 		if (!feeds.length) {
 			return { rows: [], sources: [], topics: [] };
+		}
+
+		if (frontPageMode(settings) === "topics") {
+			const lists = await Promise.all(feeds.map((feed) => loadTopicFeed(feed, options.force)));
+
+			return {
+				rows: liftMergedRows(mergeStoriesByURL(blendStories(lists.filter((list) => list.length)))),
+				sources: [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))],
+				topics: [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.topic))],
+			};
 		}
 
 		const cacheKey = frontPageCacheKey(feeds);
@@ -6192,7 +6226,7 @@ button {
 		const lists = await Promise.all(
 			feeds.map(async (feed) => {
 				try {
-					return await fetchFrontPageFeed(feed);
+					return (await getSource(feed.source).frontPage()) || [];
 				} catch (e) {
 					console.warn("Backchannel " + feed.source + " front page failed:", e);
 					return [];
@@ -6202,11 +6236,7 @@ button {
 
 		const answered = [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))];
 		const topics = [...new Set(feeds.filter((feed, index) => lists[index].length && feed.topic).map((feed) => feed.topic))];
-		let rows = mergeStoriesByURL(blendStories(lists.filter((list) => list.length)));
-
-		if (frontPageMode(settings) === "topics") {
-			rows = liftMergedRows(rows);
-		}
+		const rows = mergeStoriesByURL(blendStories(lists.filter((list) => list.length)));
 
 		if (!rows.length) {
 			return { rows: cached?.rows || [], sources: cached?.sources || [], topics: cached?.topics || [] };
