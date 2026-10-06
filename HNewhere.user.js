@@ -14371,10 +14371,10 @@ header > .settings-panel {
 	display:inline-flex;
 	align-items:center;
 	gap:5px;
-	height:26px;
-	padding:0 10px 0 8px;
+	height:21px;
+	padding:0 9px 0 7px;
 	border:1px solid var(--field-border);
-	border-radius:13px;
+	border-radius:11px;
 	background:var(--field-bg);
 	color:var(--surface-text);
 	font:inherit;
