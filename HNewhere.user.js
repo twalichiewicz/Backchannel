@@ -11818,6 +11818,7 @@ ${frontPageChooserHTML()}
 <div class="front-page-choice">
 <label class="front-page-choice-label"><input type="radio" name="${name}" value="topics"><span>Topics you follow</span></label>
 <div class="front-page-choice-hint">Show popular links from your sources that match the topics you select.</div>
+<div class="front-page-alert" role="status" hidden>Turn on a source that covers topics to follow them.</div>
 <div class="front-page-topics-panel">
 <div class="front-page-topics" role="group" aria-label="Topics">${TOPICS.map((topic) => `<button type="button" class="front-page-topic" data-topic="${escapeHTML(topic.id)}" aria-pressed="false">${TOPIC_ICONS[topic.id]}<span>${escapeHTML(topic.label)}</span></button>`).join("")}</div>
 <div class="front-page-choice-hint front-page-needs"></div>
@@ -11834,6 +11835,8 @@ ${frontPageChooserHTML()}
 
 	function wireFrontPageChooser(root, settings, { onChange } = {}) {
 		const radios = [...root.querySelectorAll('input[type="radio"]')];
+		const topicsRadio = radios.find((radio) => radio.value === "topics");
+		const alert = root.querySelector(".front-page-alert");
 		const panel = root.querySelector(".front-page-topics-panel");
 		const needs = root.querySelector(".front-page-needs");
 		const topHint = root.querySelector(".front-page-top-hint");
@@ -11854,6 +11857,16 @@ ${frontPageChooserHTML()}
 			const enabled = enabledSourceIds(settings, registeredSourceIds());
 			const covered = (id) => TOPIC_FEED_SOURCES.some((source) => enabled.includes(source) && TOPIC_FEEDS[id]?.[source]?.length);
 			const missing = new Map();
+			const available = TOPICS.some((topic) => covered(topic.id));
+
+			if (!available && mode === "topics") {
+				mode = "sources";
+				emit();
+			}
+
+			topicsRadio.disabled = !available;
+			topicsRadio.closest(".front-page-choice-label").classList.toggle("is-unavailable", !available);
+			alert.hidden = available;
 
 			for (const radio of radios) {
 				radio.checked = radio.value === mode;
@@ -14337,6 +14350,27 @@ header > .settings-panel {
 .front-page-choice-label input[type="radio"]:focus-visible {
 	outline:2px solid var(--accent);
 	outline-offset:1px;
+}
+
+.front-page-choice-label.is-unavailable,
+.front-page-choice-label.is-unavailable input[type="radio"] {
+	cursor:not-allowed;
+}
+
+.front-page-choice-label.is-unavailable > span,
+.front-page-choice-label.is-unavailable input[type="radio"] {
+	opacity:.45;
+}
+
+.front-page-alert {
+	margin:6px 0 0 23px;
+	padding:6px 9px;
+	border:1px solid var(--help-border);
+	border-radius:6px;
+	background:var(--help-bg);
+	color:var(--surface-text);
+	font-size:11px;
+	line-height:1.35;
 }
 
 .front-page-choice-hint {
