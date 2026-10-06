@@ -31,6 +31,15 @@ use to detect updates, so every release bumps it.
 
 ### Changed
 
+- **Settings' controls take the chosen color.** Checkboxes, switches,
+  radios, topic chips and selected rows were the system blue.
+
+- **Each source is summed up in two short bullets**: what it covers and what
+  its comments are like. Sources links to how each source works, including
+  what each is sent.
+
+- **The reader's tooltips are black, at a normal weight.**
+
 - **Sources in Settings lists the sources in two columns.** The "What each
   source supports" table is gone.
 
@@ -62,9 +71,16 @@ use to detect updates, so every release bumps it.
 
 ### Fixed
 
-- **The reader shows the source picker when no source is on.** Its list said
-  "Pick where comments come from" without offering a way to, and changing
-  views replaced that with "Could not reach any front page."
+- **The reader welcomes you when no source is on.** It shows the sources,
+  each summed up in two bullets, and the Front Pages choice in one place,
+  with Welcome in the rail; **Start reading** saves both. Its list used to say "Pick where comments
+  come from" without offering a way to, and changing views replaced that
+  with "Could not reach any front page."
+
+- **Topics fall back to Top links when no source covers them.** Turning off
+  every source that covers topics left Topics chosen with its picks selected
+  but disabled. Topics can't be chosen until a source covers them, and a
+  note says so.
 
 - **A queue opened with no source on leads back to the picker.** With no
   source on and something queued, opening the queue from the Sidebar's title
@@ -80,6 +96,9 @@ use to detect updates, so every release bumps it.
 
 - **The reader's rail buttons sit in the middle of the rail.** They were 3px
   left of it.
+
+- **The reader keeps its rounded corners when it is narrow.** With the list
+  closed below 1100px, the article met the rail with square corners.
 
 - **Counts in the reader's rail no longer cover their icons.** A long count,
   like 999+, hid the icon it belonged to.
