@@ -23,7 +23,7 @@ use to detect updates, so every release bumps it.
   them covers is dimmed, with the sources that would. Unpick the last topic
   and the front page goes back to Top links. A story found on more than one
   source moves up. In the reader on backchnnl.app, each topic gets
-  its own icon in the rail, beside the views for the sources it came from.
+  its own icon in the rail, beside the views for each source you have on.
 
 - **You are asked once how to build it.** A new reader is asked right after
   picking sources. A reader who already has sources sees a card at the top of
