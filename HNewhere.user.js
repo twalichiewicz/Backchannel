@@ -3216,8 +3216,8 @@
 <span>${escapeHTML(source.label)}${source.slow ? ` <span class="op-pill op-pill-slow" tabindex="0" role="note" aria-label="Slower comment fetch source">⧗<span class="op-pill-tip" aria-hidden="true">Slower comment fetch source</span></span>` : ""}</span>
 </label>
 ${
-	source.caveat
-		? `<div class="settings-option-hint">${escapeHTML(source.caveat)}${source.slow ? `<p class="settings-option-hint-slow">This source takes longer to fetch comments, so they may take a moment to appear.</p>` : ""}</div>`
+	source.points
+		? `<ul class="source-points">${source.points.map((point) => `<li>${escapeHTML(point)}</li>`).join("")}</ul>`
 		: ""
 }${cells ? "</div>" : ""}`,
 			)
@@ -3281,8 +3281,10 @@ ${
 		origins: ["news.ycombinator.com"],
 		label: "Hacker News",
 		shortLabel: "HN",
-		caveat:
-			"Will send each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
+		points: [
+			"Tech, startups and science",
+			"Long, threaded comment sections",
+		],
 		capabilities: { vote: true, reply: true, submit: true },
 
 		submitForm: {
@@ -3477,8 +3479,10 @@ ${
 		origins: ["reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com"],
 		label: "Reddit",
 		shortLabel: "Reddit",
-		caveat:
-			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds. Vote, reply and submit through your existing Reddit session.",
+		points: [
+			"Communities on almost any topic",
+			"Threaded comments with votes",
+		],
 		capabilities: { vote: true, reply: true, submit: true },
 
 		submitForm: {
@@ -3705,8 +3709,10 @@ ${
 		slow: true,
 		ageLabel: "Last Bluesky comment",
 		threadArrivesWhole: true,
-		caveat:
-			"Will send each page you visit to Constellation, an independent index of Bluesky links, not to Bluesky. Bluesky is asked only about the posts Constellation names. Signed in or out, these requests carry no account.",
+		points: [
+			"Posts and replies that link the page",
+			"Short, social commentary",
+		],
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => "https://bsky.app/profile/" + encodeURIComponent(handle),
@@ -3890,8 +3896,10 @@ ${
 		label: "Lobsters",
 		shortLabel: "Lobsters",
 		threadArrivesWhole: true,
-		caveat:
-			"Will send the domain of each page you visit to lobste.rs, not the full address. Signed in or out, these requests carry no account.",
+		points: [
+			"Programming and computing",
+			"Small, focused comment threads",
+		],
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (user) => "https://lobste.rs/~" + encodeURIComponent(user),
@@ -3983,8 +3991,10 @@ ${
 		slow: true,
 		ageLabel: "Last active on Wikipedia",
 		threadArrivesWhole: true,
-		caveat:
-			"Will send each page you visit to Wikipedia's API to find pages that link it. No account, signed in or out.",
+		points: [
+			"Wikipedia articles that link the page",
+			"Background and context, not comments",
+		],
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (author) =>
@@ -4113,8 +4123,10 @@ ${
 		shortLabel: "Hypothes.is",
 		ageLabel: "Last annotation",
 		threadArrivesWhole: true,
-		caveat:
-			"Will send each page you visit to the Hypothes.is API to find public annotations on it. No account, signed in or out.",
+		points: [
+			"Public annotations on the page",
+			"Notes pinned to passages",
+		],
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (author) =>
@@ -5264,8 +5276,10 @@ button {
 		slow: true,
 		ageLabel: "Last Mastodon post",
 		threadArrivesWhole: true,
-		caveat:
-			"Will send the domain of each page you visit to Tootfinder, an opt-in index of Mastodon posts. It indexes only people who chose to be searchable. Signed in or out, these requests carry no account.",
+		points: [
+			"Posts from people who chose to be found",
+			"Federated social replies",
+		],
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => {
@@ -5362,8 +5376,10 @@ button {
 		label: "Lemmy",
 		shortLabel: "Lemmy",
 		slow: true,
-		caveat:
-			"Will send each page you visit to lemmy.world, a large Lemmy instance whose federation reaches across the network. No account, signed in or out.",
+		points: [
+			"Federated communities, like Reddit",
+			"Threaded comments with votes",
+		],
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => "https://lemmy.world/u/" + handle,
@@ -13683,10 +13699,6 @@ header > .settings-panel {
 	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
 }
 
-.settings-option-hint-slow {
-	margin:6px 0 0;
-}
-
 .settings-app-only {
 	display:none;
 }
@@ -14070,6 +14082,20 @@ header > .settings-panel {
 	right:0;
 	left:auto;
 	transform:none;
+}
+
+.settings-section-hint a {
+	color:inherit;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+}
+
+.source-points {
+	margin:2px 0 0 23px;
+	padding:0 0 0 13px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
 }
 
 .settings-section-hint {
@@ -15129,7 +15155,7 @@ All stored locally.
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
-<div class="settings-section-hint">Where Backchannel looks for discussions and links for Front Pages.</div>
+<div class="settings-section-hint">Where Backchannel looks for discussions and links for Front Pages. <a href="${escapeHTML(REPO_URL)}#what-exactly-is-the-script-doing-with-my-information" target="_blank" rel="noopener noreferrer">How each source works</a></div>
 <div class="sources-grid">${sourceListHTML({ idPrefix: "setting-source-", cells: true })}</div>
 <div class="sources-subhead">Front Pages</div>
 <div class="sources-subhint">Choose what Backchannel shows in Front Pages. Links come only from the sources you've enabled above.</div>
