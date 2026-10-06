@@ -7147,6 +7147,16 @@ html[data-backchannel-installed] .chin {
 
 	let pageChromeStyled = false;
 
+	const PAGE_CHROME_KEY = "backchannel:chrome";
+
+	function pageChromeColors() {
+		const override = accentOverridePalette();
+
+		return override
+			? { light: override.light.accent, dark: override.dark.headerBg }
+			: { light: ACCENT, dark: HEADER_BG_DARK };
+	}
+
 	function stylePageChrome() {
 		if (pageChromeStyled) {
 			return;
@@ -7177,6 +7187,11 @@ html[data-backchannel-installed] .chin {
 		document.documentElement.style.setProperty("--backchannel-chrome", color);
 		stylePageChrome();
 		document.querySelector('meta[name="theme-color"]')?.setAttribute("content", color);
+
+		try {
+			localStorage.setItem(PAGE_CHROME_KEY, JSON.stringify({ theme: themePreference, ...pageChromeColors() }));
+		} catch {
+		}
 	}
 
 	const themeAppliers = new Set();
@@ -7252,6 +7267,7 @@ html[data-backchannel-installed] .chin {
 	// #region hnewhere-test-export
 	const ACCENT = "#237140";
 	const ACCENT_DARK = "#3fa96a";
+	const HEADER_BG_DARK = "#1b5732";
 
 	const ACCENT_RGB = "35,113,64";
 	const ACCENT_DARK_RGB = "63,169,106";
