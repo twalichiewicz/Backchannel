@@ -6021,8 +6021,6 @@ button {
 
 	const TOPIC_FEED_SOURCES = ["hn", "reddit", "lemmy", "lobsters", "bsky"];
 
-	const TOPIC_ACCOUNT_SOURCES = ["hn", "reddit"];
-
 	function frontPageTopicIds(settings) {
 		const chosen = Array.isArray(settings?.frontPageTopics) ? settings.frontPageTopics : [];
 
@@ -6704,12 +6702,12 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
-	function joinWithAnd(items) {
+	function joinWithAnd(items, conjunction = "and") {
 		if (items.length < 3) {
-			return items.join(" and ");
+			return items.join(` ${conjunction} `);
 		}
 
-		return items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
+		return items.slice(0, -1).join(", ") + ` ${conjunction} ` + items[items.length - 1];
 	}
 
 	// #region hnewhere-test-export
@@ -11749,29 +11747,43 @@ ${frontPageChooserHTML()}
 		};
 	}
 
+	let frontPageChooserCount = 0;
+
 	function frontPageChooserHTML() {
-		return `<div class="front-page-chooser">
-<label class="settings-option"><input type="checkbox" data-front-sources checked><span>Same as my discussion sources</span></label>
-<div class="front-page-topics" role="group" aria-label="Topics" hidden>${TOPICS.map((topic) => `<button type="button" class="front-page-topic" data-topic="${escapeHTML(topic.id)}" aria-pressed="false">${escapeHTML(topic.label)}</button>`).join("")}</div>
-<div class="settings-option-hint front-page-contacts" hidden></div>
+		const name = `hnewhere-front-page-${++frontPageChooserCount}`;
+
+		return `<div class="front-page-chooser" role="radiogroup" aria-label="Front page">
+<div class="front-page-choice">
+<label class="front-page-choice-label"><input type="radio" name="${name}" value="topics"><span>Topics you follow</span></label>
+<div class="front-page-choice-hint">Looks through your discussion sources for popular links on these topics.</div>
+<div class="front-page-topics-panel">
+<div class="front-page-topics" role="group" aria-label="Topics">${TOPICS.map((topic) => `<button type="button" class="front-page-topic" data-topic="${escapeHTML(topic.id)}" aria-pressed="false">${TOPIC_ICONS[topic.id]}<span>${escapeHTML(topic.label)}</span></button>`).join("")}</div>
+<div class="front-page-choice-hint front-page-needs"></div>
+<div class="front-page-choice-hint front-page-empty">Until you pick one, your front page shows top links.</div>
+</div>
+</div>
+<div class="front-page-choice">
+<label class="front-page-choice-label"><input type="radio" name="${name}" value="sources"><span>Top links from your discussion sources</span></label>
+<div class="front-page-choice-hint front-page-top-hint"></div>
+</div>
 </div>`;
 	}
 
 	let syncSettingsFrontPage = null;
 
 	function wireFrontPageChooser(root, settings, { onChange } = {}) {
-		const box = root.querySelector("[data-front-sources]");
-		const topicsRow = root.querySelector(".front-page-topics");
-		const contacts = root.querySelector(".front-page-contacts");
+		const radios = [...root.querySelectorAll('input[type="radio"]')];
+		const panel = root.querySelector(".front-page-topics-panel");
+		const needs = root.querySelector(".front-page-needs");
+		const empty = root.querySelector(".front-page-empty");
+		const topHint = root.querySelector(".front-page-top-hint");
 		const chips = [...root.querySelectorAll(".front-page-topic")];
+		const savedMode = (next) => (next?.frontPageMode === "topics" ? "topics" : "sources");
+		let mode = savedMode(settings);
 		let picked = frontPageTopicIds(settings);
-		let fromSources = frontPageMode(settings) === "sources";
 		let emitted = null;
 
-		const choice = () => ({
-			frontPageMode: !fromSources && picked.length ? "topics" : "sources",
-			frontPageTopics: fromSources ? [] : [...picked],
-		});
+		const choice = () => ({ frontPageMode: mode, frontPageTopics: [...picked] });
 
 		const emit = () => {
 			emitted = choice();
@@ -11779,29 +11791,54 @@ ${frontPageChooserHTML()}
 		};
 
 		const paint = () => {
-			box.checked = fromSources;
-			topicsRow.hidden = fromSources;
-			contacts.hidden = fromSources;
+			const enabled = enabledSourceIds(settings, registeredSourceIds());
+			const covered = (id) => TOPIC_FEED_SOURCES.some((source) => enabled.includes(source) && TOPIC_FEEDS[id]?.[source]?.length);
+			const missing = new Map();
 
-			for (const chip of chips) {
-				chip.setAttribute("aria-pressed", String(picked.includes(chip.dataset.topic)));
+			for (const radio of radios) {
+				radio.checked = radio.value === mode;
+				radio.closest(".front-page-choice").classList.toggle("is-off", radio.value !== mode);
 			}
 
-			const enabled = enabledSourceIds(settings, registeredSourceIds());
-			const sources = [...new Set(frontPageFeeds({ frontPageMode: "topics", frontPageTopics: TOPICS.map((topic) => topic.id) }, [], enabled).map((feed) => feed.source))];
-			const names = joinWithAnd(sources.map((id) => getSource(id)?.label || id));
-			const account = sources.filter((id) => TOPIC_ACCOUNT_SOURCES.includes(id)).map((id) => getSource(id)?.label || id);
+			panel.hidden = mode !== "topics";
 
-			contacts.textContent =
-				`Topics are fetched from ${names}. None of them is sent the page you are on.` +
-				(account.length ? ` Signed in to ${account.join(" or ")}, those requests arrive as your account.` : "");
+			for (const chip of chips) {
+				const on = picked.includes(chip.dataset.topic);
+				const usable = covered(chip.dataset.topic);
+
+				chip.setAttribute("aria-pressed", String(on));
+				chip.classList.toggle("is-uncovered", !usable);
+				chip.disabled = !usable && !on;
+			}
+
+			for (const topic of TOPICS.filter((topic) => !covered(topic.id))) {
+				const sources = joinWithAnd(
+					registeredSourceIds()
+						.filter((id) => TOPIC_FEEDS[topic.id][id]?.length)
+						.map((id) => getSource(id)?.label || id),
+					"or",
+				);
+
+				missing.set(sources, [...(missing.get(sources) || []), topic.label]);
+			}
+
+			needs.textContent = [...missing]
+				.map(([sources, labels]) => `${joinWithAnd(labels)} ${labels.length === 1 ? "needs" : "need"} ${sources}.`)
+				.join(" ");
+			needs.hidden = !missing.size;
+			empty.hidden = picked.some(covered);
+			topHint.textContent = frontPageSourceIds(settings).length
+				? "The most popular links right now from the front pages of your discussion sources."
+				: "None of your discussion sources has a front page of its own.";
 		};
 
-		box.addEventListener("change", () => {
-			fromSources = box.checked;
-			paint();
-			emit();
-		});
+		for (const radio of radios) {
+			radio.addEventListener("change", () => {
+				mode = radio.value;
+				paint();
+				emit();
+			});
+		}
 
 		for (const chip of chips) {
 			chip.addEventListener("click", () => {
@@ -11814,13 +11851,13 @@ ${frontPageChooserHTML()}
 		}
 
 		const sync = (next) => {
-			const saved = { frontPageMode: frontPageMode(next), frontPageTopics: frontPageTopicIds(next) };
+			const saved = { frontPageMode: savedMode(next), frontPageTopics: frontPageTopicIds(next) };
 
 			settings = next;
 
 			if (!emitted || JSON.stringify(saved) !== JSON.stringify(emitted)) {
+				mode = saved.frontPageMode;
 				picked = saved.frontPageTopics;
-				fromSources = saved.frontPageMode === "sources";
 				emitted = null;
 			}
 
@@ -11837,7 +11874,7 @@ ${frontPageChooserHTML()}
 
 		card.className = "front-page-card";
 		card.innerHTML = `<div class="front-page-card-head"><span class="front-page-card-title">Make this front page yours</span><button class="front-page-card-close" type="button" aria-label="Keep it as it is" title="Keep it as it is">${APP_CLOSE_ICON}</button></div>
-<div class="front-page-card-text">Keep it built from your sources, or pick topics.</div>
+<div class="front-page-card-text">Follow the topics you care about, or keep the top links you have now.</div>
 ${frontPageChooserHTML()}
 <div class="front-page-card-actions"><button class="front-page-card-done" type="button">Done</button></div>`;
 
@@ -14039,8 +14076,77 @@ header > .settings-panel {
 	cursor:pointer;
 }
 
+.front-page-chooser {
+	display:grid;
+	gap:12px;
+}
+
 .front-page-chooser [hidden] {
 	display:none;
+}
+
+.front-page-choice-label {
+	display:flex;
+	gap:8px;
+	align-items:flex-start;
+	font-size:12px;
+	line-height:1.35;
+	cursor:pointer;
+}
+
+.front-page-choice-label input[type="radio"] {
+	appearance:none;
+	-webkit-appearance:none;
+	box-sizing:border-box;
+	flex:0 0 auto;
+	width:15px;
+	height:15px;
+	font-size:inherit;
+	margin:calc((1.35em - 15px) / 2) 0 0;
+	display:inline-grid;
+	place-content:center;
+	border:1px solid var(--help-border);
+	border-radius:50%;
+	background:var(--help-bg);
+	cursor:pointer;
+	transition:background .14s ease, border-color .14s ease;
+}
+
+.front-page-choice-label input[type="radio"]:checked {
+	border-color:transparent;
+	background:#0b63ce;
+	background:AccentColor;
+}
+
+.front-page-choice-label input[type="radio"]:checked::after {
+	content:"";
+	width:5px;
+	height:5px;
+	border-radius:50%;
+	background:#fff;
+}
+
+.front-page-choice-label input[type="radio"]:focus-visible {
+	outline:2px solid #0b63ce;
+	outline:2px solid AccentColor;
+	outline-offset:1px;
+}
+
+.front-page-choice-hint {
+	margin:1.5px 0 0 23px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
+}
+
+.front-page-choice-label > span,
+.front-page-choice > .front-page-choice-hint {
+	transition:opacity .14s ease;
+}
+
+.front-page-choice.is-off .front-page-choice-label > span,
+.front-page-choice.is-off > .front-page-choice-hint {
+	opacity:.45;
 }
 
 .front-page-topics {
@@ -14050,9 +14156,16 @@ header > .settings-panel {
 	margin:8px 0 0 23px;
 }
 
+.front-page-topics-panel .front-page-choice-hint {
+	margin-top:8px;
+}
+
 .front-page-topic {
+	display:inline-flex;
+	align-items:center;
+	gap:5px;
 	height:26px;
-	padding:0 11px;
+	padding:0 10px 0 8px;
 	border:1px solid var(--field-border);
 	border-radius:13px;
 	background:var(--field-bg);
@@ -14062,19 +14175,37 @@ header > .settings-panel {
 	cursor:pointer;
 }
 
+.front-page-topic svg {
+	flex:0 0 auto;
+	width:13px;
+	height:13px;
+	color:#0b63ce;
+	color:AccentColor;
+}
+
 .front-page-topic[aria-pressed="true"] {
-	border-color:var(--accent);
-	background:var(--accent);
-	color:var(--accent-ink);
+	border-color:transparent;
+	background:#0b63ce;
+	background:AccentColor;
+	color:#fff;
+}
+
+.front-page-topic[aria-pressed="true"] svg {
+	color:inherit;
+}
+
+.front-page-topic.is-uncovered {
+	opacity:.4;
+}
+
+.front-page-topic:disabled {
+	cursor:default;
 }
 
 .front-page-topic:focus-visible {
-	outline:2px solid var(--accent);
+	outline:2px solid #0b63ce;
+	outline:2px solid AccentColor;
 	outline-offset:2px;
-}
-
-.front-page-contacts {
-	margin-top:8px;
 }
 
 .button-designer {
