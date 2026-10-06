@@ -28644,18 +28644,17 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	const APP_BRAND_ICON = (d, rule = "nonzero", size = 18) =>
 		`<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="${rule}" d="${d}"/></svg>`;
 
-	const TOPIC_ICON = (paths) =>
-		APP_ICON(`<g fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${paths}</g>`);
+	const TOPIC_ICON = (d, rule = "evenodd") => APP_ICON(`<path fill="currentColor" fill-rule="${rule}" d="${d}"/>`);
 
 	const TOPIC_ICONS = {
-		world: TOPIC_ICON('<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.7 3.7 2.7 6S9.8 12.3 8 14M8 2C6.2 3.7 5.3 5.7 5.3 8S6.2 12.3 8 14"/>'),
-		us: TOPIC_ICON('<path d="M2.5 13.5h11M3.5 13.5V10h9v3.5M5.5 10v3.5M8 10v3.5M10.5 10v3.5M4.5 10a3.5 3.5 0 0 1 7 0M8 6.5V3M6.8 3h2.4"/>'),
-		business: TOPIC_ICON('<rect x="2" y="5" width="12" height="8.5" rx="1.5"/><path d="M5.8 5V3.8a1 1 0 0 1 1-1h2.4a1 1 0 0 1 1 1V5M2 9h12"/>'),
-		technology: TOPIC_ICON('<rect x="4.5" y="4.5" width="7" height="7" rx="1"/><path d="M6.5 2v2.5M9.5 2v2.5M6.5 11.5V14M9.5 11.5V14M2 6.5h2.5M2 9.5h2.5M11.5 6.5H14M11.5 9.5H14"/>'),
-		entertainment: TOPIC_ICON('<path d="M2 6.5h12v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/><path d="M2 6.5 1.6 4.2l10.9-2.4.5 2.3zM4.8 3.5l1.7 2.4M8.3 2.7 10 5.1"/>'),
-		sports: TOPIC_ICON('<circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2v12M3.8 3.8c2.3 2.3 2.3 6.1 0 8.4M12.2 3.8c-2.3 2.3-2.3 6.1 0 8.4"/>'),
-		science: TOPIC_ICON('<path d="M6.2 2h3.6M6.8 2v4.2L3 12.6A1 1 0 0 0 3.9 14h8.2a1 1 0 0 0 .9-1.4L9.2 6.2V2M4.8 9.8h6.4"/>'),
-		health: TOPIC_ICON('<path d="M8 13.5S2.5 10.2 2.5 6.2A2.8 2.8 0 0 1 8 4.8a2.8 2.8 0 0 1 5.5 1.4C13.5 10.2 8 13.5 8 13.5z"/><path d="M4.2 8.4h1.6l1-1.6 1.4 3 1-1.4h2.6"/>'),
+		world: TOPIC_ICON("M8 1.5a6.5 6.5 0 1 0 0 13a6.5 6.5 0 1 0 0-13zM8 1.6a3.1 6.4 0 1 0 0 12.8a3.1 6.4 0 1 0 0-12.8zM8 1.6a1.8 6.4 0 1 0 0 12.8a1.8 6.4 0 1 0 0-12.8zM1.7 7.35h3.15v1.3H1.7zM6.3 7.35h3.4v1.3H6.3zM11.15 7.35h3.15v1.3h-3.15z"),
+		us: TOPIC_ICON("M2 13.1h12v1.4H2zM3 9.6h10v3H3zM4.9 10.4h1v2.2h-1zM7.5 10.4h1v2.2h-1zM10.1 10.4h1v2.2h-1zM4.4 8.9a3.6 3.6 0 0 1 7.2 0zM7.4 2h1.2v2.9H7.4z"),
+		business: TOPIC_ICON("M5.6 4.6V3.4a1.1 1.1 0 0 1 1.1-1.1h2.6a1.1 1.1 0 0 1 1.1 1.1v1.2H9V3.6H7v1zM3 4.6h10a1.5 1.5 0 0 1 1.5 1.5v2.3h-13V6.1A1.5 1.5 0 0 1 3 4.6zM1.5 9.4h13v2.8a1.5 1.5 0 0 1-1.5 1.5H3a1.5 1.5 0 0 1-1.5-1.5zM7 7.6h2v2.8H7z", "nonzero"),
+		technology: TOPIC_ICON("M5 4h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM6.1 6.1v3.8h3.8V6.1zM7.1 7.1h1.8v1.8H7.1zM5.8 1.8h1.3V4H5.8zM8.9 1.8h1.3V4H8.9zM5.8 12h1.3v2.2H5.8zM8.9 12h1.3v2.2H8.9zM1.8 5.8H4v1.3H1.8zM1.8 8.9H4v1.3H1.8zM12 5.8h2.2v1.3H12zM12 8.9h2.2v1.3H12z"),
+		entertainment: TOPIC_ICON("M2 7h12v5.8a1.2 1.2 0 0 1-1.2 1.2H3.2A1.2 1.2 0 0 1 2 12.8zM3.2 3.3h9.6a1.2 1.2 0 0 1 1.2 1.2v1.4H2V4.5a1.2 1.2 0 0 1 1.2-1.2zM3.9 3.3h1.6l-1.3 2.6H2.6zM7.4 3.3h1.6l-1.3 2.6H6.1zM10.9 3.3h1.6l-1.3 2.6H9.6z"),
+		sports: TOPIC_ICON("M8 1.5a6.5 6.5 0 1 0 0 13a6.5 6.5 0 1 0 0-13zM4.3 2.8a7 7 0 0 1 0 10.4a12 12 0 0 0 0-10.4zM11.7 2.8a7 7 0 0 0 0 10.4a12 12 0 0 1 0-10.4z"),
+		science: TOPIC_ICON("M6 1.8h4V3h-.8v3.4l3.9 6.3a1.2 1.2 0 0 1-1 1.8H3.9a1.2 1.2 0 0 1-1-1.8l3.9-6.3V3H6zM5.5 9h5v.8h-5z"),
+		health: TOPIC_ICON("M8 14S2.2 10.5 2.2 6.2A3 3 0 0 1 8 4.6a3 3 0 0 1 5.8 1.6C13.8 10.5 8 14 8 14zM7.3 6.6h1.4v1.6h1.6v1.4H8.7v1.6H7.3V9.6H5.7V8.2h1.6z"),
 	};
 
 	const APP_SOURCE_ICONS = {
