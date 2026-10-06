@@ -10021,7 +10021,7 @@ button {
 				await mutateHiddenStories((entries) => addHiddenStory(entries, story));
 				await options.reload?.();
 
-				showToast("Article hidden from front pages", {
+				showToast("Article hidden from Front Pages", {
 					action: {
 						label: "undo",
 						onAct: () => {
@@ -10101,7 +10101,7 @@ button {
 	let frontPageAvailable = true;
 
 	function browseLabel() {
-		return frontPageAvailable ? "front pages and your queue" : "Your queue";
+		return frontPageAvailable ? "Front Pages and your queue" : "Your queue";
 	}
 
 	async function refreshSubmitAffordance(root) {
@@ -11008,7 +11008,7 @@ button {
 
 	async function renderFrontPageView(ui, list) {
 		if (!list.childElementCount) {
-			renderBrowseSkeleton(list, "Loading front pages…");
+			renderBrowseSkeleton(list, "Loading Front Pages…");
 		}
 
 		const requested = browsePage;
@@ -11028,12 +11028,12 @@ button {
 		setBlendNote(ui, sources, topics);
 
 		if (!allRows.length) {
-			list.textContent = "Could not reach any front page.";
+			list.textContent = "Could not load Front Pages.";
 			return;
 		}
 
 		if (!rows.length) {
-			list.textContent = "Everything on the front pages is hidden.";
+			list.textContent = "Everything in Front Pages is hidden.";
 			return;
 		}
 
@@ -11725,7 +11725,7 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			}
 
 			target.innerHTML = `<div class="source-picker front-page-step">
-<div class="source-picker-title front-page-step-title">How should your front page be built?</div>
+<div class="source-picker-title front-page-step-title">How should Front Pages be built?</div>
 ${frontPageChooserHTML()}
 <div class="source-picker-actions"><button class="source-picker-save front-page-step-done" type="button">Done</button></div>
 </div>`;
@@ -11744,7 +11744,7 @@ ${frontPageChooserHTML()}
 	function frontPageChooserHTML() {
 		const name = `hnewhere-front-page-${++frontPageChooserCount}`;
 
-		return `<div class="front-page-chooser" role="radiogroup" aria-label="Front page">
+		return `<div class="front-page-chooser" role="radiogroup" aria-label="Front Pages">
 <div class="front-page-choice">
 <label class="front-page-choice-label"><input type="radio" name="${name}" value="topics"><span>Topics you follow</span></label>
 <div class="front-page-choice-hint">Show popular links from your sources that match the topics you select.</div>
@@ -11866,7 +11866,7 @@ ${frontPageChooserHTML()}
 		const card = document.createElement("div");
 
 		card.className = "front-page-card";
-		card.innerHTML = `<div class="front-page-card-head"><span class="front-page-card-title">Make this front page yours</span><button class="front-page-card-close" type="button" aria-label="Keep it as it is" title="Keep it as it is">${APP_CLOSE_ICON}</button></div>
+		card.innerHTML = `<div class="front-page-card-head"><span class="front-page-card-title">Make Front Pages yours</span><button class="front-page-card-close" type="button" aria-label="Keep it as it is" title="Keep it as it is">${APP_CLOSE_ICON}</button></div>
 <div class="front-page-card-text">Follow the topics you care about, or keep the top links you have now.</div>
 ${frontPageChooserHTML()}
 <div class="front-page-card-actions"><button class="front-page-card-done" type="button">Done</button></div>`;
@@ -14721,7 +14721,7 @@ ${settings ? settingsPanelHTML() : ""}
 <div class="settings-group">
 <div class="settings-app-only">
 <label class="settings-option settings-sidebar-head"><span class="settings-sidebar-title">Sidebar</span><input id="setting-sidebar-enabled" class="settings-switch" role="switch" data-setting="sidebarEnabled" type="checkbox" aria-describedby="settings-sidebar-hint"></label>
-<div id="settings-sidebar-hint" class="settings-sidebar-hint">Sidebar allows you to access Backchannel features like discussions and frontpages directly onto the sites you visit.</div>
+<div id="settings-sidebar-hint" class="settings-sidebar-hint">Sidebar allows you to access Backchannel features like discussions and Front Pages directly onto the sites you visit.</div>
 </div>
 <label class="settings-option">
 <input id="setting-auto-open-sidebar" data-setting="autoOpenSidebar" type="checkbox">
@@ -14854,16 +14854,16 @@ All stored locally.
 <div id="settings-blocked-list" class="settings-blocked-list"></div>
 </div>
 <div id="settings-hidden-section" class="settings-hidden-section" hidden>
-<div class="settings-option-hint settings-option-hint-slow">Articles you've hidden from the front pages</div>
+<div class="settings-option-hint settings-option-hint-slow">Articles you've hidden from Front Pages</div>
 <div id="settings-hidden-list" class="settings-blocked-list"></div>
 </div>
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
-<div class="sources-lead">Where Backchannel looks for discussions and links for the front pages.</div>
+<div class="sources-lead">Where Backchannel looks for discussions and links for Front Pages.</div>
 <div class="sources-grid">${sourceListHTML({ idPrefix: "setting-source-", cells: true })}</div>
-<div class="sources-subhead">Front pages</div>
-<div class="sources-subhint">Choose what Backchannel shows on your front page. Links come only from the sources you've enabled above.</div>
+<div class="sources-subhead">Front Pages</div>
+<div class="sources-subhint">Choose what Backchannel shows in Front Pages. Links come only from the sources you've enabled above.</div>
 ${frontPageChooserHTML()}
 </div>
 
@@ -30557,7 +30557,7 @@ ${settingsModalHTML()}
 			}
 		} else {
 			if (state.listView !== view || !list.childElementCount) {
-				renderBrowseSkeleton(list, "Loading front pages…");
+				renderBrowseSkeleton(list, "Loading Front Pages…");
 			}
 
 			const [{ rows: allRows }, hiddenKeys, queued, seen] = await Promise.all([
@@ -30585,7 +30585,7 @@ ${settingsModalHTML()}
 			if (!shown.length) {
 				renderAppListMessage(
 					!allRows.length
-						? "Could not reach any front page."
+						? "Could not load Front Pages."
 						: view === "unread"
 							? "All caught up."
 							: "Nothing here right now.",
