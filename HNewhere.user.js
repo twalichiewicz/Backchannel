@@ -26125,8 +26125,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 }
 
 .rail-icon > svg[viewBox="0 0 16 16"] {
-	width:22px;
-	height:22px;
+	width:18px;
+	height:18px;
 }
 
 .rail-label {
