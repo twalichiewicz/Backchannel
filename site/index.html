@@ -87,6 +87,11 @@
     display: none;
   }
 
+  html[data-backchannel-installed]:has([data-hnewhere-app]) .bezel {
+    padding-top: calc(6px + env(safe-area-inset-top, 0px));
+    padding-right: calc(6px + env(safe-area-inset-right, 0px));
+  }
+
   .chin {
     flex: 0 0 auto;
     display: flex;
