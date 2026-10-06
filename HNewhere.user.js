@@ -11753,7 +11753,7 @@ ${frontPageChooserHTML()}
 
 	function frontPageChooserHTML() {
 		return `<div class="front-page-chooser">
-<label class="settings-option"><input type="checkbox" data-front-sources checked><span>Build my front page from my sources</span></label>
+<label class="settings-option"><input type="checkbox" data-front-sources checked><span>Same as my discussion sources</span></label>
 <div class="front-page-topics" role="group" aria-label="Topics" hidden>${TOPICS.map((topic) => `<button type="button" class="front-page-topic" data-topic="${escapeHTML(topic.id)}" aria-pressed="false">${escapeHTML(topic.label)}</button>`).join("")}</div>
 <div class="settings-option-hint front-page-contacts" hidden></div>
 </div>`;
@@ -13824,6 +13824,19 @@ header > .settings-panel {
 	color:var(--muted);
 }
 
+.sources-subhead {
+	margin:16px 0 8px;
+	padding-bottom:4px;
+	border-bottom:1px solid var(--surface-divider);
+	color:var(--surface-text);
+	font-size:12px;
+	font-weight:600;
+}
+
+.sources-subhead:first-child {
+	margin-top:0;
+}
+
 .sources-divider {
 	border:none;
 	border-top:1px solid var(--surface-divider);
@@ -14671,8 +14684,6 @@ ${settings ? settingsPanelHTML() : ""}
 </label>
 </div>
 
-<div class="settings-group">${frontPageChooserHTML()}</div>
-
 <div class="settings-group">
 <label class="settings-option">
 <input id="setting-annotations" data-setting="annotations" type="checkbox">
@@ -14784,7 +14795,10 @@ All stored locally.
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
+<div class="sources-subhead">Discussions</div>
 ${sourceListHTML({ idPrefix: "setting-source-" })}
+<div class="sources-subhead">Articles</div>
+${frontPageChooserHTML()}
 <hr class="sources-divider">
 <div class="source-matrix-caption">What each source supports</div>
 <div class="source-matrix-scroll">
@@ -25838,10 +25852,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 #app-settings-content .settings-head,
 #app-settings-content [data-app-section="links"],
 #app-settings-modal[data-section="general"] [data-app-section="sidebar"],
-#app-settings-modal[data-section="sidebar"] [data-app-section="general"],
-#app-settings-modal:not([data-section="frontpage"]) [data-app-section="frontpage"],
-#app-settings-modal[data-section="frontpage"] [data-app-section="general"],
-#app-settings-modal[data-section="frontpage"] [data-app-section="sidebar"] {
+#app-settings-modal[data-section="sidebar"] [data-app-section="general"] {
 	display:none;
 }
 
@@ -28646,7 +28657,6 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <div class="app-settings-body">
 <nav class="app-settings-nav" aria-label="Settings sections">
 <button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
-<button type="button" class="app-settings-tab" data-settings-section="frontpage"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2.5" y="2.5" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 6h6M5 8.5h6M5 11h3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Front page</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="blocked"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12 12 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Manage disabled/hidden</span></button>
@@ -29439,8 +29449,6 @@ ${settingsModalHTML()}
 				for (const field of group.querySelectorAll(":scope > .settings-field")) {
 					field.dataset.appSection = field.querySelector(".button-designer") ? "sidebar" : "general";
 				}
-			} else if (group.querySelector(".front-page-chooser")) {
-				group.dataset.appSection = "frontpage";
 			} else {
 				group.dataset.appSection = "general";
 			}
