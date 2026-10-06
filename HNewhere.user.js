@@ -3205,10 +3205,10 @@
 		return [...SOURCES.keys()];
 	}
 
-	function sourceListHTML({ idPrefix = "" } = {}) {
+	function sourceListHTML({ idPrefix = "", cells = false } = {}) {
 		return [...SOURCES.values()]
 			.map(
-				(source) => `
+				(source) => `${cells ? '<div class="source-cell">' : ""}
 <label class="settings-option">
 <input${idPrefix ? ` id="${escapeHTML(idPrefix + source.id)}"` : ""} data-source="${escapeHTML(source.id)}" type="checkbox">
 <span>${escapeHTML(source.label)}${source.slow ? ` <span class="op-pill op-pill-slow" tabindex="0" role="note" aria-label="Slower comment fetch source">⧗<span class="op-pill-tip" aria-hidden="true">Slower comment fetch source</span></span>` : ""}</span>
@@ -3217,7 +3217,7 @@ ${
 	source.caveat
 		? `<div class="settings-option-hint">${escapeHTML(source.caveat)}${source.slow ? `<p class="settings-option-hint-slow">This source takes longer to fetch comments, so they may take a moment to appear.</p>` : ""}</div>`
 		: ""
-}`,
+}${cells ? "</div>" : ""}`,
 			)
 			.join("");
 	}
@@ -9243,14 +9243,6 @@ button {
 		return verdict?.state === "out" && authVerdictUsable(verdict, now);
 	}
 
-	function capabilityMark(supported, verdict, now) {
-		if (!supported) {
-			return "no";
-		}
-
-		return shouldAskToSignIn(verdict, now) ? "signin" : "yes";
-	}
-
 	// #endregion hnewhere-test-export
 
 	const rememberedAuthVerdicts = new Map();
@@ -13797,70 +13789,15 @@ header > .settings-panel {
 	display:block;
 }
 
-.source-matrix-caption {
-	margin:14px 0 5px;
+.sources-lead,
+.sources-subhint {
 	color:var(--muted);
 	font-size:11px;
-}
-
-.source-matrix-scroll {
-	overflow-x:auto;
-	overscroll-behavior-x:contain;
-}
-
-.source-matrix {
-	width:auto;
-	min-width:100%;
-	border-collapse:separate;
-	border-spacing:0;
-	font-size:11px;
-}
-
-.source-matrix th,
-.source-matrix td {
-	padding:3px 4px;
-	text-align:center;
-	font-weight:400;
-	white-space:nowrap;
-}
-
-.source-matrix thead th,
-.source-matrix tbody th {
-	color:var(--muted);
-}
-
-.source-matrix tbody th {
-	text-align:left;
-}
-
-.source-matrix thead th:first-child,
-.source-matrix tbody th {
-	position:sticky;
-	left:0;
-	z-index:1;
-	background:var(--surface);
-	border-right:1px solid var(--surface-divider);
-}
-
-.source-matrix tbody tr + tr th,
-.source-matrix tbody tr + tr td {
-	border-top:1px solid var(--surface-divider);
-}
-
-.source-matrix .yes {
-	color:var(--surface-text);
-}
-
-.source-matrix .no {
-	color:var(--muted);
-}
-
-.source-matrix .signin {
-	color:var(--muted);
+	line-height:1.35;
 }
 
 .sources-subhead {
-	margin:16px 0 8px;
+	margin:16px 0 0;
 	padding-bottom:4px;
 	border-bottom:1px solid var(--surface-divider);
 	color:var(--surface-text);
@@ -13868,14 +13805,15 @@ header > .settings-panel {
 	font-weight:600;
 }
 
-.sources-subhead:first-child {
-	margin-top:0;
+.sources-subhint {
+	margin:5px 0 10px;
 }
 
-.sources-divider {
-	border:none;
-	border-top:1px solid var(--surface-divider);
-	margin:14px 0;
+.sources-grid {
+	display:grid;
+	grid-template-columns:repeat(auto-fill, minmax(min(100%, 210px), 1fr));
+	gap:10px 18px;
+	align-items:start;
 }
 
 .settings-head {
@@ -14924,37 +14862,13 @@ All stored locally.
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
+<div class="sources-lead">The places Backchannel looks for discussions and front-page links. A source that's off is never contacted.</div>
 <div class="sources-subhead">Discussions</div>
-${sourceListHTML({ idPrefix: "setting-source-" })}
-<div class="sources-subhead">Articles</div>
+<div class="sources-subhint">Each page you visit is looked up on the sources you check, to find what people are saying about it.</div>
+<div class="sources-grid">${sourceListHTML({ idPrefix: "setting-source-", cells: true })}</div>
+<div class="sources-subhead">Front pages</div>
+<div class="sources-subhint">What your front page shows, in the Sidebar and in the Reader. It's built only from the sources checked above.</div>
 ${frontPageChooserHTML()}
-<hr class="sources-divider">
-<div class="source-matrix-caption">What each source supports</div>
-<div class="source-matrix-scroll">
-<table class="source-matrix">
-<thead><tr><th></th>${[...SOURCES.values()].map((source) => `<th>${escapeHTML(source.shortLabel || source.label)}</th>`).join("")}</tr></thead>
-<tbody>
-${[
-	["Read", () => true],
-	["Front page", (source) => hasFrontPage(source)],
-	["Vote", (source) => Boolean(source.capabilities.vote)],
-	["Reply", (source) => Boolean(source.capabilities.reply)],
-	["Submit", (source) => Boolean(source.capabilities.submit)],
-]
-	.map(
-		([label, supported]) => `<tr><th>${escapeHTML(label)}</th>${[
-			...SOURCES.values(),
-		]
-			.map((source) => {
-				const yes = Boolean(supported(source));
-				return `<td class="${yes ? "yes" : "no"}" data-capability-source="${escapeHTML(source.id)}" aria-label="${yes ? "yes" : "no"}">${yes ? "&check;" : "&ndash;"}</td>`;
-			})
-			.join("")}</tr>`,
-	)
-	.join("")}
-</tbody>
-</table>
-</div>
 </div>
 
 </div>
@@ -14967,37 +14881,7 @@ ${[
 `;
 	}
 
-	async function markCapabilityAuth(shadow) {
-		const now = Date.now();
-		const verdicts = new Map();
-
-		for (const cell of shadow.querySelectorAll("[data-capability-source]")) {
-			const sourceID = cell.dataset.capabilitySource;
-
-			if (!verdicts.has(sourceID)) {
-				verdicts.set(sourceID, await readAuthVerdict(sourceID));
-			}
-
-			const mark = capabilityMark(
-				cell.classList.contains("yes"),
-				verdicts.get(sourceID),
-				now,
-			);
-
-			if (mark !== "signin") {
-				continue;
-			}
-
-			cell.classList.remove("yes");
-			cell.classList.add("signin");
-			cell.textContent = "○";
-			cell.setAttribute("aria-label", "sign in required");
-			cell.title = `Sign in to ${getSource(sourceID)?.label || "this source"}`;
-		}
-	}
-
 	async function wireSettingsPanel(shadow, { onAnnotationChange } = {}) {
-		markCapabilityAuth(shadow).catch(console.error);
 		const settingsPanel = shadow.querySelector("#settings-panel");
 		const settingsToggle = shadow.querySelector("#settings-toggle");
 
