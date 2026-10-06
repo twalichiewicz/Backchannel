@@ -12,9 +12,11 @@ use to detect updates, so every release bumps it.
 
 ### Added
 
-- **A front page built from topics.** Settings has a new **Front page**
-  section. Its checkbox, **Build my front page from my sources**, keeps the
-  front page you have now: each enabled source's front page, blended.
+- **A front page built from topics.** **Sources** in Settings now has two
+  parts: **Discussions**, where comments come from, and **Articles**, where
+  the front page comes from. Its checkbox, **Same as my discussion sources**,
+  keeps the front page you have now: each enabled source's front page,
+  blended.
   Unchecked, it offers eight topics: World, U.S., Business, Technology,
   Entertainment, Sports, Science and Health. Each topic reads a few
   subreddits, Lemmy communities and Bluesky feeds picked for it, and
@@ -22,7 +24,7 @@ use to detect updates, so every release bumps it.
   Hacker News are read only while those sources are on, since a signed-in
   reader's requests to them arrive as their account. A story found on more
   than one source moves up. In the reader on backchnnl.app, each topic gets
-  its own view in the rail.
+  its own icon in the rail, beside the views for the sources it came from.
 
 - **You are asked once how to build it.** A new reader is asked right after
   picking sources. A reader who already has sources sees a card at the top of
@@ -31,9 +33,8 @@ use to detect updates, so every release bumps it.
 ### Changed
 
 - **The Sidebar's settings button opens the Settings dialog.** It is the same
-  dialog the reader on backchnnl.app uses, with General, Front page, Sidebar,
-  Sources and Manage disabled/hidden sections, in place of the narrow
-  drop-down.
+  dialog the reader on backchnnl.app uses, with General, Sidebar, Sources and
+  Manage disabled/hidden sections, in place of the narrow drop-down.
 
 - **The Backchannel toggle's designer shows it on a page.** Under **Sidebar**,
   the toggle sits in the corner of a browser window over a page, at its real
