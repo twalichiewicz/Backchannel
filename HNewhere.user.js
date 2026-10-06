@@ -5945,25 +5945,74 @@ button {
 		return sorted;
 	}
 
-	const FRONT_PAGE_CACHE_KEY = "HNewhere:frontpage_cache";
-
-	const FRONT_PAGE_TTL = 5 * 60 * 1000;
-
 	function frontPageSourceIds(settings) {
 		return enabledSourceIds(settings, registeredSourceIds()).filter((id) =>
 			hasFrontPage(getSource(id)),
 		);
 	}
 
-	async function loadFrontPages(options = {}) {
-		const settings = options.settings || (await loadSettings());
-		const ids = frontPageSourceIds(settings);
+	// #region hnewhere-test-export
+	const FRONT_PAGE_CACHE_KEY = "HNewhere:frontpage_cache";
 
-		if (!ids.length) {
-			return { rows: [], sources: [] };
+	const FRONT_PAGE_TTL = 5 * 60 * 1000;
+
+	const TOPICS = [
+		{ id: "world", label: "World" },
+		{ id: "us", label: "U.S." },
+		{ id: "business", label: "Business" },
+		{ id: "technology", label: "Technology" },
+		{ id: "entertainment", label: "Entertainment" },
+		{ id: "sports", label: "Sports" },
+		{ id: "science", label: "Science" },
+		{ id: "health", label: "Health" },
+	];
+
+	const TOPIC_FEEDS = {};
+
+	function frontPageTopicIds(settings) {
+		const chosen = Array.isArray(settings?.frontPageTopics) ? settings.frontPageTopics : [];
+
+		return [...new Set(chosen)].filter((id) => TOPIC_FEEDS[id]);
+	}
+
+	function frontPageMode(settings) {
+		return settings?.frontPageMode === "topics" && frontPageTopicIds(settings).length
+			? "topics"
+			: "sources";
+	}
+
+	function frontPageFeeds(settings, frontPageIds, enabledIds) {
+		if (frontPageMode(settings) === "sources") {
+			return frontPageIds.map((source) => ({ source, kind: "front" }));
 		}
 
-		const cacheKey = FRONT_PAGE_CACHE_KEY + ":" + ids.join(",");
+		return [];
+	}
+
+	function frontPageCacheKey(feeds) {
+		return (
+			FRONT_PAGE_CACHE_KEY +
+			":" +
+			feeds
+				.map((feed) => (feed.topic ? `${feed.topic}/${feed.source}/${feed.target || ""}` : feed.source))
+				.join(",")
+		);
+	}
+	// #endregion hnewhere-test-export
+
+	async function loadFrontPages(options = {}) {
+		const settings = options.settings || (await loadSettings());
+		const feeds = frontPageFeeds(
+			settings,
+			frontPageSourceIds(settings),
+			enabledSourceIds(settings, registeredSourceIds()),
+		);
+
+		if (!feeds.length) {
+			return { rows: [], sources: [], topics: [] };
+		}
+
+		const cacheKey = frontPageCacheKey(feeds);
 		const cached = await load(cacheKey, null);
 
 		if (
@@ -5971,32 +6020,31 @@ button {
 			cached?.rows?.length &&
 			Date.now() - cached.timestamp < FRONT_PAGE_TTL
 		) {
-			return { rows: cached.rows, sources: cached.sources || ids };
+			return { rows: cached.rows, sources: cached.sources || [], topics: cached.topics || [] };
 		}
 
 		const lists = await Promise.all(
-			ids.map(async (id) => {
+			feeds.map(async (feed) => {
 				try {
-					return (await getSource(id).frontPage()) || [];
+					return (await getSource(feed.source).frontPage()) || [];
 				} catch (e) {
-					console.warn("Backchannel " + id + " front page failed:", e);
+					console.warn("Backchannel " + feed.source + " front page failed:", e);
 					return [];
 				}
 			}),
 		);
 
-		const answered = ids.filter((id, index) => lists[index].length);
-		const rows = mergeStoriesByURL(
-			blendStories(lists.filter((list) => list.length)),
-		);
+		const answered = [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))];
+		const topics = [...new Set(feeds.filter((feed, index) => lists[index].length && feed.topic).map((feed) => feed.topic))];
+		const rows = mergeStoriesByURL(blendStories(lists.filter((list) => list.length)));
 
 		if (!rows.length) {
-			return { rows: cached?.rows || [], sources: cached?.sources || [] };
+			return { rows: cached?.rows || [], sources: cached?.sources || [], topics: cached?.topics || [] };
 		}
 
-		await save(cacheKey, { timestamp: Date.now(), rows, sources: answered });
+		await save(cacheKey, { timestamp: Date.now(), rows, sources: answered, topics });
 
-		return { rows, sources: answered };
+		return { rows, sources: answered, topics };
 	}
 
 	// -------------------------
@@ -9886,7 +9934,12 @@ button {
 		}
 
 		const settings = await loadSettings();
-		frontPageAvailable = frontPageSourceIds(settings).length > 0;
+		frontPageAvailable =
+			frontPageFeeds(
+				settings,
+				frontPageSourceIds(settings),
+				enabledSourceIds(settings, registeredSourceIds()),
+			).length > 0;
 
 		if (frontTab) {
 			frontTab.hidden = !frontPageAvailable;
