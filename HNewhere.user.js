@@ -6040,6 +6040,10 @@ button {
 			return frontPageIds.map((source) => ({ source, kind: "front" }));
 		}
 
+		if (!enabledIds.length) {
+			return [];
+		}
+
 		const feeds = [];
 
 		for (const topic of frontPageTopicIds(settings)) {
