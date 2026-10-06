@@ -37,7 +37,8 @@ Worth stating plainly, because the permissions are broad by necessity:
   its first statement.
 - **It can make cross-origin requests**, via `GM.xmlHttpRequest`, restricted by
   the `@connect` header. Which hosts it *actually* contacts depends on which
-  comment sources you have enabled:
+  comment sources you have enabled, and on the topics you pick for the front
+  page:
 
   | Source | Hosts contacted | What they are told |
   | --- | --- | --- |
@@ -51,6 +52,7 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Lemmy | `lemmy.world` | the URL of each page you visit, with no account |
   | Mastodon (discovery) | `www.tootfinder.ch` | the domain of each page you visit -- never the full address. An opt-in index of Mastodon posts, not Mastodon, and it holds only people who chose to be searchable |
   | Mastodon (front page) | `mastodon.social` | nothing about you. Asked only what that instance is currently linking to |
+  | Topic front page | `lemmy.world`, `lobste.rs`, `public.api.bsky.app`, and `www.reddit.com` and `news.ycombinator.com` while those sources are on | nothing about the page you are on, only the topics you picked. Lemmy, Lobsters and Bluesky are asked even with those sources off, with no account. Reddit and Hacker News are asked only while they are on, and signed in, those requests arrive as your account |
   | Hypothes.is | `api.hypothes.is` | the URL of each page you visit, to find public annotations on it. No account, signed in or out |
   | *no source enabled* | none | nothing -- the script performs no lookup at all. Kind of weird to use it this way, but no judgements. |
 
@@ -184,7 +186,9 @@ Worth stating plainly, because the permissions are broad by necessity:
 
 One row per request the script can make, read from the code rather than described.
 `<page>` is the address of the page you are on; `<domain>` is only its host. A
-source you have not switched on issues none of these.
+source you have not switched on issues none of these, except the topic front
+page rows, which go to Lemmy, Lobsters and Bluesky whenever you have picked
+topics and any source is on.
 
 | Source | Request | What it carries | Arrives as you? |
 | --- | --- | --- | --- |
@@ -204,6 +208,11 @@ source you have not switched on issues none of these.
 | Lemmy | `GET lemmy.world/api/v3/comment/list?post_id=<id>&type_=All&sort=Top&max_depth=8&limit=300` | a post id it already found | No |
 | Mastodon | `GET www.tootfinder.ch/rest/api/search/<domain>` | `<domain>` only, never the full address | No |
 | Mastodon (front page) | `GET mastodon.social/api/v1/trends/links?limit=40` | nothing about you, only what that instance is linking to | No |
+| Topic front page | `GET www.reddit.com/r/<subreddits>.json?limit=100` | the subreddits for a topic you picked, never `<page>`. Only while Reddit is on | Yes when signed in, as in the Reddit row |
+| Topic front page | `GET news.ycombinator.com/news` | nothing about you. Only for Technology, and only while Hacker News is on | Yes, if you are signed in there |
+| Topic front page | `GET lemmy.world/api/v3/post/list?community_name=<community>&sort=Active&type_=All&limit=50` | a community for a topic you picked, never `<page>` | No |
+| Topic front page | `GET lobste.rs/hottest.json` | nothing. Only for Technology | No |
+| Topic front page | `GET public.api.bsky.app/xrpc/app.bsky.feed.getFeed?feed=<feed>&limit=100` | a feed for a topic you picked, never `<page>` | No |
 | Hypothes.is | `GET api.hypothes.is/api/search?url=<page>&limit=200` | `<page>` | No |
 | backchnnl.app reader, not a source | `GET <the page you opened>`, only when it gives no answer from its frame | nothing but the request itself | No, it is sent without cookies |
 | backchnnl.app reader's list, not a source | `GET <article's site>/favicon.ico`, as an image, one for each article the list shows | nothing but the request itself, with no referrer | Only as far as your browser sends that site's cookies with an image on another site's page; browsers differ |

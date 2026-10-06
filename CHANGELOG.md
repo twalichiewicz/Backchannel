@@ -8,6 +8,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.16] — 2026-10-05
+
+### Added
+
+- **A front page built from topics.** Settings has a new **Front page**
+  section. Its checkbox, **Build my front page from my sources**, keeps the
+  front page you have now: each enabled source's front page, blended.
+  Unchecked, it offers eight topics: World, U.S., Business, Technology,
+  Entertainment, Sports, Science and Health. Each topic reads a few
+  subreddits, Lemmy communities and Bluesky feeds picked for it, and
+  Technology adds Lobsters' and Hacker News's front pages. Subreddits and
+  Hacker News are read only while those sources are on, since a signed-in
+  reader's requests to them arrive as their account. A story found on more
+  than one source moves up. In the reader on backchnnl.app, each topic gets
+  its own view in the rail.
+
+- **You are asked once how to build it.** A new reader is asked right after
+  picking sources. A reader who already has sources sees a card at the top of
+  the front page, once; closing it keeps the front page as it is.
+
+### Changed
+
+- **The Sidebar's settings button opens the Settings dialog.** It is the same
+  dialog the reader on backchnnl.app uses, with General, Front page, Sidebar,
+  Sources and Manage disabled/hidden sections, in place of the narrow
+  drop-down.
+
+- **The Backchannel toggle's designer shows it on a page.** Under **Sidebar**,
+  the toggle sits in the corner of a browser window over a page, at its real
+  size and color. Drag the square handle to resize it and the round one to
+  round its corners, or type either value; click the label to change it; pick
+  a color from the bar. **Reset** also puts back the label and the toggle's
+  spot in the corner of every page. Circle and Squircle are now a corner
+  radius of 50% and 30%, so a toggle you shaped before looks the same.
+
+### Fixed
+
+- **The reader shows the source picker when no source is on.** Its list said
+  "Pick where comments come from" without offering a way to, and changing
+  views replaced that with "Could not reach any front page."
+
+- **A queue opened with no source on leads back to the picker.** With no
+  source on and something queued, opening the queue from the Sidebar's title
+  left no way back to the source picker.
+
+- **The comment button stays hidden while no source is on.** It showed over
+  the source picker, and on discussions that take neither comments nor notes.
+
+- **Minimizing with no source on leaves the setup toggle**, which opens the
+  source picker, rather than one that reopened to "No discussion found for
+  this page yet".
+
 ## [1.6.15.2] — 2026-10-05
 
 ### Added
