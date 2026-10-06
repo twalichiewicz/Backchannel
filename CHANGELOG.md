@@ -12,39 +12,53 @@ use to detect updates, so every release bumps it.
 
 ### Added
 
-- **A front page built from topics.** Under **Sources** in Settings,
-  **Front pages** offers **Topics you follow** or **Top links from your
-  sources**. Top links is the front page you have now, and it stays chosen
+- **Front Pages built from topics.** Under **Sources** in Settings,
+  **Front Pages** offers **Topics you follow** or **Top links from your
+  sources**. Top links is what Front Pages shows now, and it stays chosen
   until you pick a topic.
   Topics offers eight: World, U.S., Business, Technology, Entertainment,
   Sports, Science and Health. Each reads a few subreddits, Lemmy communities
   and Bluesky feeds picked for it, and Technology adds Lobsters' and Hacker
   News's front pages, but only from sources you have on. A topic none of
   them covers is dimmed, with the sources that would. Unpick the last topic
-  and the front page goes back to Top links. A story found on more than one
+  and Front Pages goes back to Top links. A story found on more than one
   source moves up. In the reader on backchnnl.app, each topic gets
   its own icon in the rail, beside the views for each source you have on.
 
 - **You are asked once how to build it.** A new reader is asked right after
   picking sources. A reader who already has sources sees a card at the top of
-  the front page, once; closing it keeps Top links.
+  Front Pages, once; closing it keeps Top links.
 
 ### Changed
 
-- **Sources in Settings lists the sources in two columns**, one on a phone.
-  The "What each source supports" table is gone.
+- **Sources in Settings lists the sources in two columns.** The "What each
+  source supports" table is gone.
 
 - **The Sidebar's settings button opens the Settings dialog.** It is the same
-  dialog the reader on backchnnl.app uses, with General, Sidebar, Sources and
-  Manage disabled/hidden sections, in place of the narrow drop-down.
+  dialog the reader on backchnnl.app uses, with General, Appearance, Sidebar,
+  Sources and Hidden & disabled sections, in place of the narrow drop-down.
 
-- **The Backchannel toggle's designer shows it on a page.** Under **Sidebar**,
-  the toggle sits in the corner of a browser window over a page, at its real
-  size and color. Drag the square handle to resize it and the round one to
-  round its corners, or type either value; click the label to change it; pick
-  a color from the bar. **Reset** also puts back the label and the toggle's
-  spot in the corner of every page. Circle and Squircle are now a corner
-  radius of 50% and 30%, so a toggle you shaped before looks the same.
+- **Hidden & disabled, once Manage disabled/hidden, is a table.** Switch
+  between the links you've hidden and the sites you've disabled Backchannel
+  on; the table fills the dialog and scrolls inside it. Pick a row and press
+  − or Delete to remove it, or + to hide a link or disable a site or page by
+  its address.
+
+- **The reader's pane buttons read Front Pages and Discussions**, once
+  Articles and Discussion.
+
+- **Settings has an Appearance section.** It lists Theme, Color and the
+  Sidebar toggle, each with what it does beside it. Theme, which was under
+  General, is three pictures: Light, Dark and Auto, which was Detect. Color,
+  which was in the toggle's bar, is its own item. The Sidebar toggle, which
+  was the Backchannel toggle under Sidebar, keeps to its size and corners.
+
+- **The Sidebar toggle's designer shows it on a page.** Under
+  **Appearance**, the toggle sits in the corner of a small browser window,
+  at its real size and color. Drag the square handle to resize it and the
+  round one to round its corners, or type either value; click the label to
+  change it. Circle and Squircle are now a corner radius of 50% and 30%, so
+  a toggle you shaped before looks the same.
 
 ### Fixed
 
@@ -58,6 +72,13 @@ use to detect updates, so every release bumps it.
 
 - **The comment button stays hidden while no source is on.** It showed over
   the source picker, and on discussions that take neither comments nor notes.
+
+- **A color picked in Settings colors the page around the reader**, its
+  background and footer, not just its rail, and it stays after a reload; the
+  rail used to go back to green.
+
+- **The reader's rail buttons sit in the middle of the rail.** They were 3px
+  left of it.
 
 - **Counts in the reader's rail no longer cover their icons.** A long count,
   like 999+, hid the icon it belonged to.
