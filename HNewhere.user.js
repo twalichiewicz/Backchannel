@@ -29608,11 +29608,6 @@ ${settingsModalHTML()}
 		const feeds = frontPageFeeds(settings, state.sourceIds, enabledSourceIds(settings, registeredSourceIds()));
 
 		state.topicIds = frontPageTopicIds(settings).filter((id) => feeds.some((feed) => feed.topic === id));
-
-		if (state.topicIds.length) {
-			state.sourceIds = registeredSourceIds().filter((id) => feeds.some((feed) => feed.source === id));
-		}
-
 		state.noSources = !enabledSourceIds(settings, registeredSourceIds()).length;
 		renderAppRailSources();
 
