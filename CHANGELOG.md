@@ -59,6 +59,9 @@ use to detect updates, so every release bumps it.
 - **The comment button stays hidden while no source is on.** It showed over
   the source picker, and on discussions that take neither comments nor notes.
 
+- **Counts in the reader's rail no longer cover their icons.** A long count,
+  like 999+, hid the icon it belonged to.
+
 - **Minimizing with no source on leaves the setup toggle**, which opens the
   source picker, rather than one that reopened to "No discussion found for
   this page yet".
