@@ -13,24 +13,27 @@ use to detect updates, so every release bumps it.
 ### Added
 
 - **A front page built from topics.** **Sources** in Settings now has two
-  parts: **Discussions**, where comments come from, and **Articles**, where
-  the front page comes from. Its checkbox, **Same as my discussion sources**,
-  keeps the front page you have now: each enabled source's front page,
-  blended.
-  Unchecked, it offers eight topics: World, U.S., Business, Technology,
-  Entertainment, Sports, Science and Health. Each topic reads a few
-  subreddits, Lemmy communities and Bluesky feeds picked for it, and
-  Technology adds Lobsters' and Hacker News's front pages. Subreddits and
-  Hacker News are read only while those sources are on, since a signed-in
-  reader's requests to them arrive as their account. A story found on more
+  parts: **Discussions**, the sources each page you visit is looked up on,
+  and **Front pages**, which offers **Topics you follow** or **Top links from
+  your discussion sources**. Top links is the front page you have now, and
+  it stays chosen until you pick Topics.
+  Topics offers eight: World, U.S., Business, Technology, Entertainment,
+  Sports, Science and Health. Each reads a few subreddits, Lemmy communities
+  and Bluesky feeds picked for it, and Technology adds Lobsters' and Hacker
+  News's front pages, but only from sources you have on. A topic none of
+  them covers is dimmed, with the sources that would. A story found on more
   than one source moves up. In the reader on backchnnl.app, each topic gets
   its own icon in the rail, beside the views for the sources it came from.
 
 - **You are asked once how to build it.** A new reader is asked right after
   picking sources. A reader who already has sources sees a card at the top of
-  the front page, once; closing it keeps the front page as it is.
+  the front page, once; closing it keeps Top links.
 
 ### Changed
+
+- **Sources in Settings lists the sources in two columns**, one on a phone,
+  and says what each part is for. The "What each source supports" table is
+  gone.
 
 - **The Sidebar's settings button opens the Settings dialog.** It is the same
   dialog the reader on backchnnl.app uses, with General, Sidebar, Sources and
