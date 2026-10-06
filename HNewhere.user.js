@@ -26070,7 +26070,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	align-items:center;
 	gap:6px;
 	min-height:0;
-	padding:6px 12px 6px 6px;
+	padding:6px 9px;
 	overflow:visible;
 	background:var(--rail-bg);
 }
@@ -26173,7 +26173,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 .rail-badge {
 	position:absolute;
 	top:-6px;
-	right:-7px;
+	right:-4px;
 	min-width:13px;
 	height:13px;
 	padding:0 3px;
