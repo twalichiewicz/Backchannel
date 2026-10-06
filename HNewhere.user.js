@@ -11747,15 +11747,14 @@ ${frontPageChooserHTML()}
 		return `<div class="front-page-chooser" role="radiogroup" aria-label="Front page">
 <div class="front-page-choice">
 <label class="front-page-choice-label"><input type="radio" name="${name}" value="topics"><span>Topics you follow</span></label>
-<div class="front-page-choice-hint">Looks through your discussion sources for popular links on these topics.</div>
+<div class="front-page-choice-hint">Show popular links from your sources that match the topics you select.</div>
 <div class="front-page-topics-panel">
 <div class="front-page-topics" role="group" aria-label="Topics">${TOPICS.map((topic) => `<button type="button" class="front-page-topic" data-topic="${escapeHTML(topic.id)}" aria-pressed="false">${TOPIC_ICONS[topic.id]}<span>${escapeHTML(topic.label)}</span></button>`).join("")}</div>
 <div class="front-page-choice-hint front-page-needs"></div>
-<div class="front-page-choice-hint front-page-empty">Until you pick one, your front page shows top links.</div>
 </div>
 </div>
 <div class="front-page-choice">
-<label class="front-page-choice-label"><input type="radio" name="${name}" value="sources"><span>Top links from your discussion sources</span></label>
+<label class="front-page-choice-label"><input type="radio" name="${name}" value="sources"><span>Top links from your sources</span></label>
 <div class="front-page-choice-hint front-page-top-hint"></div>
 </div>
 </div>`;
@@ -11767,7 +11766,6 @@ ${frontPageChooserHTML()}
 		const radios = [...root.querySelectorAll('input[type="radio"]')];
 		const panel = root.querySelector(".front-page-topics-panel");
 		const needs = root.querySelector(".front-page-needs");
-		const empty = root.querySelector(".front-page-empty");
 		const topHint = root.querySelector(".front-page-top-hint");
 		const chips = [...root.querySelectorAll(".front-page-topic")];
 		const savedMode = (next) => (next?.frontPageMode === "topics" ? "topics" : "sources");
@@ -11775,7 +11773,7 @@ ${frontPageChooserHTML()}
 		let picked = frontPageTopicIds(settings);
 		let emitted = null;
 
-		const choice = () => ({ frontPageMode: mode, frontPageTopics: [...picked] });
+		const choice = () => ({ frontPageMode: mode === "topics" && picked.length ? "topics" : "sources", frontPageTopics: [...picked] });
 
 		const emit = () => {
 			emitted = choice();
@@ -11789,7 +11787,6 @@ ${frontPageChooserHTML()}
 
 			for (const radio of radios) {
 				radio.checked = radio.value === mode;
-				radio.closest(".front-page-choice").classList.toggle("is-off", radio.value !== mode);
 			}
 
 			panel.hidden = mode !== "topics";
@@ -11818,10 +11815,9 @@ ${frontPageChooserHTML()}
 				.map(([sources, labels]) => `${joinWithAnd(labels)} ${labels.length === 1 ? "needs" : "need"} ${sources}.`)
 				.join(" ");
 			needs.hidden = !missing.size;
-			empty.hidden = picked.some(covered);
 			topHint.textContent = frontPageSourceIds(settings).length
-				? "The most popular links right now from the front pages of your discussion sources."
-				: "None of your discussion sources has a front page of its own.";
+				? "Show the most popular links from your sources, regardless of topic."
+				: "None of your sources has a front page of its own.";
 		};
 
 		for (const radio of radios) {
@@ -11837,6 +11833,11 @@ ${frontPageChooserHTML()}
 				picked = picked.includes(chip.dataset.topic)
 					? picked.filter((id) => id !== chip.dataset.topic)
 					: [...picked, chip.dataset.topic];
+
+				if (!picked.length) {
+					mode = "sources";
+				}
+
 				paint();
 				emit();
 			});
@@ -13796,22 +13797,29 @@ header > .settings-panel {
 	line-height:1.35;
 }
 
+#app-settings-modal[data-section="sources"] #app-settings-heading {
+	margin-bottom:4px;
+}
+
+.sources-lead {
+	margin:0 0 14px;
+	line-height:1.4;
+}
+
 .sources-subhead {
-	margin:16px 0 0;
-	padding-bottom:4px;
-	border-bottom:1px solid var(--surface-divider);
+	margin:18px 0 0;
 	color:var(--surface-text);
 	font-size:12px;
 	font-weight:600;
 }
 
 .sources-subhint {
-	margin:5px 0 10px;
+	margin:2px 0 10px;
 }
 
 .sources-grid {
 	display:grid;
-	grid-template-columns:repeat(auto-fill, minmax(min(100%, 210px), 1fr));
+	grid-template-columns:repeat(2, minmax(0, 1fr));
 	gap:10px 18px;
 	align-items:start;
 }
@@ -14075,16 +14083,6 @@ header > .settings-panel {
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
-}
-
-.front-page-choice-label > span,
-.front-page-choice > .front-page-choice-hint {
-	transition:opacity .14s ease;
-}
-
-.front-page-choice.is-off .front-page-choice-label > span,
-.front-page-choice.is-off > .front-page-choice-hint {
-	opacity:.45;
 }
 
 .front-page-topics {
@@ -14862,12 +14860,10 @@ All stored locally.
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
-<div class="sources-lead">The places Backchannel looks for discussions and front-page links. A source that's off is never contacted.</div>
-<div class="sources-subhead">Discussions</div>
-<div class="sources-subhint">Each page you visit is looked up on the sources you check, to find what people are saying about it.</div>
+<div class="sources-lead">Where Backchannel looks for discussions and links for the front pages.</div>
 <div class="sources-grid">${sourceListHTML({ idPrefix: "setting-source-", cells: true })}</div>
 <div class="sources-subhead">Front pages</div>
-<div class="sources-subhint">What your front page shows, in the Sidebar and in the Reader. It's built only from the sources checked above.</div>
+<div class="sources-subhint">Choose what Backchannel shows on your front page. Links come only from the sources you've enabled above.</div>
 ${frontPageChooserHTML()}
 </div>
 
@@ -25900,6 +25896,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 `;
 
 	const SETTINGS_MODAL_PHONE_CSS = `
+	#app-settings-content .sources-grid {
+		grid-template-columns:minmax(0, 1fr);
+	}
+
 	#app-settings-modal {
 		padding:calc(12px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px));
 	}
