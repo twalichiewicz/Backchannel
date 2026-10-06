@@ -27087,6 +27087,13 @@ ${APP_ICON_CSS}
 	overflow:hidden;
 }
 
+@media (min-width: 701px) and (max-width: 1100px) {
+	#app-article {
+		border-radius:12px 0 0 12px;
+		overflow:hidden;
+	}
+}
+
 #app.list-moving #app-list,
 #app.discussion-moving #panel.app-docked {
 	position:absolute;
