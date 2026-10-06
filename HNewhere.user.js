@@ -11715,7 +11715,7 @@ ${frontPageChooserHTML()}
 			const step = wireFrontPageChooser(target.querySelector(".front-page-chooser"), settings);
 
 			target.querySelector(".front-page-step-done").onclick = async () => {
-				await saveSettings(step.choice());
+				syncSettingsFrontPage?.(await saveSettings(step.choice()));
 				await refreshForSourceChange();
 			};
 		};
@@ -11729,6 +11729,8 @@ ${frontPageChooserHTML()}
 </div>`;
 	}
 
+	let syncSettingsFrontPage = null;
+
 	function wireFrontPageChooser(root, settings, { onChange } = {}) {
 		const box = root.querySelector("[data-front-sources]");
 		const topicsRow = root.querySelector(".front-page-topics");
@@ -11736,11 +11738,17 @@ ${frontPageChooserHTML()}
 		const chips = [...root.querySelectorAll(".front-page-topic")];
 		let picked = frontPageTopicIds(settings);
 		let fromSources = frontPageMode(settings) === "sources";
+		let emitted = null;
 
 		const choice = () => ({
 			frontPageMode: !fromSources && picked.length ? "topics" : "sources",
 			frontPageTopics: fromSources ? [] : [...picked],
 		});
+
+		const emit = () => {
+			emitted = choice();
+			onChange?.(emitted);
+		};
 
 		const paint = () => {
 			box.checked = fromSources;
@@ -11764,7 +11772,7 @@ ${frontPageChooserHTML()}
 		box.addEventListener("change", () => {
 			fromSources = box.checked;
 			paint();
-			onChange?.(choice());
+			emit();
 		});
 
 		for (const chip of chips) {
@@ -11773,13 +11781,27 @@ ${frontPageChooserHTML()}
 					? picked.filter((id) => id !== chip.dataset.topic)
 					: [...picked, chip.dataset.topic];
 				paint();
-				onChange?.(choice());
+				emit();
 			});
 		}
 
+		const sync = (next) => {
+			const saved = { frontPageMode: frontPageMode(next), frontPageTopics: frontPageTopicIds(next) };
+
+			settings = next;
+
+			if (!emitted || JSON.stringify(saved) !== JSON.stringify(emitted)) {
+				picked = saved.frontPageTopics;
+				fromSources = saved.frontPageMode === "sources";
+				emitted = null;
+			}
+
+			paint();
+		};
+
 		paint();
 
-		return { choice };
+		return { choice, sync };
 	}
 
 	function frontPageCardElement(settings, onSettled) {
@@ -11810,6 +11832,8 @@ ${frontPageChooserHTML()}
 	}
 
 	async function refreshFrontPageConsumers() {
+		syncSettingsFrontPage?.(await loadSettings());
+
 		if (appState) {
 			await refreshAppSources();
 			return;
@@ -15050,6 +15074,7 @@ ${[
 			}
 
 			applyButtonDesigner(settings);
+			syncSettingsFrontPage?.(settings);
 
 			const sourceState = normalizeSourceSettings(
 				settings.sources,
@@ -15259,12 +15284,14 @@ ${[
 
 				const current = await loadSettings();
 
-				await saveSettings({
-					sources: {
-						...normalizeSourceSettings(current.sources, registeredSourceIds()),
-						[sourceInput.dataset.source]: sourceInput.checked,
-					},
-				});
+				syncSettingsFrontPage?.(
+					await saveSettings({
+						sources: {
+							...normalizeSourceSettings(current.sources, registeredSourceIds()),
+							[sourceInput.dataset.source]: sourceInput.checked,
+						},
+					}),
+				);
 
 				await refreshSubmitAffordance(shadow);
 
@@ -15625,17 +15652,19 @@ ${[
 		}
 
 		const settingsChooser = settingsPanel.querySelector(".front-page-chooser");
+		let frontPageControl = null;
 
 		if (settingsChooser) {
 			loadSettings()
-				.then((settings) =>
-					wireFrontPageChooser(settingsChooser, settings, {
+				.then((settings) => {
+					frontPageControl = wireFrontPageChooser(settingsChooser, settings, {
 						onChange: async (choice) => {
 							await saveSettings(choice);
 							await refreshFrontPageConsumers();
 						},
-					}),
-				)
+					});
+					syncSettingsFrontPage = (next) => frontPageControl.sync(next);
+				})
 				.catch(console.error);
 		}
 
