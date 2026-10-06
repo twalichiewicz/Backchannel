@@ -295,9 +295,11 @@
 		large: 56,
 	};
 
-	const BUTTON_SHAPES = {
-		circle: "50%",
-		squircle: "30%",
+	const BUTTON_RADIUS_DEFAULT = 50;
+	const BUTTON_RADIUS_MAX = 50;
+	const LEGACY_BUTTON_RADII = {
+		circle: 50,
+		squircle: 30,
 	};
 
 	const BUTTON_MARK_DEFAULT = "BC";
@@ -333,12 +335,20 @@
 		return normalizeButtonSize(next);
 	}
 
+	function normalizeButtonRadius(value, legacyShape) {
+		if (typeof value === "number" && Number.isFinite(value)) {
+			return Math.min(BUTTON_RADIUS_MAX, Math.max(0, Math.round(value)));
+		}
+
+		return LEGACY_BUTTON_RADII[legacyShape] ?? BUTTON_RADIUS_DEFAULT;
+	}
+
 	function buttonFontSizeFor(size) {
 		return Math.min(18, Math.max(9, Math.round(size * 0.3)));
 	}
 
 	let themePreference = "auto";
-	let buttonShapePreference = "circle";
+	let buttonRadiusPreference = BUTTON_RADIUS_DEFAULT;
 	let buttonSizePreference = BUTTON_SIZE_DEFAULT;
 	let buttonMarkPreference = BUTTON_MARK_DEFAULT;
 	let accentPreference = null;
@@ -347,9 +357,10 @@
 
 	function syncAppearancePreferences(settings) {
 		themePreference = settings.theme || "auto";
-		buttonShapePreference = BUTTON_SHAPES[settings.buttonShape]
-			? settings.buttonShape
-			: "circle";
+		buttonRadiusPreference = normalizeButtonRadius(
+			settings.buttonRadius,
+			settings.buttonShape,
+		);
 		buttonSizePreference = normalizeButtonSize(settings.buttonSize);
 		buttonMarkPreference = normalizeButtonMark(settings.buttonMark);
 		accentPreference =
@@ -372,7 +383,7 @@
 		showButtonWithQueue: false,
 		sources: undefined,
 		theme: "auto",
-		buttonShape: "circle",
+		buttonRadius: undefined,
 		buttonSize: BUTTON_SIZE_DEFAULT,
 		buttonMark: BUTTON_MARK_DEFAULT,
 		accentColor: null,
@@ -7258,8 +7269,7 @@ button {
 			width: `${size}px`,
 			height: `${size}px`,
 			fontSize: `${buttonFontSizeFor(size)}px`,
-			borderRadius:
-				BUTTON_SHAPES[buttonShapePreference] || BUTTON_SHAPES.circle,
+			borderRadius: `${buttonRadiusPreference}%`,
 		});
 	}
 
@@ -9235,7 +9245,10 @@ button {
 	async function applyButtonPosition(button) {
 		const saved = await load(STORAGE.position, null);
 
-		if (!saved) return;
+		if (!saved) {
+			pinButtonStyle(button, { left: null, top: "16px", right: "16px" });
+			return;
+		}
 
 		const { x, y } = clampButtonToViewport(button, saved.x, saved.y);
 
@@ -13551,17 +13564,366 @@ header > .settings-panel {
 }
 
 .button-designer {
-	display:flex;
-	align-items:stretch;
-	gap:10px;
-}
-
-.button-designer-controls {
-	flex:1 1 auto;
-	min-width:0;
+	--toggle-chrome:#f8f8f7;
+	--toggle-chrome-line:#eeeeec;
+	--toggle-grey:#c4c4c1;
+	--toggle-url:#f0f0ee;
+	--toggle-page:#fff;
+	--toggle-page-head:#e6e6e3;
+	--toggle-page-line:#f0f0ee;
+	--toggle-edge:#e4e4e1;
+	--toggle-select:#0a7aff;
+	--toggle-rail:#fcfcfb;
+	--toggle-rail-ink:#1d1d1f;
+	--toggle-rail-line:rgba(0,0,0,.08);
+	--toggle-rail-hover:rgba(0,0,0,.06);
+	--toggle-rail-press:rgba(0,0,0,.11);
+	--toggle-green:${ACCENT};
 	display:flex;
 	flex-direction:column;
-	justify-content:flex-start;
+}
+
+:host(.${DARK_CLASS}) .button-designer {
+	--toggle-chrome:#262628;
+	--toggle-chrome-line:#2f2f32;
+	--toggle-grey:#55555a;
+	--toggle-url:#2d2d30;
+	--toggle-page:#1c1c1e;
+	--toggle-page-head:#333336;
+	--toggle-page-line:#28282b;
+	--toggle-edge:#36363a;
+	--toggle-select:#3b93ff;
+	--toggle-rail:#3a3a3c;
+	--toggle-rail-ink:#f2f2f2;
+	--toggle-rail-line:rgba(255,255,255,.10);
+	--toggle-rail-hover:rgba(255,255,255,.10);
+	--toggle-rail-press:rgba(255,255,255,.18);
+	--toggle-green:${ACCENT_DARK};
+}
+
+.button-designer-label {
+	font-size:12px;
+	line-height:1.35;
+}
+
+.button-designer-hint {
+	margin-left:0;
+}
+
+.toggle-stage {
+	position:relative;
+	height:236px;
+	margin-top:8px;
+	overflow:hidden;
+	user-select:none;
+	-webkit-user-select:none;
+}
+
+#app-settings-content .toggle-stage {
+	margin-left:-18px;
+}
+
+.toggle-window {
+	position:absolute;
+	top:0;
+	right:14px;
+	bottom:-12px;
+	left:-12px;
+	overflow:hidden;
+	border-top:1px solid var(--toggle-edge);
+	border-right:1px solid var(--toggle-edge);
+	border-top-right-radius:10px;
+	background:var(--toggle-page);
+}
+
+.toggle-chrome {
+	position:absolute;
+	inset:0 0 auto 0;
+	display:flex;
+	align-items:center;
+	gap:12px;
+	height:36px;
+	padding:0 12px 0 0;
+	border-bottom:1px solid var(--toggle-chrome-line);
+	background:var(--toggle-chrome);
+	color:var(--toggle-grey);
+}
+
+.toggle-url {
+	flex:1 1 auto;
+	display:flex;
+	align-items:center;
+	gap:7px;
+	min-width:0;
+	height:22px;
+	margin-left:42px;
+	padding:0 8px 0 10px;
+	border-radius:7px;
+	background:var(--toggle-url);
+	font-size:11.5px;
+}
+
+.toggle-url-text {
+	flex:1 1 auto;
+	overflow:hidden;
+	white-space:nowrap;
+	text-overflow:ellipsis;
+}
+
+.toggle-chrome svg {
+	flex:0 0 auto;
+	display:block;
+}
+
+.toggle-page {
+	position:absolute;
+	inset:37px 0 0 0;
+	overflow:hidden;
+	background:var(--toggle-page);
+}
+
+.toggle-page-copy {
+	position:absolute;
+	left:-60px;
+	right:20px;
+	top:20px;
+	display:grid;
+	gap:9px;
+}
+
+.toggle-page-head {
+	width:76%;
+	height:15px;
+	margin-bottom:6px;
+	border-radius:4px;
+	background:var(--toggle-page-head);
+}
+
+.toggle-page-line {
+	height:7px;
+	border-radius:4px;
+	background:var(--toggle-page-line);
+}
+
+.toggle-preview {
+	position:absolute;
+	top:16px;
+	right:16px;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	box-sizing:border-box;
+	font-family:Verdana, sans-serif;
+	font-weight:bold;
+	line-height:1;
+	white-space:nowrap;
+	cursor:grab;
+	touch-action:none;
+	transition:background .2s ease, box-shadow .2s ease, width .15s ease, height .15s ease, border-radius .15s ease;
+	z-index:3;
+}
+
+.toggle-preview.is-dragging {
+	cursor:grabbing;
+	transition:none;
+}
+
+.toggle-preview-mark {
+	outline:none;
+	cursor:text;
+}
+
+.toggle-selection {
+	position:absolute;
+	border:1.5px solid var(--toggle-select);
+	border-radius:4px;
+	pointer-events:none;
+	z-index:4;
+}
+
+.toggle-handle {
+	position:absolute;
+	box-sizing:border-box;
+	border:1.5px solid var(--toggle-select);
+	background:#fff;
+	pointer-events:auto;
+	touch-action:none;
+}
+
+.toggle-handle-size {
+	left:-6px;
+	bottom:-6px;
+	width:10px;
+	height:10px;
+	border-radius:2px;
+	cursor:nesw-resize;
+}
+
+.toggle-handle-radius {
+	width:10px;
+	height:10px;
+	border-radius:50%;
+	cursor:grab;
+}
+
+.toggle-tags {
+	position:absolute;
+	display:flex;
+	gap:4px;
+	z-index:5;
+}
+
+.toggle-tag {
+	display:inline-flex;
+	align-items:center;
+	gap:2px;
+	height:18px;
+	padding:0 6px 0 2px;
+	border-radius:4px;
+	background:var(--toggle-select);
+	color:#fff;
+	font-size:10.5px;
+	font-weight:600;
+	font-variant-numeric:tabular-nums;
+	white-space:nowrap;
+	cursor:text;
+}
+
+.toggle-tag svg {
+	display:block;
+	margin-left:3px;
+}
+
+.toggle-tag input {
+	width:22px;
+	height:14px;
+	box-sizing:border-box;
+	padding:0 1px;
+	border:0;
+	border-radius:3px;
+	background:none;
+	color:inherit;
+	font:inherit;
+	text-align:right;
+}
+
+.toggle-tag input:focus {
+	outline:none;
+	background:rgba(255,255,255,.24);
+}
+
+.toggle-rail {
+	position:absolute;
+	left:50%;
+	bottom:12px;
+	display:flex;
+	align-items:center;
+	gap:6px;
+	box-sizing:border-box;
+	width:max-content;
+	max-width:calc(100% - 16px);
+	padding:3px;
+	border-radius:22px;
+	background:var(--toggle-rail);
+	color:var(--toggle-rail-ink);
+	box-shadow:0 6px 20px rgba(0,0,0,.16), inset 0 0 0 1px var(--toggle-rail-line);
+	font-size:10.5px;
+	font-weight:600;
+	transform:translateX(-50%);
+	z-index:5;
+}
+
+.toggle-colors {
+	display:inline-flex;
+	align-items:center;
+	gap:2px;
+}
+
+.toggle-swatch,
+.toggle-rail-reset {
+	position:relative;
+	display:inline-grid;
+	place-items:center;
+	height:30px;
+	padding:0;
+	border:0;
+	border-radius:15px;
+	background:none;
+	color:inherit;
+	font:inherit;
+	cursor:pointer;
+}
+
+.toggle-swatch {
+	width:30px;
+}
+
+.toggle-rail-reset {
+	padding:0 10px;
+}
+
+@media (hover: hover) {
+	.toggle-rail-reset:hover,
+	.toggle-swatch:hover:not([aria-pressed="true"]) {
+		background:var(--toggle-rail-hover);
+	}
+}
+
+.toggle-rail-reset:active,
+.toggle-swatch:active:not([aria-pressed="true"]) {
+	background:var(--toggle-rail-press);
+}
+
+.toggle-swatch i {
+	display:block;
+	width:22px;
+	height:22px;
+	border-radius:50%;
+	box-shadow:inset 0 0 0 1px rgba(0,0,0,.12);
+}
+
+.toggle-swatch[aria-pressed="true"] i {
+	box-shadow:0 0 0 2px var(--toggle-rail), 0 0 0 4px var(--toggle-rail-ink);
+}
+
+.toggle-swatch-green i {
+	background:var(--toggle-green);
+}
+
+.toggle-swatch-any i {
+	background:conic-gradient(#f44, #fb0, #6c4, #2bd, #48f, #a5f, #f4a, #f44);
+}
+
+.toggle-swatch-any input {
+	position:absolute;
+	inset:0;
+	width:100%;
+	height:100%;
+	padding:0;
+	border:0;
+	border-radius:15px;
+	opacity:0;
+	cursor:pointer;
+}
+
+.toggle-rail-rule {
+	width:1px;
+	height:18px;
+	background:var(--toggle-rail-line);
+}
+
+.toggle-preview:focus-visible,
+.toggle-handle:focus-visible,
+.toggle-swatch:focus-within,
+.toggle-rail-reset:focus-visible {
+	outline:2px solid var(--toggle-select);
+	outline-offset:2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.toggle-preview {
+		transition:none;
+	}
 }
 
 .stepper {
@@ -13629,107 +13991,6 @@ header > .settings-panel {
 	font-family:Menlo, Consolas, monospace;
 	font-size:9px;
 	color:var(--muted);
-}
-
-.button-preview {
-	flex:0 0 88px;
-	display:flex;
-	flex-direction:column;
-	align-items:center;
-	justify-content:center;
-	gap:5px;
-	padding:8px 6px;
-	border:1px solid var(--blueprint-line);
-	border-radius:5px;
-	background-color:var(--blueprint-bg);
-    background-image:
-		linear-gradient(var(--blueprint-grid) 1px, transparent 1px),
-        linear-gradient(90deg, var(--blueprint-grid) 1px, transparent 1px);
-	background-size:8px 8px;
-	background-position:center center;
-}
-
-.button-preview-stage {
-	height:68px;
-	display:flex;
-	align-items:center;
-	justify-content:center;
-}
-
-.button-preview-shape {
-	display:flex;
-	align-items:center;
-	justify-content:center;
-	border:0;
-	cursor:text;
-	caret-color:var(--accent-ink);
-	outline-offset:2px;
-	background:var(--accent);
-	box-shadow:0 1px 4px rgba(0,0,0,.25);
-	color:var(--accent-ink);
-	font-family:Verdana,sans-serif;
-	font-weight:bold;
-	transition:width .16s ease, height .16s ease, border-radius .16s ease, font-size .16s ease;
-}
-
-.button-preview-rule {
-	position:relative;
-	display:flex;
-	align-items:center;
-	justify-content:center;
-	width:100%;
-	height:9px;
-}
-
-.button-preview-rule::before,
-.button-preview-rule::after {
-	content:"";
-	position:absolute;
-	top:calc(50% - 5px);
-	height:5px;
-	width:calc(50% - 27px);
-	border-bottom:1px solid var(--blueprint-ink);
-}
-
-.button-preview-rule::before {
-	left:0;
-	border-left:1px solid var(--blueprint-ink);
-}
-
-.button-preview-rule::after {
-	right:0;
-	border-right:1px solid var(--blueprint-ink);
-}
-
-.button-preview-dim {
-	position:relative;
-	padding:0 4px;
-	background:var(--blueprint-bg);
-	color:var(--blueprint-ink);
-	font-family:Menlo, Consolas, monospace;
-	font-size:9px;
-	white-space:nowrap;
-	cursor:text;
-	outline:0;
-}
-
-.button-preview-dim:focus {
-	color:var(--accent);
-}
-
-.settings-reset {
-	align-self:flex-end;
-	margin-top:6px;
-	padding:0;
-	border:0;
-	background:none;
-	color:var(--muted);
-	font:inherit;
-	font-size:11px;
-	text-decoration:underline dotted;
-	text-underline-offset:2px;
-	text-decoration-color:var(--border);
-	cursor:pointer;
 }
 
 .settings-link-button {
@@ -13970,33 +14231,23 @@ All stored locally.
 
 <div class="settings-field">
 <div class="button-designer">
-<div class="button-designer-controls">
-<div class="settings-field-label">Backchannel toggle</div>
-<div class="segmented">
-<label class="segment"><input type="radio" name="hnewhere-button-shape" data-setting="buttonShape" value="circle"><span>Circle</span></label>
-<label class="segment"><input type="radio" name="hnewhere-button-shape" data-setting="buttonShape" value="squircle"><span>Squircle</span></label>
+<div class="button-designer-label">Backchannel toggle</div>
+<div class="settings-option-hint button-designer-hint">The button in the top-right corner of every page that opens the Sidebar. It takes your color when the page has a discussion.</div>
+<div class="toggle-stage">
+<div class="toggle-window">
+<div class="toggle-chrome" aria-hidden="true"><div class="toggle-url"><span class="toggle-url-text">example.com</span><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12.6 6.2A4.9 4.9 0 1 0 13 9.6"/><path d="M12.9 3.2v3.2H9.7"/></svg></div><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.4v7.4M5.4 4.9 8 2.4l2.6 2.5"/><path d="M5.6 6.8H4.4a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1h7.2a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1h-1.2"/></svg><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v10M3 8h10"/></svg><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="2.6" y="4.6" width="8.4" height="8.4" rx="1.6"/><path d="M5.2 2.8h6.6a1.6 1.6 0 0 1 1.6 1.6V11"/></svg></div>
+<div class="toggle-page">
+<div class="toggle-page-copy" aria-hidden="true"><div class="toggle-page-head"></div><div class="toggle-page-line" style="width:96%"></div><div class="toggle-page-line" style="width:88%"></div><div class="toggle-page-line" style="width:93%"></div><div class="toggle-page-line" style="width:72%"></div><div class="toggle-page-line" style="width:90%"></div><div class="toggle-page-line" style="width:84%"></div><div class="toggle-page-line" style="width:91%"></div><div class="toggle-page-line" style="width:78%"></div><div class="toggle-page-line" style="width:89%"></div><div class="toggle-page-line" style="width:82%"></div><div class="toggle-page-line" style="width:94%"></div><div class="toggle-page-line" style="width:70%"></div></div>
+<div id="toggle-preview" class="toggle-preview" tabindex="0" role="group" aria-label="Backchannel toggle preview. Drag it, or use the arrow keys, to see it elsewhere on a page."><span id="toggle-preview-mark" class="toggle-preview-mark" contenteditable="plaintext-only" spellcheck="false" role="textbox" aria-label="Toggle label, one or two characters" title="Type one or two characters">BC</span></div>
+<div class="toggle-selection"><span id="toggle-radius-handle" class="toggle-handle toggle-handle-radius" role="slider" tabindex="0" aria-label="Corner radius" aria-valuemin="0" aria-valuemax="${BUTTON_RADIUS_MAX}"></span><span id="toggle-size-handle" class="toggle-handle toggle-handle-size" role="slider" tabindex="0" aria-label="Toggle size" aria-valuemin="${BUTTON_SIZE_MIN}" aria-valuemax="${BUTTON_SIZE_MAX}"></span></div>
+<div class="toggle-tags"><label class="toggle-tag"><input id="button-size-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Toggle size in pixels" value="44"><span>px</span></label><label class="toggle-tag"><svg viewBox="0 0 10 10" width="9" height="9" aria-hidden="true" focusable="false"><path d="M1.5 8.5V5.5a4 4 0 0 1 4-4h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><input id="button-radius-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Corner radius in percent" value="50"><span>%</span></label></div>
 </div>
-<div class="stepper">
-<button type="button" class="stepper-button" data-size-step="-1" aria-label="Smaller button">&#8722;</button>
-<span class="stepper-value">
-<input id="button-size-input" class="stepper-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Button size in pixels" value="44">
-<span class="stepper-unit">px</span>
-</span>
-<button type="button" class="stepper-button" data-size-step="1" aria-label="Larger button">+</button>
 </div>
-<button id="settings-reset-button" class="settings-reset" type="button">reset</button>
+<div class="toggle-rail" role="toolbar" aria-label="Toggle color">
+<span class="toggle-colors" role="group" aria-label="Color"><label class="toggle-swatch toggle-swatch-any" title="Any color"><i></i><input id="button-color-input" type="color" aria-label="Any color" value="#7c3aed"></label><button type="button" class="toggle-swatch toggle-swatch-green" data-accent="" aria-label="Backchannel green" title="Backchannel green"><i></i></button><button type="button" class="toggle-swatch" data-accent="#ff6600" aria-label="Hacker News orange" title="Hacker News orange"><i style="background:#ff6600"></i></button><button type="button" class="toggle-swatch" data-accent="#1d1d1f" aria-label="Graphite" title="Graphite"><i style="background:#1d1d1f"></i></button></span>
+<span class="toggle-rail-rule" aria-hidden="true"></span>
+<button id="settings-reset-button" class="toggle-rail-reset" type="button">Reset</button>
 </div>
-<div class="button-preview">
-<div class="button-preview-stage">
-<div id="button-preview-shape" class="button-preview-shape"
-contenteditable="plaintext-only" spellcheck="false"
-role="textbox" aria-label="Button label, one or two characters"
-title="Type one or two characters">BC</div>
-</div>
-<div class="button-preview-rule"><span id="button-preview-dim" class="button-preview-dim"
-contenteditable="plaintext-only" spellcheck="false" role="textbox"
-aria-label="Accent colour as a hex value"
-title="Type a hex colour">#237140</span></div>
 </div>
 </div>
 </div>
@@ -14129,18 +14380,25 @@ ${[
 
 		const settingsRadios = {
 			theme: [...settingsPanel.querySelectorAll("input[data-setting='theme']")],
-			buttonShape: [
-				...settingsPanel.querySelectorAll("input[data-setting='buttonShape']"),
-			],
 		};
 
 		const panes = shadow.querySelector("#settings-panes");
-		const previewShape = shadow.querySelector("#button-preview-shape");
-		const previewDim = shadow.querySelector("#button-preview-dim");
+		const preview = shadow.querySelector("#toggle-preview");
+		const previewMark = shadow.querySelector("#toggle-preview-mark");
+		const previewPage = shadow.querySelector(".toggle-page");
+		const previewSelection = shadow.querySelector(".toggle-selection");
+		const previewTags = shadow.querySelector(".toggle-tags");
+		const sizeHandle = shadow.querySelector("#toggle-size-handle");
+		const radiusHandle = shadow.querySelector("#toggle-radius-handle");
 		const sizeInput = shadow.querySelector("#button-size-input");
-		const stepperButtons = [
-			...settingsPanel.querySelectorAll("[data-size-step]"),
-		];
+		const radiusInput = shadow.querySelector("#button-radius-input");
+		const colorInput = shadow.querySelector("#button-color-input");
+		const anySwatch = shadow.querySelector(".toggle-swatch-any");
+		const swatches = [...settingsPanel.querySelectorAll(".toggle-swatch[data-accent]")];
+		const designerStage = shadow.querySelector(".toggle-stage");
+		const previewSpot = { right: 16, top: 16 };
+		let designerSettings = null;
+		let designerDraft = null;
 
 		const syncPanesHeight = () => {
 			if (!panes || settingsPanel.classList.contains("hidden")) {
@@ -14207,30 +14465,115 @@ ${[
 			syncPanesHeight();
 		};
 
-		const applyButtonDesigner = (settings) => {
-			const size = normalizeButtonSize(settings.buttonSize);
-			const radius =
-				BUTTON_SHAPES[settings.buttonShape] || BUTTON_SHAPES.circle;
+		const fitDesignerStage = () => {
+			const pane = designerStage?.closest("#app-settings-content");
 
-			if (sizeInput && shadow.activeElement !== sizeInput) {
+			if (!pane || !designerStage.getClientRects().length) {
+				return;
+			}
+
+			designerStage.style.height = "";
+			designerStage.style.marginBottom = "";
+
+			const base = designerStage.offsetHeight;
+			const origin = pane.getBoundingClientRect().top - pane.scrollTop;
+			const stageBottom = () => designerStage.getBoundingClientRect().bottom - origin;
+			const fits = pane.scrollHeight <= pane.clientHeight;
+			const before = stageBottom();
+
+			if (fits) {
+				designerStage.style.height = `${base + pane.clientHeight}px`;
+			}
+
+			const trailing = pane.scrollHeight - stageBottom();
+
+			designerStage.style.height = `${base + (fits ? Math.max(0, pane.clientHeight - before) : 0)}px`;
+			designerStage.style.marginBottom = `${-trailing}px`;
+		};
+
+		const applyButtonDesigner = (settings) => {
+			designerSettings = settings;
+
+			if (!preview || !settings) {
+				return;
+			}
+
+			fitDesignerStage();
+
+			const size = designerDraft?.size ?? normalizeButtonSize(settings.buttonSize);
+			const radius =
+				designerDraft?.radius ??
+				normalizeButtonRadius(settings.buttonRadius, settings.buttonShape);
+			const accent = activeAccent(detectDarkMode());
+			const width = previewPage.clientWidth;
+			const height = previewPage.clientHeight;
+			const pad = 4;
+			const box = size + pad * 2;
+
+			if (width && height) {
+				previewSpot.right = Math.min(Math.max(previewSpot.right, 4), width - size - 4);
+				previewSpot.top = Math.min(Math.max(previewSpot.top, 4), height - size - 4);
+			}
+
+			preview.style.right = `${previewSpot.right}px`;
+			preview.style.top = `${previewSpot.top}px`;
+			preview.style.width = `${size}px`;
+			preview.style.height = `${size}px`;
+			preview.style.fontSize = `${buttonFontSizeFor(size)}px`;
+			preview.style.borderRadius = `${radius}%`;
+			preview.style.background = designerDraft?.color ?? accent.accent;
+			preview.style.color = designerDraft?.color
+				? readableInk(parseHexColor(designerDraft.color))
+				: accent.ink;
+			preview.style.boxShadow = BUTTON_VARIANTS.active.boxShadow;
+
+			if (shadow.activeElement !== previewMark) {
+				previewMark.textContent = normalizeButtonMark(settings.buttonMark);
+			}
+
+			previewSelection.style.right = `${previewSpot.right - pad}px`;
+			previewSelection.style.top = `${previewSpot.top - pad}px`;
+			previewSelection.style.width = `${box}px`;
+			previewSelection.style.height = `${box}px`;
+
+			const inset = Math.min(5 + (radius / 100) * size * 0.5, size / 2 - 2);
+
+			radiusHandle.style.left = `${pad + inset - 6.5}px`;
+			radiusHandle.style.bottom = `${pad + inset - 6.5}px`;
+			sizeHandle.setAttribute("aria-valuenow", String(size));
+			radiusHandle.setAttribute("aria-valuenow", String(radius));
+
+			if (shadow.activeElement !== sizeInput) {
 				sizeInput.value = String(size);
 			}
 
-			if (previewDim && shadow.activeElement !== previewDim) {
-				previewDim.textContent =
-					settings.accentColor ?? activeAccent(detectDarkMode()).accent;
+			if (shadow.activeElement !== radiusInput) {
+				radiusInput.value = String(radius);
 			}
 
-			if (previewShape) {
-				previewShape.style.width = `${size}px`;
-				previewShape.style.height = `${size}px`;
-				previewShape.style.borderRadius = radius;
-				previewShape.style.fontSize = `${buttonFontSizeFor(size)}px`;
+			const boxLeft = width - previewSpot.right + pad - box;
+			const boxTop = previewSpot.top - pad;
+			const below = boxTop + box + 9;
+			const tagsTop =
+				below + previewTags.offsetHeight > height - 52
+					? boxTop - previewTags.offsetHeight - 6
+					: below;
+
+			previewTags.style.left = `${Math.min(Math.max(boxLeft + box / 2 - previewTags.offsetWidth / 2, 6), width - previewTags.offsetWidth - 6)}px`;
+			previewTags.style.top = `${tagsTop}px`;
+
+			const chosen = (settings.accentColor || "").toLowerCase();
+			const preset = swatches.some((swatch) => swatch.dataset.accent === chosen);
+
+			for (const swatch of swatches) {
+				swatch.setAttribute("aria-pressed", String(swatch.dataset.accent === chosen));
 			}
 
-			for (const button of stepperButtons) {
-				button.disabled =
-					stepButtonSize(size, Number(button.dataset.sizeStep)) === size;
+			anySwatch.setAttribute("aria-pressed", String(!preset));
+			anySwatch.querySelector("i").style.background = preset ? "" : chosen;
+
+			if (!preset && shadow.activeElement !== colorInput) {
+				colorInput.value = chosen;
 			}
 		};
 
@@ -14500,11 +14843,6 @@ ${[
 				return;
 			}
 
-			if (setting === "buttonShape") {
-				await refreshButtonAppearance();
-				return;
-			}
-
 			if (setting === "notepad") {
 				watchNoteSelection(settings);
 				await reopenForNotes();
@@ -14535,23 +14873,53 @@ ${[
 			}
 		});
 
-		if (previewShape) {
-			const commitMark = async () => {
-				const next = normalizeButtonMark(previewShape.textContent);
+		if (preview && typeof ResizeObserver === "function") {
+			new ResizeObserver(() => {
+				if (designerSettings) {
+					applyButtonDesigner(designerSettings);
+				}
+			}).observe(previewPage);
+		}
 
-				previewShape.textContent = next;
-				applySettingsPanelState(await saveSettings({ buttonMark: next }));
-				await refreshButtonAppearance();
+		const saveDesigner = async (patch) => {
+			applySettingsPanelState(await saveSettings(patch));
+			await refreshButtonAppearance();
+		};
+
+		const saveAccent = async (value) => {
+			applySettingsPanelState(await saveSettings({ accentColor: value }));
+			await refreshAccentOverride();
+		};
+
+		if (preview) {
+			const commitMark = async () => {
+				const next = normalizeButtonMark(previewMark.textContent);
+
+				previewMark.textContent = next;
+				await saveDesigner({ buttonMark: next });
 			};
 
-			previewShape.addEventListener("keydown", (event) => {
-				if (event.key === "Enter") {
+			const editMark = () => {
+				previewMark.focus();
+
+				const range = previewMark.ownerDocument.createRange();
+				const selection = previewMark.ownerDocument.getSelection();
+
+				range.selectNodeContents(previewMark);
+				selection?.removeAllRanges();
+				selection?.addRange(range);
+			};
+
+			previewMark.addEventListener("keydown", (event) => {
+				event.stopPropagation();
+
+				if (event.key === "Enter" || event.key === "Escape") {
 					event.preventDefault();
-					previewShape.blur();
+					previewMark.blur();
 					return;
 				}
 
-				const selection = previewShape.ownerDocument.getSelection();
+				const selection = previewMark.ownerDocument.getSelection();
 				const replacing = selection && !selection.isCollapsed;
 
 				if (
@@ -14559,139 +14927,249 @@ ${[
 					!event.metaKey &&
 					!event.ctrlKey &&
 					!replacing &&
-					previewShape.textContent.trim().length >= BUTTON_MARK_MAX
+					previewMark.textContent.trim().length >= BUTTON_MARK_MAX
 				) {
 					event.preventDefault();
 				}
 			});
 
-			previewShape.addEventListener("blur", () => {
+			previewMark.addEventListener("blur", () => {
 				commitMark().catch(console.error);
 			});
 
-			previewShape.addEventListener("paste", (event) => {
+			previewMark.addEventListener("paste", (event) => {
 				event.preventDefault();
-				previewShape.textContent = normalizeButtonMark(
+				previewMark.textContent = normalizeButtonMark(
 					event.clipboardData?.getData("text/plain"),
 				);
 			});
-		}
 
-		if (previewDim) {
-			const commitAccent = async () => {
-				const typed = previewDim.textContent.trim();
-				const parsed = typed ? parseHexColor(typed) : null;
+			let press = null;
 
-				if (typed && !parsed) {
-					applySettingsPanelState(await loadSettings());
-					return;
-				}
-
-				const value = parsed ? rgbToHex(parsed) : null;
-
-				applySettingsPanelState(await saveSettings({ accentColor: value }));
-				await refreshAccentOverride();
-			};
-
-			previewDim.addEventListener("keydown", (event) => {
-				if (event.key === "Enter") {
-					event.preventDefault();
-					previewDim.blur();
-					return;
-				}
-
-				if (event.key === "Escape") {
-					event.preventDefault();
-					loadSettings()
-						.then((settings) => {
-							applySettingsPanelState(settings);
-							previewDim.blur();
-						})
-						.catch(console.error);
-				}
-			});
-
-			previewDim.addEventListener("blur", () => {
-				commitAccent().catch(console.error);
-			});
-
-			previewDim.addEventListener("paste", (event) => {
-				event.preventDefault();
-				previewDim.textContent = (
-					event.clipboardData?.getData("text/plain") ?? ""
-				)
-					.trim()
-					.slice(0, 7);
-			});
-		}
-
-		for (const button of stepperButtons) {
-			button.onclick = async () => {
-				const current = normalizeButtonSize(
-					(await loadSettings()).buttonSize,
-				);
-				const next = stepButtonSize(
-					current,
-					Number(button.dataset.sizeStep),
-				);
-
-				if (next === current) {
-					return;
-				}
-
-				const settings = await saveSettings({ buttonSize: next });
-
-				applySettingsPanelState(settings);
-				await refreshButtonAppearance();
-			};
-		}
-
-		if (sizeInput) {
-			const commitSizeInput = async () => {
-				const current = normalizeButtonSize((await loadSettings()).buttonSize);
-				const parsed = Number.parseInt(sizeInput.value, 10);
-				const next = Number.isFinite(parsed)
-					? normalizeButtonSize(parsed)
-					: current;
-
-				if (next === current) {
-					sizeInput.value = String(current);
-					return;
-				}
-
-				const settings = await saveSettings({ buttonSize: next });
-
-				applySettingsPanelState(settings);
-				await refreshButtonAppearance();
-			};
-
-			sizeInput.onchange = () => {
-				commitSizeInput().catch(console.error);
-			};
-
-			sizeInput.onkeydown = (event) => {
-				if (event.key !== "Enter") {
+			preview.addEventListener("pointerdown", (event) => {
+				if (event.button !== 0 || (event.target === previewMark && shadow.activeElement === previewMark)) {
 					return;
 				}
 
 				event.preventDefault();
-				sizeInput.blur();
+				press = {
+					x: event.clientX,
+					y: event.clientY,
+					right: previewSpot.right,
+					top: previewSpot.top,
+					moved: false,
+					onMark: event.target === previewMark,
+				};
+				preview.setPointerCapture(event.pointerId);
+			});
+
+			preview.addEventListener("pointermove", (event) => {
+				if (!press) {
+					return;
+				}
+
+				const dx = event.clientX - press.x;
+				const dy = event.clientY - press.y;
+
+				if (!press.moved && Math.hypot(dx, dy) < 4) {
+					return;
+				}
+
+				press.moved = true;
+				preview.classList.add("is-dragging");
+				previewSpot.right = press.right - dx;
+				previewSpot.top = press.top + dy;
+				applyButtonDesigner(designerSettings);
+			});
+
+			const endPress = () => {
+				if (!press) {
+					return;
+				}
+
+				const { moved, onMark } = press;
+
+				press = null;
+				preview.classList.remove("is-dragging");
+
+				if (!moved && onMark) {
+					editMark();
+				}
 			};
-		}
 
-		const resetButton = shadow.querySelector("#settings-reset-button");
+			preview.addEventListener("pointerup", endPress);
+			preview.addEventListener("pointercancel", endPress);
 
-		if (resetButton) {
-			resetButton.onclick = async () => {
-				const settings = await saveSettings({
-					buttonShape: DEFAULT_SETTINGS.buttonShape,
-					buttonSize: DEFAULT_SETTINGS.buttonSize,
-					accentColor: DEFAULT_SETTINGS.accentColor,
+			preview.addEventListener("keydown", (event) => {
+				const by = { ArrowLeft: [4, 0], ArrowRight: [-4, 0], ArrowUp: [0, -4], ArrowDown: [0, 4] }[event.key];
+
+				if (event.target !== preview || !by) {
+					return;
+				}
+
+				event.preventDefault();
+				previewSpot.right += by[0];
+				previewSpot.top += by[1];
+				applyButtonDesigner(designerSettings);
+			});
+
+			const dragHandle = (handle, next) => {
+				let start = null;
+
+				handle.addEventListener("pointerdown", (event) => {
+					if (event.button !== 0) {
+						return;
+					}
+
+					event.preventDefault();
+					event.stopPropagation();
+
+					const settings = designerSettings;
+
+					start = {
+						x: event.clientX,
+						y: event.clientY,
+						size: normalizeButtonSize(settings.buttonSize),
+						radius: normalizeButtonRadius(settings.buttonRadius, settings.buttonShape),
+					};
+					designerDraft = { size: start.size, radius: start.radius };
+					handle.setPointerCapture(event.pointerId);
 				});
 
-				applySettingsPanelState(settings);
-				await refreshButtonAppearance();
-				await refreshAccentOverride();
+				handle.addEventListener("pointermove", (event) => {
+					if (!start) {
+						return;
+					}
+
+					Object.assign(designerDraft, next(event.clientX - start.x, event.clientY - start.y, start));
+					applyButtonDesigner(designerSettings);
+				});
+
+				const end = () => {
+					if (!start) {
+						return;
+					}
+
+					const { size, radius } = designerDraft;
+
+					start = null;
+					saveDesigner({ buttonSize: size, buttonRadius: radius })
+						.catch(console.error)
+						.finally(() => {
+							designerDraft = null;
+							applyButtonDesigner(designerSettings);
+						});
+				};
+
+				handle.addEventListener("pointerup", end);
+				handle.addEventListener("pointercancel", end);
+			};
+
+			dragHandle(sizeHandle, (dx, dy, start) => ({
+				size: normalizeButtonSize(
+					Math.round((start.size + Math.max(-dx, dy)) / BUTTON_SIZE_STEP) * BUTTON_SIZE_STEP,
+				),
+			}));
+
+			dragHandle(radiusHandle, (dx, dy, start) => ({
+				radius: normalizeButtonRadius(start.radius + ((dx - dy) / start.size) * 100),
+			}));
+
+			sizeHandle.addEventListener("keydown", (event) => {
+				const grow = { ArrowUp: 1, ArrowLeft: 1, ArrowDown: -1, ArrowRight: -1 }[event.key];
+
+				if (grow) {
+					event.preventDefault();
+					saveDesigner({
+						buttonSize: stepButtonSize(designerSettings.buttonSize, grow),
+					}).catch(console.error);
+				}
+			});
+
+			radiusHandle.addEventListener("keydown", (event) => {
+				const round = { ArrowUp: 5, ArrowRight: 5, ArrowDown: -5, ArrowLeft: -5 }[event.key];
+
+				if (round) {
+					event.preventDefault();
+					saveDesigner({
+						buttonRadius: normalizeButtonRadius(
+							normalizeButtonRadius(designerSettings.buttonRadius, designerSettings.buttonShape) + round,
+						),
+					}).catch(console.error);
+				}
+			});
+
+			const typedValue = (input, key, normalize, current) => {
+				const commit = async () => {
+					const parsed = Number.parseInt(input.value, 10);
+
+					if (!Number.isFinite(parsed)) {
+						input.value = String(current());
+						return;
+					}
+
+					const next = normalize(parsed);
+
+					input.value = String(next);
+
+					if (next !== current()) {
+						await saveDesigner({ [key]: next });
+					}
+				};
+
+				input.addEventListener("focus", () => input.select());
+				input.onchange = () => {
+					commit().catch(console.error);
+				};
+				input.onkeydown = (event) => {
+					event.stopPropagation();
+
+					if (event.key === "Enter") {
+						event.preventDefault();
+						input.blur();
+					} else if (event.key === "Escape") {
+						event.preventDefault();
+						input.value = String(current());
+						input.blur();
+					}
+				};
+			};
+
+			typedValue(sizeInput, "buttonSize", normalizeButtonSize, () =>
+				normalizeButtonSize(designerSettings.buttonSize),
+			);
+			typedValue(radiusInput, "buttonRadius", normalizeButtonRadius, () =>
+				normalizeButtonRadius(designerSettings.buttonRadius, designerSettings.buttonShape),
+			);
+
+			for (const swatch of swatches) {
+				swatch.onclick = () => {
+					saveAccent(swatch.dataset.accent || null).catch(console.error);
+				};
+			}
+
+			colorInput.addEventListener("input", () => {
+				designerDraft = { color: colorInput.value };
+				applyButtonDesigner(designerSettings);
+			});
+
+			colorInput.addEventListener("change", () => {
+				const value = rgbToHex(parseHexColor(colorInput.value));
+
+				designerDraft = null;
+				saveAccent(value).catch(console.error);
+			});
+
+			shadow.querySelector("#settings-reset-button").onclick = async () => {
+				previewSpot.right = 16;
+				previewSpot.top = 16;
+				await save(STORAGE.position, null);
+				await saveAccent(null);
+				await saveDesigner({
+					buttonSize: DEFAULT_SETTINGS.buttonSize,
+					buttonRadius: BUTTON_RADIUS_DEFAULT,
+					buttonMark: BUTTON_MARK_DEFAULT,
+				});
 			};
 		}
 
