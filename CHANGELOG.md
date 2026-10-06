@@ -12,17 +12,17 @@ use to detect updates, so every release bumps it.
 
 ### Added
 
-- **A front page built from topics.** **Sources** in Settings now has two
-  parts: **Discussions**, the sources each page you visit is looked up on,
-  and **Front pages**, which offers **Topics you follow** or **Top links from
-  your discussion sources**. Top links is the front page you have now, and
-  it stays chosen until you pick Topics.
+- **A front page built from topics.** Under **Sources** in Settings,
+  **Front pages** offers **Topics you follow** or **Top links from your
+  sources**. Top links is the front page you have now, and it stays chosen
+  until you pick a topic.
   Topics offers eight: World, U.S., Business, Technology, Entertainment,
   Sports, Science and Health. Each reads a few subreddits, Lemmy communities
   and Bluesky feeds picked for it, and Technology adds Lobsters' and Hacker
   News's front pages, but only from sources you have on. A topic none of
-  them covers is dimmed, with the sources that would. A story found on more
-  than one source moves up. In the reader on backchnnl.app, each topic gets
+  them covers is dimmed, with the sources that would. Unpick the last topic
+  and the front page goes back to Top links. A story found on more than one
+  source moves up. In the reader on backchnnl.app, each topic gets
   its own icon in the rail, beside the views for the sources it came from.
 
 - **You are asked once how to build it.** A new reader is asked right after
@@ -31,9 +31,8 @@ use to detect updates, so every release bumps it.
 
 ### Changed
 
-- **Sources in Settings lists the sources in two columns**, one on a phone,
-  and says what each part is for. The "What each source supports" table is
-  gone.
+- **Sources in Settings lists the sources in two columns**, one on a phone.
+  The "What each source supports" table is gone.
 
 - **The Sidebar's settings button opens the Settings dialog.** It is the same
   dialog the reader on backchnnl.app uses, with General, Sidebar, Sources and
