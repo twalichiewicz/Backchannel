@@ -6036,12 +6036,10 @@ button {
 	}
 
 	function frontPageFeeds(settings, frontPageIds, enabledIds) {
-		if (frontPageMode(settings) === "sources") {
-			return frontPageIds.map((source) => ({ source, kind: "front" }));
-		}
+		const topLinks = frontPageIds.map((source) => ({ source, kind: "front" }));
 
-		if (!enabledIds.length) {
-			return [];
+		if (frontPageMode(settings) === "sources") {
+			return topLinks;
 		}
 
 		const feeds = [];
@@ -6050,7 +6048,7 @@ button {
 			for (const source of TOPIC_FEED_SOURCES) {
 				const targets = TOPIC_FEEDS[topic][source];
 
-				if (!targets?.length || (TOPIC_ACCOUNT_SOURCES.includes(source) && !enabledIds.includes(source))) {
+				if (!targets?.length || !enabledIds.includes(source)) {
 					continue;
 				}
 
@@ -6066,7 +6064,7 @@ button {
 			}
 		}
 
-		return feeds;
+		return feeds.length ? feeds : topLinks;
 	}
 
 	function bskyFeedStories(items) {
@@ -6202,7 +6200,7 @@ button {
 			return { rows: [], sources: [], topics: [] };
 		}
 
-		if (frontPageMode(settings) === "topics") {
+		if (feeds.some((feed) => feed.topic)) {
 			const lists = await Promise.all(feeds.map((feed) => loadTopicFeed(feed, options.force)));
 
 			return {
@@ -29591,18 +29589,13 @@ ${settingsModalHTML()}
 		const settings = await loadSettings();
 
 		state.sourceIds = frontPageSourceIds(settings);
-		state.topicIds = frontPageMode(settings) === "topics" ? frontPageTopicIds(settings) : [];
+
+		const feeds = frontPageFeeds(settings, state.sourceIds, enabledSourceIds(settings, registeredSourceIds()));
+
+		state.topicIds = frontPageTopicIds(settings).filter((id) => feeds.some((feed) => feed.topic === id));
 
 		if (state.topicIds.length) {
-			const fed = new Set(
-				frontPageFeeds(
-					settings,
-					state.sourceIds,
-					enabledSourceIds(settings, registeredSourceIds()),
-				).map((feed) => feed.source),
-			);
-
-			state.sourceIds = registeredSourceIds().filter((id) => fed.has(id));
+			state.sourceIds = registeredSourceIds().filter((id) => feeds.some((feed) => feed.source === id));
 		}
 
 		state.noSources = !enabledSourceIds(settings, registeredSourceIds()).length;
