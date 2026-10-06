@@ -29594,7 +29594,15 @@ ${settingsModalHTML()}
 		state.topicIds = frontPageMode(settings) === "topics" ? frontPageTopicIds(settings) : [];
 
 		if (state.topicIds.length) {
-			state.sourceIds = [];
+			const fed = new Set(
+				frontPageFeeds(
+					settings,
+					state.sourceIds,
+					enabledSourceIds(settings, registeredSourceIds()),
+				).map((feed) => feed.source),
+			);
+
+			state.sourceIds = registeredSourceIds().filter((id) => fed.has(id));
 		}
 
 		state.noSources = !enabledSourceIds(settings, registeredSourceIds()).length;
@@ -29621,20 +29629,22 @@ ${settingsModalHTML()}
 		const state = appState;
 		const holder = state.ui.shadow.querySelector("#app-rail-sources");
 
+		const topics = (state.topicIds || []).map((id) =>
+			appRailButtonHTML("topic:" + id, TOPICS.find((topic) => topic.id === id)?.label || id, TOPIC_ICONS[id]),
+		);
+		const sources = state.sourceIds.map((id) => {
+			const label = getSource(id)?.label || id;
+			const mark =
+				APP_SOURCE_ICONS[id] ||
+				`<span class="rail-monogram" aria-hidden="true">${escapeHTML(label.slice(0, 2))}</span>`;
+
+			return appRailButtonHTML("source:" + id, label, mark);
+		});
+
 		holder.innerHTML = [
-			...state.sourceIds.map((id) => {
-				const label = getSource(id)?.label || id;
-				const mark =
-					APP_SOURCE_ICONS[id] ||
-					`<span class="rail-monogram" aria-hidden="true">${escapeHTML(label.slice(0, 2))}</span>`;
-
-				return appRailButtonHTML("source:" + id, label, mark);
-			}),
-			...(state.topicIds || []).map((id) => {
-				const label = TOPICS.find((topic) => topic.id === id)?.label || id;
-
-				return appRailButtonHTML("topic:" + id, label, TOPIC_ICONS[id]);
-			}),
+			...topics,
+			...(topics.length && sources.length ? ['<div class="rail-rule" aria-hidden="true"></div>'] : []),
+			...sources,
 		].join("");
 
 		state.ui.shadow.querySelector("#app-rail-rule").hidden = !state.sourceIds.length && !(state.topicIds || []).length;
