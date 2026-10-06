@@ -14,6 +14,8 @@
     const chrome = JSON.parse(localStorage.getItem("backchannel:chrome") || "null");
 
     if (chrome) {
+      document.documentElement.setAttribute("data-backchannel-reader", "");
+
       const dark = chrome.theme === "dark" || (chrome.theme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
       const color = dark ? chrome.dark : chrome.light;
 
@@ -90,6 +92,11 @@
   html[data-backchannel-installed]:has([data-hnewhere-app]) .bezel {
     padding-top: calc(6px + env(safe-area-inset-top, 0px));
     padding-right: calc(6px + env(safe-area-inset-right, 0px));
+  }
+
+  html[data-backchannel-reader] .bezel,
+  html[data-backchannel-installed]:has([data-hnewhere-app]) .bezel {
+    position: absolute;
   }
 
   .chin {
