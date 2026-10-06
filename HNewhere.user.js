@@ -29488,6 +29488,12 @@ ${settingsModalHTML()}
 		const settings = await loadSettings();
 
 		state.sourceIds = frontPageSourceIds(settings);
+		state.topicIds = frontPageMode(settings) === "topics" ? frontPageTopicIds(settings) : [];
+
+		if (state.topicIds.length) {
+			state.sourceIds = [];
+		}
+
 		state.noSources = !enabledSourceIds(settings, registeredSourceIds()).length;
 		renderAppRailSources();
 
@@ -29512,18 +29518,27 @@ ${settingsModalHTML()}
 		const state = appState;
 		const holder = state.ui.shadow.querySelector("#app-rail-sources");
 
-		holder.innerHTML = state.sourceIds
-			.map((id) => {
+		holder.innerHTML = [
+			...state.sourceIds.map((id) => {
 				const label = getSource(id)?.label || id;
 				const mark =
 					APP_SOURCE_ICONS[id] ||
 					`<span class="rail-monogram" aria-hidden="true">${escapeHTML(label.slice(0, 2))}</span>`;
 
 				return appRailButtonHTML("source:" + id, label, mark);
-			})
-			.join("");
+			}),
+			...(state.topicIds || []).map((id) => {
+				const label = TOPICS.find((topic) => topic.id === id)?.label || id;
 
-		state.ui.shadow.querySelector("#app-rail-rule").hidden = !state.sourceIds.length;
+				return appRailButtonHTML(
+					"topic:" + id,
+					label,
+					`<span class="rail-monogram" aria-hidden="true">${escapeHTML(label.replace(/[^A-Za-z]/g, "").slice(0, 2))}</span>`,
+				);
+			}),
+		].join("");
+
+		state.ui.shadow.querySelector("#app-rail-rule").hidden = !state.sourceIds.length && !(state.topicIds || []).length;
 
 		if (
 			state.view.startsWith("source:") &&
@@ -29532,11 +29547,18 @@ ${settingsModalHTML()}
 			state.view = "unread";
 		}
 
+		if (
+			state.view.startsWith("topic:") &&
+			!(state.topicIds || []).includes(state.view.slice("topic:".length))
+		) {
+			state.view = "unread";
+		}
+
 		paintAppRail();
 	}
 
 	function appViewIsFrontPage(view) {
-		return view === "unread" || view === "all" || view.startsWith("source:");
+		return view === "unread" || view === "all" || view.startsWith("source:") || view.startsWith("topic:");
 	}
 
 	function appRowThumbHTML(story) {
@@ -29665,6 +29687,12 @@ ${settingsModalHTML()}
 			const id = view.slice("source:".length);
 
 			return getSource(id)?.label || id;
+		}
+
+		if (view.startsWith("topic:")) {
+			const id = view.slice("topic:".length);
+
+			return TOPICS.find((topic) => topic.id === id)?.label || id;
 		}
 
 		return APP_VIEWS.find((entry) => entry.id === view)?.label || "";
@@ -30510,7 +30538,7 @@ ${settingsModalHTML()}
 		}
 
 		const { queued, watched } = splitQueueEntries(queue, watches);
-		const counts = appViewCounts(state.rows, state.seen, state.sourceIds);
+		const counts = appViewCounts(state.rows, state.seen, state.sourceIds, state.topicIds || []);
 
 		paintAppRailFill({
 			queue: queued.length > 0,
@@ -30528,6 +30556,10 @@ ${settingsModalHTML()}
 
 		for (const id of state.sourceIds) {
 			badges["source:" + id] = counts.sources[id];
+		}
+
+		for (const id of state.topicIds || []) {
+			badges["topic:" + id] = counts.topics[id];
 		}
 
 		for (const badge of state.ui.shadow.querySelectorAll("[data-app-badge]")) {
@@ -33025,6 +33057,10 @@ ${settingsModalHTML()}
 		return [row?.story, ...(row?.also || [])].some((story) => story?.source === sourceId);
 	}
 
+	function rowCarriesTopic(row, topicId) {
+		return [row?.story, ...(row?.also || [])].some((story) => story?.topic === topicId);
+	}
+
 	function appViewRows(rows, view, seen) {
 		if (view === "unread") {
 			return rows.filter((row) => rowIsUnread(row, seen));
@@ -33036,14 +33072,24 @@ ${settingsModalHTML()}
 			return rows.filter((row) => rowCarriesSource(row, sourceId));
 		}
 
+		if (String(view).startsWith("topic:")) {
+			const topicId = view.slice("topic:".length);
+
+			return rows.filter((row) => rowCarriesTopic(row, topicId));
+		}
+
 		return rows;
 	}
 
-	function appViewCounts(rows, seen, sourceIds) {
-		const counts = { unread: 0, all: rows.length, sources: {} };
+	function appViewCounts(rows, seen, sourceIds, topicIds = []) {
+		const counts = { unread: 0, all: rows.length, sources: {}, topics: {} };
 
 		for (const id of sourceIds) {
 			counts.sources[id] = 0;
+		}
+
+		for (const id of topicIds) {
+			counts.topics[id] = 0;
 		}
 
 		for (const row of rows) {
@@ -33056,6 +33102,12 @@ ${settingsModalHTML()}
 			for (const id of sourceIds) {
 				if (rowCarriesSource(row, id)) {
 					counts.sources[id] += 1;
+				}
+			}
+
+			for (const id of topicIds) {
+				if (rowCarriesTopic(row, id)) {
+					counts.topics[id] += 1;
 				}
 			}
 		}
