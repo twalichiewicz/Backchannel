@@ -637,12 +637,6 @@
 		return Boolean(page && entries.has(page));
 	}
 
-	function describeBlockedEntry(entry) {
-		return entry.startsWith(BLOCKED_PAGE_PREFIX)
-			? entry.slice(BLOCKED_PAGE_PREFIX.length)
-			: entry + " (domain-wide)";
-	}
-
 	function queueKey(story) {
 		return story.key || normalizeURL(story.url || "");
 	}
@@ -13856,7 +13850,7 @@ header > .settings-panel {
 	line-height:1.35;
 }
 
-#app-settings-modal:is([data-section="sources"], [data-section="appearance"]) #app-settings-heading {
+#app-settings-modal:is([data-section="sources"], [data-section="appearance"], [data-section="blocked"]) #app-settings-heading {
 	margin-bottom:4px;
 }
 
@@ -14727,40 +14721,145 @@ header > .settings-panel {
 	opacity:.6;
 }
 
-.settings-blocked-list {
-	margin-top:4px;
-}
-
 .settings-hidden-section[hidden] {
 	display:none;
 }
 
-.settings-blocked-site {
-	color:var(--muted);
+.manage-kinds,
+.settings-pane[data-pane="blocked"] > .settings-section-hint {
+	flex-shrink:0;
 }
 
-.settings-blocked-entry {
+.manage-kinds {
+	margin-bottom:10px;
+}
+
+.manage-table {
 	display:flex;
-	align-items:center;
-	justify-content:space-between;
-	gap:8px;
-	padding:3px 0;
-	font-size:11px;
+	flex-direction:column;
+	min-height:0;
+	overflow:hidden;
+	border:1px solid var(--help-border);
+	border-radius:6px;
+	background:var(--help-bg);
 }
 
-.settings-blocked-remove {
-	border:0;
-	background:none;
+.manage-table-head,
+.manage-row {
+	display:grid;
+	grid-template-columns:minmax(0, 1fr) minmax(0, 36%);
+	gap:10px;
+	align-items:center;
+	padding:0 10px;
+}
+
+.manage-table-head {
+	min-height:24px;
+	border-bottom:1px solid var(--surface-divider);
 	color:var(--muted);
-	font-size:14px;
+	font-size:10.5px;
+	font-weight:600;
+}
+
+.manage-table-body {
+	flex:1 1 auto;
+	min-height:72px;
+	overflow-y:auto;
+	outline:none;
+}
+
+.manage-row {
+	min-height:26px;
+	font-size:11.5px;
+	cursor:default;
+}
+
+.manage-row:nth-child(even) {
+	background:var(--hover-tint, rgba(0,0,0,.035));
+}
+
+.manage-row > span {
+	overflow:hidden;
+	white-space:nowrap;
+	text-overflow:ellipsis;
+}
+
+.manage-row > span + span {
+	color:var(--muted);
+}
+
+.manage-row[aria-selected="true"] {
+	background:#0b63ce;
+	background:AccentColor;
+	color:#fff;
+}
+
+.manage-row[aria-selected="true"] > span + span {
+	color:inherit;
+	opacity:.85;
+}
+
+.manage-table-body:focus-visible .manage-row[aria-selected="true"] {
+	box-shadow:inset 0 0 0 1px rgba(255,255,255,.6);
+}
+
+.manage-add-row {
+	padding:3px 6px;
+}
+
+.manage-add-row input {
+	box-sizing:border-box;
+	width:100%;
+	height:22px;
+	padding:0 6px;
+	border:1px solid #0b63ce;
+	border:1px solid AccentColor;
+	border-radius:4px;
+	background:var(--field-bg, var(--surface));
+	color:var(--surface-text);
+	font:inherit;
+	font-size:11.5px;
+	outline:none;
+}
+
+.manage-empty {
+	padding:18px 10px;
+	color:var(--muted);
+	font-size:11px;
+	text-align:center;
+}
+
+.manage-table-tools {
+	display:flex;
+	flex:0 0 auto;
+	border-top:1px solid var(--surface-divider);
+}
+
+.manage-table-tools button {
+	display:inline-grid;
+	place-items:center;
+	width:28px;
+	height:22px;
+	padding:0;
+	border:0;
+	border-right:1px solid var(--surface-divider);
+	background:none;
+	color:var(--surface-text);
+	font:inherit;
+	font-size:15px;
 	line-height:1;
-	padding:0 2px;
 	cursor:pointer;
 }
 
-.settings-blocked-empty {
-	font-size:11px;
-	color:var(--muted);
+.manage-table-tools button:disabled {
+	opacity:.35;
+	cursor:default;
+}
+
+.manage-table-tools button:focus-visible {
+	outline:2px solid #0b63ce;
+	outline:2px solid AccentColor;
+	outline-offset:-2px;
 }
 `;
 
@@ -14975,22 +15074,29 @@ All stored locally.
 </div>
 
 <div class="settings-group settings-group-tight">
-<button id="settings-manage-blocked" class="settings-link-button" type="button" data-pane="blocked" data-pane-name="Manage disabled/hidden">Manage disabled/hidden<span class="settings-link-chevron">&rsaquo;</span></button>
+<button id="settings-manage-blocked" class="settings-link-button" type="button" data-pane="blocked" data-pane-name="Hidden &amp; disabled">Hidden &amp; disabled<span class="settings-link-chevron">&rsaquo;</span></button>
 </div>
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="blocked">
-<div class="segmented">
-<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="disabled" checked><span>Disabled</span></label>
-<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="hidden"><span>Hidden</span></label>
+<div class="settings-section-hint">Manage links you've hidden and sites you've disabled Backchannel on.</div>
+<div class="segmented manage-kinds">
+<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="hidden" checked><span>Hidden links</span></label>
+<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="disabled"><span>Disabled sites</span></label>
 </div>
-<div id="settings-blocked-section" class="settings-hidden-section">
-<div class="settings-option-hint settings-option-hint-slow">Backchannel will not appear on these sites</div>
-<div id="settings-blocked-list" class="settings-blocked-list"></div>
+<div id="settings-hidden-section" class="settings-hidden-section">
+<div class="manage-table">
+<div class="manage-table-head" aria-hidden="true"><span>Link</span><span>Site</span></div>
+<div id="settings-hidden-list" class="manage-table-body" role="listbox" aria-label="Hidden links" tabindex="0"></div>
+<div class="manage-table-tools"><button type="button" class="manage-table-add" aria-label="Hide a link" title="Hide a link">+</button><button type="button" class="manage-table-remove" aria-label="Show the chosen link again" title="Show the chosen link again" disabled>&minus;</button></div>
 </div>
-<div id="settings-hidden-section" class="settings-hidden-section" hidden>
-<div class="settings-option-hint settings-option-hint-slow">Articles you've hidden from Front Pages</div>
-<div id="settings-hidden-list" class="settings-blocked-list"></div>
+</div>
+<div id="settings-blocked-section" class="settings-hidden-section" hidden>
+<div class="manage-table">
+<div class="manage-table-head" aria-hidden="true"><span>Site</span><span>Covers</span></div>
+<div id="settings-blocked-list" class="manage-table-body" role="listbox" aria-label="Disabled sites" tabindex="0"></div>
+<div class="manage-table-tools"><button type="button" class="manage-table-add" aria-label="Disable Backchannel on a site or page" title="Disable Backchannel on a site or page">+</button><button type="button" class="manage-table-remove" aria-label="Turn Backchannel back on for the chosen site" title="Turn Backchannel back on for the chosen site" disabled>&minus;</button></div>
+</div>
 </div>
 </div>
 
@@ -15813,114 +15919,243 @@ ${frontPageChooserHTML()}
 				.catch(console.error);
 		}
 
-		const blockedList = shadow.querySelector("#settings-blocked-list");
+		const manageTable = (body, { load, add, remove, empty, placeholder }) => {
+			const table = body?.closest(".manage-table");
 
-		const renderBlockedList = async () => {
-			if (!blockedList) {
-				return;
+			if (!table) {
+				return async () => {};
 			}
 
-			const sites = await loadBlockedSites();
+			const addButton = table.querySelector(".manage-table-add");
+			const removeButton = table.querySelector(".manage-table-remove");
+			let chosen = null;
 
-			blockedList.replaceChildren();
+			const rows = () => [...body.querySelectorAll(".manage-row")];
 
-			if (!sites.size) {
-				const empty = document.createElement("div");
-
-				empty.className = "settings-blocked-empty";
-				empty.textContent = "No sites disabled yet.";
-				blockedList.appendChild(empty);
-				syncPanesHeight();
-
-				return;
-			}
-
-			for (const host of [...sites].sort()) {
-				const row = document.createElement("div");
-				const name = document.createElement("span");
-				const remove = document.createElement("button");
-				const label = describeBlockedEntry(host);
-
-				row.className = "settings-blocked-entry";
-				name.textContent = label;
-
-				remove.type = "button";
-				remove.className = "settings-blocked-remove";
-				remove.textContent = "×";
-				remove.setAttribute("aria-label", `Stop disabling Backchannel on ${label}`);
-				remove.onclick = async () => {
-					const next = await loadBlockedSites();
-
-					next.delete(host);
-					await saveBlockedSites(next);
-					await renderBlockedList();
-				};
-
-				row.append(name, remove);
-				blockedList.appendChild(row);
-			}
-
-			syncPanesHeight();
-		};
-
-		const hiddenList = shadow.querySelector("#settings-hidden-list");
-
-		const renderHiddenList = async () => {
-			if (!hiddenList) {
-				return;
-			}
-
-			const entries = await loadHiddenStories();
-
-			hiddenList.replaceChildren();
-
-			if (!entries.length) {
-				const empty = document.createElement("div");
-
-				empty.className = "settings-blocked-empty";
-				empty.textContent = "Nothing hidden yet.";
-				hiddenList.appendChild(empty);
-				syncPanesHeight();
-
-				return;
-			}
-
-			for (const entry of entries) {
-				const row = document.createElement("div");
-				const name = document.createElement("span");
-				const remove = document.createElement("button");
-				const label = entry.title || entry.url || entry.key;
-				const site = entry.site || hostLabel(entry.url);
-
-				row.className = "settings-blocked-entry";
-				name.textContent = label;
-				name.title = entry.url || label;
-
-				if (site) {
-					const where = document.createElement("span");
-
-					where.className = "settings-blocked-site";
-					where.textContent = ` (${site})`;
-					name.appendChild(where);
+			const sync = () => {
+				for (const row of rows()) {
+					row.setAttribute("aria-selected", String(row.dataset.key === chosen));
 				}
 
-				remove.type = "button";
-				remove.className = "settings-blocked-remove";
-				remove.textContent = "×";
-				remove.setAttribute("aria-label", `Stop hiding ${label}`);
-				remove.onclick = async () => {
-					await mutateHiddenStories((current) =>
-						removeHiddenStory(current, entry.key),
-					);
-					await renderHiddenList();
+				removeButton.disabled = !chosen;
+			};
+
+			const render = async () => {
+				const items = await load();
+
+				if (!items.some((item) => item.key === chosen)) {
+					chosen = null;
+				}
+
+				body.replaceChildren();
+
+				if (!items.length) {
+					const note = document.createElement("div");
+
+					note.className = "manage-empty";
+					note.textContent = empty;
+					body.appendChild(note);
+				}
+
+				for (const item of items) {
+					const row = document.createElement("div");
+
+					row.className = "manage-row";
+					row.setAttribute("role", "option");
+					row.dataset.key = item.key;
+					row.title = item.title || "";
+
+					for (const text of item.cells) {
+						const cell = document.createElement("span");
+
+						cell.textContent = text;
+						row.appendChild(cell);
+					}
+
+					row.onclick = () => {
+						chosen = item.key;
+						sync();
+						body.focus({ preventScroll: true });
+					};
+
+					body.appendChild(row);
+				}
+
+				sync();
+			};
+
+			const removeChosen = async () => {
+				if (!chosen) {
+					return;
+				}
+
+				const list = rows();
+				const index = list.findIndex((row) => row.dataset.key === chosen);
+				const next = list[index + 1] || list[index - 1];
+
+				await remove(chosen);
+				chosen = next?.dataset.key || null;
+				await render();
+			};
+
+			removeButton.onclick = () => {
+				removeChosen().catch(console.error);
+			};
+
+			body.addEventListener("keydown", (event) => {
+				if (event.target !== body) {
+					return;
+				}
+
+				if (event.key === "Delete" || event.key === "Backspace") {
+					event.preventDefault();
+					removeChosen().catch(console.error);
+				} else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+					const list = rows();
+
+					if (!list.length) {
+						return;
+					}
+
+					event.preventDefault();
+
+					const index = list.findIndex((row) => row.dataset.key === chosen);
+					const next = list[Math.min(Math.max(index + (event.key === "ArrowDown" ? 1 : -1), 0), list.length - 1)] || list[0];
+
+					chosen = next.dataset.key;
+					sync();
+					next.scrollIntoView({ block: "nearest" });
+				}
+			});
+
+			addButton.onclick = () => {
+				const existing = body.querySelector(".manage-add-row input");
+
+				if (existing) {
+					existing.focus();
+					return;
+				}
+
+				const row = document.createElement("div");
+				const input = document.createElement("input");
+				let done = false;
+
+				row.className = "manage-add-row";
+				input.type = "text";
+				input.placeholder = placeholder;
+				input.setAttribute("aria-label", placeholder);
+				input.spellcheck = false;
+				row.appendChild(input);
+				body.querySelector(".manage-empty")?.remove();
+				body.appendChild(row);
+				row.scrollIntoView({ block: "nearest" });
+				input.focus();
+
+				const finish = async (commit) => {
+					if (done) {
+						return;
+					}
+
+					done = true;
+
+					const value = input.value.trim();
+
+					if (commit && value) {
+						const key = await add(value);
+
+						if (key) {
+							chosen = key;
+						}
+					}
+
+					await render();
 				};
 
-				row.append(name, remove);
-				hiddenList.appendChild(row);
-			}
+				input.addEventListener("keydown", (event) => {
+					if (event.key === "Enter") {
+						event.preventDefault();
+						finish(true).catch(console.error);
+					} else if (event.key === "Escape") {
+						event.preventDefault();
+						event.stopPropagation();
+						finish(false).catch(console.error);
+					}
+				});
+				input.addEventListener("blur", () => {
+					finish(Boolean(input.value.trim())).catch(console.error);
+				});
+			};
 
-			syncPanesHeight();
+			return render;
 		};
+
+		const typedAddress = (value) => {
+			try {
+				return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`);
+			} catch {
+				return null;
+			}
+		};
+
+		const renderHiddenList = manageTable(shadow.querySelector("#settings-hidden-list"), {
+			empty: "Nothing hidden yet.",
+			placeholder: "Paste a link to hide",
+			load: async () =>
+				(await loadHiddenStories()).map((entry) => ({
+					key: entry.key,
+					title: entry.url || "",
+					cells: [entry.title || entry.url || entry.key, entry.site || hostLabel(entry.url)],
+				})),
+			add: async (value) => {
+				const address = typedAddress(value);
+
+				if (!address) {
+					return null;
+				}
+
+				const story = { url: address.href, title: "", site: hostLabel(address.href), source: "" };
+
+				await mutateHiddenStories((current) => addHiddenStory(current, story));
+				return hiddenStoryKey(story);
+			},
+			remove: (key) => mutateHiddenStories((current) => removeHiddenStory(current, key)),
+		});
+
+		const renderBlockedList = manageTable(shadow.querySelector("#settings-blocked-list"), {
+			empty: "No sites disabled yet.",
+			placeholder: "A site, like example.com, or a page's address",
+			load: async () =>
+				[...(await loadBlockedSites())]
+					.map((entry) => {
+						const page = entry.startsWith(BLOCKED_PAGE_PREFIX);
+
+						return { key: entry, title: "", cells: [page ? entry.slice(BLOCKED_PAGE_PREFIX.length) : entry, page ? "This page" : "Whole site"] };
+					})
+					.sort((a, b) => a.cells[0].localeCompare(b.cells[0])),
+			add: async (value) => {
+				const address = typedAddress(value);
+
+				if (!address) {
+					return null;
+				}
+
+				const entry = address.pathname === "/" && !address.search ? address.hostname : blockedPageEntry(address.href);
+				const sites = await loadBlockedSites();
+
+				if (entry) {
+					sites.add(entry);
+					await saveBlockedSites(sites);
+				}
+
+				return entry;
+			},
+			remove: async (key) => {
+				const sites = await loadBlockedSites();
+
+				sites.delete(key);
+				await saveBlockedSites(sites);
+			},
+		});
 
 		const blockedSection = shadow.querySelector("#settings-blocked-section");
 		const hiddenSection = shadow.querySelector("#settings-hidden-section");
@@ -25986,6 +26221,23 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 #app-settings-content .settings-group {
 	margin-bottom:12px;
 }
+
+#app-settings-modal[data-section="blocked"] #app-settings-content {
+	display:flex;
+	flex-direction:column;
+	overflow:hidden;
+}
+
+#app-settings-modal[data-section="blocked"] #app-settings-content > .settings-panel,
+#app-settings-modal[data-section="blocked"] #app-settings-content .settings-panes,
+#app-settings-modal[data-section="blocked"] #app-settings-content .settings-pane[data-pane="blocked"],
+#app-settings-modal[data-section="blocked"] #app-settings-content .settings-hidden-section:not([hidden]),
+#app-settings-modal[data-section="blocked"] #app-settings-content .settings-hidden-section:not([hidden]) > .manage-table {
+	display:flex;
+	flex-direction:column;
+	flex:1 1 auto;
+	min-height:0;
+}
 `;
 
 	const SETTINGS_MODAL_PHONE_CSS = `
@@ -28816,7 +29068,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <button type="button" class="app-settings-tab" data-settings-section="appearance"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.2a5.8 5.8 0 1 0 0 11.6c.9 0 1.4-.6 1.4-1.3 0-.7-.5-1-.5-1.6 0-.7.6-1.2 1.3-1.2h1.4a2.2 2.2 0 0 0 2.2-2.2C13.8 4.5 11.2 2.2 8 2.2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5.2" cy="7.6" r=".95" fill="currentColor"/><circle cx="7.4" cy="5.1" r=".95" fill="currentColor"/><circle cx="10.5" cy="5.6" r=".95" fill="currentColor"/></svg><span>Appearance</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
-<button type="button" class="app-settings-tab" data-settings-section="blocked"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12 12 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Manage disabled/hidden</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="blocked"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12 12 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Hidden &amp; disabled</span></button>
 </nav>
 <div id="app-settings-content" class="app-settings-content"><div id="app-settings-heading" class="app-settings-heading">General</div></div>
 </div>
@@ -30519,7 +30771,7 @@ ${settingsModalHTML()}
 		}
 
 		entries.push({ group: "Settings", title: "Sources", note: "Where comments come from", keys: "sources reddit hacker news bluesky lobsters mastodon lemmy settings", run: () => openAppSettingsSection("sources") });
-		entries.push({ group: "Settings", title: "Manage disabled sites", note: "Blocked", keys: "blocked disabled sites manage settings", run: () => openAppSettingsSection("blocked") });
+		entries.push({ group: "Settings", title: "Hidden & disabled", note: "Hidden links and disabled sites", keys: "hidden links blocked disabled sites manage settings", run: () => openAppSettingsSection("blocked") });
 
 		return entries;
 	}
