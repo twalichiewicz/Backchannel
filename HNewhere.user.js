@@ -6109,6 +6109,17 @@ button {
 		return [...byKey.values()];
 	}
 
+	function liftMergedRows(rows) {
+		return rows
+			.map((row, index) => {
+				const sources = new Set([row.story, ...(row.also || [])].map((story) => story?.source)).size;
+
+				return { row, index, sources, place: index / sources };
+			})
+			.sort((a, b) => a.place - b.place || b.sources - a.sources || a.index - b.index)
+			.map((entry) => entry.row);
+	}
+
 	function frontPageCacheKey(feeds) {
 		return (
 			FRONT_PAGE_CACHE_KEY +
@@ -6187,7 +6198,11 @@ button {
 
 		const answered = [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))];
 		const topics = [...new Set(feeds.filter((feed, index) => lists[index].length && feed.topic).map((feed) => feed.topic))];
-		const rows = mergeStoriesByURL(blendStories(lists.filter((list) => list.length)));
+		let rows = mergeStoriesByURL(blendStories(lists.filter((list) => list.length)));
+
+		if (frontPageMode(settings) === "topics") {
+			rows = liftMergedRows(rows);
+		}
 
 		if (!rows.length) {
 			return { rows: cached?.rows || [], sources: cached?.sources || [], topics: cached?.topics || [] };
