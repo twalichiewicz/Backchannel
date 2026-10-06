@@ -11688,8 +11688,26 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			}
 
 			save.disabled = true;
-			await saveSettings({ sources: chosen });
-			await refreshForSourceChange();
+
+			const settings = await saveSettings({ sources: chosen });
+
+			if (settings.frontPageMode !== undefined) {
+				await refreshForSourceChange();
+				return;
+			}
+
+			target.innerHTML = `<div class="source-picker front-page-step">
+<div class="source-picker-title front-page-step-title">How should your front page be built?</div>
+${frontPageChooserHTML()}
+<div class="source-picker-actions"><button class="source-picker-save front-page-step-done" type="button">Done</button></div>
+</div>`;
+
+			const step = wireFrontPageChooser(target.querySelector(".front-page-chooser"), settings);
+
+			target.querySelector(".front-page-step-done").onclick = async () => {
+				await saveSettings(step.choice());
+				await refreshForSourceChange();
+			};
 		};
 	}
 
