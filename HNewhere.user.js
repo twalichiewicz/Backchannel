@@ -11769,8 +11769,8 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 
 		target.innerHTML = `
 <div class="source-picker">
-<div class="source-picker-title">Where should comments come from?</div>
-<div class="source-picker-intro">Pick at least one. Nothing is contacted until you do.</div>
+<div class="source-picker-title">Pick your sources</div>
+<div class="source-picker-intro">Backchannel looks up each page you visit on the sources you pick, and builds Front Pages from them. Nothing is contacted until you choose.</div>
 <div class="source-picker-list">${sourceListHTML()}</div>
 <div class="source-picker-actions">
 <button class="source-picker-save" type="button" disabled>Save</button>
@@ -26452,6 +26452,63 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	display:none !important;
 }
 
+.app-onboarding {
+	position:absolute;
+	inset:0 0 0 var(--rail-column);
+	z-index:6;
+	display:flex;
+	overflow-y:auto;
+	box-sizing:border-box;
+	padding:40px 24px;
+	border-radius:12px 0 0 12px;
+	background:var(--bg);
+	color:var(--text);
+}
+
+.app-onboarding-card {
+	width:100%;
+	max-width:560px;
+	margin:auto;
+	font-size:12px;
+}
+
+.app-onboarding-title {
+	margin:0 0 6px;
+	font-size:20px;
+	font-weight:650;
+	line-height:1.25;
+}
+
+.app-onboarding-intro {
+	margin:0 0 18px;
+	color:var(--muted);
+	font-size:12.5px;
+	line-height:1.45;
+}
+
+.app-onboarding-actions {
+	display:flex;
+	justify-content:flex-end;
+	margin-top:18px;
+}
+
+.app-onboarding-start {
+	height:30px;
+	padding:0 16px;
+	border:0;
+	border-radius:15px;
+	background:var(--accent);
+	color:var(--accent-ink);
+	font:inherit;
+	font-weight:600;
+	cursor:pointer;
+}
+
+.app-onboarding-start:disabled {
+	opacity:.45;
+	cursor:default;
+}
+
 #app-rail {
 	display:flex;
 	flex-direction:column;
@@ -28236,6 +28293,12 @@ header .item-action-link {
 		grid-template-rows:minmax(0, 1fr) auto;
 	}
 
+	.app-onboarding {
+		inset:0;
+		padding:24px 16px 96px;
+		border-radius:0;
+	}
+
 	#app-rail {
 		grid-row:2;
 		flex-direction:row;
@@ -29133,6 +29196,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	function appShellOpenHTML() {
 		return `<div id="app" data-stage="list">
 <div id="app-tip" class="app-tip" role="tooltip" hidden></div>
+<section id="app-onboarding" class="app-onboarding" aria-label="Welcome" hidden></section>
 <div id="app-settings-arrow" class="app-settings-arrow" hidden></div>
 <div id="app-saved-arrow" class="app-settings-arrow is-down" hidden></div>
 <div id="app-saved-menu" class="app-view-menu app-saved-menu" role="menu" aria-label="Saved" hidden>
@@ -29161,6 +29225,7 @@ ${APP_VIEWS.filter((view) => APP_FILLED_VIEWS.includes(view.id))
 <button id="app-search" class="app-stack-button" type="button" aria-label="Search the list" aria-expanded="false" aria-controls="app-search-bar" hidden>${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</button>
 <div id="app-search-page" class="app-search-page" role="dialog" aria-label="Search Backchannel" hidden><div class="app-search-head"><input id="app-search-input" class="app-search-input" type="search" placeholder="Search Backchannel" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search Backchannel"><button id="app-search-close" class="app-search-close" type="button">Cancel</button></div><div id="app-search-results" class="app-search-results"></div></div>
 <nav id="app-rail" aria-label="Views">
+<button id="app-rail-welcome" class="rail-button is-current" type="button" data-tip="Welcome" aria-label="Welcome" aria-current="page" hidden><span class="rail-icon">${APP_ICON('<path fill="currentColor" d="M.5 7h2.4v5H.5zM13.1 4h2.4v5h-2.4z"/><path fill="currentColor" fill-rule="evenodd" d="M3.4 7.6 6.3 5.4a2 2 0 0 1 2.2-.1l1 .6H13v3.2h-1.4l-2.5 3.3a1.1 1.1 0 0 1-1.6.2l-.4-.3-.5.3a1.1 1.1 0 0 1-1.4-.4L3.4 10.6zM7.1 7.6h3.3v.9H7.1zM6.4 9.4l1.6 1.4-.5.5-1.6-1.4zM7.9 8.7l1.6 1.4-.5.5-1.6-1.4z"/>')}</span><span class="rail-label" aria-hidden="true">Welcome</span></button>
 ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).join("\n")}
 <button id="app-rail-search" class="rail-button" type="button" data-tip="Search" aria-label="Search Backchannel" aria-pressed="false" aria-controls="app-search-page"><span class="rail-icon">${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</span><span class="rail-label" aria-hidden="true">Search</span></button>
 <button id="app-saved" class="rail-button" type="button" data-tip="Saved" aria-label="Saved" aria-haspopup="true" aria-expanded="false" aria-controls="app-saved-menu"><span class="rail-icon">${APP_SAVED_ICON}<span class="rail-badge" data-app-badge="saved"></span></span><span class="rail-label" aria-hidden="true">Saved</span></button>
@@ -30953,6 +31018,84 @@ ${settingsModalHTML()}
 		body.replaceChildren(note);
 	}
 
+	function appOnboardingHTML() {
+		return `<div class="app-onboarding-card">
+<h1 class="app-onboarding-title">Welcome to Backchannel</h1>
+<p class="app-onboarding-intro">Backchannel finds what people are saying about the pages you visit, and fills Front Pages with links worth reading, from the sources you pick here. Nothing is contacted until you start.</p>
+<div class="sources-grid">${sourceListHTML({ cells: true })}</div>
+<div class="sources-subhead">Front Pages</div>
+<div class="sources-subhint">Choose what Backchannel shows in Front Pages. Links come only from the sources you've enabled above.</div>
+${frontPageChooserHTML()}
+<div class="app-onboarding-actions"><button class="app-onboarding-start" type="button" disabled>Start reading</button></div>
+</div>`;
+	}
+
+	async function paintAppOnboarding() {
+		const state = appState;
+		const panel = state.ui.shadow.querySelector("#app-onboarding");
+
+		if (!panel) {
+			return;
+		}
+
+		const welcome = state.ui.shadow.querySelector("#app-rail-welcome");
+
+		for (const view of ["unread", "all"]) {
+			const button = state.ui.shadow.querySelector(`#app-rail [data-app-view="${view}"]`);
+
+			if (button) {
+				button.hidden = state.noSources;
+			}
+		}
+
+		if (welcome) {
+			welcome.hidden = !state.noSources;
+		}
+
+		if (!state.noSources) {
+			panel.hidden = true;
+			panel.replaceChildren();
+			return;
+		}
+
+		const control = state.ui.shadow.querySelector("#comment-toggle");
+
+		if (control) {
+			control.hidden = true;
+		}
+
+		if (panel.childElementCount) {
+			panel.hidden = false;
+			return;
+		}
+
+		const base = await loadSettings();
+
+		panel.innerHTML = appOnboardingHTML();
+
+		const boxes = [...panel.querySelectorAll("input[data-source]")];
+		const start = panel.querySelector(".app-onboarding-start");
+		const chosen = () => Object.fromEntries(boxes.map((box) => [box.dataset.source, box.checked]));
+		const chooser = wireFrontPageChooser(panel.querySelector(".front-page-chooser"), { ...base, sources: chosen() });
+
+		panel.addEventListener("change", (event) => {
+			if (!event.target.matches("input[data-source]")) {
+				return;
+			}
+
+			start.disabled = !boxes.some((box) => box.checked);
+			chooser.sync({ ...base, sources: chosen(), ...chooser.choice() });
+		});
+
+		start.onclick = async () => {
+			start.disabled = true;
+			syncSettingsFrontPage?.(await saveSettings({ sources: chosen(), ...chooser.choice() }));
+			await refreshAppSources();
+		};
+
+		panel.hidden = false;
+	}
+
 	async function renderAppList({ force = false } = {}) {
 		const state = appState;
 		const ui = state.ui;
@@ -30961,6 +31104,7 @@ ${settingsModalHTML()}
 		const request = ++state.listSeq;
 
 		paintAppRail();
+		await paintAppOnboarding();
 
 		if (force || state.listView !== view) {
 			resetAppListScroll();
@@ -30973,11 +31117,7 @@ ${settingsModalHTML()}
 		} else if (state.noSources) {
 			state.rows = [];
 			state.rowsByURL = new Map();
-
-			if (!list.querySelector(".source-picker")) {
-				renderSourcePicker(ui, list);
-				resetAppListScroll();
-			}
+			list.replaceChildren();
 		} else {
 			if (state.listView !== view || !list.childElementCount) {
 				renderBrowseSkeleton(list, "Loading Front Pages…");
