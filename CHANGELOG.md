@@ -8,6 +8,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.16] — 2026-10-06
+
+### Added
+
+- **Front Pages built from topics.** Under **Sources** in Settings,
+  **Front Pages** offers **Topics you follow** or **Top links from your
+  sources**. Top links is what Front Pages shows now, and it stays chosen
+  until you pick a topic.
+  Topics offers eight: World, U.S., Business, Technology, Entertainment,
+  Sports, Science and Health. Each reads a few subreddits, Lemmy communities
+  and Bluesky feeds picked for it, and Technology adds Lobsters' and Hacker
+  News's front pages, but only from sources you have on. A topic none of
+  them covers can't be picked, and hovering it says which sources would.
+  A story found on more than one source moves up. In the reader on
+  backchnnl.app, each topic gets its own icon in the rail, beside the views
+  for each source you have on; on a phone they sit under All articles as
+  chips.
+
+- **You are asked once how to build it.** A new reader is asked right after
+  picking sources. A reader who already has sources sees a card at the top of
+  Front Pages, once; closing it keeps Top links.
+
+### Changed
+
+- **Settings' controls take the chosen color.** Checkboxes, switches,
+  radios, topic chips and selected rows were the system blue.
+
+- **Each source is summed up in two short bullets**: what it covers and what
+  its comments are like. Sources links to how each source works, including
+  what each is sent.
+
+- **The reader's tooltips are black, at a normal weight.**
+
+- **Sources in Settings lists the sources in two columns.** The "What each
+  source supports" table is gone.
+
+- **The Sidebar's settings button opens the Settings dialog.** It is the same
+  dialog the reader on backchnnl.app uses, with General, Appearance, Sidebar,
+  Sources and Hidden & disabled sections, in place of the narrow drop-down.
+
+- **Hidden & disabled, once Manage disabled/hidden, is a table.** Switch
+  between the links you've hidden and the sites you've disabled Backchannel
+  on; the table fills the dialog and scrolls inside it. Pick a row and press
+  − or Delete to remove it, or + to hide a link or disable a site or page by
+  its address.
+
+- **The reader's pane buttons read Front Pages and Discussions**, once
+  Articles and Discussion.
+
+- **Settings has an Appearance section.** It lists Theme, Color and the
+  Sidebar toggle, each with what it does beside it. Theme, which was under
+  General, is three pictures: Light, Dark and Auto, which was Detect. Color,
+  which was in the toggle's bar, is its own item. The Sidebar toggle, which
+  was the Backchannel toggle under Sidebar, keeps to its size and corners.
+
+- **The Sidebar toggle's designer shows it on a page.** Under
+  **Appearance**, the toggle sits in the corner of a small browser window,
+  at its real size and color. Drag the square handle to resize it and the
+  round one to round its corners, or type either value; click the label to
+  change it. Circle and Squircle are now a corner radius of 50% and 30%, so
+  a toggle you shaped before looks the same.
+
+### Fixed
+
+- **The reader welcomes you when no source is on.** It shows the sources,
+  each summed up in two bullets, and the Front Pages choice in one place,
+  with Welcome in the rail; **Start reading** saves both. Its list used to say "Pick where comments
+  come from" without offering a way to, and changing views replaced that
+  with "Could not reach any front page."
+
+- **Topics fall back to Top links when no source covers them.** Turning off
+  every source that covers topics left Topics chosen with its picks selected
+  but disabled. Those picks are dropped, and Topics can't be chosen until a
+  source covers them; hovering it says why.
+
+- **A queue opened with no source on leads back to the picker.** With no
+  source on and something queued, opening the queue from the Sidebar's title
+  left no way back to the source picker.
+
+- **The comment button stays hidden while no source is on.** It showed over
+  the source picker, and on discussions that take neither comments nor notes.
+
+- **A color picked in Settings colors the page around the reader**, its
+  background and footer, not just its rail, and it stays after a reload; the
+  rail used to go back to green. Safari's toolbar takes the color too, from
+  the next time the page loads.
+
+- **The reader's rail buttons sit in the middle of the rail.** They were 3px
+  left of it.
+
+- **The reader keeps its rounded corners when it is narrow.** With the list
+  closed below 1100px, the article met the rail with square corners.
+
+- **Counts in the reader's rail no longer cover their icons.** A long count,
+  like 999+, hid the icon it belonged to.
+
+- **Minimizing with no source on leaves the setup toggle**, which opens the
+  source picker, rather than one that reopened to "No discussion found for
+  this page yet".
+
 ## [1.6.15.2] — 2026-10-05
 
 ### Added

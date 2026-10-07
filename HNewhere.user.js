@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.15.2
+// @version      1.6.16
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -295,9 +295,11 @@
 		large: 56,
 	};
 
-	const BUTTON_SHAPES = {
-		circle: "50%",
-		squircle: "30%",
+	const BUTTON_RADIUS_DEFAULT = 50;
+	const BUTTON_RADIUS_MAX = 50;
+	const LEGACY_BUTTON_RADII = {
+		circle: 50,
+		squircle: 30,
 	};
 
 	const BUTTON_MARK_DEFAULT = "BC";
@@ -333,12 +335,20 @@
 		return normalizeButtonSize(next);
 	}
 
+	function normalizeButtonRadius(value, legacyShape) {
+		if (typeof value === "number" && Number.isFinite(value)) {
+			return Math.min(BUTTON_RADIUS_MAX, Math.max(0, Math.round(value)));
+		}
+
+		return LEGACY_BUTTON_RADII[legacyShape] ?? BUTTON_RADIUS_DEFAULT;
+	}
+
 	function buttonFontSizeFor(size) {
 		return Math.min(18, Math.max(9, Math.round(size * 0.3)));
 	}
 
 	let themePreference = "auto";
-	let buttonShapePreference = "circle";
+	let buttonRadiusPreference = BUTTON_RADIUS_DEFAULT;
 	let buttonSizePreference = BUTTON_SIZE_DEFAULT;
 	let buttonMarkPreference = BUTTON_MARK_DEFAULT;
 	let accentPreference = null;
@@ -346,16 +356,21 @@
 	let commentImagesPreference = false;
 
 	function syncAppearancePreferences(settings) {
+		const before = `${themePreference} ${accentPreference}`;
+
 		themePreference = settings.theme || "auto";
-		buttonShapePreference = BUTTON_SHAPES[settings.buttonShape]
-			? settings.buttonShape
-			: "circle";
+		buttonRadiusPreference = normalizeButtonRadius(
+			settings.buttonRadius,
+			settings.buttonShape,
+		);
 		buttonSizePreference = normalizeButtonSize(settings.buttonSize);
 		buttonMarkPreference = normalizeButtonMark(settings.buttonMark);
 		accentPreference =
 			typeof settings.accentColor === "string" ? settings.accentColor : null;
 		keepSidebarSizePreference = settings.keepSidebarSize !== false;
 		commentImagesPreference = settings.commentImages === true;
+
+		return `${themePreference} ${accentPreference}` !== before;
 	}
 	// #endregion hnewhere-test-export
 
@@ -371,8 +386,10 @@
 		hideWithoutDiscussion: false,
 		showButtonWithQueue: false,
 		sources: undefined,
+		frontPageMode: undefined,
+		frontPageTopics: [],
 		theme: "auto",
-		buttonShape: "circle",
+		buttonRadius: undefined,
 		buttonSize: BUTTON_SIZE_DEFAULT,
 		buttonMark: BUTTON_MARK_DEFAULT,
 		accentColor: null,
@@ -554,7 +571,9 @@
 			merged.annotationsWhenSidebarClosed = false;
 		}
 
-		syncAppearancePreferences(merged);
+		if (syncAppearancePreferences(merged)) {
+			reapplyThemes();
+		}
 
 		return merged;
 	}
@@ -567,7 +586,9 @@
 
 		await save(STORAGE.settings, next);
 
-		syncAppearancePreferences(next);
+		if (syncAppearancePreferences(next)) {
+			reapplyThemes();
+		}
 
 		return next;
 	}
@@ -614,12 +635,6 @@
 		const page = blockedPageEntry(url);
 
 		return Boolean(page && entries.has(page));
-	}
-
-	function describeBlockedEntry(entry) {
-		return entry.startsWith(BLOCKED_PAGE_PREFIX)
-			? entry.slice(BLOCKED_PAGE_PREFIX.length)
-			: entry + " (domain-wide)";
 	}
 
 	function queueKey(story) {
@@ -3192,19 +3207,19 @@
 		return [...SOURCES.keys()];
 	}
 
-	function sourceListHTML({ idPrefix = "" } = {}) {
+	function sourceListHTML({ idPrefix = "", cells = false } = {}) {
 		return [...SOURCES.values()]
 			.map(
-				(source) => `
+				(source) => `${cells ? '<div class="source-cell">' : ""}
 <label class="settings-option">
 <input${idPrefix ? ` id="${escapeHTML(idPrefix + source.id)}"` : ""} data-source="${escapeHTML(source.id)}" type="checkbox">
 <span>${escapeHTML(source.label)}${source.slow ? ` <span class="op-pill op-pill-slow" tabindex="0" role="note" aria-label="Slower comment fetch source">⧗<span class="op-pill-tip" aria-hidden="true">Slower comment fetch source</span></span>` : ""}</span>
 </label>
 ${
-	source.caveat
-		? `<div class="settings-option-hint">${escapeHTML(source.caveat)}${source.slow ? `<p class="settings-option-hint-slow">This source takes longer to fetch comments, so they may take a moment to appear.</p>` : ""}</div>`
+	source.points
+		? `<ul class="source-points">${source.points.map((point) => `<li>${escapeHTML(point)}</li>`).join("")}</ul>`
 		: ""
-}`,
+}${cells ? "</div>" : ""}`,
 			)
 			.join("");
 	}
@@ -3266,8 +3281,10 @@ ${
 		origins: ["news.ycombinator.com"],
 		label: "Hacker News",
 		shortLabel: "HN",
-		caveat:
-			"Will send each page you visit to Algolia's Hacker News search, with no identifier attached. Vote, reply and submit through your existing HN session.",
+		points: [
+			"Tech, startups and science",
+			"Long, threaded comment sections",
+		],
 		capabilities: { vote: true, reply: true, submit: true },
 
 		submitForm: {
@@ -3462,8 +3479,10 @@ ${
 		origins: ["reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com"],
 		label: "Reddit",
 		shortLabel: "Reddit",
-		caveat:
-			"Will send each page you visit to reddit.com. Signed in to Reddit, those requests arrive as your account. Signed out, they carry only the long-lived device id your browser already holds. Vote, reply and submit through your existing Reddit session.",
+		points: [
+			"Communities on almost any topic",
+			"Threaded comments with votes",
+		],
 		capabilities: { vote: true, reply: true, submit: true },
 
 		submitForm: {
@@ -3690,8 +3709,10 @@ ${
 		slow: true,
 		ageLabel: "Last Bluesky comment",
 		threadArrivesWhole: true,
-		caveat:
-			"Will send each page you visit to Constellation, an independent index of Bluesky links, not to Bluesky. Bluesky is asked only about the posts Constellation names. Signed in or out, these requests carry no account.",
+		points: [
+			"Posts and replies that link the page",
+			"Short, social commentary",
+		],
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => "https://bsky.app/profile/" + encodeURIComponent(handle),
@@ -3875,8 +3896,10 @@ ${
 		label: "Lobsters",
 		shortLabel: "Lobsters",
 		threadArrivesWhole: true,
-		caveat:
-			"Will send the domain of each page you visit to lobste.rs, not the full address. Signed in or out, these requests carry no account.",
+		points: [
+			"Programming and computing",
+			"Small, focused comment threads",
+		],
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (user) => "https://lobste.rs/~" + encodeURIComponent(user),
@@ -3968,8 +3991,10 @@ ${
 		slow: true,
 		ageLabel: "Last active on Wikipedia",
 		threadArrivesWhole: true,
-		caveat:
-			"Will send each page you visit to Wikipedia's API to find pages that link it. No account, signed in or out.",
+		points: [
+			"Wikipedia articles that link the page",
+			"Background and context, not comments",
+		],
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (author) =>
@@ -4098,8 +4123,10 @@ ${
 		shortLabel: "Hypothes.is",
 		ageLabel: "Last annotation",
 		threadArrivesWhole: true,
-		caveat:
-			"Will send each page you visit to the Hypothes.is API to find public annotations on it. No account, signed in or out.",
+		points: [
+			"Public annotations on the page",
+			"Notes pinned to passages",
+		],
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (author) =>
@@ -5249,8 +5276,10 @@ button {
 		slow: true,
 		ageLabel: "Last Mastodon post",
 		threadArrivesWhole: true,
-		caveat:
-			"Will send the domain of each page you visit to Tootfinder, an opt-in index of Mastodon posts. It indexes only people who chose to be searchable. Signed in or out, these requests carry no account.",
+		points: [
+			"Posts from people who chose to be found",
+			"Federated social replies",
+		],
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => {
@@ -5347,8 +5376,10 @@ button {
 		label: "Lemmy",
 		shortLabel: "Lemmy",
 		slow: true,
-		caveat:
-			"Will send each page you visit to lemmy.world, a large Lemmy instance whose federation reaches across the network. No account, signed in or out.",
+		points: [
+			"Federated communities, like Reddit",
+			"Threaded comments with votes",
+		],
 		capabilities: { vote: false, reply: false, submit: false },
 
 		profileURL: (handle) => "https://lemmy.world/u/" + handle,
@@ -5934,25 +5965,268 @@ button {
 		return sorted;
 	}
 
-	const FRONT_PAGE_CACHE_KEY = "HNewhere:frontpage_cache";
-
-	const FRONT_PAGE_TTL = 5 * 60 * 1000;
-
 	function frontPageSourceIds(settings) {
 		return enabledSourceIds(settings, registeredSourceIds()).filter((id) =>
 			hasFrontPage(getSource(id)),
 		);
 	}
 
-	async function loadFrontPages(options = {}) {
-		const settings = options.settings || (await loadSettings());
-		const ids = frontPageSourceIds(settings);
+	// #region hnewhere-test-export
+	const FRONT_PAGE_CACHE_KEY = "HNewhere:frontpage_cache";
 
-		if (!ids.length) {
-			return { rows: [], sources: [] };
+	const FRONT_PAGE_TTL = 5 * 60 * 1000;
+
+	const TOPICS = [
+		{ id: "world", label: "World" },
+		{ id: "us", label: "U.S." },
+		{ id: "business", label: "Business" },
+		{ id: "technology", label: "Technology" },
+		{ id: "entertainment", label: "Entertainment" },
+		{ id: "sports", label: "Sports" },
+		{ id: "science", label: "Science" },
+		{ id: "health", label: "Health" },
+	];
+
+	const TOPIC_FEEDS = {
+		world: {
+			reddit: ["worldnews", "europe", "geopolitics"],
+			lemmy: ["world@lemmy.world", "europe@feddit.org"],
+			bsky: ["at://did:plc:3sn6bogankaicebzdb7liro3/app.bsky.feed.generator/aaajaq4ut77am"],
+		},
+		us: {
+			reddit: ["politics", "inthenews", "news"],
+			lemmy: ["politics@lemmy.world", "news@lemmy.world"],
+			bsky: [
+				"at://did:plc:7mtqkeetxgxqfyhyi2dnyga2/app.bsky.feed.generator/aaadhh6hwvaca",
+				"at://did:plc:kkf4naxqmweop7dv4l2iqqf5/app.bsky.feed.generator/verified-news",
+			],
+		},
+		business: {
+			reddit: ["economics", "business"],
+			bsky: ["at://did:plc:cndfx4udwgvpjaakvxvh7wm5/app.bsky.feed.generator/flipboard-biz"],
+		},
+		technology: {
+			reddit: ["technology", "Futurology"],
+			lemmy: ["technology@lemmy.world"],
+			bsky: ["at://did:plc:cndfx4udwgvpjaakvxvh7wm5/app.bsky.feed.generator/flipboard-tech"],
+			lobsters: ["hottest"],
+			hn: ["news"],
+		},
+		entertainment: {
+			reddit: ["entertainment", "television", "movies", "gaming"],
+			lemmy: ["games@lemmy.world"],
+			bsky: [
+				"at://did:plc:opm7kjzippurg433jh7rt4ax/app.bsky.feed.generator/aaacvdfm2b4ig",
+				"at://did:plc:2hwwem55ce6djnk6bn62cstr/app.bsky.feed.generator/aaaotdzmoni2q",
+			],
+		},
+		sports: {
+			reddit: ["nfl", "nba", "soccer", "CFB", "formula1", "MMA", "baseball", "hockey", "sports"],
+			bsky: ["at://did:plc:lcn5zsz2e7kjwoe4ldf3chr5/app.bsky.feed.generator/aaanstr6k5dvo"],
+		},
+		science: {
+			reddit: ["science", "space"],
+			bsky: ["at://did:plc:jfhpnnst6flqway4eaeqzj2a/app.bsky.feed.generator/for-science"],
+		},
+		health: {
+			reddit: ["health"],
+			bsky: [
+				"at://did:plc:xqbbs34shcevzm326a4rvftn/app.bsky.feed.generator/aaabre5ak5ddi",
+				"at://did:plc:egtk4i4s3a2cykq3pa5nrkqr/app.bsky.feed.generator/aaaarylo7rb2e",
+			],
+		},
+	};
+
+	const TOPIC_FEED_SOURCES = ["hn", "reddit", "lemmy", "lobsters", "bsky"];
+
+	function frontPageTopicIds(settings) {
+		const chosen = Array.isArray(settings?.frontPageTopics) ? settings.frontPageTopics : [];
+
+		return [...new Set(chosen)].filter((id) => TOPIC_FEEDS[id]);
+	}
+
+	function frontPageMode(settings) {
+		return settings?.frontPageMode === "topics" && frontPageTopicIds(settings).length
+			? "topics"
+			: "sources";
+	}
+
+	function frontPageFeeds(settings, frontPageIds, enabledIds) {
+		const topLinks = frontPageIds.map((source) => ({ source, kind: "front" }));
+
+		if (frontPageMode(settings) === "sources") {
+			return topLinks;
 		}
 
-		const cacheKey = FRONT_PAGE_CACHE_KEY + ":" + ids.join(",");
+		const feeds = [];
+
+		for (const topic of frontPageTopicIds(settings)) {
+			for (const source of TOPIC_FEED_SOURCES) {
+				const targets = TOPIC_FEEDS[topic][source];
+
+				if (!targets?.length || !enabledIds.includes(source)) {
+					continue;
+				}
+
+				if (source === "reddit") {
+					feeds.push({ topic, source, kind: "subreddits", target: targets.join("+") });
+				} else if (source === "lemmy") {
+					feeds.push(...targets.map((target) => ({ topic, source, kind: "community", target })));
+				} else if (source === "bsky") {
+					feeds.push(...targets.map((target) => ({ topic, source, kind: "feed", target })));
+				} else {
+					feeds.push({ topic, source, kind: "front" });
+				}
+			}
+		}
+
+		return feeds.length ? feeds : topLinks;
+	}
+
+	function bskyFeedStories(items) {
+		const byKey = new Map();
+
+		for (const item of items || []) {
+			const post = item?.post;
+			const external = post?.embed?.external || post?.embed?.media?.external;
+			const url = external?.uri || "";
+			const key = normalizeURL(url);
+
+			if (!key || !isOffSiteLink(url, ["bsky.app"])) {
+				continue;
+			}
+
+			const time = Math.floor(Date.parse(post.indexedAt) / 1000) || 0;
+			const score = (post.likeCount || 0) + (post.repostCount || 0);
+			const existing = byKey.get(key);
+
+			if (existing) {
+				existing.score += score;
+				existing.descendants += post.replyCount || 0;
+				existing.time = Math.min(existing.time, time);
+				continue;
+			}
+
+			const rkey = String(post.uri || "").split("/").pop();
+
+			byKey.set(key, {
+				source: "bsky",
+				key,
+				id: post.uri,
+				url,
+				title: external.title || hostLabel(url),
+				by: post.author?.handle || "",
+				score,
+				time,
+				descendants: post.replyCount || 0,
+				site: hostLabel(url),
+				permalink: post.author?.handle && rkey ? `https://bsky.app/profile/${post.author.handle}/post/${rkey}` : "",
+			});
+		}
+
+		return [...byKey.values()];
+	}
+
+	function liftMergedRows(rows) {
+		return rows
+			.map((row, index) => {
+				const sources = new Set([row.story, ...(row.also || [])].map((story) => story?.source)).size;
+
+				return { row, index, sources, place: index / sources };
+			})
+			.sort((a, b) => a.place - b.place || b.sources - a.sources || a.index - b.index)
+			.map((entry) => entry.row);
+	}
+
+	function frontPageCacheKey(feeds) {
+		return (
+			FRONT_PAGE_CACHE_KEY +
+			":" +
+			feeds
+				.map((feed) => (feed.topic ? `${feed.topic}/${feed.source}/${feed.target || ""}` : feed.source))
+				.join(",")
+		);
+	}
+	// #endregion hnewhere-test-export
+
+	async function fetchFrontPageFeed(feed) {
+		let stories = [];
+
+		if (feed.kind === "front") {
+			stories = (await getSource(feed.source).frontPage()) || [];
+		} else if (feed.kind === "subreddits") {
+			const result = await redditFetch(`/r/${feed.target}.json?limit=100`);
+
+			stories = (result?.json?.data?.children || [])
+				.map((child) => child.data)
+				.filter((post) => post?.id && isOffSiteLink(post.url, REDDIT_SELF_HOSTS))
+				.map(redditStory);
+		} else if (feed.kind === "community") {
+			const res = await lemmyJSON(
+				`https://lemmy.world/api/v3/post/list?community_name=${encodeURIComponent(feed.target)}&sort=Active&type_=All&limit=50`,
+			);
+
+			stories = (res?.posts || [])
+				.filter((view) => isOffSiteLink(view.post?.url, [], ["/pictrs/"]))
+				.map(lemmyStory);
+		} else if (feed.kind === "feed") {
+			const res = await bskyJSON(
+				`${BSKY_APPVIEW}/app.bsky.feed.getFeed?feed=${encodeURIComponent(feed.target)}&limit=100`,
+			);
+
+			stories = bskyFeedStories(res?.feed);
+		}
+
+		return feed.topic ? stories.map((story) => ({ ...story, topic: feed.topic })) : stories;
+	}
+
+	const FRONT_PAGE_FEED_KEY = "HNewhere:frontpage_feed:";
+
+	async function loadTopicFeed(feed, force) {
+		const key = FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`;
+		const cached = await load(key, null);
+
+		if (!force && cached?.stories?.length && Date.now() - cached.timestamp < FRONT_PAGE_TTL) {
+			return cached.stories;
+		}
+
+		try {
+			const stories = await fetchFrontPageFeed(feed);
+
+			if (stories.length) {
+				await save(key, { timestamp: Date.now(), stories });
+				return stories;
+			}
+		} catch (e) {
+			console.warn("Backchannel " + feed.source + " topic feed failed:", e);
+		}
+
+		return cached?.stories || [];
+	}
+
+	async function loadFrontPages(options = {}) {
+		const settings = options.settings || (await loadSettings());
+		const feeds = frontPageFeeds(
+			settings,
+			frontPageSourceIds(settings),
+			enabledSourceIds(settings, registeredSourceIds()),
+		);
+
+		if (!feeds.length) {
+			return { rows: [], sources: [], topics: [] };
+		}
+
+		if (feeds.some((feed) => feed.topic)) {
+			const lists = await Promise.all(feeds.map((feed) => loadTopicFeed(feed, options.force)));
+
+			return {
+				rows: liftMergedRows(mergeStoriesByURL(blendStories(lists.filter((list) => list.length)))),
+				sources: [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))],
+				topics: [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.topic))],
+			};
+		}
+
+		const cacheKey = frontPageCacheKey(feeds);
 		const cached = await load(cacheKey, null);
 
 		if (
@@ -5960,32 +6234,31 @@ button {
 			cached?.rows?.length &&
 			Date.now() - cached.timestamp < FRONT_PAGE_TTL
 		) {
-			return { rows: cached.rows, sources: cached.sources || ids };
+			return { rows: cached.rows, sources: cached.sources || [], topics: cached.topics || [] };
 		}
 
 		const lists = await Promise.all(
-			ids.map(async (id) => {
+			feeds.map(async (feed) => {
 				try {
-					return (await getSource(id).frontPage()) || [];
+					return (await getSource(feed.source).frontPage()) || [];
 				} catch (e) {
-					console.warn("Backchannel " + id + " front page failed:", e);
+					console.warn("Backchannel " + feed.source + " front page failed:", e);
 					return [];
 				}
 			}),
 		);
 
-		const answered = ids.filter((id, index) => lists[index].length);
-		const rows = mergeStoriesByURL(
-			blendStories(lists.filter((list) => list.length)),
-		);
+		const answered = [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))];
+		const topics = [...new Set(feeds.filter((feed, index) => lists[index].length && feed.topic).map((feed) => feed.topic))];
+		const rows = mergeStoriesByURL(blendStories(lists.filter((list) => list.length)));
 
 		if (!rows.length) {
-			return { rows: cached?.rows || [], sources: cached?.sources || [] };
+			return { rows: cached?.rows || [], sources: cached?.sources || [], topics: cached?.topics || [] };
 		}
 
-		await save(cacheKey, { timestamp: Date.now(), rows, sources: answered });
+		await save(cacheKey, { timestamp: Date.now(), rows, sources: answered, topics });
 
-		return { rows, sources: answered };
+		return { rows, sources: answered, topics };
 	}
 
 	// -------------------------
@@ -6447,12 +6720,12 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
-	function joinWithAnd(items) {
+	function joinWithAnd(items, conjunction = "and") {
 		if (items.length < 3) {
-			return items.join(" and ");
+			return items.join(` ${conjunction} `);
 		}
 
-		return items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
+		return items.slice(0, -1).join(", ") + ` ${conjunction} ` + items[items.length - 1];
 	}
 
 	// #region hnewhere-test-export
@@ -6874,9 +7147,76 @@ button {
 		if (host.hasAttribute("data-hnewhere-page-mode")) {
 			paintPageCanvas(host);
 		}
+
+		if (host.hasAttribute("data-hnewhere-app")) {
+			paintPageChrome(host);
+		}
+	}
+
+	const PAGE_CHROME_CSS = `
+html[data-backchannel-installed] body,
+html[data-backchannel-installed] .bezel,
+html[data-backchannel-installed] .chin {
+	background:var(--backchannel-chrome);
+}
+`;
+
+	let pageChromeStyled = false;
+
+	const PAGE_CHROME_KEY = "backchannel:chrome";
+
+	function pageChromeColors() {
+		const override = accentOverridePalette();
+
+		return override
+			? { light: override.light.accent, dark: override.dark.headerBg }
+			: { light: ACCENT, dark: HEADER_BG_DARK };
+	}
+
+	function stylePageChrome() {
+		if (pageChromeStyled) {
+			return;
+		}
+
+		pageChromeStyled = true;
+
+		try {
+			const sheet = new CSSStyleSheet();
+
+			sheet.replaceSync(PAGE_CHROME_CSS);
+			document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+		} catch {
+			const style = document.createElement("style");
+
+			style.textContent = PAGE_CHROME_CSS;
+			(document.head || document.documentElement).appendChild(style);
+		}
+	}
+
+	function paintPageChrome(host) {
+		const color = getComputedStyle(host).backgroundColor;
+
+		if (!color || color === "rgba(0, 0, 0, 0)" || color === "transparent") {
+			return;
+		}
+
+		document.documentElement.style.setProperty("--backchannel-chrome", color);
+		stylePageChrome();
+		document.querySelector('meta[name="theme-color"]')?.setAttribute("content", color);
+
+		try {
+			localStorage.setItem(PAGE_CHROME_KEY, JSON.stringify({ theme: themePreference, ...pageChromeColors() }));
+		} catch {
+		}
 	}
 
 	const themeAppliers = new Set();
+
+	function reapplyThemes() {
+		for (const apply of themeAppliers) {
+			apply();
+		}
+	}
 
 	function watchTheme(host) {
 		const apply = () => applyThemeToHost(host);
@@ -6943,6 +7283,7 @@ button {
 	// #region hnewhere-test-export
 	const ACCENT = "#237140";
 	const ACCENT_DARK = "#3fa96a";
+	const HEADER_BG_DARK = "#1b5732";
 
 	const ACCENT_RGB = "35,113,64";
 	const ACCENT_DARK_RGB = "63,169,106";
@@ -7258,8 +7599,7 @@ button {
 			width: `${size}px`,
 			height: `${size}px`,
 			fontSize: `${buttonFontSizeFor(size)}px`,
-			borderRadius:
-				BUTTON_SHAPES[buttonShapePreference] || BUTTON_SHAPES.circle,
+			borderRadius: `${buttonRadiusPreference}%`,
 		});
 	}
 
@@ -8989,14 +9329,6 @@ button {
 		return verdict?.state === "out" && authVerdictUsable(verdict, now);
 	}
 
-	function capabilityMark(supported, verdict, now) {
-		if (!supported) {
-			return "no";
-		}
-
-		return shouldAskToSignIn(verdict, now) ? "signin" : "yes";
-	}
-
 	// #endregion hnewhere-test-export
 
 	const rememberedAuthVerdicts = new Map();
@@ -9235,7 +9567,10 @@ button {
 	async function applyButtonPosition(button) {
 		const saved = await load(STORAGE.position, null);
 
-		if (!saved) return;
+		if (!saved) {
+			pinButtonStyle(button, { left: null, top: "16px", right: "16px" });
+			return;
+		}
 
 		const { x, y } = clampButtonToViewport(button, saved.x, saved.y);
 
@@ -9471,13 +9806,16 @@ button {
 			panel.classList.toggle("browsing", on);
 			refreshSidebarSubtitle(ui);
 
-			const stranded = on && !sidebarHasDiscussion;
+			const picking = Boolean(ui.body?.querySelector(".source-picker"));
+			const stranded = on && !sidebarHasDiscussion && !picking;
 
 			toggle.disabled = panel.classList.contains("queue-only") || stranded;
 			toggle.title = stranded
 				? "No discussion found for this page"
 				: on
-					? "Back to this page's discussion"
+					? picking
+						? "Back to choosing sources"
+						: "Back to this page's discussion"
 					: browseLabel();
 
 			panel.classList.remove("submitting");
@@ -9769,7 +10107,7 @@ button {
 				await mutateHiddenStories((entries) => addHiddenStory(entries, story));
 				await options.reload?.();
 
-				showToast("Article hidden from front pages", {
+				showToast("Article hidden from Front Pages", {
 					action: {
 						label: "undo",
 						onAct: () => {
@@ -9849,7 +10187,7 @@ button {
 	let frontPageAvailable = true;
 
 	function browseLabel() {
-		return frontPageAvailable ? "front pages and your queue" : "Your queue";
+		return frontPageAvailable ? "Front Pages and your queue" : "Your queue";
 	}
 
 	async function refreshSubmitAffordance(root) {
@@ -9870,7 +10208,12 @@ button {
 		}
 
 		const settings = await loadSettings();
-		frontPageAvailable = frontPageSourceIds(settings).length > 0;
+		frontPageAvailable =
+			frontPageFeeds(
+				settings,
+				frontPageSourceIds(settings),
+				enabledSourceIds(settings, registeredSourceIds()),
+			).length > 0;
 
 		if (frontTab) {
 			frontTab.hidden = !frontPageAvailable;
@@ -10710,14 +11053,17 @@ button {
 		}
 	}
 
-	function setBlendNote(ui, sources) {
-		setBrowseNote(
-			ui,
-			sources.length < 2
-				? ""
-				: "Blended from " +
-						joinWithAnd(sources.map((id) => getSource(id)?.label || id)),
-		);
+	function setBlendNote(ui, sources, topics = []) {
+		const sourceNames = joinWithAnd(sources.map((id) => getSource(id)?.label || id));
+
+		if (topics.length) {
+			const topicNames = joinWithAnd(topics.map((id) => TOPICS.find((topic) => topic.id === id)?.label || id));
+
+			setBrowseNote(ui, `${topicNames}, from ${sourceNames}`);
+			return;
+		}
+
+		setBrowseNote(ui, sources.length < 2 ? "" : "Blended from " + sourceNames);
 	}
 
 	const BROWSE_SKELETON_WIDTHS = ["92%", "74%", "86%", "63%", "81%", "70%", "88%", "58%"];
@@ -10748,11 +11094,11 @@ button {
 
 	async function renderFrontPageView(ui, list) {
 		if (!list.childElementCount) {
-			renderBrowseSkeleton(list, "Loading front pages…");
+			renderBrowseSkeleton(list, "Loading Front Pages…");
 		}
 
 		const requested = browsePage;
-		const [{ rows: allRows, sources }, queued, hiddenKeys] = await Promise.all([
+		const [{ rows: allRows, sources, topics }, queued, hiddenKeys] = await Promise.all([
 			loadFrontPages(),
 			loadQueue(),
 			loadHiddenStoryKeys(),
@@ -10765,15 +11111,15 @@ button {
 		const queuedKeys = new Set(queued.map(queueKey));
 		const rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
 
-		setBlendNote(ui, sources);
+		setBlendNote(ui, sources, topics);
 
 		if (!allRows.length) {
-			list.textContent = "Could not reach any front page.";
+			list.textContent = "Could not load Front Pages.";
 			return;
 		}
 
 		if (!rows.length) {
-			list.textContent = "Everything on the front pages is hidden.";
+			list.textContent = "Everything in Front Pages is hidden.";
 			return;
 		}
 
@@ -10794,6 +11140,12 @@ button {
 					reload: () => renderBrowseView(ui),
 				}),
 			);
+
+		const cardSettings = await loadSettings();
+
+		if (cardSettings.frontPageMode === undefined && browseTab === "front") {
+			list.prepend(frontPageCardElement(cardSettings, () => refreshFrontPageConsumers()));
+		}
 
 		refreshFavoriteControls().catch(console.error);
 
@@ -11408,19 +11760,25 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 		})();
 	}
 
-	function renderSourcePicker(ui) {
-		ui.body.innerHTML = `
+	function renderSourcePicker(ui, target = ui.body) {
+		const control = ui.shadow?.querySelector("#comment-toggle");
+
+		if (control) {
+			control.hidden = true;
+		}
+
+		target.innerHTML = `
 <div class="source-picker">
-<div class="source-picker-title">Where should comments come from?</div>
-<div class="source-picker-intro">Pick at least one. Nothing is contacted until you do.</div>
+<div class="source-picker-title">Pick your sources</div>
+<div class="source-picker-intro">Backchannel looks up each page you visit on the sources you pick, and builds Front Pages from them. Nothing is contacted until you choose.</div>
 <div class="source-picker-list">${sourceListHTML()}</div>
 <div class="source-picker-actions">
 <button class="source-picker-save" type="button" disabled>Save</button>
 </div>
 </div>`;
 
-		const list = ui.body.querySelector(".source-picker-list");
-		const save = ui.body.querySelector(".source-picker-save");
+		const list = target.querySelector(".source-picker-list");
+		const save = target.querySelector(".source-picker-save");
 
 		const syncSave = () => {
 			save.disabled = !list.querySelector("input[data-source]:checked");
@@ -11444,9 +11802,240 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			}
 
 			save.disabled = true;
-			await saveSettings({ sources: chosen });
-			await refreshForSourceChange();
+
+			const settings = await saveSettings({ sources: chosen });
+
+			if (settings.frontPageMode !== undefined) {
+				await refreshForSourceChange();
+				return;
+			}
+
+			target.innerHTML = `<div class="source-picker front-page-step">
+<div class="source-picker-title front-page-step-title">How should Front Pages be built?</div>
+${frontPageChooserHTML()}
+<div class="source-picker-actions"><button class="source-picker-save front-page-step-done" type="button">Done</button></div>
+</div>`;
+
+			const step = wireFrontPageChooser(target.querySelector(".front-page-chooser"), settings);
+
+			target.querySelector(".front-page-step-done").onclick = async () => {
+				syncSettingsFrontPage?.(await saveSettings(step.choice()));
+				await refreshForSourceChange();
+			};
 		};
+	}
+
+	let frontPageChooserCount = 0;
+
+	function frontPageChooserHTML() {
+		const name = `hnewhere-front-page-${++frontPageChooserCount}`;
+
+		return `<div class="front-page-chooser" role="radiogroup" aria-label="Front Pages">
+<div class="front-page-choice">
+<label class="front-page-choice-label"><input type="radio" name="${name}" value="topics"><span>Topics you follow</span></label>
+<div class="front-page-choice-hint">Show popular links from your sources that match the topics you select.</div>
+<div class="front-page-topics-panel">
+<div class="front-page-topics" role="group" aria-label="Topics">${TOPICS.map((topic) => `<button type="button" class="front-page-topic" data-topic="${escapeHTML(topic.id)}" aria-pressed="false">${TOPIC_ICONS[topic.id]}<span>${escapeHTML(topic.label)}</span></button>`).join("")}</div>
+</div>
+</div>
+<div class="front-page-choice">
+<label class="front-page-choice-label"><input type="radio" name="${name}" value="sources"><span>Top links from your sources</span></label>
+<div class="front-page-choice-hint front-page-top-hint"></div>
+</div>
+<div class="front-page-hover-tip" role="tooltip" hidden></div>
+</div>`;
+	}
+
+	let syncSettingsFrontPage = null;
+
+	function wireFrontPageChooser(root, settings, { onChange } = {}) {
+		const radios = [...root.querySelectorAll('input[type="radio"]')];
+		const topicsRadio = radios.find((radio) => radio.value === "topics");
+		const panel = root.querySelector(".front-page-topics-panel");
+		const topHint = root.querySelector(".front-page-top-hint");
+		const chips = [...root.querySelectorAll(".front-page-topic")];
+		const savedMode = (next) => (next?.frontPageMode === "topics" ? "topics" : "sources");
+		let mode = savedMode(settings);
+		let picked = frontPageTopicIds(settings);
+		let emitted = null;
+
+		const choice = () => ({ frontPageMode: mode, frontPageTopics: [...picked] });
+
+		const emit = () => {
+			emitted = choice();
+			onChange?.(emitted);
+		};
+
+		const paint = () => {
+			const enabled = enabledSourceIds(settings, registeredSourceIds());
+			const covered = (id) => TOPIC_FEED_SOURCES.some((source) => enabled.includes(source) && TOPIC_FEEDS[id]?.[source]?.length);
+			const available = TOPICS.some((topic) => covered(topic.id));
+			const kept = picked.filter(covered);
+			let changed = kept.length !== picked.length;
+
+			picked = kept;
+
+			if (!available && mode === "topics") {
+				mode = "sources";
+				changed = true;
+			}
+
+			const topicsLabel = topicsRadio.closest(".front-page-choice-label");
+
+			topicsRadio.disabled = !available;
+			topicsLabel.classList.toggle("is-unavailable", !available);
+
+			if (available) {
+				delete topicsLabel.dataset.hoverTip;
+			} else {
+				topicsLabel.dataset.hoverTip = "Turn on a source that covers topics to follow them.";
+			}
+
+			for (const radio of radios) {
+				radio.checked = radio.value === mode;
+			}
+
+			panel.hidden = mode !== "topics";
+
+			for (const chip of chips) {
+				const id = chip.dataset.topic;
+				const usable = covered(id);
+
+				chip.setAttribute("aria-pressed", String(picked.includes(id)));
+				chip.classList.toggle("is-uncovered", !usable);
+
+				if (usable) {
+					chip.removeAttribute("aria-disabled");
+					delete chip.dataset.hoverTip;
+				} else {
+					chip.setAttribute("aria-disabled", "true");
+					chip.dataset.hoverTip = `Needs ${joinWithAnd(
+						registeredSourceIds()
+							.filter((source) => TOPIC_FEEDS[id][source]?.length)
+							.map((source) => getSource(source)?.label || source),
+						"or",
+					)}`;
+				}
+			}
+
+			topHint.textContent = frontPageSourceIds(settings).length
+				? "Show the most popular links from your sources, regardless of topic."
+				: "None of your sources has a front page of its own.";
+
+			if (changed) {
+				emit();
+			}
+		};
+
+		for (const radio of radios) {
+			radio.addEventListener("change", () => {
+				mode = radio.value;
+				paint();
+				emit();
+			});
+		}
+
+		const hoverTip = root.querySelector(".front-page-hover-tip");
+
+		root.addEventListener("pointermove", (event) => {
+			const target = event.target.closest?.("[data-hover-tip]");
+
+			if (!target || !root.contains(target)) {
+				hoverTip.hidden = true;
+				return;
+			}
+
+			const box = root.getBoundingClientRect();
+			const x = event.clientX - box.left;
+
+			hoverTip.textContent = target.dataset.hoverTip;
+			hoverTip.hidden = false;
+
+			const flip = x + 14 + hoverTip.offsetWidth > box.width;
+
+			hoverTip.classList.toggle("is-flipped", flip);
+			hoverTip.style.left = `${flip ? x - 14 - hoverTip.offsetWidth : x + 14}px`;
+			hoverTip.style.top = `${event.clientY - box.top}px`;
+		});
+		root.addEventListener("pointerleave", () => {
+			hoverTip.hidden = true;
+		});
+
+		for (const chip of chips) {
+			chip.addEventListener("click", () => {
+				if (chip.getAttribute("aria-disabled") === "true") {
+					return;
+				}
+
+				picked = picked.includes(chip.dataset.topic)
+					? picked.filter((id) => id !== chip.dataset.topic)
+					: [...picked, chip.dataset.topic];
+				paint();
+				emit();
+			});
+		}
+
+		const sync = (next) => {
+			const saved = { frontPageMode: savedMode(next), frontPageTopics: frontPageTopicIds(next) };
+
+			settings = next;
+
+			if (!emitted || JSON.stringify(saved) !== JSON.stringify(emitted)) {
+				mode = saved.frontPageMode;
+				picked = saved.frontPageTopics;
+				emitted = null;
+			}
+
+			paint();
+		};
+
+		paint();
+
+		return { choice, sync };
+	}
+
+	function frontPageCardElement(settings, onSettled) {
+		const card = document.createElement("div");
+
+		card.className = "front-page-card";
+		card.innerHTML = `<div class="front-page-card-head"><span class="front-page-card-title">Make Front Pages yours</span><button class="front-page-card-close" type="button" aria-label="Keep it as it is" title="Keep it as it is">${APP_CLOSE_ICON}</button></div>
+<div class="front-page-card-text">Follow the topics you care about, or keep the top links you have now.</div>
+${frontPageChooserHTML()}
+<div class="front-page-card-actions"><button class="front-page-card-done" type="button">Done</button></div>`;
+
+		const chooser = wireFrontPageChooser(card.querySelector(".front-page-chooser"), settings);
+
+		const settle = async (choice) => {
+			card.remove();
+			await saveSettings(choice);
+			await onSettled();
+		};
+
+		card.querySelector(".front-page-card-close").onclick = () => {
+			settle({ frontPageMode: "sources", frontPageTopics: [] }).catch(console.error);
+		};
+		card.querySelector(".front-page-card-done").onclick = () => {
+			settle(chooser.choice()).catch(console.error);
+		};
+
+		return card;
+	}
+
+	async function refreshFrontPageConsumers() {
+		syncSettingsFrontPage?.(await loadSettings());
+
+		if (appState) {
+			await refreshAppSources();
+			return;
+		}
+
+		if (sidebarUI) {
+			await refreshBrowseAffordances(sidebarUI.shadow);
+
+			if (sidebarUI.shadow.querySelector("#panel")?.classList.contains("browsing") && browseTab === "front") {
+				await renderBrowseView(sidebarUI);
+			}
+		}
 	}
 
 	async function createSetupButton() {
@@ -12172,7 +12761,8 @@ header {
 	display:none;
 }
 
-#header-submit[hidden] {
+#header-submit[hidden],
+#comment-toggle[hidden] {
 	display:none;
 }
 
@@ -12581,16 +13171,15 @@ header > .settings-panel {
 
 .settings-option input[type="checkbox"]:checked {
 	border-color:transparent;
-	background:#0b63ce;
-	background:AccentColor;
+	background:var(--accent);
 }
 
 .settings-option input[type="checkbox"]:checked::after {
 	content:"";
 	width:7px;
 	height:3.5px;
-	border-left:1.5px solid #fff;
-	border-bottom:1.5px solid #fff;
+	border-left:1.5px solid var(--accent-ink);
+	border-bottom:1.5px solid var(--accent-ink);
 	transform:translateY(-1px) rotate(-45deg);
 }
 
@@ -12607,8 +13196,7 @@ header > .settings-panel {
 }
 
 .settings-option input[type="checkbox"].settings-switch:checked {
-	background:#0b63ce;
-	background:AccentColor;
+	background:var(--accent);
 }
 
 .settings-option input[type="checkbox"].settings-switch::after {
@@ -12631,8 +13219,7 @@ header > .settings-panel {
 }
 
 .settings-option input[type="checkbox"]:focus-visible {
-	outline:2px solid #0b63ce;
-	outline:2px solid AccentColor;
+	outline:2px solid var(--accent);
 	outline-offset:1px;
 }
 
@@ -13150,19 +13737,15 @@ header > .settings-panel {
 	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
 }
 
-.settings-option-hint-slow {
-	margin:6px 0 0;
-}
-
 .settings-app-only {
 	display:none;
 }
 
-#app-settings-content .settings-app-only {
+:host([data-hnewhere-app]) #app-settings-content .settings-app-only {
 	display:block;
 }
 
-#app-settings-modal[data-section="sidebar"] #app-settings-heading {
+:host([data-hnewhere-app]) #app-settings-modal[data-section="sidebar"] #app-settings-heading {
 	display:none;
 }
 
@@ -13190,8 +13773,7 @@ header > .settings-panel {
 	margin-bottom:0;
 }
 
-.settings-panel.sidebar-off .settings-group:has(#setting-sidebar-enabled) > :not(.settings-app-only),
-.settings-panel.sidebar-off .settings-field:has(.button-designer) {
+.settings-panel.sidebar-off .settings-group:has(#setting-sidebar-enabled) > :not(.settings-app-only) {
 	display:none;
 }
 
@@ -13332,72 +13914,251 @@ header > .settings-panel {
 	display:block;
 }
 
-.source-matrix-caption {
-	margin:14px 0 5px;
+.settings-section-hint,
+.sources-subhint {
 	color:var(--muted);
 	font-size:11px;
+	line-height:1.35;
 }
 
-.source-matrix-scroll {
-	overflow-x:auto;
-	overscroll-behavior-x:contain;
+#app-settings-modal:is([data-section="sources"], [data-section="appearance"], [data-section="blocked"]) #app-settings-heading {
+	margin-bottom:4px;
 }
 
-.source-matrix {
-	width:auto;
-	min-width:100%;
-	border-collapse:separate;
-	border-spacing:0;
-	font-size:11px;
-}
-
-.source-matrix th,
-.source-matrix td {
-	padding:3px 4px;
-	text-align:center;
-	font-weight:400;
-	white-space:nowrap;
-}
-
-.source-matrix thead th,
-.source-matrix tbody th {
-	color:var(--muted);
-}
-
-.source-matrix tbody th {
-	text-align:left;
-}
-
-.source-matrix thead th:first-child,
-.source-matrix tbody th {
-	position:sticky;
-	left:0;
-	z-index:1;
-	background:var(--surface);
-	border-right:1px solid var(--surface-divider);
-}
-
-.source-matrix tbody tr + tr th,
-.source-matrix tbody tr + tr td {
+.appearance-row {
+	display:grid;
+	grid-template-columns:minmax(0, 1fr) auto;
+	align-items:start;
+	gap:8px 18px;
+	padding:12px 0;
 	border-top:1px solid var(--surface-divider);
 }
 
-.source-matrix .yes {
+.settings-section-hint + .appearance-row {
+	padding-top:0;
+	border-top:0;
+}
+
+.appearance-row-label {
+	font-size:12px;
+	line-height:1.35;
+}
+
+.appearance-row-hint {
+	margin-top:2px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
+}
+
+.theme-tile input:focus-visible ~ .theme-tile-art,
+.toggle-swatch:focus-visible i,
+.toggle-swatch-any:focus-within i {
+	outline:2px solid var(--accent);
+	outline-offset:2px;
+}
+
+.theme-tiles {
+	display:flex;
+	gap:12px;
+}
+
+.theme-tile {
+	position:relative;
+	display:grid;
+	justify-items:center;
+	gap:5px;
+	cursor:pointer;
+}
+
+.theme-tile input {
+	position:absolute;
+	inset:0;
+	width:100%;
+	height:100%;
+	margin:0;
+	opacity:0;
+	cursor:pointer;
+}
+
+.theme-tile-art {
+	position:relative;
+	display:block;
+	width:60px;
+	height:40px;
+	overflow:hidden;
+	border-radius:6px;
+	box-shadow:inset 0 0 0 1px rgba(0,0,0,.14);
+}
+
+.theme-tile-art-light,
+.theme-tile-art-auto::before {
+	background:
+		linear-gradient(var(--accent), var(--accent)) 0 0 / 100% 8px no-repeat,
+		linear-gradient(#d2d2ca, #d2d2ca) 7px 14px / 62% 3px no-repeat,
+		linear-gradient(#e0e0d8, #e0e0d8) 7px 21px / 46% 3px no-repeat,
+		linear-gradient(#e0e0d8, #e0e0d8) 7px 28px / 54% 3px no-repeat,
+		#f6f6ef;
+}
+
+.theme-tile-art-dark,
+.theme-tile-art-auto::after {
+	background:
+		linear-gradient(color-mix(in srgb, var(--accent) 62%, #000), color-mix(in srgb, var(--accent) 62%, #000)) 0 0 / 100% 8px no-repeat,
+		linear-gradient(#4a4a4a, #4a4a4a) 7px 14px / 62% 3px no-repeat,
+		linear-gradient(#383838, #383838) 7px 21px / 46% 3px no-repeat,
+		linear-gradient(#383838, #383838) 7px 28px / 54% 3px no-repeat,
+		#1e1e1e;
+}
+
+.theme-tile-art-auto::before,
+.theme-tile-art-auto::after {
+	content:"";
+	position:absolute;
+	inset:0;
+}
+
+.theme-tile-art-auto::after {
+	clip-path:polygon(62% 0, 100% 0, 100% 100%, 38% 100%);
+}
+
+.theme-tile input:checked ~ .theme-tile-art {
+	outline:2px solid var(--accent);
+	outline-offset:2px;
+}
+
+.theme-tile-name {
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.3;
+}
+
+.theme-tile input:checked ~ .theme-tile-name {
 	color:var(--surface-text);
+	font-weight:600;
 }
 
-.source-matrix .no {
+.toggle-colors {
+	--toggle-green:${ACCENT};
+	--swatch-edge:rgba(0,0,0,.12);
+	display:flex;
+	gap:12px;
+	padding:4px 0 16px;
+}
+
+:host(.${DARK_CLASS}) .toggle-colors {
+	--toggle-green:${ACCENT_DARK};
+	--swatch-edge:rgba(255,255,255,.22);
+}
+
+.toggle-swatch {
+	position:relative;
+	display:block;
+	padding:0;
+	border:0;
+	background:none;
+	font:inherit;
+	cursor:pointer;
+}
+
+.toggle-swatch i {
+	display:block;
+	width:22px;
+	height:22px;
+	border-radius:50%;
+	box-shadow:inset 0 0 0 1px var(--swatch-edge);
+}
+
+.toggle-swatch[aria-pressed="true"] i {
+	outline:2px solid var(--accent);
+	outline-offset:2px;
+}
+
+.toggle-swatch-green i {
+	background:var(--toggle-green);
+}
+
+.toggle-swatch-any i {
+	background:conic-gradient(#f44, #fb0, #6c4, #2bd, #48f, #a5f, #f4a, #f44);
+}
+
+.toggle-swatch-any input {
+	position:absolute;
+	inset:0;
+	width:100%;
+	height:100%;
+	padding:0;
+	border:0;
+	opacity:0;
+	cursor:pointer;
+}
+
+.toggle-swatch-name {
+	position:absolute;
+	top:29px;
+	left:50%;
+	color:var(--surface-text);
+	font-size:10px;
+	font-weight:600;
+	line-height:1.2;
+	white-space:nowrap;
+	transform:translateX(-50%);
+	visibility:hidden;
+	pointer-events:none;
+}
+
+.toggle-swatch[aria-pressed="true"] .toggle-swatch-name {
+	visibility:visible;
+}
+
+.toggle-colors .toggle-swatch:first-child .toggle-swatch-name {
+	left:0;
+	transform:none;
+}
+
+.toggle-colors .toggle-swatch:last-child .toggle-swatch-name {
+	right:0;
+	left:auto;
+	transform:none;
+}
+
+.settings-section-hint a {
+	color:inherit;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+}
+
+.source-points {
+	margin:2px 0 0 23px;
+	padding:0 0 0 13px;
 	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
 }
 
-.source-matrix .signin {
-	color:var(--muted);
+.settings-section-hint {
+	margin:0 0 14px;
+	line-height:1.4;
 }
 
-.sources-divider {
-	border:none;
+.sources-subhead {
+	margin:16px 0 0;
+	padding-top:12px;
 	border-top:1px solid var(--surface-divider);
-	margin:14px 0;
+	color:var(--surface-text);
+	font-size:12px;
+	font-weight:600;
+}
+
+.sources-subhint {
+	margin:2px 0 10px;
+}
+
+.sources-grid {
+	display:grid;
+	grid-template-columns:repeat(2, minmax(0, 1fr));
+	gap:10px 18px;
+	align-items:start;
 }
 
 .settings-head {
@@ -13528,30 +14289,482 @@ header > .settings-panel {
 }
 
 .segment input:checked + span {
-	background:#0b63ce;
-	background:AccentColor;
-	color:#fff;
+	background:var(--accent);
+	color:var(--accent-ink);
 	font-weight:600;
 }
 
 .segment input:focus-visible + span {
-	outline:2px solid #0b63ce;
-	outline:2px solid AccentColor;
+	outline:2px solid var(--accent);
 	outline-offset:-2px;
 }
 
-.button-designer {
-	display:flex;
-	align-items:stretch;
-	gap:10px;
+.front-page-card {
+	display:grid;
+	margin:10px 12px 12px;
+	padding:12px;
+	border:1px solid var(--surface-border);
+	border-radius:10px;
+	background:var(--help-bg);
+	color:var(--surface-text);
+	font-size:12px;
 }
 
-.button-designer-controls {
-	flex:1 1 auto;
-	min-width:0;
+.front-page-card-head {
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+}
+
+.front-page-card-title {
+	font-size:12px;
+	font-weight:600;
+}
+
+.front-page-card-close {
+	display:inline-grid;
+	place-items:center;
+	width:24px;
+	height:24px;
+	padding:0;
+	border:0;
+	margin:-4px -4px -4px 0;
+	border-radius:5px;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+}
+
+.front-page-card-text {
+	margin-top:2px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
+}
+
+.front-page-card .front-page-chooser {
+	margin-top:10px;
+}
+
+.front-page-card-actions {
+	display:flex;
+	justify-content:flex-end;
+	margin-top:10px;
+}
+
+.front-page-card-done {
+	height:26px;
+	padding:0 14px;
+	border:0;
+	border-radius:13px;
+	background:var(--accent);
+	color:var(--accent-ink);
+	font:inherit;
+	font-weight:600;
+	cursor:pointer;
+}
+
+.front-page-chooser {
+	display:grid;
+	gap:8px;
+}
+
+.front-page-chooser [hidden] {
+	display:none;
+}
+
+.front-page-choice-label {
+	display:flex;
+	gap:8px;
+	align-items:flex-start;
+	font-size:12px;
+	line-height:1.35;
+	cursor:pointer;
+}
+
+.front-page-choice-label input[type="radio"] {
+	appearance:none;
+	-webkit-appearance:none;
+	box-sizing:border-box;
+	flex:0 0 auto;
+	width:15px;
+	height:15px;
+	font-size:inherit;
+	margin:calc((1.35em - 15px) / 2) 0 0;
+	display:inline-grid;
+	place-content:center;
+	border:1px solid var(--help-border);
+	border-radius:50%;
+	background:var(--help-bg);
+	cursor:pointer;
+	transition:background .14s ease, border-color .14s ease;
+}
+
+.front-page-choice-label input[type="radio"]:checked {
+	border-color:transparent;
+	background:var(--accent);
+}
+
+.front-page-choice-label input[type="radio"]:checked::after {
+	content:"";
+	width:5px;
+	height:5px;
+	border-radius:50%;
+	background:var(--accent-ink);
+}
+
+.front-page-choice-label input[type="radio"]:focus-visible {
+	outline:2px solid var(--accent);
+	outline-offset:1px;
+}
+
+.front-page-choice-label.is-unavailable,
+.front-page-choice-label.is-unavailable input[type="radio"] {
+	cursor:not-allowed;
+}
+
+.front-page-choice-label.is-unavailable > span,
+.front-page-choice-label.is-unavailable input[type="radio"] {
+	opacity:.45;
+}
+
+.front-page-choice-label.is-unavailable input[type="radio"] {
+	pointer-events:none;
+}
+
+.front-page-chooser {
+	position:relative;
+}
+
+.front-page-hover-tip {
+	position:absolute;
+	z-index:20;
+	padding:5px 9px;
+	border-radius:6px;
+	background:var(--rail-fg, var(--header-text, #fff));
+	color:#000;
+	font:400 11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	white-space:nowrap;
+	box-shadow:0 4px 14px rgba(0,0,0,.22);
+	pointer-events:none;
+	transform:translateY(-50%);
+}
+
+.front-page-hover-tip::before {
+	content:"";
+	position:absolute;
+	top:50%;
+	left:-4px;
+	width:8px;
+	height:8px;
+	margin-top:-4px;
+	background:inherit;
+	transform:rotate(45deg);
+}
+
+.front-page-hover-tip.is-flipped::before {
+	right:-4px;
+	left:auto;
+}
+
+.front-page-choice-hint {
+	margin:1.5px 0 0 23px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
+}
+
+.front-page-topics {
+	display:flex;
+	flex-wrap:wrap;
+	gap:6px;
+	margin:8px 0 0 23px;
+}
+
+.front-page-topics-panel .front-page-choice-hint {
+	margin-top:8px;
+}
+
+.front-page-topic {
+	position:relative;
+	display:inline-flex;
+	align-items:center;
+	gap:5px;
+	height:21px;
+	padding:0 9px 0 7px;
+	border:1px solid var(--field-border);
+	border-radius:11px;
+	background:var(--field-bg);
+	color:var(--surface-text);
+	font:inherit;
+	font-size:12px;
+	cursor:pointer;
+}
+
+.front-page-topic svg {
+	flex:0 0 auto;
+	width:13px;
+	height:13px;
+	color:var(--accent);
+}
+
+.front-page-topic[aria-pressed="true"] {
+	border-color:transparent;
+	background:var(--accent);
+	color:var(--accent-ink);
+}
+
+.front-page-topic[aria-pressed="true"] svg {
+	color:inherit;
+}
+
+.front-page-topic.is-uncovered > svg,
+.front-page-topic.is-uncovered > span {
+	opacity:.4;
+}
+
+.front-page-topic[aria-disabled="true"] {
+	cursor:not-allowed;
+}
+
+.front-page-topic:focus-visible {
+	outline:2px solid var(--accent);
+	outline-offset:2px;
+}
+
+.button-designer {
+	--toggle-chrome:#f8f8f7;
+	--toggle-chrome-line:#eeeeec;
+	--toggle-grey:#c4c4c1;
+	--toggle-url:#f0f0ee;
+	--toggle-page:#fff;
+	--toggle-page-head:#e6e6e3;
+	--toggle-page-line:#f0f0ee;
+	--toggle-edge:#e4e4e1;
+	--toggle-select:#0a7aff;
+	--toggle-green:${ACCENT};
 	display:flex;
 	flex-direction:column;
-	justify-content:flex-start;
+}
+
+:host(.${DARK_CLASS}) .button-designer {
+	--toggle-chrome:#262628;
+	--toggle-chrome-line:#2f2f32;
+	--toggle-grey:#55555a;
+	--toggle-url:#2d2d30;
+	--toggle-page:#1c1c1e;
+	--toggle-page-head:#333336;
+	--toggle-page-line:#28282b;
+	--toggle-edge:#36363a;
+	--toggle-select:#3b93ff;
+	--toggle-green:${ACCENT_DARK};
+}
+
+.toggle-stage {
+	position:relative;
+	width:252px;
+	height:168px;
+	overflow:hidden;
+	user-select:none;
+	-webkit-user-select:none;
+}
+
+.toggle-window {
+	position:absolute;
+	inset:0;
+	overflow:hidden;
+	box-sizing:border-box;
+	border:1px solid var(--toggle-edge);
+	border-radius:10px;
+	background:var(--toggle-page);
+}
+
+.toggle-chrome {
+	position:absolute;
+	inset:0 0 auto 0;
+	display:flex;
+	align-items:center;
+	gap:12px;
+	height:36px;
+	padding:0 12px 0 0;
+	border-bottom:1px solid var(--toggle-chrome-line);
+	background:var(--toggle-chrome);
+	color:var(--toggle-grey);
+}
+
+.toggle-url {
+	flex:1 1 auto;
+	display:flex;
+	align-items:center;
+	gap:7px;
+	min-width:0;
+	height:22px;
+	margin-left:10px;
+	padding:0 8px 0 10px;
+	border-radius:7px;
+	background:var(--toggle-url);
+	font-size:11.5px;
+}
+
+.toggle-url-text {
+	flex:1 1 auto;
+	overflow:hidden;
+	white-space:nowrap;
+	text-overflow:ellipsis;
+}
+
+.toggle-chrome svg {
+	flex:0 0 auto;
+	display:block;
+}
+
+.toggle-page {
+	position:absolute;
+	inset:37px 0 0 0;
+	overflow:hidden;
+	background:var(--toggle-page);
+}
+
+.toggle-page-copy {
+	position:absolute;
+	left:14px;
+	right:20px;
+	top:20px;
+	display:grid;
+	gap:9px;
+}
+
+.toggle-page-head {
+	width:76%;
+	height:15px;
+	margin-bottom:6px;
+	border-radius:4px;
+	background:var(--toggle-page-head);
+}
+
+.toggle-page-line {
+	height:7px;
+	border-radius:4px;
+	background:var(--toggle-page-line);
+}
+
+.toggle-preview {
+	position:absolute;
+	top:16px;
+	right:16px;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	box-sizing:border-box;
+	font-family:Verdana, sans-serif;
+	font-weight:bold;
+	line-height:1;
+	white-space:nowrap;
+	cursor:grab;
+	touch-action:none;
+	transition:background .2s ease, box-shadow .2s ease, width .15s ease, height .15s ease, border-radius .15s ease;
+	z-index:3;
+}
+
+.toggle-preview.is-dragging {
+	cursor:grabbing;
+	transition:none;
+}
+
+.toggle-preview-mark {
+	outline:none;
+	cursor:text;
+}
+
+.toggle-selection {
+	position:absolute;
+	border:1.5px solid var(--toggle-select);
+	border-radius:4px;
+	pointer-events:none;
+	z-index:4;
+}
+
+.toggle-handle {
+	position:absolute;
+	box-sizing:border-box;
+	border:1.5px solid var(--toggle-select);
+	background:#fff;
+	pointer-events:auto;
+	touch-action:none;
+}
+
+.toggle-handle-size {
+	left:-6px;
+	bottom:-6px;
+	width:10px;
+	height:10px;
+	border-radius:2px;
+	cursor:nesw-resize;
+}
+
+.toggle-handle-radius {
+	width:10px;
+	height:10px;
+	border-radius:50%;
+	cursor:crosshair;
+}
+
+.toggle-tags {
+	position:absolute;
+	display:flex;
+	gap:4px;
+	z-index:5;
+}
+
+.toggle-tag {
+	display:inline-flex;
+	align-items:center;
+	gap:2px;
+	height:18px;
+	padding:0 6px 0 2px;
+	border-radius:4px;
+	background:var(--toggle-select);
+	color:#fff;
+	font-size:10.5px;
+	font-weight:600;
+	font-variant-numeric:tabular-nums;
+	white-space:nowrap;
+	cursor:text;
+}
+
+.toggle-tag svg {
+	display:block;
+	margin-left:3px;
+}
+
+.toggle-tag input {
+	width:22px;
+	height:14px;
+	box-sizing:border-box;
+	padding:0 1px;
+	border:0;
+	border-radius:3px;
+	background:none;
+	color:inherit;
+	font:inherit;
+	text-align:right;
+}
+
+.toggle-tag input:focus {
+	outline:none;
+	background:rgba(255,255,255,.24);
+}
+
+.toggle-preview:focus-visible,
+.toggle-handle:focus-visible {
+	outline:2px solid var(--toggle-select);
+	outline-offset:2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.toggle-preview {
+		transition:none;
+	}
 }
 
 .stepper {
@@ -13595,8 +14808,7 @@ header > .settings-panel {
 }
 
 .stepper-value:focus-within {
-	outline:2px solid #0b63ce;
-	outline:2px solid AccentColor;
+	outline:2px solid var(--accent);
 	outline-offset:-1px;
 }
 
@@ -13621,107 +14833,6 @@ header > .settings-panel {
 	color:var(--muted);
 }
 
-.button-preview {
-	flex:0 0 88px;
-	display:flex;
-	flex-direction:column;
-	align-items:center;
-	justify-content:center;
-	gap:5px;
-	padding:8px 6px;
-	border:1px solid var(--blueprint-line);
-	border-radius:5px;
-	background-color:var(--blueprint-bg);
-    background-image:
-		linear-gradient(var(--blueprint-grid) 1px, transparent 1px),
-        linear-gradient(90deg, var(--blueprint-grid) 1px, transparent 1px);
-	background-size:8px 8px;
-	background-position:center center;
-}
-
-.button-preview-stage {
-	height:68px;
-	display:flex;
-	align-items:center;
-	justify-content:center;
-}
-
-.button-preview-shape {
-	display:flex;
-	align-items:center;
-	justify-content:center;
-	border:0;
-	cursor:text;
-	caret-color:var(--accent-ink);
-	outline-offset:2px;
-	background:var(--accent);
-	box-shadow:0 1px 4px rgba(0,0,0,.25);
-	color:var(--accent-ink);
-	font-family:Verdana,sans-serif;
-	font-weight:bold;
-	transition:width .16s ease, height .16s ease, border-radius .16s ease, font-size .16s ease;
-}
-
-.button-preview-rule {
-	position:relative;
-	display:flex;
-	align-items:center;
-	justify-content:center;
-	width:100%;
-	height:9px;
-}
-
-.button-preview-rule::before,
-.button-preview-rule::after {
-	content:"";
-	position:absolute;
-	top:calc(50% - 5px);
-	height:5px;
-	width:calc(50% - 27px);
-	border-bottom:1px solid var(--blueprint-ink);
-}
-
-.button-preview-rule::before {
-	left:0;
-	border-left:1px solid var(--blueprint-ink);
-}
-
-.button-preview-rule::after {
-	right:0;
-	border-right:1px solid var(--blueprint-ink);
-}
-
-.button-preview-dim {
-	position:relative;
-	padding:0 4px;
-	background:var(--blueprint-bg);
-	color:var(--blueprint-ink);
-	font-family:Menlo, Consolas, monospace;
-	font-size:9px;
-	white-space:nowrap;
-	cursor:text;
-	outline:0;
-}
-
-.button-preview-dim:focus {
-	color:var(--accent);
-}
-
-.settings-reset {
-	align-self:flex-end;
-	margin-top:6px;
-	padding:0;
-	border:0;
-	background:none;
-	color:var(--muted);
-	font:inherit;
-	font-size:11px;
-	text-decoration:underline dotted;
-	text-underline-offset:2px;
-	text-decoration-color:var(--border);
-	cursor:pointer;
-}
-
 .settings-link-button {
 	display:flex;
 	align-items:center;
@@ -13742,40 +14853,142 @@ header > .settings-panel {
 	opacity:.6;
 }
 
-.settings-blocked-list {
-	margin-top:4px;
-}
-
 .settings-hidden-section[hidden] {
 	display:none;
 }
 
-.settings-blocked-site {
-	color:var(--muted);
+.manage-kinds,
+.settings-pane[data-pane="blocked"] > .settings-section-hint {
+	flex-shrink:0;
 }
 
-.settings-blocked-entry {
+.manage-kinds {
+	margin-bottom:10px;
+}
+
+.manage-table {
 	display:flex;
-	align-items:center;
-	justify-content:space-between;
-	gap:8px;
-	padding:3px 0;
-	font-size:11px;
+	flex-direction:column;
+	min-height:0;
+	overflow:hidden;
+	border:1px solid var(--help-border);
+	border-radius:6px;
+	background:var(--help-bg);
 }
 
-.settings-blocked-remove {
-	border:0;
-	background:none;
+.manage-table-head,
+.manage-row {
+	display:grid;
+	grid-template-columns:minmax(0, 1fr) minmax(0, 36%);
+	gap:10px;
+	align-items:center;
+	padding:0 10px;
+}
+
+.manage-table-head {
+	min-height:24px;
+	border-bottom:1px solid var(--surface-divider);
 	color:var(--muted);
-	font-size:14px;
+	font-size:10.5px;
+	font-weight:600;
+}
+
+.manage-table-body {
+	flex:1 1 auto;
+	min-height:72px;
+	overflow-y:auto;
+	outline:none;
+}
+
+.manage-row {
+	min-height:26px;
+	font-size:11.5px;
+	cursor:default;
+}
+
+.manage-row:nth-child(even) {
+	background:var(--hover-tint, rgba(0,0,0,.035));
+}
+
+.manage-row > span {
+	overflow:hidden;
+	white-space:nowrap;
+	text-overflow:ellipsis;
+}
+
+.manage-row > span + span {
+	color:var(--muted);
+}
+
+.manage-row[aria-selected="true"] {
+	background:var(--accent);
+	color:var(--accent-ink);
+}
+
+.manage-row[aria-selected="true"] > span + span {
+	color:inherit;
+	opacity:.85;
+}
+
+.manage-table-body:focus-visible .manage-row[aria-selected="true"] {
+	box-shadow:inset 0 0 0 1px rgba(255,255,255,.6);
+}
+
+.manage-add-row {
+	padding:3px 6px;
+}
+
+.manage-add-row input {
+	box-sizing:border-box;
+	width:100%;
+	height:22px;
+	padding:0 6px;
+	border:1px solid var(--accent);
+	border-radius:4px;
+	background:var(--field-bg, var(--surface));
+	color:var(--surface-text);
+	font:inherit;
+	font-size:11.5px;
+	outline:none;
+}
+
+.manage-empty {
+	padding:18px 10px;
+	color:var(--muted);
+	font-size:11px;
+	text-align:center;
+}
+
+.manage-table-tools {
+	display:flex;
+	flex:0 0 auto;
+	border-top:1px solid var(--surface-divider);
+}
+
+.manage-table-tools button {
+	display:inline-grid;
+	place-items:center;
+	width:28px;
+	height:22px;
+	padding:0;
+	border:0;
+	border-right:1px solid var(--surface-divider);
+	background:none;
+	color:var(--surface-text);
+	font:inherit;
+	font-size:15px;
 	line-height:1;
-	padding:0 2px;
 	cursor:pointer;
 }
 
-.settings-blocked-empty {
-	font-size:11px;
-	color:var(--muted);
+.manage-table-tools button:disabled {
+	opacity:.35;
+	cursor:default;
+}
+
+.manage-table-tools button:focus-visible {
+	outline:2px solid var(--accent);
+	outline-offset:-2px;
 }
 `;
 
@@ -13869,7 +15082,7 @@ ${settings ? settingsPanelHTML() : ""}
 <div class="settings-group">
 <div class="settings-app-only">
 <label class="settings-option settings-sidebar-head"><span class="settings-sidebar-title">Sidebar</span><input id="setting-sidebar-enabled" class="settings-switch" role="switch" data-setting="sidebarEnabled" type="checkbox" aria-describedby="settings-sidebar-hint"></label>
-<div id="settings-sidebar-hint" class="settings-sidebar-hint">Sidebar allows you to access Backchannel features like discussions and frontpages directly onto the sites you visit.</div>
+<div id="settings-sidebar-hint" class="settings-sidebar-hint">Sidebar allows you to access Backchannel features like discussions and Front Pages directly onto the sites you visit.</div>
 </div>
 <label class="settings-option">
 <input id="setting-auto-open-sidebar" data-setting="autoOpenSidebar" type="checkbox">
@@ -13949,48 +15162,40 @@ All stored locally.
 </div>
 
 <div class="settings-group">
-<div class="settings-field">
-<div class="settings-field-label">Theme</div>
-<div class="segmented">
-<label class="segment"><input type="radio" name="hnewhere-theme" data-setting="theme" value="auto"><span>Detect</span></label>
-<label class="segment"><input type="radio" name="hnewhere-theme" data-setting="theme" value="light"><span>Light</span></label>
-<label class="segment"><input type="radio" name="hnewhere-theme" data-setting="theme" value="dark"><span>Dark</span></label>
+<div class="settings-section-hint">How Backchannel looks in the Sidebar, the Reader and on the sites you visit.</div>
+<div class="appearance-row">
+<div class="appearance-row-text"><div class="appearance-row-label" id="appearance-theme-label">Theme</div><div class="appearance-row-hint">Light or dark, or Auto to match your device.</div></div>
+<div class="appearance-row-control theme-tiles" role="radiogroup" aria-labelledby="appearance-theme-label">
+<label class="theme-tile"><input type="radio" name="hnewhere-theme" data-setting="theme" value="light"><span class="theme-tile-art theme-tile-art-light" aria-hidden="true"></span><span class="theme-tile-name">Light</span></label>
+<label class="theme-tile"><input type="radio" name="hnewhere-theme" data-setting="theme" value="dark"><span class="theme-tile-art theme-tile-art-dark" aria-hidden="true"></span><span class="theme-tile-name">Dark</span></label>
+<label class="theme-tile"><input type="radio" name="hnewhere-theme" data-setting="theme" value="auto"><span class="theme-tile-art theme-tile-art-auto" aria-hidden="true"></span><span class="theme-tile-name">Auto</span></label>
 </div>
 </div>
-
-<div class="settings-field">
-<div class="button-designer">
-<div class="button-designer-controls">
-<div class="settings-field-label">Backchannel toggle</div>
-<div class="segmented">
-<label class="segment"><input type="radio" name="hnewhere-button-shape" data-setting="buttonShape" value="circle"><span>Circle</span></label>
-<label class="segment"><input type="radio" name="hnewhere-button-shape" data-setting="buttonShape" value="squircle"><span>Squircle</span></label>
+<div class="appearance-row">
+<div class="appearance-row-text"><div class="appearance-row-label" id="appearance-color-label">Color</div><div class="appearance-row-hint">Tints the Sidebar's header, the Reader's rail and the Sidebar toggle.</div></div>
+<div class="appearance-row-control toggle-colors" role="group" aria-labelledby="appearance-color-label">
+<label class="toggle-swatch toggle-swatch-any" title="Any color"><i></i><input id="button-color-input" type="color" aria-label="Any color" value="#7c3aed"><span class="toggle-swatch-name" aria-hidden="true">Any color</span></label>
+<button type="button" class="toggle-swatch toggle-swatch-green" data-accent="" aria-label="Backchannel green" title="Backchannel green"><i></i><span class="toggle-swatch-name" aria-hidden="true">Backchannel green</span></button>
+<button type="button" class="toggle-swatch" data-accent="#ff6600" aria-label="Hacker News orange" title="Hacker News orange"><i style="background:#ff6600"></i><span class="toggle-swatch-name" aria-hidden="true">Hacker News orange</span></button>
+<button type="button" class="toggle-swatch" data-accent="#1d1d1f" aria-label="Graphite" title="Graphite"><i style="background:#1d1d1f"></i><span class="toggle-swatch-name" aria-hidden="true">Graphite</span></button>
 </div>
-<div class="stepper">
-<button type="button" class="stepper-button" data-size-step="-1" aria-label="Smaller button">&#8722;</button>
-<span class="stepper-value">
-<input id="button-size-input" class="stepper-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Button size in pixels" value="44">
-<span class="stepper-unit">px</span>
-</span>
-<button type="button" class="stepper-button" data-size-step="1" aria-label="Larger button">+</button>
 </div>
-<button id="settings-reset-button" class="settings-reset" type="button">reset</button>
-</div>
-<div class="button-preview">
-<div class="button-preview-stage">
-<div id="button-preview-shape" class="button-preview-shape"
-contenteditable="plaintext-only" spellcheck="false"
-role="textbox" aria-label="Button label, one or two characters"
-title="Type one or two characters">BC</div>
-</div>
-<div class="button-preview-rule"><span id="button-preview-dim" class="button-preview-dim"
-contenteditable="plaintext-only" spellcheck="false" role="textbox"
-aria-label="Accent colour as a hex value"
-title="Type a hex colour">#237140</span></div>
+<div class="appearance-row">
+<div class="appearance-row-text"><div class="appearance-row-label button-designer-label">Sidebar toggle</div><div class="appearance-row-hint button-designer-hint">The floating button shown on every site for opening the Sidebar.</div></div>
+<div class="appearance-row-control button-designer">
+<div class="toggle-stage">
+<div class="toggle-window">
+<div class="toggle-chrome" aria-hidden="true"><div class="toggle-url"><span class="toggle-url-text">example.com</span><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12.6 6.2A4.9 4.9 0 1 0 13 9.6"/><path d="M12.9 3.2v3.2H9.7"/></svg></div><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.4v7.4M5.4 4.9 8 2.4l2.6 2.5"/><path d="M5.6 6.8H4.4a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1h7.2a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1h-1.2"/></svg><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v10M3 8h10"/></svg><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="2.6" y="4.6" width="8.4" height="8.4" rx="1.6"/><path d="M5.2 2.8h6.6a1.6 1.6 0 0 1 1.6 1.6V11"/></svg></div>
+<div class="toggle-page">
+<div class="toggle-page-copy" aria-hidden="true"><div class="toggle-page-head"></div><div class="toggle-page-line" style="width:96%"></div><div class="toggle-page-line" style="width:88%"></div><div class="toggle-page-line" style="width:93%"></div><div class="toggle-page-line" style="width:72%"></div><div class="toggle-page-line" style="width:90%"></div><div class="toggle-page-line" style="width:84%"></div><div class="toggle-page-line" style="width:91%"></div><div class="toggle-page-line" style="width:78%"></div><div class="toggle-page-line" style="width:89%"></div><div class="toggle-page-line" style="width:82%"></div><div class="toggle-page-line" style="width:94%"></div><div class="toggle-page-line" style="width:70%"></div></div>
+<div id="toggle-preview" class="toggle-preview" tabindex="0" role="group" aria-label="Sidebar toggle preview. Drag it, or use the arrow keys, to see it elsewhere on a page."><span id="toggle-preview-mark" class="toggle-preview-mark" contenteditable="plaintext-only" spellcheck="false" role="textbox" aria-label="Toggle label, one or two characters" title="Type one or two characters">BC</span></div>
+<div class="toggle-selection"><span id="toggle-radius-handle" class="toggle-handle toggle-handle-radius" role="slider" tabindex="0" aria-label="Corner radius" aria-valuemin="0" aria-valuemax="${BUTTON_RADIUS_MAX}"></span><span id="toggle-size-handle" class="toggle-handle toggle-handle-size" role="slider" tabindex="0" aria-label="Toggle size" aria-valuemin="${BUTTON_SIZE_MIN}" aria-valuemax="${BUTTON_SIZE_MAX}"></span></div>
+<div class="toggle-tags"><label class="toggle-tag"><input id="button-size-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Toggle size in pixels" value="44"><span>px</span></label><label class="toggle-tag"><svg viewBox="0 0 10 10" width="9" height="9" aria-hidden="true" focusable="false"><path d="M1.5 8.5V5.5a4 4 0 0 1 4-4h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><input id="button-radius-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Corner radius in percent" value="50"><span>%</span></label></div>
 </div>
 </div>
 </div>
-
+</div>
+</div>
 </div>
 
 <div class="settings-group">
@@ -13998,54 +15203,38 @@ title="Type a hex colour">#237140</span></div>
 </div>
 
 <div class="settings-group settings-group-tight">
-<button id="settings-manage-blocked" class="settings-link-button" type="button" data-pane="blocked" data-pane-name="Manage disabled/hidden">Manage disabled/hidden<span class="settings-link-chevron">&rsaquo;</span></button>
+<button id="settings-manage-blocked" class="settings-link-button" type="button" data-pane="blocked" data-pane-name="Hidden &amp; disabled">Hidden &amp; disabled<span class="settings-link-chevron">&rsaquo;</span></button>
 </div>
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="blocked">
-<div class="segmented">
-<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="disabled" checked><span>Disabled</span></label>
-<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="hidden"><span>Hidden</span></label>
+<div class="settings-section-hint">Manage links you've hidden and sites you've disabled Backchannel on.</div>
+<div class="segmented manage-kinds">
+<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="hidden" checked><span>Hidden links</span></label>
+<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="disabled"><span>Disabled sites</span></label>
 </div>
-<div id="settings-blocked-section" class="settings-hidden-section">
-<div class="settings-option-hint settings-option-hint-slow">Backchannel will not appear on these sites</div>
-<div id="settings-blocked-list" class="settings-blocked-list"></div>
+<div id="settings-hidden-section" class="settings-hidden-section">
+<div class="manage-table">
+<div class="manage-table-head" aria-hidden="true"><span>Link</span><span>Site</span></div>
+<div id="settings-hidden-list" class="manage-table-body" role="listbox" aria-label="Hidden links" tabindex="0"></div>
+<div class="manage-table-tools"><button type="button" class="manage-table-add" aria-label="Hide a link" title="Hide a link">+</button><button type="button" class="manage-table-remove" aria-label="Show the chosen link again" title="Show the chosen link again" disabled>&minus;</button></div>
 </div>
-<div id="settings-hidden-section" class="settings-hidden-section" hidden>
-<div class="settings-option-hint settings-option-hint-slow">Articles you've hidden from the front pages</div>
-<div id="settings-hidden-list" class="settings-blocked-list"></div>
+</div>
+<div id="settings-blocked-section" class="settings-hidden-section" hidden>
+<div class="manage-table">
+<div class="manage-table-head" aria-hidden="true"><span>Site</span><span>Covers</span></div>
+<div id="settings-blocked-list" class="manage-table-body" role="listbox" aria-label="Disabled sites" tabindex="0"></div>
+<div class="manage-table-tools"><button type="button" class="manage-table-add" aria-label="Disable Backchannel on a site or page" title="Disable Backchannel on a site or page">+</button><button type="button" class="manage-table-remove" aria-label="Turn Backchannel back on for the chosen site" title="Turn Backchannel back on for the chosen site" disabled>&minus;</button></div>
+</div>
 </div>
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
-${sourceListHTML({ idPrefix: "setting-source-" })}
-<hr class="sources-divider">
-<div class="source-matrix-caption">What each source supports</div>
-<div class="source-matrix-scroll">
-<table class="source-matrix">
-<thead><tr><th></th>${[...SOURCES.values()].map((source) => `<th>${escapeHTML(source.shortLabel || source.label)}</th>`).join("")}</tr></thead>
-<tbody>
-${[
-	["Read", () => true],
-	["Front page", (source) => hasFrontPage(source)],
-	["Vote", (source) => Boolean(source.capabilities.vote)],
-	["Reply", (source) => Boolean(source.capabilities.reply)],
-	["Submit", (source) => Boolean(source.capabilities.submit)],
-]
-	.map(
-		([label, supported]) => `<tr><th>${escapeHTML(label)}</th>${[
-			...SOURCES.values(),
-		]
-			.map((source) => {
-				const yes = Boolean(supported(source));
-				return `<td class="${yes ? "yes" : "no"}" data-capability-source="${escapeHTML(source.id)}" aria-label="${yes ? "yes" : "no"}">${yes ? "&check;" : "&ndash;"}</td>`;
-			})
-			.join("")}</tr>`,
-	)
-	.join("")}
-</tbody>
-</table>
-</div>
+<div class="settings-section-hint">Where Backchannel looks for discussions and links for Front Pages. <a href="${escapeHTML(REPO_URL)}#what-exactly-is-the-script-doing-with-my-information" target="_blank" rel="noopener noreferrer">How each source works</a></div>
+<div class="sources-grid">${sourceListHTML({ idPrefix: "setting-source-", cells: true })}</div>
+<div class="sources-subhead">Front Pages</div>
+<div class="sources-subhint">Choose what Backchannel shows in Front Pages. Links come only from the sources you've enabled above.</div>
+${frontPageChooserHTML()}
 </div>
 
 </div>
@@ -14058,37 +15247,7 @@ ${[
 `;
 	}
 
-	async function markCapabilityAuth(shadow) {
-		const now = Date.now();
-		const verdicts = new Map();
-
-		for (const cell of shadow.querySelectorAll("[data-capability-source]")) {
-			const sourceID = cell.dataset.capabilitySource;
-
-			if (!verdicts.has(sourceID)) {
-				verdicts.set(sourceID, await readAuthVerdict(sourceID));
-			}
-
-			const mark = capabilityMark(
-				cell.classList.contains("yes"),
-				verdicts.get(sourceID),
-				now,
-			);
-
-			if (mark !== "signin") {
-				continue;
-			}
-
-			cell.classList.remove("yes");
-			cell.classList.add("signin");
-			cell.textContent = "○";
-			cell.setAttribute("aria-label", "sign in required");
-			cell.title = `Sign in to ${getSource(sourceID)?.label || "this source"}`;
-		}
-	}
-
 	async function wireSettingsPanel(shadow, { onAnnotationChange } = {}) {
-		markCapabilityAuth(shadow).catch(console.error);
 		const settingsPanel = shadow.querySelector("#settings-panel");
 		const settingsToggle = shadow.querySelector("#settings-toggle");
 
@@ -14119,18 +15278,24 @@ ${[
 
 		const settingsRadios = {
 			theme: [...settingsPanel.querySelectorAll("input[data-setting='theme']")],
-			buttonShape: [
-				...settingsPanel.querySelectorAll("input[data-setting='buttonShape']"),
-			],
 		};
 
 		const panes = shadow.querySelector("#settings-panes");
-		const previewShape = shadow.querySelector("#button-preview-shape");
-		const previewDim = shadow.querySelector("#button-preview-dim");
+		const preview = shadow.querySelector("#toggle-preview");
+		const previewMark = shadow.querySelector("#toggle-preview-mark");
+		const previewPage = shadow.querySelector(".toggle-page");
+		const previewSelection = shadow.querySelector(".toggle-selection");
+		const previewTags = shadow.querySelector(".toggle-tags");
+		const sizeHandle = shadow.querySelector("#toggle-size-handle");
+		const radiusHandle = shadow.querySelector("#toggle-radius-handle");
 		const sizeInput = shadow.querySelector("#button-size-input");
-		const stepperButtons = [
-			...settingsPanel.querySelectorAll("[data-size-step]"),
-		];
+		const radiusInput = shadow.querySelector("#button-radius-input");
+		const colorInput = shadow.querySelector("#button-color-input");
+		const anySwatch = shadow.querySelector(".toggle-swatch-any");
+		const swatches = [...settingsPanel.querySelectorAll(".toggle-swatch[data-accent]")];
+		const previewSpot = { right: 16, top: 16 };
+		let designerSettings = null;
+		let designerDraft = null;
 
 		const syncPanesHeight = () => {
 			if (!panes || settingsPanel.classList.contains("hidden")) {
@@ -14198,29 +15363,84 @@ ${[
 		};
 
 		const applyButtonDesigner = (settings) => {
-			const size = normalizeButtonSize(settings.buttonSize);
-			const radius =
-				BUTTON_SHAPES[settings.buttonShape] || BUTTON_SHAPES.circle;
+			designerSettings = settings;
 
-			if (sizeInput && shadow.activeElement !== sizeInput) {
+			if (!preview || !settings) {
+				return;
+			}
+
+			const size = designerDraft?.size ?? normalizeButtonSize(settings.buttonSize);
+			const radius =
+				designerDraft?.radius ??
+				normalizeButtonRadius(settings.buttonRadius, settings.buttonShape);
+			const accent = activeAccent(detectDarkMode());
+			const width = previewPage.clientWidth;
+			const height = previewPage.clientHeight;
+			const pad = 4;
+			const box = size + pad * 2;
+
+			if (width && height) {
+				previewSpot.right = Math.min(Math.max(previewSpot.right, 4), width - size - 4);
+				previewSpot.top = Math.min(Math.max(previewSpot.top, 4), height - size - 4);
+			}
+
+			preview.style.right = `${previewSpot.right}px`;
+			preview.style.top = `${previewSpot.top}px`;
+			preview.style.width = `${size}px`;
+			preview.style.height = `${size}px`;
+			preview.style.fontSize = `${buttonFontSizeFor(size)}px`;
+			preview.style.borderRadius = `${radius}%`;
+			preview.style.background = designerDraft?.color ?? accent.accent;
+			preview.style.color = designerDraft?.color
+				? readableInk(parseHexColor(designerDraft.color))
+				: accent.ink;
+			preview.style.boxShadow = BUTTON_VARIANTS.active.boxShadow;
+
+			if (shadow.activeElement !== previewMark) {
+				previewMark.textContent = normalizeButtonMark(settings.buttonMark);
+			}
+
+			previewSelection.style.right = `${previewSpot.right - pad}px`;
+			previewSelection.style.top = `${previewSpot.top - pad}px`;
+			previewSelection.style.width = `${box}px`;
+			previewSelection.style.height = `${box}px`;
+
+			const inset = Math.min(5 + (radius / 100) * size * 0.5, size / 2 - 2);
+
+			radiusHandle.style.left = `${pad + inset - 6.5}px`;
+			radiusHandle.style.bottom = `${pad + inset - 6.5}px`;
+			sizeHandle.setAttribute("aria-valuenow", String(size));
+			radiusHandle.setAttribute("aria-valuenow", String(radius));
+
+			if (shadow.activeElement !== sizeInput) {
 				sizeInput.value = String(size);
 			}
 
-			if (previewDim && shadow.activeElement !== previewDim) {
-				previewDim.textContent =
-					settings.accentColor ?? activeAccent(detectDarkMode()).accent;
+			if (shadow.activeElement !== radiusInput) {
+				radiusInput.value = String(radius);
 			}
 
-			if (previewShape) {
-				previewShape.style.width = `${size}px`;
-				previewShape.style.height = `${size}px`;
-				previewShape.style.borderRadius = radius;
-				previewShape.style.fontSize = `${buttonFontSizeFor(size)}px`;
+			const boxLeft = width - previewSpot.right + pad - box;
+			const boxTop = previewSpot.top - pad;
+			const below = boxTop + box + 9;
+			const above = boxTop - previewTags.offsetHeight - 6;
+			const tagsTop = below + previewTags.offsetHeight > height - 6 && above >= 4 ? above : below;
+
+			previewTags.style.left = `${Math.min(Math.max(boxLeft + box / 2 - previewTags.offsetWidth / 2, 6), width - previewTags.offsetWidth - 6)}px`;
+			previewTags.style.top = `${tagsTop}px`;
+
+			const chosen = (settings.accentColor || "").toLowerCase();
+			const preset = swatches.some((swatch) => swatch.dataset.accent === chosen);
+
+			for (const swatch of swatches) {
+				swatch.setAttribute("aria-pressed", String(swatch.dataset.accent === chosen));
 			}
 
-			for (const button of stepperButtons) {
-				button.disabled =
-					stepButtonSize(size, Number(button.dataset.sizeStep)) === size;
+			anySwatch.setAttribute("aria-pressed", String(!preset));
+			anySwatch.querySelector("i").style.background = preset ? "" : chosen;
+
+			if (!preset && shadow.activeElement !== colorInput) {
+				colorInput.value = chosen;
 			}
 		};
 
@@ -14246,6 +15466,7 @@ ${[
 			}
 
 			applyButtonDesigner(settings);
+			syncSettingsFrontPage?.(settings);
 
 			const sourceState = normalizeSourceSettings(
 				settings.sources,
@@ -14455,12 +15676,14 @@ ${[
 
 				const current = await loadSettings();
 
-				await saveSettings({
-					sources: {
-						...normalizeSourceSettings(current.sources, registeredSourceIds()),
-						[sourceInput.dataset.source]: sourceInput.checked,
-					},
-				});
+				syncSettingsFrontPage?.(
+					await saveSettings({
+						sources: {
+							...normalizeSourceSettings(current.sources, registeredSourceIds()),
+							[sourceInput.dataset.source]: sourceInput.checked,
+						},
+					}),
+				);
 
 				await refreshSubmitAffordance(shadow);
 
@@ -14487,11 +15710,6 @@ ${[
 			if (setting === "theme") {
 				refreshThemeSurfaces();
 				await onAnnotationChange?.();
-				return;
-			}
-
-			if (setting === "buttonShape") {
-				await refreshButtonAppearance();
 				return;
 			}
 
@@ -14525,23 +15743,53 @@ ${[
 			}
 		});
 
-		if (previewShape) {
-			const commitMark = async () => {
-				const next = normalizeButtonMark(previewShape.textContent);
+		if (preview && typeof ResizeObserver === "function") {
+			new ResizeObserver(() => {
+				if (designerSettings) {
+					applyButtonDesigner(designerSettings);
+				}
+			}).observe(previewPage);
+		}
 
-				previewShape.textContent = next;
-				applySettingsPanelState(await saveSettings({ buttonMark: next }));
-				await refreshButtonAppearance();
+		const saveDesigner = async (patch) => {
+			applySettingsPanelState(await saveSettings(patch));
+			await refreshButtonAppearance();
+		};
+
+		const saveAccent = async (value) => {
+			applySettingsPanelState(await saveSettings({ accentColor: value }));
+			await refreshAccentOverride();
+		};
+
+		if (preview) {
+			const commitMark = async () => {
+				const next = normalizeButtonMark(previewMark.textContent);
+
+				previewMark.textContent = next;
+				await saveDesigner({ buttonMark: next });
 			};
 
-			previewShape.addEventListener("keydown", (event) => {
-				if (event.key === "Enter") {
+			const editMark = () => {
+				previewMark.focus();
+
+				const range = previewMark.ownerDocument.createRange();
+				const selection = previewMark.ownerDocument.getSelection();
+
+				range.selectNodeContents(previewMark);
+				selection?.removeAllRanges();
+				selection?.addRange(range);
+			};
+
+			previewMark.addEventListener("keydown", (event) => {
+				event.stopPropagation();
+
+				if (event.key === "Enter" || event.key === "Escape") {
 					event.preventDefault();
-					previewShape.blur();
+					previewMark.blur();
 					return;
 				}
 
-				const selection = previewShape.ownerDocument.getSelection();
+				const selection = previewMark.ownerDocument.getSelection();
 				const replacing = selection && !selection.isCollapsed;
 
 				if (
@@ -14549,250 +15797,494 @@ ${[
 					!event.metaKey &&
 					!event.ctrlKey &&
 					!replacing &&
-					previewShape.textContent.trim().length >= BUTTON_MARK_MAX
+					previewMark.textContent.trim().length >= BUTTON_MARK_MAX
 				) {
 					event.preventDefault();
 				}
 			});
 
-			previewShape.addEventListener("blur", () => {
+			previewMark.addEventListener("blur", () => {
 				commitMark().catch(console.error);
 			});
 
-			previewShape.addEventListener("paste", (event) => {
+			previewMark.addEventListener("paste", (event) => {
 				event.preventDefault();
-				previewShape.textContent = normalizeButtonMark(
+				previewMark.textContent = normalizeButtonMark(
 					event.clipboardData?.getData("text/plain"),
 				);
 			});
-		}
 
-		if (previewDim) {
-			const commitAccent = async () => {
-				const typed = previewDim.textContent.trim();
-				const parsed = typed ? parseHexColor(typed) : null;
+			let press = null;
 
-				if (typed && !parsed) {
-					applySettingsPanelState(await loadSettings());
-					return;
-				}
-
-				const value = parsed ? rgbToHex(parsed) : null;
-
-				applySettingsPanelState(await saveSettings({ accentColor: value }));
-				await refreshAccentOverride();
-			};
-
-			previewDim.addEventListener("keydown", (event) => {
-				if (event.key === "Enter") {
-					event.preventDefault();
-					previewDim.blur();
-					return;
-				}
-
-				if (event.key === "Escape") {
-					event.preventDefault();
-					loadSettings()
-						.then((settings) => {
-							applySettingsPanelState(settings);
-							previewDim.blur();
-						})
-						.catch(console.error);
-				}
-			});
-
-			previewDim.addEventListener("blur", () => {
-				commitAccent().catch(console.error);
-			});
-
-			previewDim.addEventListener("paste", (event) => {
-				event.preventDefault();
-				previewDim.textContent = (
-					event.clipboardData?.getData("text/plain") ?? ""
-				)
-					.trim()
-					.slice(0, 7);
-			});
-		}
-
-		for (const button of stepperButtons) {
-			button.onclick = async () => {
-				const current = normalizeButtonSize(
-					(await loadSettings()).buttonSize,
-				);
-				const next = stepButtonSize(
-					current,
-					Number(button.dataset.sizeStep),
-				);
-
-				if (next === current) {
-					return;
-				}
-
-				const settings = await saveSettings({ buttonSize: next });
-
-				applySettingsPanelState(settings);
-				await refreshButtonAppearance();
-			};
-		}
-
-		if (sizeInput) {
-			const commitSizeInput = async () => {
-				const current = normalizeButtonSize((await loadSettings()).buttonSize);
-				const parsed = Number.parseInt(sizeInput.value, 10);
-				const next = Number.isFinite(parsed)
-					? normalizeButtonSize(parsed)
-					: current;
-
-				if (next === current) {
-					sizeInput.value = String(current);
-					return;
-				}
-
-				const settings = await saveSettings({ buttonSize: next });
-
-				applySettingsPanelState(settings);
-				await refreshButtonAppearance();
-			};
-
-			sizeInput.onchange = () => {
-				commitSizeInput().catch(console.error);
-			};
-
-			sizeInput.onkeydown = (event) => {
-				if (event.key !== "Enter") {
+			preview.addEventListener("pointerdown", (event) => {
+				if (event.button !== 0 || (event.target === previewMark && shadow.activeElement === previewMark)) {
 					return;
 				}
 
 				event.preventDefault();
-				sizeInput.blur();
+				press = {
+					x: event.clientX,
+					y: event.clientY,
+					right: previewSpot.right,
+					top: previewSpot.top,
+					moved: false,
+					onMark: event.target === previewMark,
+				};
+				preview.setPointerCapture(event.pointerId);
+			});
+
+			preview.addEventListener("pointermove", (event) => {
+				if (!press) {
+					return;
+				}
+
+				const dx = event.clientX - press.x;
+				const dy = event.clientY - press.y;
+
+				if (!press.moved && Math.hypot(dx, dy) < 4) {
+					return;
+				}
+
+				press.moved = true;
+				preview.classList.add("is-dragging");
+				previewSpot.right = press.right - dx;
+				previewSpot.top = press.top + dy;
+				applyButtonDesigner(designerSettings);
+			});
+
+			const endPress = () => {
+				if (!press) {
+					return;
+				}
+
+				const { moved, onMark } = press;
+
+				press = null;
+				preview.classList.remove("is-dragging");
+
+				if (!moved && onMark) {
+					editMark();
+				}
 			};
-		}
 
-		const resetButton = shadow.querySelector("#settings-reset-button");
+			preview.addEventListener("pointerup", endPress);
+			preview.addEventListener("pointercancel", endPress);
 
-		if (resetButton) {
-			resetButton.onclick = async () => {
-				const settings = await saveSettings({
-					buttonShape: DEFAULT_SETTINGS.buttonShape,
-					buttonSize: DEFAULT_SETTINGS.buttonSize,
-					accentColor: DEFAULT_SETTINGS.accentColor,
+			preview.addEventListener("keydown", (event) => {
+				const by = { ArrowLeft: [4, 0], ArrowRight: [-4, 0], ArrowUp: [0, -4], ArrowDown: [0, 4] }[event.key];
+
+				if (event.target !== preview || !by) {
+					return;
+				}
+
+				event.preventDefault();
+				previewSpot.right += by[0];
+				previewSpot.top += by[1];
+				applyButtonDesigner(designerSettings);
+			});
+
+			const dragHandle = (handle, next) => {
+				let start = null;
+
+				handle.addEventListener("pointerdown", (event) => {
+					if (event.button !== 0) {
+						return;
+					}
+
+					event.preventDefault();
+					event.stopPropagation();
+
+					const settings = designerSettings;
+
+					start = {
+						x: event.clientX,
+						y: event.clientY,
+						size: normalizeButtonSize(settings.buttonSize),
+						radius: normalizeButtonRadius(settings.buttonRadius, settings.buttonShape),
+					};
+					designerDraft = { size: start.size, radius: start.radius };
+					handle.setPointerCapture(event.pointerId);
 				});
 
-				applySettingsPanelState(settings);
-				await refreshButtonAppearance();
-				await refreshAccentOverride();
+				handle.addEventListener("pointermove", (event) => {
+					if (!start) {
+						return;
+					}
+
+					Object.assign(designerDraft, next(event.clientX - start.x, event.clientY - start.y, start));
+					applyButtonDesigner(designerSettings);
+				});
+
+				const end = () => {
+					if (!start) {
+						return;
+					}
+
+					const { size, radius } = designerDraft;
+
+					start = null;
+					saveDesigner({ buttonSize: size, buttonRadius: radius })
+						.catch(console.error)
+						.finally(() => {
+							designerDraft = null;
+							applyButtonDesigner(designerSettings);
+						});
+				};
+
+				handle.addEventListener("pointerup", end);
+				handle.addEventListener("pointercancel", end);
 			};
+
+			dragHandle(sizeHandle, (dx, dy, start) => ({
+				size: normalizeButtonSize(
+					Math.round((start.size + Math.max(-dx, dy)) / BUTTON_SIZE_STEP) * BUTTON_SIZE_STEP,
+				),
+			}));
+
+			dragHandle(radiusHandle, (dx, dy, start) => ({
+				radius: normalizeButtonRadius(start.radius + ((dx - dy) / start.size) * 100),
+			}));
+
+			sizeHandle.addEventListener("keydown", (event) => {
+				const grow = { ArrowUp: 1, ArrowLeft: 1, ArrowDown: -1, ArrowRight: -1 }[event.key];
+
+				if (grow) {
+					event.preventDefault();
+					saveDesigner({
+						buttonSize: stepButtonSize(designerSettings.buttonSize, grow),
+					}).catch(console.error);
+				}
+			});
+
+			radiusHandle.addEventListener("keydown", (event) => {
+				const round = { ArrowUp: 5, ArrowRight: 5, ArrowDown: -5, ArrowLeft: -5 }[event.key];
+
+				if (round) {
+					event.preventDefault();
+					saveDesigner({
+						buttonRadius: normalizeButtonRadius(
+							normalizeButtonRadius(designerSettings.buttonRadius, designerSettings.buttonShape) + round,
+						),
+					}).catch(console.error);
+				}
+			});
+
+			const typedValue = (input, key, normalize, current) => {
+				const commit = async () => {
+					const parsed = Number.parseInt(input.value, 10);
+
+					if (!Number.isFinite(parsed)) {
+						input.value = String(current());
+						return;
+					}
+
+					const next = normalize(parsed);
+
+					input.value = String(next);
+
+					if (next !== current()) {
+						await saveDesigner({ [key]: next });
+					}
+				};
+
+				input.addEventListener("focus", () => input.select());
+				input.onchange = () => {
+					commit().catch(console.error);
+				};
+				input.onkeydown = (event) => {
+					event.stopPropagation();
+
+					if (event.key === "Enter") {
+						event.preventDefault();
+						input.blur();
+					} else if (event.key === "Escape") {
+						event.preventDefault();
+						input.value = String(current());
+						input.blur();
+					}
+				};
+			};
+
+			typedValue(sizeInput, "buttonSize", normalizeButtonSize, () =>
+				normalizeButtonSize(designerSettings.buttonSize),
+			);
+			typedValue(radiusInput, "buttonRadius", normalizeButtonRadius, () =>
+				normalizeButtonRadius(designerSettings.buttonRadius, designerSettings.buttonShape),
+			);
+
+			for (const swatch of swatches) {
+				swatch.onclick = () => {
+					saveAccent(swatch.dataset.accent || null).catch(console.error);
+				};
+			}
+
+			colorInput.addEventListener("input", () => {
+				designerDraft = { color: colorInput.value };
+				applyButtonDesigner(designerSettings);
+			});
+
+			colorInput.addEventListener("change", () => {
+				const value = rgbToHex(parseHexColor(colorInput.value));
+
+				designerDraft = null;
+				saveAccent(value).catch(console.error);
+			});
 		}
 
-		const blockedList = shadow.querySelector("#settings-blocked-list");
+		const settingsChooser = settingsPanel.querySelector(".front-page-chooser");
+		let frontPageControl = null;
 
-		const renderBlockedList = async () => {
-			if (!blockedList) {
-				return;
+		if (settingsChooser) {
+			loadSettings()
+				.then((settings) => {
+					frontPageControl = wireFrontPageChooser(settingsChooser, settings, {
+						onChange: async (choice) => {
+							await saveSettings(choice);
+							await refreshFrontPageConsumers();
+						},
+					});
+					syncSettingsFrontPage = (next) => frontPageControl.sync(next);
+				})
+				.catch(console.error);
+		}
+
+		const manageTable = (body, { load, add, remove, empty, placeholder }) => {
+			const table = body?.closest(".manage-table");
+
+			if (!table) {
+				return async () => {};
 			}
 
-			const sites = await loadBlockedSites();
+			const addButton = table.querySelector(".manage-table-add");
+			const removeButton = table.querySelector(".manage-table-remove");
+			let chosen = null;
 
-			blockedList.replaceChildren();
+			const rows = () => [...body.querySelectorAll(".manage-row")];
 
-			if (!sites.size) {
-				const empty = document.createElement("div");
-
-				empty.className = "settings-blocked-empty";
-				empty.textContent = "No sites disabled yet.";
-				blockedList.appendChild(empty);
-				syncPanesHeight();
-
-				return;
-			}
-
-			for (const host of [...sites].sort()) {
-				const row = document.createElement("div");
-				const name = document.createElement("span");
-				const remove = document.createElement("button");
-				const label = describeBlockedEntry(host);
-
-				row.className = "settings-blocked-entry";
-				name.textContent = label;
-
-				remove.type = "button";
-				remove.className = "settings-blocked-remove";
-				remove.textContent = "×";
-				remove.setAttribute("aria-label", `Stop disabling Backchannel on ${label}`);
-				remove.onclick = async () => {
-					const next = await loadBlockedSites();
-
-					next.delete(host);
-					await saveBlockedSites(next);
-					await renderBlockedList();
-				};
-
-				row.append(name, remove);
-				blockedList.appendChild(row);
-			}
-
-			syncPanesHeight();
-		};
-
-		const hiddenList = shadow.querySelector("#settings-hidden-list");
-
-		const renderHiddenList = async () => {
-			if (!hiddenList) {
-				return;
-			}
-
-			const entries = await loadHiddenStories();
-
-			hiddenList.replaceChildren();
-
-			if (!entries.length) {
-				const empty = document.createElement("div");
-
-				empty.className = "settings-blocked-empty";
-				empty.textContent = "Nothing hidden yet.";
-				hiddenList.appendChild(empty);
-				syncPanesHeight();
-
-				return;
-			}
-
-			for (const entry of entries) {
-				const row = document.createElement("div");
-				const name = document.createElement("span");
-				const remove = document.createElement("button");
-				const label = entry.title || entry.url || entry.key;
-				const site = entry.site || hostLabel(entry.url);
-
-				row.className = "settings-blocked-entry";
-				name.textContent = label;
-				name.title = entry.url || label;
-
-				if (site) {
-					const where = document.createElement("span");
-
-					where.className = "settings-blocked-site";
-					where.textContent = ` (${site})`;
-					name.appendChild(where);
+			const sync = () => {
+				for (const row of rows()) {
+					row.setAttribute("aria-selected", String(row.dataset.key === chosen));
 				}
 
-				remove.type = "button";
-				remove.className = "settings-blocked-remove";
-				remove.textContent = "×";
-				remove.setAttribute("aria-label", `Stop hiding ${label}`);
-				remove.onclick = async () => {
-					await mutateHiddenStories((current) =>
-						removeHiddenStory(current, entry.key),
-					);
-					await renderHiddenList();
+				removeButton.disabled = !chosen;
+			};
+
+			const render = async () => {
+				const items = await load();
+
+				if (!items.some((item) => item.key === chosen)) {
+					chosen = null;
+				}
+
+				body.replaceChildren();
+
+				if (!items.length) {
+					const note = document.createElement("div");
+
+					note.className = "manage-empty";
+					note.textContent = empty;
+					body.appendChild(note);
+				}
+
+				for (const item of items) {
+					const row = document.createElement("div");
+
+					row.className = "manage-row";
+					row.setAttribute("role", "option");
+					row.dataset.key = item.key;
+					row.title = item.title || "";
+
+					for (const text of item.cells) {
+						const cell = document.createElement("span");
+
+						cell.textContent = text;
+						row.appendChild(cell);
+					}
+
+					row.onclick = () => {
+						chosen = item.key;
+						sync();
+						body.focus({ preventScroll: true });
+					};
+
+					body.appendChild(row);
+				}
+
+				sync();
+			};
+
+			const removeChosen = async () => {
+				if (!chosen) {
+					return;
+				}
+
+				const list = rows();
+				const index = list.findIndex((row) => row.dataset.key === chosen);
+				const next = list[index + 1] || list[index - 1];
+
+				await remove(chosen);
+				chosen = next?.dataset.key || null;
+				await render();
+			};
+
+			removeButton.onclick = () => {
+				removeChosen().catch(console.error);
+			};
+
+			body.addEventListener("keydown", (event) => {
+				if (event.target !== body) {
+					return;
+				}
+
+				if (event.key === "Delete" || event.key === "Backspace") {
+					event.preventDefault();
+					removeChosen().catch(console.error);
+				} else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+					const list = rows();
+
+					if (!list.length) {
+						return;
+					}
+
+					event.preventDefault();
+
+					const index = list.findIndex((row) => row.dataset.key === chosen);
+					const next = list[Math.min(Math.max(index + (event.key === "ArrowDown" ? 1 : -1), 0), list.length - 1)] || list[0];
+
+					chosen = next.dataset.key;
+					sync();
+					next.scrollIntoView({ block: "nearest" });
+				}
+			});
+
+			addButton.onclick = () => {
+				const existing = body.querySelector(".manage-add-row input");
+
+				if (existing) {
+					existing.focus();
+					return;
+				}
+
+				const row = document.createElement("div");
+				const input = document.createElement("input");
+				let done = false;
+
+				row.className = "manage-add-row";
+				input.type = "text";
+				input.placeholder = placeholder;
+				input.setAttribute("aria-label", placeholder);
+				input.spellcheck = false;
+				row.appendChild(input);
+				body.querySelector(".manage-empty")?.remove();
+				body.appendChild(row);
+				row.scrollIntoView({ block: "nearest" });
+				input.focus();
+
+				const finish = async (commit) => {
+					if (done) {
+						return;
+					}
+
+					done = true;
+
+					const value = input.value.trim();
+
+					if (commit && value) {
+						const key = await add(value);
+
+						if (key) {
+							chosen = key;
+						}
+					}
+
+					await render();
 				};
 
-				row.append(name, remove);
-				hiddenList.appendChild(row);
-			}
+				input.addEventListener("keydown", (event) => {
+					if (event.key === "Enter") {
+						event.preventDefault();
+						finish(true).catch(console.error);
+					} else if (event.key === "Escape") {
+						event.preventDefault();
+						event.stopPropagation();
+						finish(false).catch(console.error);
+					}
+				});
+				input.addEventListener("blur", () => {
+					finish(Boolean(input.value.trim())).catch(console.error);
+				});
+			};
 
-			syncPanesHeight();
+			return render;
 		};
+
+		const typedAddress = (value) => {
+			try {
+				return new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `https://${value}`);
+			} catch {
+				return null;
+			}
+		};
+
+		const renderHiddenList = manageTable(shadow.querySelector("#settings-hidden-list"), {
+			empty: "Nothing hidden yet.",
+			placeholder: "Paste a link to hide",
+			load: async () =>
+				(await loadHiddenStories()).map((entry) => ({
+					key: entry.key,
+					title: entry.url || "",
+					cells: [entry.title || entry.url || entry.key, entry.site || hostLabel(entry.url)],
+				})),
+			add: async (value) => {
+				const address = typedAddress(value);
+
+				if (!address) {
+					return null;
+				}
+
+				const story = { url: address.href, title: "", site: hostLabel(address.href), source: "" };
+
+				await mutateHiddenStories((current) => addHiddenStory(current, story));
+				return hiddenStoryKey(story);
+			},
+			remove: (key) => mutateHiddenStories((current) => removeHiddenStory(current, key)),
+		});
+
+		const renderBlockedList = manageTable(shadow.querySelector("#settings-blocked-list"), {
+			empty: "No sites disabled yet.",
+			placeholder: "A site, like example.com, or a page's address",
+			load: async () =>
+				[...(await loadBlockedSites())]
+					.map((entry) => {
+						const page = entry.startsWith(BLOCKED_PAGE_PREFIX);
+
+						return { key: entry, title: "", cells: [page ? entry.slice(BLOCKED_PAGE_PREFIX.length) : entry, page ? "This page" : "Whole site"] };
+					})
+					.sort((a, b) => a.cells[0].localeCompare(b.cells[0])),
+			add: async (value) => {
+				const address = typedAddress(value);
+
+				if (!address) {
+					return null;
+				}
+
+				const entry = address.pathname === "/" && !address.search ? address.hostname : blockedPageEntry(address.href);
+				const sites = await loadBlockedSites();
+
+				if (entry) {
+					sites.add(entry);
+					await saveBlockedSites(sites);
+				}
+
+				return entry;
+			},
+			remove: async (key) => {
+				const sites = await loadBlockedSites();
+
+				sites.delete(key);
+				await saveBlockedSites(sites);
+			},
+		});
 
 		const blockedSection = shadow.querySelector("#settings-blocked-section");
 		const hiddenSection = shadow.querySelector("#settings-hidden-section");
@@ -16393,7 +17885,7 @@ blockquote.comment-quote-redundant {
 	text-decoration-color:currentColor;
 }
 
-${appMode ? APP_CSS : ""}
+${appMode ? APP_CSS : SIDEBAR_SETTINGS_MODAL_CSS}
 </style>
 
 ${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-docked"' : pageMode ? ' class="page-mode"' : ""}>
@@ -16444,6 +17936,11 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		const { setSettingsOpen } = await wireSettingsPanel(shadow, {
 			onAnnotationChange: refreshArticleAnnotations,
 		});
+
+		if (!appMode) {
+			shadow.querySelector("#panel").insertAdjacentHTML("afterend", settingsModalHTML());
+			wireSettingsModal(shadow);
+		}
 
 		clearFilterButton.onclick = (event) => {
 			event.preventDefault();
@@ -16633,6 +18130,8 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 				if (sidebarHasDiscussion) {
 					await saveSidebarState("collapsed");
 					await createRestoreButton();
+				} else if (!enabledSourceIds(await loadSettings(), registeredSourceIds()).length) {
+					await createSetupButton();
 				} else if (location.hostname === "news.ycombinator.com") {
 					await offerQueueOnHN();
 				} else {
@@ -24428,6 +25927,12 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		const generation = ++sidebarGeneration;
 		const comments = ui.shadow?.querySelector("#comments");
 		const settings = await loadSettings();
+		const wasPicking = Boolean(ui.body?.querySelector(".source-picker"));
+		const leaveBrowsing = () => {
+			if (ui.shadow?.querySelector("#panel")?.classList.contains("browsing")) {
+				setBrowseMode(ui, false);
+			}
+		};
 
 		const render = () => {
 			if (generation !== sidebarGeneration) {
@@ -24440,6 +25945,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				if (!enabledSourceIds(settings, registeredSourceIds()).length) {
 					sidebarHasDiscussion = false;
 					renderSourcePicker(ui);
+					leaveBrowsing();
 					return;
 				}
 
@@ -24468,6 +25974,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				setSidebarStage(ui, "comments");
 				await renderDiscussions(discussions, ui);
 				await refreshSubmitAffordance(ui.shadow);
+
+				if (wasPicking) {
+					leaveBrowsing();
+				}
 
 				if (generation === sidebarGeneration) {
 					await refreshArticleAnnotations();
@@ -24584,6 +26094,396 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	const APP_ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 	const APP_PULL_MAX = 96;
 
+	const APP_ICON_CSS = `
+.app-head-icon {
+	flex:0 0 auto;
+	position:relative;
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	width:24px;
+	height:24px;
+	padding:0;
+	border:0;
+	border-radius:5px;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+}
+
+.app-head-icon[hidden] {
+	display:none;
+}
+
+.app-head-icon svg {
+	display:block;
+}
+
+:host {
+	--icon-fill:#fff;
+	--icon-on:var(--text);
+	--icon-knock:var(--text);
+	--icon-solid:none;
+	--icon-hollow:inline;
+}
+
+:host(.${DARK_CLASS}) {
+	--icon-on:#fff;
+	--icon-knock:var(--bg);
+	--icon-solid:inline;
+	--icon-hollow:none;
+}
+`;
+
+	const SETTINGS_MODAL_CSS = `
+.app-settings-modal {
+	position:fixed;
+	inset:0;
+	z-index:60;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	box-sizing:border-box;
+	padding:32px;
+	background:rgba(0,0,0,.45);
+}
+
+.app-settings-modal[hidden] {
+	display:none;
+}
+
+.app-settings-dialog {
+	display:flex;
+	flex-direction:column;
+	box-sizing:border-box;
+	width:min(678px, 100%);
+	height:min(520px, 100%);
+	overflow:hidden;
+	border:1px solid var(--surface-border);
+	border-radius:10px;
+	background:var(--surface);
+	color:var(--surface-text);
+	box-shadow:0 24px 64px rgba(0,0,0,.35);
+	font-size:12px;
+	line-height:1.35;
+	text-align:left;
+}
+
+.app-settings-top {
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	padding:6px 6px 6px 14px;
+	border-bottom:1px solid var(--surface-divider);
+}
+
+.app-settings-title {
+	font-size:13px;
+	font-weight:600;
+}
+
+.app-settings-body {
+	display:flex;
+	flex:1 1 auto;
+	min-height:0;
+}
+
+.app-settings-nav {
+	flex:0 0 200px;
+	display:flex;
+	flex-direction:column;
+	gap:1px;
+	box-sizing:border-box;
+	padding:8px 8px;
+	border-right:1px solid var(--surface-divider);
+	background:var(--help-bg);
+}
+
+.app-settings-tab {
+	display:flex;
+	align-items:center;
+	gap:8px;
+	white-space:nowrap;
+	padding:5px 8px;
+	border:0;
+	border-radius:6px;
+	background:none;
+	color:var(--surface-text);
+	font:inherit;
+	font-size:12px;
+	text-align:left;
+	cursor:pointer;
+}
+
+.app-settings-tab svg {
+	flex:0 0 auto;
+	color:var(--meta);
+}
+
+.app-settings-tab[aria-current="page"] {
+	background:var(--active-tint);
+	font-weight:600;
+}
+
+.app-settings-tab[aria-current="page"] svg {
+	color:var(--surface-text);
+}
+
+@media (hover: hover) {
+	.app-settings-tab:not([aria-current="page"]):hover {
+		background:var(--hover-tint);
+	}
+}
+
+#app-settings-modal:has(.settings-panel.sidebar-off) .app-settings-tab[data-settings-section="sidebar"] {
+	opacity:.7;
+}
+
+.app-settings-tab:not([aria-current="page"]):active {
+	background:var(--active-tint);
+}
+
+.settings-credits-mark {
+	display:none;
+}
+
+.app-settings-nav .settings-credits {
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	gap:6px;
+	margin-top:auto;
+	padding:6px 0 0 8px;
+}
+
+.app-settings-nav .settings-credits-label {
+	display:none;
+}
+
+.app-settings-nav .settings-credits-mark {
+	display:block;
+}
+
+.app-settings-nav .settings-credits a[href$="/issues"] {
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	width:24px;
+	height:24px;
+	border-radius:5px;
+	color:var(--meta);
+	text-decoration:none;
+}
+
+@media (hover: hover) {
+	.app-settings-nav .settings-credits a[href$="/issues"]:hover {
+		background:var(--hover-tint);
+		color:var(--text);
+	}
+}
+
+.app-settings-nav .settings-credits a[href$="/issues"]:active {
+	background:var(--active-tint);
+	color:var(--icon-on);
+}
+
+.app-settings-content {
+	flex:1 1 auto;
+	min-width:0;
+	overflow-y:auto;
+	padding:12px 18px 16px;
+}
+
+.app-settings-heading {
+	margin:0 0 10px;
+	font-size:13px;
+	font-weight:600;
+}
+
+#app-settings-content .settings-panel {
+	position:static;
+	width:auto;
+	max-width:440px;
+	max-height:none;
+	overflow:visible;
+	padding:0;
+	border:0;
+	border-radius:0;
+	background:none;
+	box-shadow:none;
+	z-index:auto;
+}
+
+#app-settings-content .settings-head,
+#app-settings-content [data-app-section="links"],
+#app-settings-modal:not([data-section="general"]) [data-app-section="general"],
+#app-settings-modal:not([data-section="appearance"]) [data-app-section="appearance"],
+#app-settings-modal:not([data-section="sidebar"]) [data-app-section="sidebar"] {
+	display:none;
+}
+
+#app-settings-content .settings-panes {
+	display:block;
+	width:100%;
+	height:auto !important;
+	overflow:visible;
+	transform:none !important;
+	transition:none;
+}
+
+#app-settings-content .settings-pane {
+	width:100%;
+	visibility:visible;
+}
+
+#app-settings-content .settings-panes.is-secondary > .settings-pane-primary,
+#app-settings-content .settings-panes:not(.is-secondary) > .settings-pane-secondary {
+	display:none;
+}
+
+#app-settings-content .settings-group + .settings-group {
+	margin-top:0;
+	padding-top:0;
+	border-top:0;
+}
+
+#app-settings-content .settings-group {
+	margin-bottom:12px;
+}
+
+#app-settings-modal[data-section="blocked"] #app-settings-content {
+	display:flex;
+	flex-direction:column;
+	overflow:hidden;
+}
+
+#app-settings-modal[data-section="blocked"] #app-settings-content > .settings-panel,
+#app-settings-modal[data-section="blocked"] #app-settings-content .settings-panes,
+#app-settings-modal[data-section="blocked"] #app-settings-content .settings-pane[data-pane="blocked"],
+#app-settings-modal[data-section="blocked"] #app-settings-content .settings-hidden-section:not([hidden]),
+#app-settings-modal[data-section="blocked"] #app-settings-content .settings-hidden-section:not([hidden]) > .manage-table {
+	display:flex;
+	flex-direction:column;
+	flex:1 1 auto;
+	min-height:0;
+}
+`;
+
+	const SETTINGS_MODAL_PHONE_CSS = `
+	#app-settings-content .appearance-row {
+		grid-template-columns:minmax(0, 2fr) minmax(0, 3fr);
+		gap:8px 14px;
+	}
+
+	#app-settings-content .theme-tiles {
+		gap:8px;
+	}
+
+	#app-settings-content .theme-tile {
+		flex:1 1 0;
+		min-width:0;
+	}
+
+	#app-settings-content .theme-tile-art {
+		width:100%;
+		height:auto;
+		aspect-ratio:3 / 2;
+	}
+
+	#app-settings-content .toggle-colors {
+		justify-content:space-between;
+	}
+
+	#app-settings-content .toggle-stage {
+		width:100%;
+		height:auto;
+		aspect-ratio:4 / 3;
+	}
+
+	#app-settings-modal {
+		padding:calc(12px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px));
+	}
+
+	.app-settings-dialog {
+		width:100%;
+		height:100%;
+		border-radius:14px;
+	}
+
+
+	.app-settings-body {
+		flex-direction:column;
+	}
+
+	.app-settings-nav {
+		flex:0 0 auto;
+		flex-direction:row;
+		gap:4px;
+		overflow-x:auto;
+		padding:8px 10px;
+		border-right:0;
+		border-bottom:1px solid var(--surface-divider);
+	}
+
+	.app-settings-tab {
+		flex:0 0 auto;
+	}
+
+	#app-settings-content {
+		padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px));
+	}
+
+	.app-settings-version {
+		display:inline !important;
+		margin-left:8px;
+		color:var(--meta);
+		font-size:12px;
+	}
+
+	.app-settings-top a[href$="/issues"] {
+		display:inline-flex;
+		align-items:center;
+		justify-content:center;
+		width:32px;
+		height:32px;
+		margin-right:2px;
+		border-radius:16px;
+		color:var(--surface-text);
+	}
+
+	.app-settings-top .settings-credits-mark {
+		display:block;
+		width:16px;
+		height:16px;
+	}
+`;
+
+	const SIDEBAR_SETTINGS_MODAL_CSS = `${APP_ICON_CSS}${SETTINGS_MODAL_CSS}
+#app-settings-modal {
+	z-index:2147483647;
+	line-height:1.4;
+	color:var(--text);
+	font-style:normal;
+	font-weight:normal;
+	font-variant:normal;
+	letter-spacing:normal;
+	word-spacing:normal;
+	text-transform:none;
+	text-indent:0;
+	text-align:left;
+	text-shadow:none;
+	white-space:normal;
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+	font-size:13px;
+}
+
+#app-settings-modal [hidden] {
+	display:none !important;
+}
+
+@media (max-width: 700px) {${SETTINGS_MODAL_PHONE_CSS}}
+`;
+
 	const APP_CSS = `
 :host {
 	display:block;
@@ -24627,13 +26527,70 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	display:none !important;
 }
 
+.app-onboarding {
+	position:absolute;
+	inset:0 0 0 var(--rail-column);
+	z-index:6;
+	display:flex;
+	overflow-y:auto;
+	box-sizing:border-box;
+	padding:40px 24px;
+	border-radius:12px 0 0 12px;
+	background:var(--bg);
+	color:var(--text);
+}
+
+.app-onboarding-card {
+	width:100%;
+	max-width:560px;
+	margin:auto;
+	font-size:12px;
+}
+
+.app-onboarding-title {
+	margin:0 0 6px;
+	font-size:20px;
+	font-weight:650;
+	line-height:1.25;
+}
+
+.app-onboarding-intro {
+	margin:0 0 18px;
+	color:var(--muted);
+	font-size:12.5px;
+	line-height:1.45;
+}
+
+.app-onboarding-actions {
+	display:flex;
+	justify-content:flex-end;
+	margin-top:18px;
+}
+
+.app-onboarding-start {
+	height:30px;
+	padding:0 16px;
+	border:0;
+	border-radius:15px;
+	background:var(--accent);
+	color:var(--accent-ink);
+	font:inherit;
+	font-weight:600;
+	cursor:pointer;
+}
+
+.app-onboarding-start:disabled {
+	opacity:.45;
+	cursor:default;
+}
+
 #app-rail {
 	display:flex;
 	flex-direction:column;
 	align-items:center;
 	gap:6px;
 	min-height:0;
-	padding:6px 12px 6px 6px;
+	padding:6px 9px;
 	overflow:visible;
 	background:var(--rail-bg);
 }
@@ -24724,23 +26681,28 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	display:contents;
 }
 
+.rail-icon > svg[viewBox="0 0 16 16"] {
+	width:18px;
+	height:18px;
+}
+
 .rail-label {
 	display:none;
 }
 
 .rail-badge {
 	position:absolute;
-	top:0;
-	right:-5px;
-	min-width:15px;
-	height:15px;
+	top:-6px;
+	right:-4px;
+	min-width:13px;
+	height:13px;
 	padding:0 3px;
 	box-sizing:border-box;
-	border-radius:8px;
+	border-radius:7px;
 	background:var(--rail-fg);
 	color:var(--rail-bg);
 	box-shadow:0 0 0 1.5px var(--rail-bg);
-	font:600 9px/15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	font:600 8.5px/13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 	text-align:center;
 	pointer-events:none;
 }
@@ -24777,8 +26739,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	padding:5px 9px;
 	border-radius:6px;
 	background:var(--rail-fg);
-	color:var(--rail-bg);
-	font:600 12px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	color:#000;
+	font:400 11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 	white-space:nowrap;
 	box-shadow:0 4px 14px rgba(0,0,0,.22);
 	pointer-events:none;
@@ -24846,44 +26808,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	margin-left:auto;
 }
 
-.app-head-icon {
-	flex:0 0 auto;
-	position:relative;
-	display:inline-flex;
-	align-items:center;
-	justify-content:center;
-	width:24px;
-	height:24px;
-	padding:0;
-	border:0;
-	border-radius:5px;
-	background:none;
-	color:var(--meta);
-	cursor:pointer;
-}
-
-.app-head-icon[hidden] {
-	display:none;
-}
-
-.app-head-icon svg {
-	display:block;
-}
-
-:host {
-	--icon-fill:#fff;
-	--icon-on:var(--text);
-	--icon-knock:var(--text);
-	--icon-solid:none;
-	--icon-hollow:inline;
-}
-
-:host(.${DARK_CLASS}) {
-	--icon-on:#fff;
-	--icon-knock:var(--bg);
-	--icon-solid:inline;
-	--icon-hollow:none;
-}
+${APP_ICON_CSS}
 
 .app-sync-glyph {
 	display:block;
@@ -25237,6 +27162,13 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	overflow:hidden;
 }
 
+@media (min-width: 701px) and (max-width: 1100px) {
+	#app-article {
+		border-radius:12px 0 0 12px;
+		overflow:hidden;
+	}
+}
+
 #app.list-moving #app-list,
 #app.discussion-moving #panel.app-docked {
 	position:absolute;
@@ -25281,219 +27213,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	font-size:10px;
 }
 
-.app-settings-modal {
-	position:fixed;
-	inset:0;
-	z-index:60;
-	display:flex;
-	align-items:center;
-	justify-content:center;
-	box-sizing:border-box;
-	padding:32px;
-	background:rgba(0,0,0,.45);
-}
-
-.app-settings-modal[hidden] {
-	display:none;
-}
-
-.app-settings-dialog {
-	display:flex;
-	flex-direction:column;
-	box-sizing:border-box;
-	width:min(678px, 100%);
-	height:min(520px, 100%);
-	overflow:hidden;
-	border:1px solid var(--surface-border);
-	border-radius:10px;
-	background:var(--surface);
-	color:var(--surface-text);
-	box-shadow:0 24px 64px rgba(0,0,0,.35);
-	font-size:12px;
-	line-height:1.35;
-	text-align:left;
-}
-
-.app-settings-top {
-	display:flex;
-	align-items:center;
-	justify-content:space-between;
-	padding:6px 6px 6px 14px;
-	border-bottom:1px solid var(--surface-divider);
-}
-
-.app-settings-title {
-	font-size:13px;
-	font-weight:600;
-}
-
-.app-settings-body {
-	display:flex;
-	flex:1 1 auto;
-	min-height:0;
-}
-
-.app-settings-nav {
-	flex:0 0 200px;
-	display:flex;
-	flex-direction:column;
-	gap:1px;
-	box-sizing:border-box;
-	padding:8px 8px;
-	border-right:1px solid var(--surface-divider);
-	background:var(--help-bg);
-}
-
-.app-settings-tab {
-	display:flex;
-	align-items:center;
-	gap:8px;
-	white-space:nowrap;
-	padding:5px 8px;
-	border:0;
-	border-radius:6px;
-	background:none;
-	color:var(--surface-text);
-	font:inherit;
-	font-size:12px;
-	text-align:left;
-	cursor:pointer;
-}
-
-.app-settings-tab svg {
-	flex:0 0 auto;
-	color:var(--meta);
-}
-
-.app-settings-tab[aria-current="page"] {
-	background:var(--active-tint);
-	font-weight:600;
-}
-
-.app-settings-tab[aria-current="page"] svg {
-	color:var(--surface-text);
-}
-
-@media (hover: hover) {
-	.app-settings-tab:not([aria-current="page"]):hover {
-		background:var(--hover-tint);
-	}
-}
-
-#app-settings-modal:has(.settings-panel.sidebar-off) .app-settings-tab[data-settings-section="sidebar"] {
-	opacity:.7;
-}
-
-.app-settings-tab:not([aria-current="page"]):active {
-	background:var(--active-tint);
-}
-
-.settings-credits-mark {
-	display:none;
-}
-
-.app-settings-nav .settings-credits {
-	display:flex;
-	align-items:center;
-	justify-content:space-between;
-	gap:6px;
-	margin-top:auto;
-	padding:6px 0 0 8px;
-}
-
-.app-settings-nav .settings-credits-label {
-	display:none;
-}
-
-.app-settings-nav .settings-credits-mark {
-	display:block;
-}
-
-.app-settings-nav .settings-credits a[href$="/issues"] {
-	display:inline-flex;
-	align-items:center;
-	justify-content:center;
-	width:24px;
-	height:24px;
-	border-radius:5px;
-	color:var(--meta);
-	text-decoration:none;
-}
-
-@media (hover: hover) {
-	.app-settings-nav .settings-credits a[href$="/issues"]:hover {
-		background:var(--hover-tint);
-		color:var(--text);
-	}
-}
-
-.app-settings-nav .settings-credits a[href$="/issues"]:active {
-	background:var(--active-tint);
-	color:var(--icon-on);
-}
-
-.app-settings-content {
-	flex:1 1 auto;
-	min-width:0;
-	overflow-y:auto;
-	padding:12px 18px 16px;
-}
-
-.app-settings-heading {
-	margin:0 0 10px;
-	font-size:13px;
-	font-weight:600;
-}
-
-#app-settings-content .settings-panel {
-	position:static;
-	width:auto;
-	max-width:440px;
-	max-height:none;
-	overflow:visible;
-	padding:0;
-	border:0;
-	border-radius:0;
-	background:none;
-	box-shadow:none;
-	z-index:auto;
-}
-
-#app-settings-content .settings-head,
-#app-settings-content [data-app-section="links"],
-#app-settings-modal[data-section="general"] [data-app-section="sidebar"],
-#app-settings-modal[data-section="sidebar"] [data-app-section="general"] {
-	display:none;
-}
-
-#app-settings-content .settings-panes {
-	display:block;
-	width:100%;
-	height:auto !important;
-	overflow:visible;
-	transform:none !important;
-	transition:none;
-}
-
-#app-settings-content .settings-pane {
-	width:100%;
-	visibility:visible;
-}
-
-#app-settings-content .settings-panes.is-secondary > .settings-pane-primary,
-#app-settings-content .settings-panes:not(.is-secondary) > .settings-pane-secondary {
-	display:none;
-}
-
-#app-settings-content .settings-group + .settings-group {
-	margin-top:0;
-	padding-top:0;
-	border-top:0;
-}
-
-#app-settings-content .settings-group {
-	margin-bottom:12px;
-}
+${SETTINGS_MODAL_CSS}
 
 #app > .settings-panel {
 	position:fixed;
@@ -26216,8 +27936,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 #panel.app-docked .app-discussion-meta .source-menu-option input[type="radio"]:checked {
 	border-color:transparent;
-	background:#0b63ce;
-	background:AccentColor;
+	background:var(--accent);
 	box-shadow:none;
 }
 
@@ -26226,7 +27945,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	width:5px;
 	height:5px;
 	border-radius:50%;
-	background:#fff;
+	background:var(--accent-ink);
 }
 
 #panel.app-docked .app-discussion-meta .choice-label {
@@ -26583,6 +28302,7 @@ header .item-action-link {
 #app-row-menu,
 #app-list-foot,
 #app-list-heading,
+#app-list-tags,
 #app-next,
 .browse-more,
 .browse-sources-total,
@@ -26656,6 +28376,12 @@ header .item-action-link {
 		grid-template-rows:minmax(0, 1fr) auto;
 	}
 
+	.app-onboarding {
+		inset:0;
+		padding:24px 16px 96px;
+		border-radius:0;
+	}
+
 	#app-rail {
 		grid-row:2;
 		flex-direction:row;
@@ -26706,6 +28432,12 @@ header .item-action-link {
 	#app-rail .rail-icon svg {
 		width:22px;
 		height:22px;
+	}
+
+	#app-rail .rail-badge {
+		top:-1px;
+		right:auto;
+		left:27px;
 	}
 
 	.rail-button.is-current .rail-icon {
@@ -27153,6 +28885,51 @@ header .item-action-link {
 		letter-spacing:-.01em;
 	}
 
+	#app-list-tags:not([hidden]) {
+		display:flex !important;
+		gap:6px;
+		padding:2px 16px 10px;
+		overflow-x:auto;
+		scrollbar-width:none;
+	}
+
+	#app-list-tags::-webkit-scrollbar {
+		display:none;
+	}
+
+	#app-list-tags .front-page-topic {
+		flex:0 0 auto;
+	}
+
+	#app-list-tags:not([hidden]) + #app-list-body > .browse-empty:only-child {
+		position:static;
+		min-height:50vh;
+	}
+
+	#app-list-tags .rail-hn {
+		min-width:0;
+		height:13px;
+		padding:0 2px;
+		border-radius:3px;
+		background:var(--accent);
+		color:var(--accent-ink);
+		font-size:7px;
+	}
+
+	#app-list-tags [aria-pressed="true"] .rail-hn {
+		background:var(--accent-ink);
+		color:var(--accent);
+	}
+
+	#app-list-tags .rail-monogram {
+		color:var(--accent);
+		font-size:9px;
+	}
+
+	#app-list-tags [aria-pressed="true"] .rail-monogram {
+		color:inherit;
+	}
+
 	#app[data-searching] #app-rail,
 	#app[data-searching] #app-search {
 		display:none !important;
@@ -27249,62 +29026,7 @@ header .item-action-link {
 		overflow:visible;
 	}
 
-	#app-settings-modal {
-		padding:calc(12px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px));
-	}
-
-	.app-settings-dialog {
-		width:100%;
-		height:100%;
-		border-radius:14px;
-	}
-
-
-	.app-settings-body {
-		flex-direction:column;
-	}
-
-	.app-settings-nav {
-		flex:0 0 auto;
-		flex-direction:row;
-		gap:4px;
-		overflow-x:auto;
-		padding:8px 10px;
-		border-right:0;
-		border-bottom:1px solid var(--surface-divider);
-	}
-
-	.app-settings-tab {
-		flex:0 0 auto;
-	}
-
-	#app-settings-content {
-		padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px));
-	}
-
-	.app-settings-version {
-		display:inline !important;
-		margin-left:8px;
-		color:var(--meta);
-		font-size:12px;
-	}
-
-	.app-settings-top a[href$="/issues"] {
-		display:inline-flex;
-		align-items:center;
-		justify-content:center;
-		width:32px;
-		height:32px;
-		margin-right:2px;
-		border-radius:16px;
-		color:var(--surface-text);
-	}
-
-	.app-settings-top .settings-credits-mark {
-		display:block;
-		width:16px;
-		height:16px;
-	}
+${SETTINGS_MODAL_PHONE_CSS}
 }
 `;
 
@@ -27542,6 +29264,19 @@ header .item-action-link {
 	const APP_BRAND_ICON = (d, rule = "nonzero", size = 18) =>
 		`<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="${rule}" d="${d}"/></svg>`;
 
+	const TOPIC_ICON = (d, rule = "evenodd") => APP_ICON(`<path fill="currentColor" fill-rule="${rule}" d="${d}"/>`);
+
+	const TOPIC_ICONS = {
+		world: TOPIC_ICON("M8 1.5a6.5 6.5 0 1 0 0 13a6.5 6.5 0 1 0 0-13zM8 1.6a3.1 6.4 0 1 0 0 12.8a3.1 6.4 0 1 0 0-12.8zM8 1.6a1.8 6.4 0 1 0 0 12.8a1.8 6.4 0 1 0 0-12.8zM1.7 7.35h3.15v1.3H1.7zM6.3 7.35h3.4v1.3H6.3zM11.15 7.35h3.15v1.3h-3.15z"),
+		us: TOPIC_ICON("M2 13.1h12v1.4H2zM3 9.6h10v3H3zM4.9 10.4h1v2.2h-1zM7.5 10.4h1v2.2h-1zM10.1 10.4h1v2.2h-1zM4.4 8.9a3.6 3.6 0 0 1 7.2 0zM7.4 2h1.2v2.9H7.4z"),
+		business: TOPIC_ICON("M5.6 4.6V3.4a1.1 1.1 0 0 1 1.1-1.1h2.6a1.1 1.1 0 0 1 1.1 1.1v1.2H9V3.6H7v1zM3 4.6h10a1.5 1.5 0 0 1 1.5 1.5v2.3h-13V6.1A1.5 1.5 0 0 1 3 4.6zM1.5 9.4h13v2.8a1.5 1.5 0 0 1-1.5 1.5H3a1.5 1.5 0 0 1-1.5-1.5zM7 7.6h2v2.8H7z", "nonzero"),
+		technology: TOPIC_ICON("M5 4h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM6.1 6.1v3.8h3.8V6.1zM7.1 7.1h1.8v1.8H7.1zM5.8 1.8h1.3V4H5.8zM8.9 1.8h1.3V4H8.9zM5.8 12h1.3v2.2H5.8zM8.9 12h1.3v2.2H8.9zM1.8 5.8H4v1.3H1.8zM1.8 8.9H4v1.3H1.8zM12 5.8h2.2v1.3H12zM12 8.9h2.2v1.3H12z"),
+		entertainment: TOPIC_ICON("M2 7h12v5.8a1.2 1.2 0 0 1-1.2 1.2H3.2A1.2 1.2 0 0 1 2 12.8zM3.2 3.3h9.6a1.2 1.2 0 0 1 1.2 1.2v1.4H2V4.5a1.2 1.2 0 0 1 1.2-1.2zM3.9 3.3h1.6l-1.3 2.6H2.6zM7.4 3.3h1.6l-1.3 2.6H6.1zM10.9 3.3h1.6l-1.3 2.6H9.6z"),
+		sports: TOPIC_ICON("M8 1.5a6.5 6.5 0 1 0 0 13a6.5 6.5 0 1 0 0-13zM4.3 2.8a7 7 0 0 1 0 10.4a12 12 0 0 0 0-10.4zM11.7 2.8a7 7 0 0 0 0 10.4a12 12 0 0 1 0-10.4z"),
+		science: TOPIC_ICON("M6 1.8h4V3h-.8v3.4l3.9 6.3a1.2 1.2 0 0 1-1 1.8H3.9a1.2 1.2 0 0 1-1-1.8l3.9-6.3V3H6zM5.5 9h5v.8h-5z"),
+		health: TOPIC_ICON("M8 14S2.2 10.5 2.2 6.2A3 3 0 0 1 8 4.6a3 3 0 0 1 5.8 1.6C13.8 10.5 8 14 8 14zM7.3 6.6h1.4v1.6h1.6v1.4H8.7v1.6H7.3V9.6H5.7V8.2h1.6z"),
+	};
+
 	const APP_SOURCE_ICONS = {
 		hn: '<span class="rail-hn" aria-hidden="true">HN</span>',
 		reddit: APP_BRAND_ICON(
@@ -27566,9 +29301,30 @@ header .item-action-link {
 		return `<button class="rail-button${APP_FILLED_VIEWS.includes(id) ? " rail-empty" : ""}" type="button" data-app-view="${escapeHTML(id)}" data-tip="${escapeHTML(label)}" aria-label="${escapeHTML(label)}" aria-pressed="false"><span class="rail-icon">${inner}<span class="rail-badge" data-app-badge="${escapeHTML(id)}"></span></span><span class="rail-label" aria-hidden="true">${escapeHTML(label)}</span></button>`;
 	}
 
+	function settingsModalHTML() {
+		return `
+<div id="app-settings-modal" class="app-settings-modal" hidden>
+<div class="app-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
+<div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><span class="app-settings-version" hidden></span><span class="app-settings-top-spacer"></span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
+<div class="app-settings-body">
+<nav class="app-settings-nav" aria-label="Settings sections">
+<button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="appearance"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.2a5.8 5.8 0 1 0 0 11.6c.9 0 1.4-.6 1.4-1.3 0-.7-.5-1-.5-1.6 0-.7.6-1.2 1.3-1.2h1.4a2.2 2.2 0 0 0 2.2-2.2C13.8 4.5 11.2 2.2 8 2.2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5.2" cy="7.6" r=".95" fill="currentColor"/><circle cx="7.4" cy="5.1" r=".95" fill="currentColor"/><circle cx="10.5" cy="5.6" r=".95" fill="currentColor"/></svg><span>Appearance</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="blocked"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12 12 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Hidden &amp; disabled</span></button>
+</nav>
+<div id="app-settings-content" class="app-settings-content"><div id="app-settings-heading" class="app-settings-heading">General</div></div>
+</div>
+</div>
+</div>
+`;
+	}
+
 	function appShellOpenHTML() {
 		return `<div id="app" data-stage="list">
 <div id="app-tip" class="app-tip" role="tooltip" hidden></div>
+<section id="app-onboarding" class="app-onboarding" aria-label="Welcome" hidden></section>
 <div id="app-settings-arrow" class="app-settings-arrow" hidden></div>
 <div id="app-saved-arrow" class="app-settings-arrow is-down" hidden></div>
 <div id="app-saved-menu" class="app-view-menu app-saved-menu" role="menu" aria-label="Saved" hidden>
@@ -27597,6 +29353,7 @@ ${APP_VIEWS.filter((view) => APP_FILLED_VIEWS.includes(view.id))
 <button id="app-search" class="app-stack-button" type="button" aria-label="Search the list" aria-expanded="false" aria-controls="app-search-bar" hidden>${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</button>
 <div id="app-search-page" class="app-search-page" role="dialog" aria-label="Search Backchannel" hidden><div class="app-search-head"><input id="app-search-input" class="app-search-input" type="search" placeholder="Search Backchannel" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search Backchannel"><button id="app-search-close" class="app-search-close" type="button">Cancel</button></div><div id="app-search-results" class="app-search-results"></div></div>
 <nav id="app-rail" aria-label="Views">
+<button id="app-rail-welcome" class="rail-button is-current" type="button" data-tip="Welcome" aria-label="Welcome" aria-current="page" hidden><span class="rail-icon">${APP_ICON('<path fill="currentColor" d="M8 1.3 10 5.6l4.7.5-3.5 3.2 1 4.6L8 11.5l-4.2 2.4 1-4.6-3.5-3.2 4.7-.5z"/>')}</span><span class="rail-label" aria-hidden="true">Welcome</span></button>
 ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).join("\n")}
 <button id="app-rail-search" class="rail-button" type="button" data-tip="Search" aria-label="Search Backchannel" aria-pressed="false" aria-controls="app-search-page"><span class="rail-icon">${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</span><span class="rail-label" aria-hidden="true">Search</span></button>
 <button id="app-saved" class="rail-button" type="button" data-tip="Saved" aria-label="Saved" aria-haspopup="true" aria-expanded="false" aria-controls="app-saved-menu"><span class="rail-icon">${APP_SAVED_ICON}<span class="rail-badge" data-app-badge="saved"></span></span><span class="rail-label" aria-hidden="true">Saved</span></button>
@@ -27612,30 +29369,18 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="app-head-icon" type="button" aria-label="Mark all as read" title="Mark all as read">${APP_MARK_READ_ICON}</button><button id="app-list-sync" class="app-head-icon" type="button" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button></span></div>
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
 <div id="app-list-heading" class="app-list-heading"></div>
+<div id="app-list-tags" class="app-list-tags" role="group" aria-label="Filters" hidden></div>
 <div id="app-list-body"></div>
 <div id="app-list-foot" hidden><button id="app-list-mark-read" class="item-action-link" type="button">Mark all as read</button></div>
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
 <section id="app-article" aria-label="Article">
-<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true">${APP_LIST_TOGGLE_ICON}<span class="app-pane-toggle-label">Articles</span></button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><span id="app-article-tools-sep" class="app-head-sep" aria-hidden="true" hidden>|</span><button id="app-view-toggle" class="app-head-icon app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true" disabled><span class="app-pane-toggle-label">Discussion</span>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
+<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true">${APP_LIST_TOGGLE_ICON}<span class="app-pane-toggle-label">Front Pages</span></button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><span id="app-article-tools-sep" class="app-head-sep" aria-hidden="true" hidden>|</span><button id="app-view-toggle" class="app-head-icon app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true" disabled><span class="app-pane-toggle-label">Discussions</span>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
 <div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick an article to read it here, with what people said about it beside it.</div></div>
 <div id="app-next" class="app-next" hidden><span class="app-next-label">Read next</span><button id="app-next-link" class="app-next-link" type="button"><span class="app-next-title"></span><span class="app-next-meta"></span></button></div>
 </section>
 ${settingsPanelHTML()}
-<div id="app-settings-modal" class="app-settings-modal" hidden>
-<div class="app-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
-<div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><span class="app-settings-version" hidden></span><span class="app-settings-top-spacer"></span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
-<div class="app-settings-body">
-<nav class="app-settings-nav" aria-label="Settings sections">
-<button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
-<button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
-<button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
-<button type="button" class="app-settings-tab" data-settings-section="blocked"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12 12 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Manage disabled/hidden</span></button>
-</nav>
-<div id="app-settings-content" class="app-settings-content"><div id="app-settings-heading" class="app-settings-heading">General</div></div>
-</div>
-</div>
-</div>
+${settingsModalHTML()}
 `;
 	}
 
@@ -27726,6 +29471,14 @@ ${settingsPanelHTML()}
 
 			if (button && !button.disabled) {
 				chooseAppView(button.dataset.appView);
+			}
+		});
+
+		shadow.querySelector("#app-list-tags").addEventListener("click", (event) => {
+			const chip = event.target?.closest?.("[data-app-view]");
+
+			if (chip) {
+				chooseAppView(chip.dataset.appView === appState?.view ? "all" : chip.dataset.appView);
 			}
 		});
 
@@ -28320,19 +30073,18 @@ ${settingsPanelHTML()}
 		rail.addEventListener("scroll", hideAppTip);
 		rail.addEventListener("click", hideAppTip);
 
-		wireAppSettingsModal(shadow);
+		wireSettingsModal(shadow);
 		document.addEventListener("keydown", onAppKey);
 		window.addEventListener("message", onAppMessage);
 	}
 
-	function wireAppSettingsModal(shadow) {
+	function wireSettingsModal(shadow) {
 		const modal = shadow.querySelector("#app-settings-modal");
 		const content = shadow.querySelector("#app-settings-content");
 		const panel = shadow.querySelector("#settings-panel");
 		const gear = shadow.querySelector("#settings-toggle");
-		const app = shadow.querySelector("#app");
 
-		if (!modal || !content || !panel || !gear || !app) {
+		if (!modal || !content || !panel || !gear) {
 			return;
 		}
 
@@ -28358,9 +30110,7 @@ ${settingsPanelHTML()}
 			} else if (group.querySelector("#setting-auto-open-sidebar")) {
 				group.dataset.appSection = "sidebar";
 			} else if (group.querySelector(".button-designer")) {
-				for (const field of group.querySelectorAll(":scope > .settings-field")) {
-					field.dataset.appSection = field.querySelector(".button-designer") ? "sidebar" : "general";
-				}
+				group.dataset.appSection = "appearance";
 			} else {
 				group.dataset.appSection = "general";
 			}
@@ -28489,14 +30239,15 @@ ${settingsPanelHTML()}
 		const settings = await loadSettings();
 
 		state.sourceIds = frontPageSourceIds(settings);
+
+		const feeds = frontPageFeeds(settings, state.sourceIds, enabledSourceIds(settings, registeredSourceIds()));
+
+		state.topicIds = frontPageTopicIds(settings).filter((id) => feeds.some((feed) => feed.topic === id));
+		state.noSources = !enabledSourceIds(settings, registeredSourceIds()).length;
 		renderAppRailSources();
 
-		if (!enabledSourceIds(settings, registeredSourceIds()).length) {
+		if (state.noSources) {
 			sidebarHasDiscussion = false;
-			renderSourcePicker(state.ui);
-			renderAppListMessage("Pick where comments come from, and the front pages fill in here.");
-			await paintAppCounts();
-			return;
 		}
 
 		await renderAppList();
@@ -28516,18 +30267,37 @@ ${settingsPanelHTML()}
 		const state = appState;
 		const holder = state.ui.shadow.querySelector("#app-rail-sources");
 
-		holder.innerHTML = state.sourceIds
-			.map((id) => {
-				const label = getSource(id)?.label || id;
-				const mark =
-					APP_SOURCE_ICONS[id] ||
-					`<span class="rail-monogram" aria-hidden="true">${escapeHTML(label.slice(0, 2))}</span>`;
+		const topicFilters = (state.topicIds || []).map((id) => ({
+			view: "topic:" + id,
+			label: TOPICS.find((topic) => topic.id === id)?.label || id,
+			mark: TOPIC_ICONS[id],
+		}));
+		const sourceFilters = state.sourceIds.map((id) => {
+			const label = getSource(id)?.label || id;
 
-				return appRailButtonHTML("source:" + id, label, mark);
-			})
+			return {
+				view: "source:" + id,
+				label,
+				mark: APP_SOURCE_ICONS[id] || `<span class="rail-monogram" aria-hidden="true">${escapeHTML(label.slice(0, 2))}</span>`,
+			};
+		});
+		const topics = topicFilters.map((filter) => appRailButtonHTML(filter.view, filter.label, filter.mark));
+		const sources = sourceFilters.map((filter) => appRailButtonHTML(filter.view, filter.label, filter.mark));
+
+		state.ui.shadow.querySelector("#app-list-tags").innerHTML = [...topicFilters, ...sourceFilters]
+			.map(
+				(filter) =>
+					`<button type="button" class="front-page-topic" data-app-view="${escapeHTML(filter.view)}" aria-pressed="false">${filter.mark}<span>${escapeHTML(filter.label)}</span></button>`,
+			)
 			.join("");
 
-		state.ui.shadow.querySelector("#app-rail-rule").hidden = !state.sourceIds.length;
+		holder.innerHTML = [
+			...topics,
+			...(topics.length && sources.length ? ['<div class="rail-rule" aria-hidden="true"></div>'] : []),
+			...sources,
+		].join("");
+
+		state.ui.shadow.querySelector("#app-rail-rule").hidden = !state.sourceIds.length && !(state.topicIds || []).length;
 
 		if (
 			state.view.startsWith("source:") &&
@@ -28536,11 +30306,18 @@ ${settingsPanelHTML()}
 			state.view = "unread";
 		}
 
+		if (
+			state.view.startsWith("topic:") &&
+			!(state.topicIds || []).includes(state.view.slice("topic:".length))
+		) {
+			state.view = "unread";
+		}
+
 		paintAppRail();
 	}
 
 	function appViewIsFrontPage(view) {
-		return view === "unread" || view === "all" || view.startsWith("source:");
+		return view === "unread" || view === "all" || view.startsWith("source:") || view.startsWith("topic:");
 	}
 
 	function appRowThumbHTML(story) {
@@ -28671,6 +30448,12 @@ ${settingsPanelHTML()}
 			return getSource(id)?.label || id;
 		}
 
+		if (view.startsWith("topic:")) {
+			const id = view.slice("topic:".length);
+
+			return TOPICS.find((topic) => topic.id === id)?.label || id;
+		}
+
 		return APP_VIEWS.find((entry) => entry.id === view)?.label || "";
 	}
 
@@ -28680,11 +30463,22 @@ ${settingsPanelHTML()}
 		const searching = !appIsPhone() && state.ui.shadow.querySelector("#app").hasAttribute("data-searching");
 		const search = state.ui.shadow.querySelector("#app-rail-search");
 
+		const filtered = state.view.startsWith("topic:") || state.view.startsWith("source:");
+		const tags = state.ui.shadow.querySelector("#app-list-tags");
+
 		for (const button of state.ui.shadow.querySelectorAll("#app-rail [data-app-view], #app-saved-menu [data-app-view]")) {
-			const current = !searching && button.dataset.appView === state.view;
+			const current =
+				!searching &&
+				(button.dataset.appView === state.view || (filtered && appIsPhone() && button.dataset.appView === "all"));
 
 			button.classList.toggle("is-current", current);
 			button.setAttribute("aria-pressed", String(current));
+		}
+
+		tags.hidden = !tags.children.length || !(filtered || state.view === "all");
+
+		for (const chip of tags.children) {
+			chip.setAttribute("aria-pressed", String(chip.dataset.appView === state.view));
 		}
 
 		search.classList.toggle("is-current", searching);
@@ -29243,19 +31037,19 @@ ${settingsPanelHTML()}
 
 		const seen = new Set();
 
-		for (const field of panel?.querySelectorAll(".settings-field, .settings-group label") || []) {
-			const label = (field.matches("label") ? field.textContent : field.querySelector(".settings-field-label, label")?.textContent || "").trim().split("\n")[0].trim();
+		for (const field of panel?.querySelectorAll(".settings-field, .appearance-row, .settings-group label") || []) {
+			const label = (field.matches("label") ? field.textContent : field.querySelector(".settings-field-label, .appearance-row-label, label")?.textContent || "").trim().split("\n")[0].trim();
 			const owner = field.closest("[data-app-section]");
-			const section = owner?.dataset.appSection === "sidebar" ? "sidebar" : "general";
+			const section = ["appearance", "sidebar"].includes(owner?.dataset.appSection) ? owner.dataset.appSection : "general";
 
 			if (label && label.length < 80 && !seen.has(label) && !field.closest("#app-view-menu")) {
 				seen.add(label);
-				entries.push({ group: "Settings", title: label, note: section === "sidebar" ? "Sidebar" : "General", keys: `${label} settings`, run: () => openAppSettingsSection(section) });
+				entries.push({ group: "Settings", title: label, note: { general: "General", appearance: "Appearance", sidebar: "Sidebar" }[section], keys: `${label} settings`, run: () => openAppSettingsSection(section) });
 			}
 		}
 
 		entries.push({ group: "Settings", title: "Sources", note: "Where comments come from", keys: "sources reddit hacker news bluesky lobsters mastodon lemmy settings", run: () => openAppSettingsSection("sources") });
-		entries.push({ group: "Settings", title: "Manage disabled sites", note: "Blocked", keys: "blocked disabled sites manage settings", run: () => openAppSettingsSection("blocked") });
+		entries.push({ group: "Settings", title: "Hidden & disabled", note: "Hidden links and disabled sites", keys: "hidden links blocked disabled sites manage settings", run: () => openAppSettingsSection("blocked") });
 
 		return entries;
 	}
@@ -29384,6 +31178,84 @@ ${settingsPanelHTML()}
 		body.replaceChildren(note);
 	}
 
+	function appOnboardingHTML() {
+		return `<div class="app-onboarding-card">
+<h1 class="app-onboarding-title">Welcome to Backchannel</h1>
+<p class="app-onboarding-intro">Backchannel finds what people are saying about the pages you visit, and fills Front Pages with links worth reading, from the sources you pick here. Nothing is contacted until you start.</p>
+<div class="sources-grid">${sourceListHTML({ cells: true })}</div>
+<div class="sources-subhead">Front Pages</div>
+<div class="sources-subhint">Choose what Backchannel shows in Front Pages. Links come only from the sources you've enabled above.</div>
+${frontPageChooserHTML()}
+<div class="app-onboarding-actions"><button class="app-onboarding-start" type="button" disabled>Start reading</button></div>
+</div>`;
+	}
+
+	async function paintAppOnboarding() {
+		const state = appState;
+		const panel = state.ui.shadow.querySelector("#app-onboarding");
+
+		if (!panel) {
+			return;
+		}
+
+		const welcome = state.ui.shadow.querySelector("#app-rail-welcome");
+
+		for (const view of ["unread", "all"]) {
+			const button = state.ui.shadow.querySelector(`#app-rail [data-app-view="${view}"]`);
+
+			if (button) {
+				button.hidden = state.noSources;
+			}
+		}
+
+		if (welcome) {
+			welcome.hidden = !state.noSources;
+		}
+
+		if (!state.noSources) {
+			panel.hidden = true;
+			panel.replaceChildren();
+			return;
+		}
+
+		const control = state.ui.shadow.querySelector("#comment-toggle");
+
+		if (control) {
+			control.hidden = true;
+		}
+
+		if (panel.childElementCount) {
+			panel.hidden = false;
+			return;
+		}
+
+		const base = await loadSettings();
+
+		panel.innerHTML = appOnboardingHTML();
+
+		const boxes = [...panel.querySelectorAll("input[data-source]")];
+		const start = panel.querySelector(".app-onboarding-start");
+		const chosen = () => Object.fromEntries(boxes.map((box) => [box.dataset.source, box.checked]));
+		const chooser = wireFrontPageChooser(panel.querySelector(".front-page-chooser"), { ...base, sources: chosen() });
+
+		panel.addEventListener("change", (event) => {
+			if (!event.target.matches("input[data-source]")) {
+				return;
+			}
+
+			start.disabled = !boxes.some((box) => box.checked);
+			chooser.sync({ ...base, sources: chosen(), ...chooser.choice() });
+		});
+
+		start.onclick = async () => {
+			start.disabled = true;
+			syncSettingsFrontPage?.(await saveSettings({ sources: chosen(), ...chooser.choice() }));
+			await refreshAppSources();
+		};
+
+		panel.hidden = false;
+	}
+
 	async function renderAppList({ force = false } = {}) {
 		const state = appState;
 		const ui = state.ui;
@@ -29392,6 +31264,7 @@ ${settingsPanelHTML()}
 		const request = ++state.listSeq;
 
 		paintAppRail();
+		await paintAppOnboarding();
 
 		if (force || state.listView !== view) {
 			resetAppListScroll();
@@ -29401,9 +31274,13 @@ ${settingsPanelHTML()}
 			await renderQueueView(ui, list, { part: view === "queue" ? "queued" : "watching" });
 		} else if (view === "collection") {
 			await renderCollectionView(ui, list);
+		} else if (state.noSources) {
+			state.rows = [];
+			state.rowsByURL = new Map();
+			list.replaceChildren();
 		} else {
 			if (state.listView !== view || !list.childElementCount) {
-				renderBrowseSkeleton(list, "Loading front pages…");
+				renderBrowseSkeleton(list, "Loading Front Pages…");
 			}
 
 			const [{ rows: allRows }, hiddenKeys, queued, seen] = await Promise.all([
@@ -29431,7 +31308,7 @@ ${settingsPanelHTML()}
 			if (!shown.length) {
 				renderAppListMessage(
 					!allRows.length
-						? "Could not reach any front page."
+						? "Could not load Front Pages."
 						: view === "unread"
 							? "All caught up."
 							: "Nothing here right now.",
@@ -29449,6 +31326,12 @@ ${settingsPanelHTML()}
 				});
 
 				element.classList.toggle("is-unread", unread);
+			}
+
+			const cardSettings = await loadSettings();
+
+			if (cardSettings.frontPageMode === undefined && request === state.listSeq) {
+				list.prepend(frontPageCardElement(cardSettings, () => refreshFrontPageConsumers()));
 			}
 
 			refreshFavoriteControls().catch(console.error);
@@ -29500,7 +31383,7 @@ ${settingsPanelHTML()}
 		}
 
 		const { queued, watched } = splitQueueEntries(queue, watches);
-		const counts = appViewCounts(state.rows, state.seen, state.sourceIds);
+		const counts = appViewCounts(state.rows, state.seen, state.sourceIds, state.topicIds || []);
 
 		paintAppRailFill({
 			queue: queued.length > 0,
@@ -29518,6 +31401,10 @@ ${settingsPanelHTML()}
 
 		for (const id of state.sourceIds) {
 			badges["source:" + id] = counts.sources[id];
+		}
+
+		for (const id of state.topicIds || []) {
+			badges["topic:" + id] = counts.topics[id];
 		}
 
 		for (const badge of state.ui.shadow.querySelectorAll("[data-app-badge]")) {
@@ -32015,6 +33902,10 @@ ${settingsPanelHTML()}
 		return [row?.story, ...(row?.also || [])].some((story) => story?.source === sourceId);
 	}
 
+	function rowCarriesTopic(row, topicId) {
+		return [row?.story, ...(row?.also || [])].some((story) => story?.topic === topicId);
+	}
+
 	function appViewRows(rows, view, seen) {
 		if (view === "unread") {
 			return rows.filter((row) => rowIsUnread(row, seen));
@@ -32026,14 +33917,24 @@ ${settingsPanelHTML()}
 			return rows.filter((row) => rowCarriesSource(row, sourceId));
 		}
 
+		if (String(view).startsWith("topic:")) {
+			const topicId = view.slice("topic:".length);
+
+			return rows.filter((row) => rowCarriesTopic(row, topicId));
+		}
+
 		return rows;
 	}
 
-	function appViewCounts(rows, seen, sourceIds) {
-		const counts = { unread: 0, all: rows.length, sources: {} };
+	function appViewCounts(rows, seen, sourceIds, topicIds = []) {
+		const counts = { unread: 0, all: rows.length, sources: {}, topics: {} };
 
 		for (const id of sourceIds) {
 			counts.sources[id] = 0;
+		}
+
+		for (const id of topicIds) {
+			counts.topics[id] = 0;
 		}
 
 		for (const row of rows) {
@@ -32046,6 +33947,12 @@ ${settingsPanelHTML()}
 			for (const id of sourceIds) {
 				if (rowCarriesSource(row, id)) {
 					counts.sources[id] += 1;
+				}
+			}
+
+			for (const id of topicIds) {
+				if (rowCarriesTopic(row, id)) {
+					counts.topics[id] += 1;
 				}
 			}
 		}
