@@ -44,16 +44,6 @@
 
 ## FAQ
 
-### Where did HNewhere go?
-
-Nothing went anywhere. **HNewhere is now Backchannel**. Same project, same
-history, same install URL, same settings. It was renamed in v1.6.0 when it
-stopped being about one site: it now offers many sources and each
-source is a checkbox you control.
-
-If you already have it installed it updates itself and renames in place. Your hidden sites, your reading queue, your collapsed threads and your
-preferences all carry over untouched.
-
 ### What exactly is the script doing with my information?
 
 It runs on every page, so this matters: there's no backend, no analytics, and no
@@ -89,6 +79,16 @@ Full detail, including a host-by-host table, in [SECURITY.md](SECURITY.md).
 ### When I enable annotations, I see faintly highlighted text that isn't directly quoted
 
 When you enable annotations, the script generates a heat map of which content in the article the discussions are focusing on. So even if a piece of text isn't directly quoted by a comment, it may receive the highlighter effect. If it's distracting, you can disable showing annotations when the sidebar is closed by making sure **Show when sidebar closed** is not enabled.
+
+### Where did HNewhere go?
+
+Nothing went anywhere. **HNewhere is now Backchannel**. Same project, same
+history, same install URL, same settings. It was renamed in v1.6.0 when it
+stopped being about one site: it now offers many sources and each
+source is a checkbox you control.
+
+If you already have it installed it updates itself and renames in place. Your hidden sites, your reading queue, your collapsed threads and your
+preferences all carry over untouched.
 
 ### How can I contribute?
 
