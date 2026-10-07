@@ -8,8 +8,8 @@ fix ships as a new version that existing installs pick up automatically.
 
 | Version    | Supported |
 | ---------- | --------- |
-| 1.6.15.2   | Yes       |
-| < 1.6.15.2 | No        |
+| 1.6.16     | Yes       |
+| < 1.6.16   | No        |
 
 Your installed version is shown at the bottom of the settings panel.
 
@@ -103,7 +103,10 @@ Worth stating plainly, because the permissions are broad by necessity:
   write in the notepad. An article you ask the reader to scrape passes through
   the same storage on its way from its tab: the reader removes it once it is
   shown, and if the reader has gone by then it stays until the next scrape
-  replaces it. Nothing is sent anywhere except the hosts above.
+  replaces it. On backchnnl.app it also keeps your theme and the reader's two
+  page colors in that site's own local storage, under `backchannel:chrome`, so
+  the page can take your color before the script runs. Nothing is sent
+  anywhere except the hosts above.
 - **It keeps what Hacker News answered about the last pages you looked up**, so
   a page reopened within the hour is not asked about again. Since 1.6.15.2 that
   is one stored value holding thirty pages at most, by address. A page is used
