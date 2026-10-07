@@ -28302,6 +28302,7 @@ header .item-action-link {
 #app-row-menu,
 #app-list-foot,
 #app-list-heading,
+#app-list-tags,
 #app-next,
 .browse-more,
 .browse-sources-total,
@@ -28884,6 +28885,51 @@ header .item-action-link {
 		letter-spacing:-.01em;
 	}
 
+	#app-list-tags:not([hidden]) {
+		display:flex !important;
+		gap:6px;
+		padding:2px 16px 10px;
+		overflow-x:auto;
+		scrollbar-width:none;
+	}
+
+	#app-list-tags::-webkit-scrollbar {
+		display:none;
+	}
+
+	#app-list-tags .front-page-topic {
+		flex:0 0 auto;
+	}
+
+	#app-list-tags:not([hidden]) + #app-list-body > .browse-empty:only-child {
+		position:static;
+		min-height:50vh;
+	}
+
+	#app-list-tags .rail-hn {
+		min-width:0;
+		height:13px;
+		padding:0 2px;
+		border-radius:3px;
+		background:var(--accent);
+		color:var(--accent-ink);
+		font-size:7px;
+	}
+
+	#app-list-tags [aria-pressed="true"] .rail-hn {
+		background:var(--accent-ink);
+		color:var(--accent);
+	}
+
+	#app-list-tags .rail-monogram {
+		color:var(--accent);
+		font-size:9px;
+	}
+
+	#app-list-tags [aria-pressed="true"] .rail-monogram {
+		color:inherit;
+	}
+
 	#app[data-searching] #app-rail,
 	#app[data-searching] #app-search {
 		display:none !important;
@@ -29323,6 +29369,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="app-head-icon" type="button" aria-label="Mark all as read" title="Mark all as read">${APP_MARK_READ_ICON}</button><button id="app-list-sync" class="app-head-icon" type="button" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button></span></div>
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
 <div id="app-list-heading" class="app-list-heading"></div>
+<div id="app-list-tags" class="app-list-tags" role="group" aria-label="Filters" hidden></div>
 <div id="app-list-body"></div>
 <div id="app-list-foot" hidden><button id="app-list-mark-read" class="item-action-link" type="button">Mark all as read</button></div>
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
@@ -29424,6 +29471,14 @@ ${settingsModalHTML()}
 
 			if (button && !button.disabled) {
 				chooseAppView(button.dataset.appView);
+			}
+		});
+
+		shadow.querySelector("#app-list-tags").addEventListener("click", (event) => {
+			const chip = event.target?.closest?.("[data-app-view]");
+
+			if (chip) {
+				chooseAppView(chip.dataset.appView === appState?.view ? "all" : chip.dataset.appView);
 			}
 		});
 
@@ -30212,17 +30267,29 @@ ${settingsModalHTML()}
 		const state = appState;
 		const holder = state.ui.shadow.querySelector("#app-rail-sources");
 
-		const topics = (state.topicIds || []).map((id) =>
-			appRailButtonHTML("topic:" + id, TOPICS.find((topic) => topic.id === id)?.label || id, TOPIC_ICONS[id]),
-		);
-		const sources = state.sourceIds.map((id) => {
+		const topicFilters = (state.topicIds || []).map((id) => ({
+			view: "topic:" + id,
+			label: TOPICS.find((topic) => topic.id === id)?.label || id,
+			mark: TOPIC_ICONS[id],
+		}));
+		const sourceFilters = state.sourceIds.map((id) => {
 			const label = getSource(id)?.label || id;
-			const mark =
-				APP_SOURCE_ICONS[id] ||
-				`<span class="rail-monogram" aria-hidden="true">${escapeHTML(label.slice(0, 2))}</span>`;
 
-			return appRailButtonHTML("source:" + id, label, mark);
+			return {
+				view: "source:" + id,
+				label,
+				mark: APP_SOURCE_ICONS[id] || `<span class="rail-monogram" aria-hidden="true">${escapeHTML(label.slice(0, 2))}</span>`,
+			};
 		});
+		const topics = topicFilters.map((filter) => appRailButtonHTML(filter.view, filter.label, filter.mark));
+		const sources = sourceFilters.map((filter) => appRailButtonHTML(filter.view, filter.label, filter.mark));
+
+		state.ui.shadow.querySelector("#app-list-tags").innerHTML = [...topicFilters, ...sourceFilters]
+			.map(
+				(filter) =>
+					`<button type="button" class="front-page-topic" data-app-view="${escapeHTML(filter.view)}" aria-pressed="false">${filter.mark}<span>${escapeHTML(filter.label)}</span></button>`,
+			)
+			.join("");
 
 		holder.innerHTML = [
 			...topics,
@@ -30396,11 +30463,22 @@ ${settingsModalHTML()}
 		const searching = !appIsPhone() && state.ui.shadow.querySelector("#app").hasAttribute("data-searching");
 		const search = state.ui.shadow.querySelector("#app-rail-search");
 
+		const filtered = state.view.startsWith("topic:") || state.view.startsWith("source:");
+		const tags = state.ui.shadow.querySelector("#app-list-tags");
+
 		for (const button of state.ui.shadow.querySelectorAll("#app-rail [data-app-view], #app-saved-menu [data-app-view]")) {
-			const current = !searching && button.dataset.appView === state.view;
+			const current =
+				!searching &&
+				(button.dataset.appView === state.view || (filtered && appIsPhone() && button.dataset.appView === "all"));
 
 			button.classList.toggle("is-current", current);
 			button.setAttribute("aria-pressed", String(current));
+		}
+
+		tags.hidden = !tags.children.length || !(filtered || state.view === "all");
+
+		for (const chip of tags.children) {
+			chip.setAttribute("aria-pressed", String(chip.dataset.appView === state.view));
 		}
 
 		search.classList.toggle("is-current", searching);
