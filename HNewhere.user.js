@@ -14301,7 +14301,6 @@ header > .settings-panel {
 
 .front-page-card {
 	display:grid;
-	gap:8px;
 	margin:10px 12px 12px;
 	padding:12px;
 	border:1px solid var(--surface-border);
@@ -14318,7 +14317,7 @@ header > .settings-panel {
 }
 
 .front-page-card-title {
-	font-size:13px;
+	font-size:12px;
 	font-weight:600;
 }
 
@@ -14329,6 +14328,7 @@ header > .settings-panel {
 	height:24px;
 	padding:0;
 	border:0;
+	margin:-4px -4px -4px 0;
 	border-radius:5px;
 	background:none;
 	color:var(--meta);
@@ -14336,13 +14336,20 @@ header > .settings-panel {
 }
 
 .front-page-card-text {
+	margin-top:2px;
 	color:var(--muted);
-	font-size:11.5px;
+	font-size:11px;
+	line-height:1.35;
+}
+
+.front-page-card .front-page-chooser {
+	margin-top:10px;
 }
 
 .front-page-card-actions {
 	display:flex;
 	justify-content:flex-end;
+	margin-top:10px;
 }
 
 .front-page-card-done {
@@ -14359,7 +14366,7 @@ header > .settings-panel {
 
 .front-page-chooser {
 	display:grid;
-	gap:12px;
+	gap:8px;
 }
 
 .front-page-chooser [hidden] {
