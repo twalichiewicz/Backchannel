@@ -2,12 +2,16 @@
 <picture>
   <img width="120" height="120" alt="backchannel-birb" src="site/icon-360.png" />
 </picture>
-  <br/><em>The internet's commentary track</em>
+  <br/><center><h1 align="center">⺌Backchannel⺌</h1></center>
+  <p align="center">The internet's commentary track.</p>
 </p>
 
-<img width="1305" height="887" alt="A screenshot of Safari on macOS opened to https://www.seangoedecke.com/llms-reward-expertise/, with the HNewhere side bar open viewing the comments. The settings dropdown in the sidebar is also open, showing which settings the user currently has enabled." src="https://github.com/user-attachments/assets/f50131fc-fa6b-4e25-a5dd-9c44ceae1bc5" />
+<picture>
+  <a href="https://github.com/user-attachments/assets/17f947d5-c66c-4dfb-84a7-ade01ecd3a74"><img width="1280" height="720" alt="Two screenshots of Safari on macOS  overlapping each other diagonally bottom-left to top-right. The front screenshot shows a tab opened to https://backchnnl.app, displaying the Reader view with the user having selected and loaded 'C for Rust Programmers' (https://bd103.dev/blog/2026-10-07-c-for-rust-programmers/) with the Discussion panel open alongside the article. The back screenshot shows a tab opened to 'Sharing AI progress in mathematics' (https://openai.com/index/sharing-ai-progress-in-mathematics/) with the Sidebar open, showing the discussions about the article in an overlay panel." src="https://github.com/user-attachments/assets/17f947d5-c66c-4dfb-84a7-ade01ecd3a74" /></a>
 
-# Backchannel
+</picture>
+
+## Features
 
 - **The internet's commentary track:** Avoid the two-tab-tango and conveniently read the community's comments in-context.
 - **Never miss a thread:** Every page you land on gets checked against the sources you've picked, so you find out a discussion exists without going hunting for one.
