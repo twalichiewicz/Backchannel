@@ -7,7 +7,7 @@
 </p>
 
 <picture>
-  <a href="https://github.com/user-attachments/assets/17f947d5-c66c-4dfb-84a7-ade01ecd3a74"><img width="1280" height="720" alt="Two screenshots of Safari on macOS  overlapping each other diagonally bottom-left to top-right. The front screenshot shows a tab opened to https://backchnnl.app, displaying the Reader view with the user having selected and loaded 'C for Rust Programmers' (https://bd103.dev/blog/2026-10-07-c-for-rust-programmers/) with the Discussion panel open alongside the article. The back screenshot shows a tab opened to 'Sharing AI progress in mathematics' (https://openai.com/index/sharing-ai-progress-in-mathematics/) with the Sidebar open, showing the discussions about the article in an overlay panel." src="https://github.com/user-attachments/assets/17f947d5-c66c-4dfb-84a7-ade01ecd3a74" /></a>
+  <a href="https://github.com/user-attachments/assets/17f947d5-c66c-4dfb-84a7-ade01ecd3a74"><img width="1280" height="600" alt="Two screenshots of Safari on macOS  overlapping each other diagonally bottom-left to top-right. The front screenshot shows a tab opened to https://backchnnl.app, displaying the Reader view with the user having selected and loaded 'C for Rust Programmers' (https://bd103.dev/blog/2026-10-07-c-for-rust-programmers/) with the Discussion panel open alongside the article. The back screenshot shows a tab opened to 'Sharing AI progress in mathematics' (https://openai.com/index/sharing-ai-progress-in-mathematics/) with the Sidebar open, showing the discussions about the article in an overlay panel." src="https://github.com/user-attachments/assets/17f947d5-c66c-4dfb-84a7-ade01ecd3a74" /></a>
 
 </picture>
 
