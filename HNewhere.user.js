@@ -199,7 +199,7 @@
 		votes: "HNewhere:votes",
 		blocked: "HNewhere:blocked_sites",
 		queue: "HNewhere:queue",
-		favorites: "HNewhere:favorites",
+		saved: "HNewhere:favorites",
 		pendingFocus: "HNewhere:pending_focus",
 		collected: "HNewhere:collected",
 		hiddenStories: "HNewhere:hidden_stories",
@@ -734,7 +734,7 @@
 		];
 	}
 
-	function adoptCollectedDocuments(entries, favorites, notedIndex, now) {
+	function adoptCollectedDocuments(entries, saved, notedIndex, now) {
 		const list = Array.isArray(entries) ? [...entries] : [];
 		const held = new Set(list.map((entry) => entry.key));
 		const pages = new Map();
@@ -754,7 +754,7 @@
 			});
 		};
 
-		for (const entry of Array.isArray(favorites) ? favorites : []) {
+		for (const entry of Array.isArray(saved) ? saved : []) {
 			offer(entry?.url, entry?.kind === "comment" ? entry.context || entry.title : entry?.title, entry?.addedAt);
 		}
 
@@ -794,7 +794,7 @@
 			}));
 	}
 
-	function addToFavorites(entries, item, now) {
+	function addToSaved(entries, item, now) {
 		const list = Array.isArray(entries) ? entries : [];
 
 		if (list.some((entry) => entry.key === item.key)) {
@@ -822,13 +822,13 @@
 		];
 	}
 
-	function removeFromFavorites(entries, key) {
+	function removeFromSaved(entries, key) {
 		return (Array.isArray(entries) ? entries : []).filter(
 			(entry) => entry.key !== key,
 		);
 	}
 
-	function favoritesOfKind(entries, kind) {
+	function savedOfKind(entries, kind) {
 		return (Array.isArray(entries) ? entries : []).filter(
 			(entry) => (entry.kind || "discussion") === kind,
 		);
@@ -850,10 +850,10 @@
 			})),
 		].sort((a, b) => b.at - a.at)[0];
 
-		return favoriteExcerpt(latest?.text || "", FAVORITE_EXCERPT_CHARS);
+		return textExcerpt(latest?.text || "", EXCERPT_CHARS);
 	}
 
-	function collectDocuments(favorites, notedIndex, notesByKey, collected = [], looks = {}) {
+	function collectDocuments(saved, notedIndex, notesByKey, collected = [], looks = {}) {
 		const documents = new Map();
 
 		const documentFor = (key, url) => {
@@ -885,7 +885,7 @@
 			return doc;
 		};
 
-		for (const entry of Array.isArray(favorites) ? favorites : []) {
+		for (const entry of Array.isArray(saved) ? saved : []) {
 			if (!entry?.key) {
 				continue;
 			}
@@ -1262,7 +1262,7 @@
 		};
 	}
 
-	function isKeptComment(quotes, commentKey) {
+	function isSavedComment(quotes, commentKey) {
 		return (Array.isArray(quotes) ? quotes : []).some(
 			(quote) => quote && (quote.focus === commentKey || quote.key === commentKey),
 		);
@@ -1276,8 +1276,8 @@
 			.reduce((sum, story) => sum + (Number(story.commentCount) || 0), 0);
 	}
 
-	function collectionTabState(favorites, noted, collected) {
-		const kept = (Array.isArray(favorites) ? favorites.length : 0) + (Array.isArray(noted) ? noted.length : 0);
+	function collectionTabState(saved, noted, collected) {
+		const kept = (Array.isArray(saved) ? saved.length : 0) + (Array.isArray(noted) ? noted.length : 0);
 		const entries = Array.isArray(collected) ? collected : [];
 
 		return {
@@ -1466,14 +1466,14 @@
 			return;
 		}
 
-		const [favorites, collected, index, looks] = await Promise.all([
-			loadFavoriteEntries(),
+		const [saved, collected, index, looks] = await Promise.all([
+			loadSavedItems(),
 			loadCollected(),
 			loadNotedIndex(),
 			loadLooks(),
 		]);
 		const kept =
-			favorites.some((entry) => normalizeURL(entry.url || "") === key) ||
+			saved.some((entry) => normalizeURL(entry.url || "") === key) ||
 			collected.some((entry) => entry.key === key) ||
 			index.some((entry) => normalizeURL(entry.url || "") === key);
 
@@ -1578,8 +1578,8 @@
 		return new Set((await loadHiddenStories()).map((entry) => entry.key));
 	}
 
-	async function loadFavoriteEntries() {
-		const stored = await load(STORAGE.favorites, []);
+	async function loadSavedItems() {
+		const stored = await load(STORAGE.saved, []);
 
 		return Array.isArray(stored) ? stored.filter((entry) => entry?.key) : [];
 	}
@@ -1633,8 +1633,8 @@
 		return lookWrites;
 	}
 
-	async function saveFavorites(entries) {
-		await save(STORAGE.favorites, entries);
+	async function storeSavedItems(entries) {
+		await save(STORAGE.saved, entries);
 		return entries;
 	}
 
@@ -1642,13 +1642,13 @@
 		let stored = await load(STORAGE.collected, null);
 
 		if (stored === null && !(await load(COLLECTED_MIGRATED_KEY, false))) {
-			const [legacy, favorites, notedIndex] = await Promise.all([
+			const [legacy, saved, notedIndex] = await Promise.all([
 				load(COLLECTED_LEGACY_KEY, null),
-				load(STORAGE.favorites, []),
+				load(STORAGE.saved, []),
 				load(NOTES_INDEX_KEY, []),
 			]);
 
-			stored = adoptCollectedDocuments(migrateCollectedEntries(legacy), favorites, notedIndex, Date.now());
+			stored = adoptCollectedDocuments(migrateCollectedEntries(legacy), saved, notedIndex, Date.now());
 			await save(STORAGE.collected, stored);
 			await save(COLLECTED_MIGRATED_KEY, true);
 
@@ -1763,10 +1763,10 @@
 
 	// #region hnewhere-test-export
 
-	const FAVORITE_EXCERPT_CHARS = 140;
-	const FAVORITE_TEXT_CHARS = 2000;
+	const EXCERPT_CHARS = 140;
+	const SAVED_TEXT_CHARS = 2000;
 
-	function favoriteExcerpt(value, limit) {
+	function textExcerpt(value, limit) {
 		const text = unescapeHTML(
 			String(value ?? "")
 				.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
@@ -1785,7 +1785,7 @@
 		return (boundary > limit / 2 ? cut.slice(0, boundary) : cut).trim() + "…";
 	}
 
-	function favoriteKeyFor(story) {
+	function savedKeyFor(story) {
 		if (story.source) {
 			return `${story.source}:${story.id}`;
 		}
@@ -1793,7 +1793,7 @@
 		return normalizeURL(story.url || "") || String(story.id ?? "");
 	}
 
-	function favoriteCovers(entry, item) {
+	function savedCovers(entry, item) {
 		if (!entry?.key || !item?.key) {
 			return false;
 		}
@@ -1814,7 +1814,7 @@
 		return Boolean(page && normalizeURL(entry.url || "") === page);
 	}
 
-	function favoriteButtonHTML(about = {}) {
+	function saveButtonHTML(about = {}) {
 		const id = String(about.id ?? about.key ?? "");
 		const key = String(about.key || "");
 
@@ -1823,19 +1823,19 @@
 		}
 
 		return `<button class="item-action-link" type="button"
-      data-item-action="fave" data-item-action-source="${escapeHTML(String(about.source || ""))}"
+      data-item-action="save" data-item-action-source="${escapeHTML(String(about.source || ""))}"
       data-item-action-id="${escapeHTML(id)}"
-      data-favorite-key="${escapeHTML(key)}"
-      data-favorite-url="${escapeHTML(about.url || "")}"
-      data-favorite-title="${escapeHTML(about.title || "")}"
-      data-favorite-site="${escapeHTML(about.site || "")}"
-      data-favorite-kind="${escapeHTML(about.kind || "discussion")}"
-      data-favorite-context="${escapeHTML(about.context || "")}"
-      data-favorite-by="${escapeHTML(about.by || "")}"
-      data-favorite-time="${escapeHTML(String(about.time || ""))}"
-      data-favorite-focus="${escapeHTML(about.focus || "")}"
-      data-favorite-parent="${escapeHTML(about.parent || "")}"
-      data-favorite-text="${escapeHTML(about.text || "")}">favorite</button>`;
+      data-save-key="${escapeHTML(key)}"
+      data-save-url="${escapeHTML(about.url || "")}"
+      data-save-title="${escapeHTML(about.title || "")}"
+      data-save-site="${escapeHTML(about.site || "")}"
+      data-save-kind="${escapeHTML(about.kind || "discussion")}"
+      data-save-context="${escapeHTML(about.context || "")}"
+      data-save-by="${escapeHTML(about.by || "")}"
+      data-save-time="${escapeHTML(String(about.time || ""))}"
+      data-save-focus="${escapeHTML(about.focus || "")}"
+      data-save-parent="${escapeHTML(about.parent || "")}"
+      data-save-text="${escapeHTML(about.text || "")}">favorite</button>`;
 	}
 
 	function itemActionLinksHTML(itemId, sourceID, about = {}) {
@@ -1843,7 +1843,7 @@
 			return "";
 		}
 
-		const button = favoriteButtonHTML({
+		const button = saveButtonHTML({
 			...about,
 			key: about.key || `${sourceID || ""}:${itemId}`,
 			source: sourceID,
@@ -1855,16 +1855,16 @@
       ${button}`;
 	}
 
-	function paintFavoriteControls(root, entries) {
+	function paintSaveControls(root, entries) {
 		const list = Array.isArray(entries) ? entries : [];
 
-		for (const button of root.querySelectorAll(`[data-item-action="fave"]`)) {
+		for (const button of root.querySelectorAll(`[data-item-action="save"]`)) {
 			const item = {
-				key: button.dataset.favoriteKey,
-				url: button.dataset.favoriteUrl || "",
-				kind: button.dataset.favoriteKind || "discussion",
+				key: button.dataset.saveKey,
+				url: button.dataset.saveUrl || "",
+				kind: button.dataset.saveKind || "discussion",
 			};
-			const on = list.some((entry) => favoriteCovers(entry, item));
+			const on = list.some((entry) => savedCovers(entry, item));
 
 			button.textContent = on ? "unfavorite" : "favorite";
 			button.classList.toggle("item-action-on", on);
@@ -1873,21 +1873,21 @@
 
 	// #endregion hnewhere-test-export
 
-	async function refreshFavoriteControls() {
+	async function refreshSaveControls() {
 		const root = sidebarUI?.shadow;
 
 		if (root) {
-			paintFavoriteControls(root, await loadFavoriteEntries());
+			paintSaveControls(root, await loadSavedItems());
 		}
 	}
 
-	async function toggleFavorite(item, settings) {
-		const entries = await loadFavoriteEntries();
-		const kept = entries.filter((entry) => !favoriteCovers(entry, item));
+	async function toggleSaved(item, settings) {
+		const entries = await loadSavedItems();
+		const kept = entries.filter((entry) => !savedCovers(entry, item));
 		const on = kept.length !== entries.length;
 
-		await saveFavorites(
-			on ? kept : addToFavorites(entries, item, Date.now()),
+		await storeSavedItems(
+			on ? kept : addToSaved(entries, item, Date.now()),
 		);
 
 		if (!on) {
@@ -1912,27 +1912,27 @@
 		button.disabled = true;
 
 		try {
-			const on = await toggleFavorite({
-				key: button.dataset.favoriteKey,
-				url: button.dataset.favoriteUrl || "",
-				title: button.dataset.favoriteTitle || "",
-				site: button.dataset.favoriteSite || "",
-				kind: button.dataset.favoriteKind || "discussion",
-				context: button.dataset.favoriteContext || "",
-				by: button.dataset.favoriteBy || "",
-				time: Number(button.dataset.favoriteTime) || 0,
-				focus: button.dataset.favoriteFocus || "",
+			const on = await toggleSaved({
+				key: button.dataset.saveKey,
+				url: button.dataset.saveUrl || "",
+				title: button.dataset.saveTitle || "",
+				site: button.dataset.saveSite || "",
+				kind: button.dataset.saveKind || "discussion",
+				context: button.dataset.saveContext || "",
+				by: button.dataset.saveBy || "",
+				time: Number(button.dataset.saveTime) || 0,
+				focus: button.dataset.saveFocus || "",
 				source: sourceID,
 				id: itemId,
-				parent: button.dataset.favoriteParent || "",
-				text: button.dataset.favoriteText || "",
+				parent: button.dataset.saveParent || "",
+				text: button.dataset.saveText || "",
 			});
 
 			button.textContent = on ? "unfavorite" : "favorite";
 			button.classList.toggle("item-action-on", on);
 		} finally {
 			button.disabled = false;
-			refreshFavoriteControls().catch(console.error);
+			refreshSaveControls().catch(console.error);
 			refreshNotedCount(sidebarUI?.shadow).catch(console.error);
 			refreshCollectionTag().catch(console.error);
 		}
@@ -5866,7 +5866,7 @@ button {
 			(a, b) => (b.edited || b.created || 0) - (a.edited || a.created || 0),
 		)[0];
 
-		return favoriteExcerpt(latest?.text || latest?.exact || "", FAVORITE_EXCERPT_CHARS);
+		return textExcerpt(latest?.text || latest?.exact || "", EXCERPT_CHARS);
 	}
 
 	function notedIndexEntry(ref, notes, previous, hereRef, here, now) {
@@ -10530,7 +10530,7 @@ html[data-backchannel-installed] .chin {
 			: "";
 
 		const rowQueueLink = () => `|
-	<button class="browse-save-link" type="button">queue</button>`;
+	<button class="browse-queue-link" type="button">queue</button>`;
 
 		const rowHideLink = () =>
 			options.hideable
@@ -10538,19 +10538,14 @@ html[data-backchannel-installed] .chin {
 	<button class="item-action-link browse-hide-link" type="button">hide</button>`
 				: "";
 
-		const rowActions = () => {
-			return options.unfavorite
-				? `
-      |
-      <button class="item-action-link browse-unfavorite-link" type="button">unfavorite</button>`
-				: itemActionLinksHTML(story.id, story.source, {
-						key: favoriteKeyFor(story),
-						url: story.url,
-						title: story.title,
-						site: story.site,
-						kind: "discussion",
-					});
-		};
+		const rowActions = () =>
+			itemActionLinksHTML(story.id, story.source, {
+				key: savedKeyFor(story),
+				url: story.url,
+				title: story.title,
+				site: story.site,
+				kind: "discussion",
+			});
 
 		const rowMeta = () => {
 			if (story.kind === "comment") {
@@ -10677,27 +10672,13 @@ html[data-backchannel-installed] .chin {
 			};
 		}
 
-		if (options.unfavorite) {
-			const drop = row.querySelector(".browse-unfavorite-link");
+		const queueButton = row.querySelector(".browse-queue-link");
 
-			if (drop) {
-				drop.onclick = async () => {
-					await saveFavorites(
-						removeFromFavorites(await loadFavoriteEntries(), options.unfavorite),
-					);
-
-					await options.reload?.();
-				};
-			}
-		}
-
-		const saveButton = row.querySelector(".browse-save-link");
-
-		if (saveButton) {
+		if (queueButton) {
 			const queuedLabel = options.inQueue ? "unqueue" : "queued";
 			const key = queueKey(story);
 			const paintQueued = (queued) => {
-				saveButton.textContent = queued ? queuedLabel : "queue";
+				queueButton.textContent = queued ? queuedLabel : "queue";
 			};
 
 			if (options.inQueue) {
@@ -10710,7 +10691,7 @@ html[data-backchannel-installed] .chin {
 					.catch(console.error);
 			}
 
-			saveButton.onclick = async () => {
+			queueButton.onclick = async () => {
 				let already = false;
 
 				await mutateQueue((entries) => {
@@ -10721,7 +10702,7 @@ html[data-backchannel-installed] .chin {
 						: addToQueue(entries, story, Date.now());
 				});
 
-				saveButton.textContent = already ? "queue" : queuedLabel;
+				queueButton.textContent = already ? "queue" : queuedLabel;
 
 				if (already && row.parentElement?.closest("#browse-list") && browseTab === "queue") {
 					row.remove();
@@ -10866,12 +10847,12 @@ html[data-backchannel-installed] .chin {
 			return;
 		}
 
-		const [favorites, noted, collected] = await Promise.all([
-			loadFavoriteEntries(),
+		const [saved, noted, collected] = await Promise.all([
+			loadSavedItems(),
 			loadNotedIndex(),
 			loadCollected(),
 		]);
-		const state = collectionTabState(favorites, noted, collected);
+		const state = collectionTabState(saved, noted, collected);
 
 		notedHasItems = state.has;
 		tab.classList.toggle("has-fresh", state.fresh > 0);
@@ -11282,8 +11263,8 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 	async function removeCollectedDocument(doc) {
 		const key = doc.key;
 		const notesKey = doc.noteDocument?.key || "";
-		const [favorites, looks, index, notes] = await Promise.all([
-			loadFavoriteEntries(),
+		const [saved, looks, index, notes] = await Promise.all([
+			loadSavedItems(),
 			loadLooks(),
 			load(NOTES_INDEX_KEY, []),
 			notesKey ? load(notesKey, null) : null,
@@ -11292,7 +11273,7 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 		const snapshot = {
 			key,
 			url: doc.url || "",
-			favorites: favorites.filter((entry) => documentKeyFor(entry) === key),
+			saved: saved.filter((entry) => documentKeyFor(entry) === key),
 			collected: [],
 			look: lookFor(looks, key),
 			notesKey,
@@ -11305,7 +11286,7 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 
 			return removeFromCollected(entries, key);
 		});
-		await saveFavorites(favorites.filter((entry) => documentKeyFor(entry) !== key));
+		await storeSavedItems(saved.filter((entry) => documentKeyFor(entry) !== key));
 		await forgetLook(key);
 
 		if (notesKey) {
@@ -11317,10 +11298,10 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 	}
 
 	async function restoreCollectedDocument(snapshot) {
-		const favorites = await loadFavoriteEntries();
-		const held = new Set(favorites.map((entry) => entry.key));
+		const saved = await loadSavedItems();
+		const held = new Set(saved.map((entry) => entry.key));
 
-		await saveFavorites([...favorites, ...snapshot.favorites.filter((entry) => !held.has(entry.key))]);
+		await storeSavedItems([...saved, ...snapshot.saved.filter((entry) => !held.has(entry.key))]);
 		await mutateCollected((entries) => [
 			...entries,
 			...snapshot.collected.filter((entry) => !entries.some((each) => each.key === entry.key)),
@@ -11359,7 +11340,7 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 		}
 
 		await refreshCollectionSignal();
-		refreshFavoriteControls().catch(console.error);
+		refreshSaveControls().catch(console.error);
 		await refreshCollectionTag();
 	}
 
@@ -11674,8 +11655,8 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 	}
 
 	async function loadCollectionDocuments() {
-		const [favorites, index, collected, looks] = await Promise.all([
-			loadFavoriteEntries(),
+		const [saved, index, collected, looks] = await Promise.all([
+			loadSavedItems(),
 			loadNotedIndex(),
 			loadCollected(),
 			loadLooks(),
@@ -11684,7 +11665,7 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 			await Promise.all(index.map(async (entry) => [entry.key, await load(entry.key, null)])),
 		);
 
-		return collectDocuments(favorites, index, notesByKey, collected, looks);
+		return collectDocuments(saved, index, notesByKey, collected, looks);
 	}
 
 	let openCollectedDocument = null;
@@ -11703,8 +11684,8 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 			return null;
 		}
 
-		const [favorites, index, collected, looks] = await Promise.all([
-			loadFavoriteEntries(),
+		const [saved, index, collected, looks] = await Promise.all([
+			loadSavedItems(),
 			loadNotedIndex(),
 			loadCollected(),
 			loadLooks(),
@@ -11713,7 +11694,7 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 
 		for (const key of wanted) {
 			const noted = index.filter((entry) => keyOfIndex(entry) === key);
-			const mine = favorites.filter((entry) => documentKeyFor(entry) === key);
+			const mine = saved.filter((entry) => documentKeyFor(entry) === key);
 			const entries = collected.filter((entry) => entry.key === key);
 
 			if (!noted.length && !mine.length && !entries.length) {
@@ -11737,18 +11718,18 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 		return openCollectedDocument;
 	}
 
-	function paintKeptMarks(body) {
+	function paintSavedMarks(body) {
 		for (const element of body?.querySelectorAll(".comment[data-comment-id]") || []) {
-			const kept = isKeptComment(openCollectedDocument?.quotes, element.dataset.commentId);
+			const kept = isSavedComment(openCollectedDocument?.quotes, element.dataset.commentId);
 			const status = element.querySelector(".comment-vote-status");
-			const mark = status?.parentElement?.querySelector(":scope > .kept-mark");
+			const mark = status?.parentElement?.querySelector(":scope > .saved-mark");
 
-			element.classList.toggle("is-kept", kept);
+			element.classList.toggle("is-saved", kept);
 
 			if (kept && status && !mark) {
 				const added = document.createElement("span");
 
-				added.className = "kept-mark";
+				added.className = "saved-mark";
 				added.textContent = "kept";
 				status.before(" ", added);
 			} else if (!kept && mark) {
@@ -11884,7 +11865,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		}
 
 		await loadOpenCollectedDocument();
-		paintKeptMarks(context.ui.body);
+		paintSavedMarks(context.ui.body);
 		await paintCollectionTag(context.ui, context.stories, context.seenTimes);
 	}
 
@@ -11919,7 +11900,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 		backfillCardLooks(documents).catch(console.error);
 
-		refreshFavoriteControls().catch(console.error);
+		refreshSaveControls().catch(console.error);
 	}
 
 	async function refreshQueueCount(root) {
@@ -12083,7 +12064,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		body.appendChild(message);
 
 		const address = pageAddress();
-		const keep = favoriteButtonHTML({
+		const keep = saveButtonHTML({
 			key: normalizeURL(address) || "",
 			url: address,
 			title: pageDocumentTitle(),
@@ -12098,7 +12079,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			line.innerHTML = keep;
 			line.firstElementChild.title = "Keep this page in your Collection and hear when a discussion starts";
 			body.appendChild(line);
-			refreshFavoriteControls().catch(console.error);
+			refreshSaveControls().catch(console.error);
 		}
 
 		loadOpenCollectedDocument()
@@ -12349,7 +12330,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
 		}
 
-		refreshFavoriteControls().catch(console.error);
+		refreshSaveControls().catch(console.error);
 
 		refreshQueueEntries(entries).then((refreshed) => {
 			if (refreshed && isBrowsing(ui) && browseTab === "queue") {
@@ -12489,7 +12470,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			list.prepend(frontPageCardElement(cardSettings, () => refreshFrontPageConsumers()));
 		}
 
-		refreshFavoriteControls().catch(console.error);
+		refreshSaveControls().catch(console.error);
 
 		renderBrowseNav(
 			list,
@@ -14377,12 +14358,12 @@ header {
 	z-index:2147483647;
 }
 
-.comment.is-kept > .comment-layout {
+.comment.is-saved > .comment-layout {
 	box-shadow:inset 2px 0 0 var(--accent);
 	padding-left:8px;
 }
 
-.kept-mark {
+.saved-mark {
 	color:var(--accent);
 	font-size:10px;
 	font-weight:700;
@@ -14579,7 +14560,7 @@ header {
 	}
 }
 
-.browse-save-link {
+.browse-queue-link {
 	border:0;
 	padding:0;
 	background:none;
@@ -14593,12 +14574,12 @@ header {
 }
 
 @media (hover: hover) {
-	.browse-save-link:hover {
+	.browse-queue-link:hover {
 		text-decoration:underline;
 	}
 }
 
-.browse-save-link:focus-visible {
+.browse-queue-link:focus-visible {
 	text-decoration:underline;
 }
 
@@ -19987,7 +19968,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		ageLabel ? escapeHTML(ageLabel) + " " : ""
 	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
 	${itemActionLinksHTML(storyID, story.source, {
-		key: favoriteKeyFor({ ...story, id: storyID, url: articleTarget }),
+		key: savedKeyFor({ ...story, id: storyID, url: articleTarget }),
 		url: articleTarget,
 		title: title || "",
 		site: story.site || (articleTarget ? hostLabel(articleTarget) : ""),
@@ -21293,13 +21274,13 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 
 		const storyID = discussion.id;
 
-		const isKept = isKeptComment(openCollectedDocument?.quotes, comment.key);
+		const isSaved = isSavedComment(openCollectedDocument?.quotes, comment.key);
 
 		div.className = "comment";
 		div.dataset.commentId = comment.key;
 		div.dataset.storyId = String(storyID);
 		div.dataset.createdAt = String(comment.createdAt || 0);
-		div.classList.toggle("is-kept", isKept);
+		div.classList.toggle("is-saved", isSaved);
 
 		if (!comment.local && isNewComment(comment, seenTime)) {
 			div.classList.add("new-comment");
@@ -21348,7 +21329,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			permalink
 				? `<a class="item-age" data-age-id="${escapeHTML(commentID)}" target="_blank" rel="noopener noreferrer" href="${escapeHTML(permalink)}">${timeAgo(comment.createdAt)}</a>`
 				: `<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span>`
-		}${isKept ? ' <span class="kept-mark">kept</span>' : ""}<span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
+		}${isSaved ? ' <span class="saved-mark">kept</span>' : ""}<span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
 
 		${
 				capabilities.reply
@@ -21371,14 +21352,14 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 						key: `${comment.source || "hn"}:${commentID}`,
 						url: discussion.articleURL || discussionURL(comment) || "",
 						focus: comment.key,
-						title: favoriteExcerpt(comment.bodyHTML, FAVORITE_EXCERPT_CHARS),
+						title: textExcerpt(comment.bodyHTML, EXCERPT_CHARS),
 						site: getSource(comment.source)?.shortLabel || "",
 						context: discussion.title || discussion.label || "",
 						by: comment.authorName || comment.author || "",
 						time: comment.createdAt || 0,
 						kind: "comment",
 						parent: String(comment.storyID || ""),
-						text: favoriteExcerpt(comment.bodyHTML, FAVORITE_TEXT_CHARS),
+						text: textExcerpt(comment.bodyHTML, SAVED_TEXT_CHARS),
 					})
 		}
 
@@ -21613,7 +21594,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 				context.parentKey,
 			);
 
-			refreshFavoriteControls().catch(console.error);
+			refreshSaveControls().catch(console.error);
 			applyPendingFocus().catch(console.error);
 			ensureVoteControlsLoaded().catch(console.error);
 
@@ -21909,7 +21890,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		}
 
 		reconcileWholeThreads(stories, ui);
-		refreshFavoriteControls().catch(console.error);
+		refreshSaveControls().catch(console.error);
 		applyPendingFocus().catch(console.error);
 		await paintCollectionTag(ui, stories, seenTimes);
 
@@ -22259,9 +22240,9 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 
 		const single = stories.length < 2;
 		const pageURL = pageAddress();
-		const pageFavorite = single
+		const pageSave = single
 			? ""
-			: favoriteButtonHTML({
+			: saveButtonHTML({
 					key: normalizeURL(pageURL) || "",
 					url: pageURL,
 					title: page || pageDocumentTitle(),
@@ -22276,7 +22257,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 	stories.length > 1
 		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <span class="source-menu-anchor"><button type="button" class="page-header-disclosure" aria-expanded="false" aria-haspopup="true" aria-controls="source-menu">${escapeHTML(pluralize(stories.length, "discussion"))}</button>${sourceMenuHTML(stories)}</span><span class="page-header-sep">|</span>`
 		: ""
-}${stories.length > 1 && pageFavorite ? pageFavorite : ""}</div>
+}${stories.length > 1 && pageSave ? pageSave : ""}</div>
 `;
 
 		const disclosure = wrapper.querySelector(".page-header-disclosure");
@@ -23700,7 +23681,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 			const link = document.createElement("a");
 			link.href = "#";
-			link.className = "hnewhere-save-link";
+			link.className = "hnewhere-queue-link";
 			link.textContent = queued.has(key) ? "queued" : "queue";
 
 			link.onclick = async (event) => {
@@ -28664,7 +28645,7 @@ ${APP_ICON_CSS}
 	display:none;
 }
 
-#app-article-actions [data-item-action="fave"] {
+#app-article-actions [data-item-action="save"] {
 	--head-fill:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.8 2.5h6.4a.8.8 0 0 1 .8.8v10.1L8 10.8l-4 2.6V3.3a.8.8 0 0 1 .8-.8z' fill='black' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 	--head-outline:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.8 2.5h6.4a.8.8 0 0 1 .8.8v10.1L8 10.8l-4 2.6V3.3a.8.8 0 0 1 .8-.8z' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
@@ -28982,7 +28963,7 @@ ${SETTINGS_MODAL_CSS}
 	background:var(--open-row);
 }
 
-#app-list-body .browse-row.is-open :is(.item-action-link, .browse-save-link, .browse-comments-total) {
+#app-list-body .browse-row.is-open :is(.item-action-link, .browse-queue-link, .browse-comments-total) {
 	text-decoration-color:color-mix(in srgb, currentColor 50%, transparent);
 }
 
@@ -30669,7 +30650,7 @@ header .item-action-link {
 		fill:currentColor;
 	}
 
-	#app-list-body .story-meta .browse-save-link,
+	#app-list-body .story-meta .browse-queue-link,
 	#app-list-body .story-meta .item-action-link,
 	#app-list-body .story-meta .browse-hide-link,
 	#app-list-body .story-meta .browse-comments-total {
@@ -31638,7 +31619,7 @@ ${settingsModalHTML()}
 			}
 		});
 		shadow.querySelector("#app-bar-open").onclick = () => shadow.querySelector("#app-article-open").click();
-		shadow.querySelector("#app-bar-save").onclick = () => shadow.querySelector('#app-article-actions [data-item-action="fave"]')?.click();
+		shadow.querySelector("#app-bar-save").onclick = () => shadow.querySelector('#app-article-actions [data-item-action="save"]')?.click();
 		shadow.querySelector("#app-bar-like").onclick = () => shadow.querySelector("#app-article-actions .app-head-votes:not(.hidden) .app-head-thumb-up")?.click();
 		shadow.querySelector("#app-next-link").onclick = () => {
 			const next = appNextRow();
@@ -32552,12 +32533,12 @@ ${settingsModalHTML()}
 			return;
 		}
 
-		const favorite = shadow.querySelector('#app-article-actions [data-item-action="fave"]');
+		const headSave = shadow.querySelector('#app-article-actions [data-item-action="save"]');
 		const vote = shadow.querySelector("#app-article-actions .app-head-votes:not(.hidden) .app-head-thumb-up");
 		const like = shadow.querySelector("#app-bar-like");
-		const saved = favorite?.textContent.trim() === "unfavorite";
+		const saved = headSave?.textContent.trim() === "unfavorite";
 
-		save.hidden = !favorite;
+		save.hidden = !headSave;
 		save.setAttribute("aria-pressed", String(saved));
 		save.setAttribute("aria-label", saved ? "Unfavorite" : "Favorite");
 		like.hidden = !vote;
@@ -33020,7 +33001,7 @@ ${frontPageChooserHTML()}
 				list.prepend(frontPageCardElement(cardSettings, () => refreshFrontPageConsumers()));
 			}
 
-			refreshFavoriteControls().catch(console.error);
+			refreshSaveControls().catch(console.error);
 		}
 
 		if (request !== state.listSeq) {
@@ -33057,10 +33038,10 @@ ${frontPageChooserHTML()}
 		}
 
 		const seq = ++state.countSeq;
-		const [queue, collected, favorites, notes] = await Promise.all([
+		const [queue, collected, saved, notes] = await Promise.all([
 			loadQueue(),
 			loadCollected(),
-			loadFavoriteEntries(),
+			loadSavedItems(),
 			loadNotedIndex(),
 		]);
 
@@ -33072,7 +33053,7 @@ ${frontPageChooserHTML()}
 
 		paintAppRailFill({
 			queue: queue.length > 0,
-			collection: favorites.length + notes.length + collected.length > 0,
+			collection: saved.length + notes.length + collected.length > 0,
 		});
 		const badges = {
 			unread: counts.unread,
@@ -33383,9 +33364,9 @@ ${frontPageChooserHTML()}
 			story.id && getSource(story.source)?.capabilities.vote
 				? `<span class="vote-controls app-head-votes hidden" data-hn-vote-source="${escapeHTML(String(story.source || "hn"))}" data-hn-vote-story-id="${escapeHTML(String(story.id))}" data-hn-vote-item-id="${escapeHTML(String(story.id))}"></span>`
 				: "";
-		const favorite = story.id
-			? `${favoriteButtonHTML({
-					key: favoriteKeyFor(story),
+		const saveControl = story.id
+			? `${saveButtonHTML({
+					key: savedKeyFor(story),
 					url: story.url,
 					title: story.title,
 					site: story.site,
@@ -33393,7 +33374,7 @@ ${frontPageChooserHTML()}
 					source: story.source,
 					id: story.id,
 				})}`
-			: favoriteButtonHTML({
+			: saveButtonHTML({
 					key: normalizeURL(story.url) || "",
 					url: story.url,
 					title: story.title || "",
@@ -33401,8 +33382,8 @@ ${frontPageChooserHTML()}
 					kind: "discussion",
 				});
 
-		holder.innerHTML = `<span class="app-head-group app-head-reading">${votes}${favorite}</span>`;
-		holder.querySelector('[data-item-action="fave"]')?.classList.add("app-head-icon");
+		holder.innerHTML = `<span class="app-head-group app-head-reading">${votes}${saveControl}</span>`;
+		holder.querySelector('[data-item-action="save"]')?.classList.add("app-head-icon");
 
 		const titleActions = () => {
 			for (const button of holder.querySelectorAll("button:not(.vote-button)")) {
@@ -33437,7 +33418,7 @@ ${frontPageChooserHTML()}
 				.catch(console.error);
 		}
 
-		refreshFavoriteControls().catch(console.error);
+		refreshSaveControls().catch(console.error);
 	}
 
 	function setAppSavedMenuOpen(open) {
