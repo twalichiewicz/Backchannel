@@ -864,16 +864,53 @@
 		return [folder?.key, ...(Array.isArray(folder?.addresses) ? folder.addresses : [])].filter(Boolean);
 	}
 
+	const folderIndexes = new WeakMap();
+
+	function byFolderAge(folders) {
+		return (a, b) => (Number(folders[a].addedAt) || 0) - (Number(folders[b].addedAt) || 0) || a - b;
+	}
+
+	function folderIndex(folders) {
+		if (!folderIndexes.has(folders)) {
+			const index = new Map();
+
+			folders.forEach((folder, position) => {
+				if (!folder?.key) {
+					return;
+				}
+
+				for (const address of folderAddresses(folder)) {
+					if (!index.has(address)) {
+						index.set(address, []);
+					}
+
+					index.get(address).push(position);
+				}
+			});
+
+			const byAge = byFolderAge(folders);
+
+			for (const positions of index.values()) {
+				positions.sort(byAge);
+			}
+
+			folderIndexes.set(folders, index);
+		}
+
+		return folderIndexes.get(folders);
+	}
+
 	function foldersMatching(addresses, folders) {
 		const wanted = new Set((Array.isArray(addresses) ? addresses : [addresses]).map(addressKey).filter(Boolean));
 
-		if (!wanted.size) {
+		if (!wanted.size || !Array.isArray(folders)) {
 			return [];
 		}
 
-		return (Array.isArray(folders) ? folders : [])
-			.filter((folder) => folder?.key && folderAddresses(folder).some((each) => wanted.has(each)))
-			.sort((a, b) => (Number(a.addedAt) || 0) - (Number(b.addedAt) || 0));
+		const index = folderIndex(folders);
+		const positions = [...new Set([...wanted].flatMap((address) => index.get(address) || []))];
+
+		return (wanted.size > 1 ? positions.sort(byFolderAge(folders)) : positions).map((position) => folders[position]);
 	}
 
 	function folderKeyFor(addresses, folders) {
@@ -1068,6 +1105,7 @@
 
 	const ORPHAN_TRACES_PER_LOAD = 6;
 	const ORPHAN_TRACE_LIMIT = 5;
+	const ORPHAN_TRACE_SOURCES = new Set(["hn", "lobsters", "lemmy"]);
 
 	function orphanedComments(saved) {
 		return (Array.isArray(saved) ? saved : []).filter(
@@ -1116,7 +1154,7 @@
 
 			const item = await get(`https://hacker-news.firebaseio.com/v0/item/${story}.json`);
 
-			return item ? { link: /^https?:\/\//i.test(String(item.url || "")) ? item.url : threadAddress("hn", story), title: item.title || entry.context || "", thread: story } : null;
+			return String(item?.id) === story ? { link: /^https?:\/\//i.test(String(item.url || "")) ? item.url : threadAddress("hn", story), title: item.title || entry.context || "", thread: story } : null;
 		}
 
 		if (entry.source === "lobsters") {
@@ -1132,7 +1170,7 @@
 
 			const item = await get(`https://lobste.rs/s/${story}.json`);
 
-			return item ? { link: /^https?:\/\//i.test(String(item.url || "")) ? item.url : threadAddress("lobsters", story), title: item.title || entry.context || "", thread: story } : null;
+			return item?.short_id === story ? { link: /^https?:\/\//i.test(String(item.url || "")) ? item.url : threadAddress("lobsters", story), title: item.title || entry.context || "", thread: story } : null;
 		}
 
 		if (entry.source === "lemmy") {
@@ -1429,8 +1467,9 @@
 					: "Nothing new since you were here"
 				: null;
 		const notes = [...doc.notes].sort((a, b) => (b.edited || b.created || 0) - (a.edited || a.created || 0));
+		const pageSave = doc.discussions.find((entry) => !entry.source);
 		const yours = [
-			...doc.discussions.map((entry) => {
+			...doc.discussions.filter((entry) => entry.source || entry === pageSave).map((entry) => {
 				const fresh = discussionCounts.get(entry.key) || 0;
 
 				if (!entry.source) {
@@ -1985,6 +2024,7 @@
 		]);
 
 		if (!folders.ok || !saved.ok || !index.ok) {
+			console.error("Backchannel collection repair could not read its stores");
 			return;
 		}
 
@@ -2010,7 +2050,7 @@
 	async function traceOrphanedComments() {
 		const [saved, folders, settings] = await Promise.all([loadSavedItems(), loadCollected(), loadSettings()]);
 		const on = new Set(enabledSources(settings).map((source) => source.id));
-		const due = orphanedComments(saved).filter((entry) => on.has(entry.source) && !orphanTraceTried.has(entry.key)).slice(0, ORPHAN_TRACES_PER_LOAD);
+		const due = orphanedComments(saved).filter((entry) => ORPHAN_TRACE_SOURCES.has(entry.source) && on.has(entry.source) && !orphanTraceTried.has(entry.key)).slice(0, ORPHAN_TRACES_PER_LOAD);
 		let traced = false;
 
 		for (const entry of due) {
@@ -2350,10 +2390,10 @@
 			return;
 		}
 
-		const [saved, index] = await Promise.all([loadSavedItems(), loadNotedIndex()]);
 		const gone = [];
 
-		await mutateCollected((entries) => {
+		await mutateCollected(async (entries) => {
+			const [saved, index] = await Promise.all([loadSavedItems(), loadNotedIndex()]);
 			const empty = wanted.filter((key) => entries.some((entry) => entry.key === key) && folderIsEmpty(key, saved, index, entries));
 
 			gone.push(...empty);
@@ -5413,10 +5453,21 @@ ${
 	const NOTE_CONTEXT_CHARS = 32;
 	const NOTES_PER_DOCUMENT = 200;
 
+	function noteDocumentSubject() {
+		const story = appState?.open?.row?.story || {};
+		const link = String(story.url || appState?.open?.url || "");
+
+		return appState && link && !sameDocumentAddress(pageHref(), link)
+			? { url: link, title: story.title || pageTitle() }
+			: { url: pageHref(), title: pageTitle() };
+	}
+
 	function noteDocumentRef(fingerprint = null) {
+		const { url } = noteDocumentSubject();
+
 		return fingerprint
 			? { kind: "pdf", id: String(fingerprint) }
-			: { kind: "url", id: normalizeURL(pageHref()) || pageHref() };
+			: { kind: "url", id: normalizeURL(url) || url };
 	}
 
 	function noteStorageKey(ref) {
@@ -6351,9 +6402,17 @@ button {
 
 	async function saveNotes(notes, ref = noteDocumentRefForPage()) {
 		const kept = notes.slice(-NOTES_PER_DOCUMENT);
-		const page = kept.length ? await fileSaved(openPageContext()) : "";
+		let page = "";
 
 		await save(noteStorageKey(ref), { version: 1, notes: kept });
+
+		if (kept.length) {
+			try {
+				page = await fileSaved(openPageContext());
+			} catch (error) {
+				console.error(error);
+			}
+		}
 
 		const previous = await rememberNotedDocument(ref, kept, page);
 
@@ -6363,8 +6422,10 @@ button {
 			}
 
 			refreshCollectionTag().catch(console.error);
-		} else if (previous?.page) {
-			await pruneFolders([previous.page]);
+		}
+
+		if (previous && (!kept.length || (page && page !== previous.page))) {
+			await pruneFolders([notedFolderKey(previous, await loadCollected())]);
 		}
 
 		return kept;
@@ -6412,7 +6473,7 @@ button {
 					notes,
 					previous,
 					noteDocumentRefForPage(),
-					{ url: pageHref(), title: pageTitle(), page },
+					{ ...noteDocumentSubject(), page },
 					Date.now(),
 				),
 			);
