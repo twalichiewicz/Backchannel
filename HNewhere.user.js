@@ -1105,7 +1105,7 @@
 		);
 		const firstView = firstViewedAt > 0 && previousView > 0 ? Math.min(firstViewedAt, previousView) : firstViewedAt;
 		const dates = [
-			`Collected ${collectionDate(collectedAt, now)}`,
+			`Saved ${collectionDate(collectedAt, now)}`,
 			firstView > 0 ? `first viewed ${collectionDate(firstView, now)}` : "",
 			previousView > 0 ? `last viewed ${collectionAgo(previousView, now)}` : "",
 		]
@@ -1171,7 +1171,7 @@
 		if (item.kind === "quote") {
 			return row(
 				"quote",
-				"Kept",
+				"Saved",
 				`<button class="collection-tag-jump" type="button" data-comment-key="${escapeHTML(item.key)}"><span class="browse-quote">${escapeHTML(item.text)}</span></button>${item.by ? ` <span class="collection-tag-by">by ${escapeHTML(item.by)}</span>` : ""}${detail}`,
 			);
 		}
@@ -1184,7 +1184,7 @@
 			return row("more", "", `<span class="collection-tag-detail-only">${escapeHTML(item.label)}</span>`);
 		}
 
-		return row("discussion", "Favorite", `<span class="collection-tag-label">${escapeHTML(item.label)}</span>${detail}`);
+		return row("discussion", "Saved", `<span class="collection-tag-label">${escapeHTML(item.label)}</span>${detail}`);
 	}
 
 	function cardPictureIsSharp(width, height) {
@@ -1835,7 +1835,7 @@
       data-save-time="${escapeHTML(String(about.time || ""))}"
       data-save-focus="${escapeHTML(about.focus || "")}"
       data-save-parent="${escapeHTML(about.parent || "")}"
-      data-save-text="${escapeHTML(about.text || "")}">favorite</button>`;
+      data-save-text="${escapeHTML(about.text || "")}">save</button>`;
 	}
 
 	function itemActionLinksHTML(itemId, sourceID, about = {}) {
@@ -1866,7 +1866,7 @@
 			};
 			const on = list.some((entry) => savedCovers(entry, item));
 
-			button.textContent = on ? "unfavorite" : "favorite";
+			button.textContent = on ? "unsave" : "save";
 			button.classList.toggle("item-action-on", on);
 		}
 	}
@@ -1928,7 +1928,7 @@
 				text: button.dataset.saveText || "",
 			});
 
-			button.textContent = on ? "unfavorite" : "favorite";
+			button.textContent = on ? "unsave" : "save";
 			button.classList.toggle("item-action-on", on);
 		} finally {
 			button.disabled = false;
@@ -11730,7 +11730,7 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 				const added = document.createElement("span");
 
 				added.className = "saved-mark";
-				added.textContent = "kept";
+				added.textContent = "saved";
 				status.before(" ", added);
 			} else if (!kept && mark) {
 				mark.remove();
@@ -11879,7 +11879,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 			empty.className = "browse-empty";
 			empty.textContent =
-				"Nothing collected yet. Favorite a discussion or a comment, or write a note on any page, and it will be kept here.";
+				"Nothing saved yet. Save a page, a discussion or a comment, or write a note on any page, and it will be kept here.";
 			list.appendChild(empty);
 			return;
 		}
@@ -12077,7 +12077,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 			line.className = "no-discussion-keep";
 			line.innerHTML = keep;
-			line.firstElementChild.title = "Keep this page in your Collection and hear when a discussion starts";
+			line.firstElementChild.title = "Save this page to your Collection and hear when a discussion starts";
 			body.appendChild(line);
 			refreshSaveControls().catch(console.error);
 		}
@@ -12360,7 +12360,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 	const QUEUE_NOTE = "Discussions you've queued";
 
-	const COLLECTION_NOTE = "The pages you kept, with what you kept about them";
+	const COLLECTION_NOTE = "The pages you saved, with what you saved about them";
 
 	function setBrowseNote(ui, text) {
 		const note = ui?.shadow?.querySelector("#browse-blend-note");
@@ -21329,7 +21329,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			permalink
 				? `<a class="item-age" data-age-id="${escapeHTML(commentID)}" target="_blank" rel="noopener noreferrer" href="${escapeHTML(permalink)}">${timeAgo(comment.createdAt)}</a>`
 				: `<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span>`
-		}${isSaved ? ' <span class="saved-mark">kept</span>' : ""}<span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
+		}${isSaved ? ' <span class="saved-mark">saved</span>' : ""}<span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
 
 		${
 				capabilities.reply
@@ -30914,8 +30914,8 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M9.6 2.4h4v4M13.6 2.4 7.8 8.2M11.6 9.4v3.1a1.1 1.1 0 0 1-1.1 1.1H3.5a1.1 1.1 0 0 1-1.1-1.1V5.5a1.1 1.1 0 0 1 1.1-1.1h3.1" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 	const APP_HEAD_TITLES = {
-		favorite: "Favorite",
-		unfavorite: "Unfavorite",
+		save: "Save",
+		unsave: "Unsave",
 	};
 
 	const APP_PANE_ICON = (region, divider) =>
@@ -31027,7 +31027,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 </nav>
 <button id="app-bar-back" class="app-stack-button" type="button" aria-label="Back to the articles" data-glyph="down" hidden>${APP_ICON('<path d="M2.2 5.1a1 1 0 0 1 1.4-.1L8 9l4.4-4a1 1 0 0 1 1.3 1.5l-5 4.6a1 1 0 0 1-1.4 0l-5-4.6a1 1 0 0 1-.1-1.4z"/>')}</button>
 <div id="app-row-menu" class="app-view-menu app-row-menu" role="menu" aria-label="This article" hidden></div>
-<div id="app-bar" class="app-bar" hidden><button id="app-bar-open" class="app-stack-button" type="button" aria-label="Open the original page" hidden>${APP_ICON('<path d="M9 2h5v5h-1.7V4.9L7.7 9.5 6.5 8.3l4.6-4.6H9z"/><path d="M3.5 4H7v1.7H4.7v5.6h5.6V9H12v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-pressed="false" aria-label="Favorite" hidden>${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-like" class="app-stack-button" type="button" aria-pressed="false" aria-label="Like" hidden>${APP_ICON('<path d="M2 7.2h2.6V14H2.5a.5.5 0 0 1-.5-.5z"/><path d="M5.8 14V6.7l2.5-4.4a1.2 1.2 0 0 1 2.2.9L10 6h3a1.4 1.4 0 0 1 1.37 1.7l-1 4.7A2 2 0 0 1 11.4 14z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
+<div id="app-bar" class="app-bar" hidden><button id="app-bar-open" class="app-stack-button" type="button" aria-label="Open the original page" hidden>${APP_ICON('<path d="M9 2h5v5h-1.7V4.9L7.7 9.5 6.5 8.3l4.6-4.6H9z"/><path d="M3.5 4H7v1.7H4.7v5.6h5.6V9H12v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-pressed="false" aria-label="Save" hidden>${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-like" class="app-stack-button" type="button" aria-pressed="false" aria-label="Like" hidden>${APP_ICON('<path d="M2 7.2h2.6V14H2.5a.5.5 0 0 1-.5-.5z"/><path d="M5.8 14V6.7l2.5-4.4a1.2 1.2 0 0 1 2.2.9L10 6h3a1.4 1.4 0 0 1 1.37 1.7l-1 4.7A2 2 0 0 1 11.4 14z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
 <section id="app-list" aria-label="Articles">
 <div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="app-head-icon" type="button" aria-label="Mark all as read" title="Mark all as read">${APP_MARK_READ_ICON}</button><button id="app-list-sync" class="app-head-icon" type="button" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button></span></div>
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
@@ -32536,11 +32536,11 @@ ${settingsModalHTML()}
 		const headSave = shadow.querySelector('#app-article-actions [data-item-action="save"]');
 		const vote = shadow.querySelector("#app-article-actions .app-head-votes:not(.hidden) .app-head-thumb-up");
 		const like = shadow.querySelector("#app-bar-like");
-		const saved = headSave?.textContent.trim() === "unfavorite";
+		const saved = headSave?.textContent.trim() === "unsave";
 
 		save.hidden = !headSave;
 		save.setAttribute("aria-pressed", String(saved));
-		save.setAttribute("aria-label", saved ? "Unfavorite" : "Favorite");
+		save.setAttribute("aria-label", saved ? "Unsave" : "Save");
 		like.hidden = !vote;
 		like.setAttribute("aria-pressed", vote?.getAttribute("aria-pressed") || "false");
 		like.setAttribute("aria-label", vote?.title || "Like");
