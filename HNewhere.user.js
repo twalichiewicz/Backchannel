@@ -824,18 +824,6 @@
 		];
 	}
 
-	function removeFromSaved(entries, key) {
-		return (Array.isArray(entries) ? entries : []).filter(
-			(entry) => entry.key !== key,
-		);
-	}
-
-	function savedOfKind(entries, kind) {
-		return (Array.isArray(entries) ? entries : []).filter(
-			(entry) => (entry.kind || "discussion") === kind,
-		);
-	}
-
 	function documentKeyFor(entry) {
 		return normalizeURL(entry?.url || "") || String(entry?.url || entry?.key || "");
 	}
@@ -1304,16 +1292,6 @@
 		});
 	}
 
-	function collectionTerms(query) {
-		return String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
-	}
-
-	function collectionMatches(text, terms) {
-		const lowered = String(text || "").toLowerCase();
-
-		return terms.every((term) => lowered.includes(term));
-	}
-
 	function collectionHaystack(doc) {
 		return [
 			doc.title,
@@ -1322,31 +1300,6 @@
 			...doc.quotes.map((entry) => entry.text || entry.title || ""),
 			...doc.notes.flatMap((note) => [note.text || "", note.exact || ""]),
 		].join("\n");
-	}
-
-	function collectionMatch(doc, terms) {
-		if (!terms.length) {
-			return { matched: true, child: null };
-		}
-
-		if (collectionMatches(`${doc.title}\n${doc.site}`, terms)) {
-			return { matched: true, child: null };
-		}
-
-		const children = [
-			...doc.quotes.map((entry) => ({ kind: "quote", text: entry.text || entry.title || "" })),
-			...doc.notes.map((note) => ({
-				kind: "note",
-				text: [note.text || "", note.exact || ""].join("\n"),
-			})),
-			...doc.discussions.map((entry) => ({ kind: "discussion", text: entry.title || "" })),
-		];
-		const child = children.find((each) => collectionMatches(each.text, terms)) || null;
-
-		return {
-			matched: Boolean(child) || collectionMatches(collectionHaystack(doc), terms),
-			child,
-		};
 	}
 
 	const LOOKS_KEY = "HNewhere:looks";
@@ -11434,40 +11387,6 @@ html[data-backchannel-installed] .chin {
 		}
 	}
 
-	async function collectedNotesFor(page) {
-		return keptNotes(await load(noteStorageKey(page), null));
-	}
-
-	async function saveCollectedNotes(page, notes) {
-		await saveNotes(notes, page);
-
-		if (sameURL(page.url || "", pageHref())) {
-			await reopenForNotes();
-		}
-	}
-
-	async function deleteCollectedNote(page, note) {
-		const notes = await collectedNotesFor(page);
-
-		await saveCollectedNotes(
-			page,
-			notes.filter((kept) => kept.id !== note.id),
-		);
-	}
-
-	async function updateCollectedNote(page, note, parsed) {
-		if (!parsed?.text && !parsed?.exact) {
-			return;
-		}
-
-		const notes = await collectedNotesFor(page);
-
-		await saveCollectedNotes(
-			page,
-			notes.map((kept) => (kept.id === note.id ? editedNote(kept, parsed) : kept)),
-		);
-	}
-
 	function documentKindsLabel(doc) {
 		return [
 			[doc.discussions.filter((entry) => entry.source).length, "discussion"],
@@ -14775,10 +14694,6 @@ header {
 
 .browse-title-link:visited {
 	color:var(--meta);
-}
-
-.browse-row-collected .browse-title-link:visited {
-	color:var(--text);
 }
 
 .bc-wall {
