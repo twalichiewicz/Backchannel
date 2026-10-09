@@ -201,7 +201,7 @@
 		queue: "HNewhere:queue",
 		favorites: "HNewhere:favorites",
 		pendingFocus: "HNewhere:pending_focus",
-		watches: "HNewhere:watches",
+		collected: "HNewhere:collected",
 		hiddenStories: "HNewhere:hidden_stories",
 		zoomBySite: "HNewhere:zoom_by_site",
 		appListWidth: "HNewhere:app_list_width",
@@ -209,6 +209,9 @@
 		appZoom: "HNewhere:app_zoom",
 		readOut: "HNewhere:read_out",
 	};
+
+	const COLLECTED_LEGACY_KEY = "HNewhere:watches";
+	const COLLECTED_MIGRATED_KEY = "HNewhere:collected_migrated";
 
 	// #region hnewhere-test-export
 	const SOURCE_KEY_SEPARATOR = ":";
@@ -641,11 +644,8 @@
 		return story.key || normalizeURL(story.url || "");
 	}
 
-	function queueEntryMatchesWatch(entry, watch) {
-		return (
-			queueKey(entry) === watch.key ||
-			normalizeURL(entry.url || "") === watch.key
-		);
+	function withoutLegacyPlaceholders(entries) {
+		return (Array.isArray(entries) ? entries : []).filter((entry) => entry && !entry.watchPlaceholder);
 	}
 
 	function addToQueue(entries, story, now) {
@@ -706,9 +706,9 @@
 		};
 	}
 
-	const WATCH_MISS_CEILING = 5;
+	const COLLECTED_MISS_CEILING = 5;
 
-	function addToWatchList(entries, page, now) {
+	function addToCollected(entries, page, now, { viewed = false } = {}) {
 		const list = Array.isArray(entries) ? entries : [];
 
 		if (list.some((entry) => entry.key === page.key)) {
@@ -728,8 +728,70 @@
 				misses: 0,
 				foundAt: null,
 				seenAt: null,
+				viewedAt: viewed ? now : null,
+				lastViewedAt: viewed ? now : null,
 			},
 		];
+	}
+
+	function adoptCollectedDocuments(entries, favorites, notedIndex, now) {
+		const list = Array.isArray(entries) ? [...entries] : [];
+		const held = new Set(list.map((entry) => entry.key));
+		const pages = new Map();
+		const offer = (url, title, at) => {
+			const key = normalizeURL(url || "");
+
+			if (!key || held.has(key)) {
+				return;
+			}
+
+			const known = pages.get(key);
+
+			pages.set(key, {
+				url: known?.url || url,
+				title: known?.title || title || "",
+				at: Math.min(known?.at ?? Infinity, Number(at) || now),
+			});
+		};
+
+		for (const entry of Array.isArray(favorites) ? favorites : []) {
+			offer(entry?.url, entry?.kind === "comment" ? entry.context || entry.title : entry?.title, entry?.addedAt);
+		}
+
+		for (const entry of notedDocuments(notedIndex)) {
+			if (entry.url) {
+				offer(entry.url, entry.title, entry.updated);
+			}
+		}
+
+		for (const [key, page] of pages) {
+			list.push({
+				key,
+				url: page.url,
+				title: page.title,
+				site: hostLabel(page.url),
+				addedAt: page.at,
+				checkedAt: 0,
+				marks: {},
+				misses: 0,
+				foundAt: null,
+				seenAt: null,
+				viewedAt: 0,
+				lastViewedAt: null,
+			});
+		}
+
+		return list;
+	}
+
+	function migrateCollectedEntries(stored) {
+		return (Array.isArray(stored) ? stored : [])
+			.filter((entry) => entry && typeof entry === "object" && entry.key)
+			.map((entry) => ({
+				...entry,
+				viewedAt: entry.viewedAt ?? 0,
+				lastViewedAt: entry.lastViewedAt ?? (entry.seenAt || null),
+			}));
 	}
 
 	function addToFavorites(entries, item, now) {
@@ -754,6 +816,7 @@
 				source: item.source || "",
 				id: item.id || "",
 				parent: item.parent || "",
+				text: item.text || "",
 				addedAt: now,
 			},
 		];
@@ -771,13 +834,465 @@
 		);
 	}
 
-	function removeFromWatchList(entries, key) {
+	function documentKeyFor(entry) {
+		return normalizeURL(entry?.url || "") || String(entry?.url || entry?.key || "");
+	}
+
+	function documentExcerpt(doc) {
+		const latest = [
+			...doc.quotes.map((quote) => ({
+				at: Number(quote.addedAt) || 0,
+				text: quote.text || quote.title || "",
+			})),
+			...doc.notes.map((note) => ({
+				at: (note.edited || note.created || 0) * 1000,
+				text: note.text || note.exact || "",
+			})),
+		].sort((a, b) => b.at - a.at)[0];
+
+		return favoriteExcerpt(latest?.text || "", FAVORITE_EXCERPT_CHARS);
+	}
+
+	function collectDocuments(favorites, notedIndex, notesByKey, collected = [], looks = {}) {
+		const documents = new Map();
+
+		const documentFor = (key, url) => {
+			if (!documents.has(key)) {
+				documents.set(key, {
+					key,
+					url: url || "",
+					title: "",
+					site: "",
+					touched: 0,
+					discussions: [],
+					quotes: [],
+					notes: [],
+					noteDocument: null,
+					excerpt: "",
+					collected: null,
+					fresh: false,
+					found: 0,
+					look: null,
+				});
+			}
+
+			const doc = documents.get(key);
+
+			if (!doc.url && url) {
+				doc.url = url;
+			}
+
+			return doc;
+		};
+
+		for (const entry of Array.isArray(favorites) ? favorites : []) {
+			if (!entry?.key) {
+				continue;
+			}
+
+			const doc = documentFor(documentKeyFor(entry), entry.url);
+
+			((entry.kind || "discussion") === "comment" ? doc.quotes : doc.discussions).push(entry);
+			doc.touched = Math.max(doc.touched, Number(entry.addedAt) || 0);
+		}
+
+		for (const index of notedDocuments(notedIndex)) {
+			const notes = keptNotes(notesByKey?.get(index.key) ?? null);
+
+			if (!notes.length) {
+				continue;
+			}
+
+			const doc = documentFor(
+				index.url ? documentKeyFor(index) : `${index.kind}:${index.id}`,
+				index.url,
+			);
+
+			doc.noteDocument = index;
+			doc.notes = [...notes].sort(
+				(a, b) => (b.edited || b.created || 0) - (a.edited || a.created || 0),
+			);
+
+			for (const note of notes) {
+				doc.touched = Math.max(doc.touched, (note.edited || note.created || 0) * 1000);
+			}
+
+			doc.touched = Math.max(doc.touched, Number(index.updated) || 0);
+		}
+
+		for (const entry of Array.isArray(collected) ? collected : []) {
+			if (!entry?.key) {
+				continue;
+			}
+
+			const doc = documentFor(entry.key, entry.url);
+
+			doc.collected = entry;
+			doc.fresh = collectedIsFresh(entry);
+			doc.found = Number(entry.count) || 0;
+			doc.touched = Math.max(doc.touched, Number(entry.addedAt) || 0);
+		}
+
+		for (const doc of documents.values()) {
+			doc.title =
+				doc.noteDocument?.title ||
+				doc.discussions.find((entry) => entry.title)?.title ||
+				doc.quotes.find((entry) => entry.context)?.context ||
+				doc.collected?.title ||
+				doc.url ||
+				doc.key;
+			doc.site = doc.url ? hostLabel(doc.url) : doc.collected?.site || "";
+			doc.look = lookFor(looks, doc.key);
+			doc.excerpt = documentExcerpt(doc);
+		}
+
+		return [...documents.values()].sort((a, b) => {
+			if (a.fresh !== b.fresh) {
+				return a.fresh ? -1 : 1;
+			}
+
+			if (a.fresh) {
+				return (b.collected?.foundAt || 0) - (a.collected?.foundAt || 0);
+			}
+
+			return b.touched - a.touched;
+		});
+	}
+
+	function collectionTerms(query) {
+		return String(query || "").toLowerCase().split(/\s+/).filter(Boolean);
+	}
+
+	function collectionMatches(text, terms) {
+		const lowered = String(text || "").toLowerCase();
+
+		return terms.every((term) => lowered.includes(term));
+	}
+
+	function collectionHaystack(doc) {
+		return [
+			doc.title,
+			doc.site,
+			...doc.discussions.map((entry) => entry.title || ""),
+			...doc.quotes.map((entry) => entry.text || entry.title || ""),
+			...doc.notes.flatMap((note) => [note.text || "", note.exact || ""]),
+		].join("\n");
+	}
+
+	function collectionMatch(doc, terms) {
+		if (!terms.length) {
+			return { matched: true, child: null };
+		}
+
+		if (collectionMatches(`${doc.title}\n${doc.site}`, terms)) {
+			return { matched: true, child: null };
+		}
+
+		const children = [
+			...doc.quotes.map((entry) => ({ kind: "quote", text: entry.text || entry.title || "" })),
+			...doc.notes.map((note) => ({
+				kind: "note",
+				text: [note.text || "", note.exact || ""].join("\n"),
+			})),
+			...doc.discussions.map((entry) => ({ kind: "discussion", text: entry.title || "" })),
+		];
+		const child = children.find((each) => collectionMatches(each.text, terms)) || null;
+
+		return {
+			matched: Boolean(child) || collectionMatches(collectionHaystack(doc), terms),
+			child,
+		};
+	}
+
+	const LOOKS_KEY = "HNewhere:looks";
+	const LOOKS_LIMIT = 500;
+	const CARD_PICTURE_MIN_SIDE = 200;
+	const CARD_IMAGES_PARALLEL = 4;
+	const LOOK_BACKFILL_PER_PASS = 6;
+	const PAGE_HEAD_LIMIT = 200000;
+	let lookWrites = Promise.resolve();
+
+	const CARD_MORE_ICON =
+		'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="8" cy="3.2" r="1.5" fill="currentColor"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><circle cx="8" cy="12.8" r="1.5" fill="currentColor"/></svg>';
+
+	function cardMenuItems(doc, { inTag = false } = {}) {
+		const items = [];
+		const watched = Boolean(doc?.collected) && !doc.collected.unwatched;
+		const web = /^https?:\/\//i.test(String(doc?.url || ""));
+
+		if (web && !inTag) {
+			items.push({ id: "open", label: "Open" });
+			items.push({ id: "tab", label: "Open in new tab" });
+		}
+
+		if (doc?.fresh && !inTag) {
+			items.push({ id: "seen", label: "Mark as seen" });
+		}
+
+		if (web || doc?.collected) {
+			items.push(watched ? { id: "unwatch", label: "Unwatch" } : { id: "watch", label: "Watch" });
+		}
+
+		if (web && !inTag) {
+			items.push({ id: "copy", label: "Copy link" });
+		}
+
+		items.push({ id: "delete", label: "Delete" });
+
+		return items;
+	}
+
+	const TAG_NOTES_SHOWN = 5;
+
+	function collectionDate(ms, now = Date.now()) {
+		const date = new Date(Number(ms) || 0);
+		const sameYear = date.getFullYear() === new Date(now).getFullYear();
+
+		return date.toLocaleDateString("en-US", { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
+	}
+
+	function collectionAgo(ms, now = Date.now()) {
+		const seconds = Math.floor((now - (Number(ms) || 0)) / 1000);
+
+		if (seconds < 60) {
+			return "just now";
+		}
+
+		const minutes = Math.floor(seconds / 60);
+
+		if (minutes < 60) {
+			return `${pluralize(minutes, "minute")} ago`;
+		}
+
+		const hours = Math.floor(minutes / 60);
+
+		if (hours < 24) {
+			return `${pluralize(hours, "hour")} ago`;
+		}
+
+		const days = Math.floor(hours / 24);
+
+		return days < 30 ? `${pluralize(days, "day")} ago` : collectionDate(ms, now);
+	}
+
+	function tagExcerpt(text, limit = 120) {
+		const flat = String(text || "").replace(/\s+/g, " ").trim();
+
+		return flat.length > limit ? `${flat.slice(0, limit).trimEnd()}…` : flat;
+	}
+
+	function collectionTagModel(
+		doc,
+		{
+			now = Date.now(),
+			previousView = 0,
+			firstViewedAt = 0,
+			newComments = 0,
+			newDiscussions = 0,
+			discussionCounts = new Map(),
+			replyCounts = new Map(),
+			labelFor = (id) => id,
+		} = {},
+	) {
+		const collectedAt = Math.min(
+			now,
+			...[
+				Number(doc.collected?.addedAt) || 0,
+				...doc.discussions.map((entry) => Number(entry.addedAt) || 0),
+				...doc.quotes.map((entry) => Number(entry.addedAt) || 0),
+				...doc.notes.map((note) => (Number(note.created) || 0) * 1000),
+			].filter((value) => value > 0),
+		);
+		const firstView = firstViewedAt > 0 && previousView > 0 ? Math.min(firstViewedAt, previousView) : firstViewedAt;
+		const dates = [
+			`Collected ${collectionDate(collectedAt, now)}`,
+			firstView > 0 ? `first viewed ${collectionDate(firstView, now)}` : "",
+			previousView > 0 ? `last viewed ${collectionAgo(previousView, now)}` : "",
+		]
+			.filter(Boolean)
+			.join(" · ");
+		const counted = [
+			newComments ? pluralize(newComments, "new comment") : "",
+			newDiscussions ? pluralize(newDiscussions, "new discussion") : "",
+		].filter(Boolean);
+		const changes =
+			previousView > 0
+				? counted.length
+					? `Since you were here: ${counted.join(" · ")}`
+					: "Nothing new since you were here"
+				: null;
+		const notes = [...doc.notes].sort((a, b) => (b.edited || b.created || 0) - (a.edited || a.created || 0));
+		const yours = [
+			...doc.discussions.map((entry) => {
+				const fresh = discussionCounts.get(entry.key) || 0;
+
+				if (!entry.source) {
+					return { kind: "discussion", key: entry.key, label: "This page", detail: "" };
+				}
+
+				return {
+					kind: "discussion",
+					key: entry.key,
+					label: `${labelFor(entry.source) || entry.site || "A"} discussion`,
+					detail: fresh ? pluralize(fresh, "new comment") : "",
+				};
+			}),
+			...doc.quotes.map((entry) => {
+				const key = entry.focus || entry.key;
+				const replies = replyCounts.get(key) || 0;
+
+				return {
+					kind: "quote",
+					key,
+					text: tagExcerpt(entry.text || entry.title),
+					by: entry.by || "",
+					detail: replies ? pluralize(replies, "new reply", "new replies") : "",
+				};
+			}),
+			...notes.slice(0, TAG_NOTES_SHOWN).map((note) => ({
+				kind: "note",
+				key: note.id,
+				text: tagExcerpt(note.text || note.exact),
+				detail: collectionDate((note.edited || note.created || 0) * 1000, now),
+			})),
+			...(notes.length > TAG_NOTES_SHOWN
+				? [{ kind: "more", label: `and ${notes.length - TAG_NOTES_SHOWN} more notes` }]
+				: []),
+		];
+
+		return { title: "In your Collection", unwatched: Boolean(doc.collected?.unwatched), dates, changes, yours };
+	}
+
+	function collectionTagItemHTML(item) {
+		const detail = item.detail ? ` <span class="collection-tag-detail">${escapeHTML(item.detail)}</span>` : "";
+		const row = (kind, label, body) =>
+			`<li class="collection-tag-item" data-kind="${kind}"><span class="collection-tag-kind">${label}</span><span class="collection-tag-body">${body}</span></li>`;
+
+		if (item.kind === "quote") {
+			return row(
+				"quote",
+				"Kept",
+				`<button class="collection-tag-jump" type="button" data-comment-key="${escapeHTML(item.key)}"><span class="browse-quote">${escapeHTML(item.text)}</span></button>${item.by ? ` <span class="collection-tag-by">by ${escapeHTML(item.by)}</span>` : ""}${detail}`,
+			);
+		}
+
+		if (item.kind === "note") {
+			return row("note", "Note", `<span class="collection-tag-note">${escapeHTML(item.text)}</span>${detail}`);
+		}
+
+		if (item.kind === "more") {
+			return row("more", "", `<span class="collection-tag-detail-only">${escapeHTML(item.label)}</span>`);
+		}
+
+		return row("discussion", "Favorite", `<span class="collection-tag-label">${escapeHTML(item.label)}</span>${detail}`);
+	}
+
+	function cardPictureIsSharp(width, height) {
+		return Math.min(Number(width) || 0, Number(height) || 0) >= CARD_PICTURE_MIN_SIDE;
+	}
+
+	function pageHead(html) {
+		const text = String(html || "");
+		const end = text.search(/<\/head\s*>/i);
+
+		return end >= 0 ? text.slice(0, text.indexOf(">", end) + 1) : text.slice(0, PAGE_HEAD_LIMIT);
+	}
+
+	function keptLooks(stored, limit = LOOKS_LIMIT) {
+		if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+			return {};
+		}
+
+		const entries = Object.entries(stored).filter(
+			([, look]) => look && typeof look === "object" && !Array.isArray(look),
+		);
+
+		entries.sort((a, b) => (Number(b[1].at) || 0) - (Number(a[1].at) || 0));
+
+		return Object.fromEntries(entries.slice(0, limit));
+	}
+
+	function lookFor(looks, key) {
+		const look = looks && typeof looks === "object" ? looks[key] : null;
+
+		return look && typeof look === "object" ? look : null;
+	}
+
+	function safeLook(look) {
+		if (!look || typeof look !== "object") {
+			return null;
+		}
+
+		const text = (value) => (typeof value === "string" ? value.trim() : "");
+		const plain = (value) => (/[;{}<>]/.test(value) ? "" : value);
+		const supports = (property, value) =>
+			Boolean(value) &&
+			!/[;{}<>\\]/.test(value) &&
+			!/\b(?:var|url|attr|env|image|image-set|cross-fade|element|paint|expression)\s*\(/i.test(value) &&
+			CSS.supports(property, value);
+		const address = (value) => (/^https?:\/\//i.test(value) ? value.replace(/^http:/i, "https:") : "");
+		const color = (value) => (supports("color", value) ? value : "");
+
+		return {
+			image: address(text(look.image)),
+			bg: color(text(look.bg)),
+			text: color(text(look.text)),
+			font: supports("font-family", text(look.font)) ? text(look.font) : "",
+			weight: /^(normal|bold|[1-9]00)$/.test(text(look.weight)) ? text(look.weight) : "",
+			color: color(text(look.color)),
+			icon: address(text(look.icon)),
+			site: plain(text(look.site)),
+			at: Number(look.at) || 0,
+		};
+	}
+
+	function collectedEntryFor(item) {
+		const url = String(item?.url || "");
+		const key = normalizeURL(url);
+
+		if (!key) {
+			return null;
+		}
+
+		return {
+			key,
+			url,
+			title: (item.kind === "comment" ? item.context || item.title : item.title) || "",
+			site: hostLabel(url),
+		};
+	}
+
+	function isKeptComment(quotes, commentKey) {
+		return (Array.isArray(quotes) ? quotes : []).some(
+			(quote) => quote && (quote.focus === commentKey || quote.key === commentKey),
+		);
+	}
+
+	function foundCommentCount(found, sinceMs) {
+		const since = Math.floor((Number(sinceMs) || 0) / 1000);
+
+		return (Array.isArray(found) ? found : [])
+			.filter((story) => (Number(story?.createdAt) || 0) > since)
+			.reduce((sum, story) => sum + (Number(story.commentCount) || 0), 0);
+	}
+
+	function collectionTabState(favorites, noted, collected) {
+		const kept = (Array.isArray(favorites) ? favorites.length : 0) + (Array.isArray(noted) ? noted.length : 0);
+		const entries = Array.isArray(collected) ? collected : [];
+
+		return {
+			has: kept + entries.length > 0,
+			fresh: freshCollectedCount(entries),
+		};
+	}
+
+	function removeFromCollected(entries, key) {
 		return (Array.isArray(entries) ? entries : []).filter(
 			(entry) => entry.key !== key,
 		);
 	}
 
-	function watchMarkChanged(before, after) {
+	function probeMarkChanged(before, after) {
 		if (after === null || after === undefined) {
 			return false;
 		}
@@ -789,64 +1304,80 @@
 		return before !== after;
 	}
 
-	function watchesDue(entries, now, interval) {
+	function collectedDue(entries, now, interval) {
 		return (Array.isArray(entries) ? entries : []).filter(
 			(entry) =>
-				!entry.foundAt &&
-				entry.misses < WATCH_MISS_CEILING &&
+				entry &&
+				!entry.unwatched &&
+				!collectedIsFresh(entry) &&
+				(entry.misses || 0) < COLLECTED_MISS_CEILING &&
 				now - (entry.checkedAt || 0) >= interval,
 		);
 	}
 
-	function watchIsFresh(state) {
-		return Boolean(state?.foundAt && !state?.seenAt);
-	}
-
-	function sortWatchedEntries(entries, stateFor) {
-		return [...(Array.isArray(entries) ? entries : [])].sort((a, b) => {
-			const left = stateFor(a);
-			const right = stateFor(b);
-			const freshLeft = watchIsFresh(left) ? 0 : 1;
-			const freshRight = watchIsFresh(right) ? 0 : 1;
-
-			if (freshLeft !== freshRight) {
-				return freshLeft - freshRight;
-			}
-
-			if (freshLeft === 0) {
-				return (right?.foundAt || 0) - (left?.foundAt || 0);
-			}
-
-			return 0;
-		});
-	}
-
-	function unseenWatchCount(entries) {
-		return (Array.isArray(entries) ? entries : []).filter(
-			(entry) => entry.foundAt && !entry.seenAt,
-		).length;
-	}
-
-	function watchIsStalled(state) {
+	function collectedIsFresh(entry) {
 		return Boolean(
-			state && !state.foundAt && (state.misses || 0) >= WATCH_MISS_CEILING,
+			entry &&
+				!entry.unwatched &&
+				entry.foundAt &&
+				!(Number(entry.seenAt) >= Number(entry.foundAt)),
 		);
 	}
 
-	function stalledWatchCount(entries) {
-		return (Array.isArray(entries) ? entries : []).filter((entry) =>
-			watchIsStalled(entry),
-		).length;
+	function freshCollectedCount(entries) {
+		return (Array.isArray(entries) ? entries : []).filter(collectedIsFresh).length;
 	}
 
-	function markWatchesSeen(entries, url, now) {
+	function arriveAtCollected(entries, url, now) {
+		const list = Array.isArray(entries) ? entries : [];
 		const key = normalizeURL(url || "");
+		const before = key ? list.find((entry) => entry?.key === key) || null : null;
 
+		if (!before) {
+			return { entries: list, before: null };
+		}
+
+		return {
+			entries: list.map((entry) =>
+				entry === before
+					? {
+							...entry,
+							viewedAt: entry.viewedAt === null || entry.viewedAt === undefined ? now : entry.viewedAt,
+							lastViewedAt: now,
+							seenAt: collectedIsFresh(entry) ? now : entry.seenAt,
+						}
+					: entry,
+			),
+			before,
+		};
+	}
+
+	function markCollectedSeen(entries, key, now) {
 		return (Array.isArray(entries) ? entries : []).map((entry) =>
-			key && entry.key === key && entry.foundAt && !entry.seenAt
-				? { ...entry, seenAt: now }
-				: entry,
+			entry?.key === key && collectedIsFresh(entry) ? { ...entry, seenAt: now } : entry,
 		);
+	}
+
+	function withWatched(entries, key, watched) {
+		const list = Array.isArray(entries) ? entries : [];
+
+		if (!list.some((entry) => entry?.key === key)) {
+			return list;
+		}
+
+		return list.map((entry) => {
+			if (entry?.key !== key) {
+				return entry;
+			}
+
+			if (!watched) {
+				return { ...entry, unwatched: true };
+			}
+
+			const { unwatched, ...rest } = entry;
+
+			return { ...rest, misses: 0 };
+		});
 	}
 
 	function migrateQueueKeys(entries, normalize) {
@@ -927,22 +1458,61 @@
 		return true;
 	}
 
-	async function markWatchArrival(url = pageAddress(), now = Date.now()) {
-		const entries = await loadWatches();
-		const marked = markWatchesSeen(entries, url, now);
+	async function captureLookOnArrival(page = document) {
+		const url = pageHref();
+		const key = normalizeURL(url);
 
-		if (marked.every((entry, index) => entry === entries[index])) {
-			return false;
+		if (!key) {
+			return;
 		}
 
-		await saveWatches(marked);
-		return true;
+		const [favorites, collected, index, looks] = await Promise.all([
+			loadFavoriteEntries(),
+			loadCollected(),
+			loadNotedIndex(),
+			loadLooks(),
+		]);
+		const kept =
+			favorites.some((entry) => normalizeURL(entry.url || "") === key) ||
+			collected.some((entry) => entry.key === key) ||
+			index.some((entry) => normalizeURL(entry.url || "") === key);
+
+		if (!kept || lookFor(looks, key)) {
+			return;
+		}
+
+		if (page.readyState !== "complete") {
+			await new Promise((resolve) => (page.defaultView || page).addEventListener("load", resolve, { once: true }));
+		}
+
+		await rememberLook(url, pageLook(page));
+	}
+
+	let collectedArrival = { key: "", at: 0, before: Promise.resolve(null) };
+
+	function markCollectedArrival(url = pageAddress(), now = Date.now()) {
+		const key = normalizeURL(url || "");
+		let before = null;
+		const arrived = mutateCollected((entries) => {
+			const result = arriveAtCollected(entries, url, now);
+
+			before = result.before;
+
+			return result.before ? result.entries : undefined;
+		}).then(
+			() => before,
+			() => null,
+		);
+
+		collectedArrival = { key, at: now, before: arrived };
+
+		return arrived.then((entry) => collectedIsFresh(entry));
 	}
 
 	async function loadQueue() {
 		const stored = await load(STORAGE.queue, []);
 
-		return Array.isArray(stored) ? stored.filter((entry) => entry?.id) : [];
+		return withoutLegacyPlaceholders(stored).filter((entry) => entry?.id);
 	}
 
 	async function saveQueue(entries) {
@@ -1014,21 +1584,88 @@
 		return Array.isArray(stored) ? stored.filter((entry) => entry?.key) : [];
 	}
 
+	async function loadLooks() {
+		return keptLooks(await load(LOOKS_KEY, null));
+	}
+
+	function forgetLook(key) {
+		const write = async () => {
+			const looks = await loadLooks();
+
+			if (lookFor(looks, key)) {
+				await save(LOOKS_KEY, Object.fromEntries(Object.entries(looks).filter(([each]) => each !== key)));
+			}
+		};
+
+		lookWrites = lookWrites.then(write, write);
+
+		return lookWrites;
+	}
+
+	function rememberLookIfMissing(url, look) {
+		return rememberLook(url, look, { onlyMissing: true });
+	}
+
+	function rememberLook(url, look, { onlyMissing = false } = {}) {
+		const write = async () => {
+			const key = normalizeURL(url);
+			const safe = key ? safeLook(look) : null;
+
+			if (!safe) {
+				return;
+			}
+
+			const looks = await loadLooks();
+			const known = lookFor(looks, key);
+
+			if (onlyMissing && known && (known.image || !safe.image)) {
+				return;
+			}
+
+			const next = { ...(onlyMissing && known ? { ...known, image: safe.image } : safe), at: Date.now() };
+
+			await save(LOOKS_KEY, keptLooks({ ...looks, [key]: next }));
+			paintCardLook(key, next);
+		};
+
+		lookWrites = lookWrites.then(write, write);
+
+		return lookWrites;
+	}
+
 	async function saveFavorites(entries) {
 		await save(STORAGE.favorites, entries);
 		return entries;
 	}
 
-	async function loadWatches() {
-		const stored = await load(STORAGE.watches, []);
+	async function loadCollected() {
+		let stored = await load(STORAGE.collected, null);
+
+		if (stored === null && !(await load(COLLECTED_MIGRATED_KEY, false))) {
+			const [legacy, favorites, notedIndex] = await Promise.all([
+				load(COLLECTED_LEGACY_KEY, null),
+				load(STORAGE.favorites, []),
+				load(NOTES_INDEX_KEY, []),
+			]);
+
+			stored = adoptCollectedDocuments(migrateCollectedEntries(legacy), favorites, notedIndex, Date.now());
+			await save(STORAGE.collected, stored);
+			await save(COLLECTED_MIGRATED_KEY, true);
+
+			if (legacy !== null) {
+				await save(COLLECTED_LEGACY_KEY, []);
+			}
+		}
 
 		return Array.isArray(stored) ? stored.filter((entry) => entry?.key) : [];
 	}
 
-	async function saveWatches(entries) {
-		await save(STORAGE.watches, entries);
+	async function saveCollected(entries) {
+		await save(STORAGE.collected, entries);
 		return entries;
 	}
+
+	const mutateCollected = serializeMutations(loadCollected, saveCollected);
 
 	async function loadSiteWidth() {
 		const widths = await load(STORAGE.widths, {});
@@ -1127,6 +1764,7 @@
 	// #region hnewhere-test-export
 
 	const FAVORITE_EXCERPT_CHARS = 140;
+	const FAVORITE_TEXT_CHARS = 2000;
 
 	function favoriteExcerpt(value, limit) {
 		const text = unescapeHTML(
@@ -1196,14 +1834,13 @@
       data-favorite-by="${escapeHTML(about.by || "")}"
       data-favorite-time="${escapeHTML(String(about.time || ""))}"
       data-favorite-focus="${escapeHTML(about.focus || "")}"
-      data-favorite-parent="${escapeHTML(about.parent || "")}">favorite</button>`;
+      data-favorite-parent="${escapeHTML(about.parent || "")}"
+      data-favorite-text="${escapeHTML(about.text || "")}">favorite</button>`;
 	}
 
-	function itemActionLinksHTML(itemId, sourceID, watchLink, about = {}) {
-		const between = watchLink ? `\n      |\n      ${watchLink}` : "";
-
+	function itemActionLinksHTML(itemId, sourceID, about = {}) {
 		if (!itemId) {
-			return between;
+			return "";
 		}
 
 		const button = favoriteButtonHTML({
@@ -1213,7 +1850,7 @@
 			id: itemId,
 		});
 
-		return `${between}
+		return `
       |
       ${button}`;
 	}
@@ -1253,6 +1890,14 @@
 			on ? kept : addToFavorites(entries, item, Date.now()),
 		);
 
+		if (!on) {
+			await keepCollected(collectedEntryFor(item)).catch(console.error);
+
+			if (!appState && normalizeURL(pageHref()) === normalizeURL(String(item.url || ""))) {
+				rememberLook(pageHref(), pageLook(document)).catch(console.error);
+			}
+		}
+
 		return !on;
 	}
 
@@ -1280,6 +1925,7 @@
 				source: sourceID,
 				id: itemId,
 				parent: button.dataset.favoriteParent || "",
+				text: button.dataset.favoriteText || "",
 			});
 
 			button.textContent = on ? "unfavorite" : "favorite";
@@ -1288,6 +1934,7 @@
 			button.disabled = false;
 			refreshFavoriteControls().catch(console.error);
 			refreshNotedCount(sidebarUI?.shadow).catch(console.error);
+			refreshCollectionTag().catch(console.error);
 		}
 	}
 
@@ -1681,6 +2328,85 @@
 			descendants: post.num_comments ?? 0,
 			site: post.subreddit_name_prefixed || "r/" + (post.subreddit || ""),
 			permalink: "https://www.reddit.com" + (post.permalink || ""),
+		};
+	}
+
+	function pageLook(page) {
+		const view = page.defaultView;
+		const meta = (selector) => page.querySelector(selector)?.getAttribute("content") || "";
+		const styleOf = (element) => (element && view ? view.getComputedStyle(element) : null);
+		const opaque = (color) => color && color !== "rgba(0, 0, 0, 0)" && color !== "transparent";
+		const root = page.querySelector("article") || page.querySelector("main") || page.body;
+		const heading = root?.querySelector("h1") || page.querySelector("h1");
+		const paragraph = root?.querySelector("p") || page.querySelector("p");
+		let bg = "rgb(255, 255, 255)";
+
+		for (const element of [root, page.body, page.documentElement]) {
+			const color = styleOf(element)?.backgroundColor;
+
+			if (opaque(color)) {
+				bg = color;
+				break;
+			}
+		}
+
+		const text = styleOf(paragraph || root)?.color || "rgb(0, 0, 0)";
+		const headingStyle = styleOf(heading);
+		const base = page.baseURI || page.location.href;
+		let icon = page.querySelector('link[rel~="icon"]')?.getAttribute("href") || "/favicon.ico";
+		let host = page.location?.hostname || "";
+		let image = meta('meta[property="og:image"]') || meta('meta[name="twitter:image"]') || meta('meta[property="twitter:image"]');
+
+		try {
+			icon = new URL(icon, base).href;
+			image = image ? new URL(image, base).href : "";
+			host = host || new URL(base).hostname;
+		} catch {
+		}
+
+		return {
+			image,
+			bg,
+			text,
+			font: headingStyle?.fontFamily || styleOf(paragraph || root)?.fontFamily || "sans-serif",
+			weight: headingStyle?.fontWeight || "700",
+			color: headingStyle?.color || text,
+			icon,
+			site: meta('meta[property="og:site_name"]') || host,
+			at: Date.now(),
+		};
+	}
+
+	function lookFromHTML(html, url) {
+		const page = new DOMParser().parseFromString(String(html || ""), "text/html");
+		const meta = (selector) => page.querySelector(selector)?.getAttribute("content") || "";
+		const resolve = (value) => {
+			try {
+				return new URL(value, url).href;
+			} catch {
+				return "";
+			}
+		};
+		let host = "";
+
+		try {
+			host = new URL(url).hostname;
+		} catch {
+		}
+
+		const image = meta('meta[property="og:image"]') || meta('meta[name="twitter:image"]');
+		const icon = page.querySelector('link[rel~="icon"]')?.getAttribute("href") || "/favicon.ico";
+
+		return {
+			image: image ? resolve(image) : "",
+			bg: "",
+			text: "",
+			font: "",
+			weight: "",
+			color: "",
+			icon: resolve(icon),
+			site: meta('meta[property="og:site_name"]') || host,
+			at: Date.now(),
 		};
 	}
 
@@ -3332,7 +4058,7 @@ ${
 				return null;
 			}
 
-			return { mark: total, changed: watchMarkChanged(context.mark, total) };
+			return { mark: total, changed: probeMarkChanged(context.mark, total) };
 		},
 
 		async frontPage() {
@@ -3529,7 +4255,7 @@ ${
 				.sort()
 				.join(",");
 
-			return { mark, changed: watchMarkChanged(context.mark, mark) };
+			return { mark, changed: probeMarkChanged(context.mark, mark) };
 		},
 
 		async discover(url) {
@@ -3736,7 +4462,7 @@ ${
 
 			return {
 				mark: counted.total,
-				changed: watchMarkChanged(context.mark, counted.total),
+				changed: probeMarkChanged(context.mark, counted.total),
 			};
 		},
 
@@ -5120,6 +5846,16 @@ button {
 		await save(noteStorageKey(ref), { version: 1, notes: kept });
 		await rememberNotedDocument(ref, kept);
 
+		if (kept.length && ref.kind === "url") {
+			if (!appState) {
+				rememberLook(pageHref(), pageLook(document)).catch(console.error);
+			}
+
+			keepCollected(collectedEntryFor({ url: pageHref(), title: pageTitle() }))
+				.then(refreshCollectionTag)
+				.catch(console.error);
+		}
+
 		return kept;
 	}
 
@@ -5474,30 +6210,14 @@ button {
 	}
 
 	// -------------------------
-	// Watch list
+	// Collection updates
 	// -------------------------
 
-	const WATCH_INTERVAL_MS = 3600000;
-	const WATCH_BATCH = 4;
-	const WATCH_POLL_DELAY_MS = 5000;
+	const COLLECTED_CHECK_INTERVAL_MS = 3600000;
+	const COLLECTED_CHECK_BATCH = 4;
+	const COLLECTED_CHECK_DELAY_MS = 5000;
 
-	function watchStory(entry, discussion) {
-		return {
-			id: discussion.id,
-			key: discussion.key,
-			source: discussion.source,
-			permalink: discussion.permalink || "",
-			url: discussion.articleURL || entry.url,
-			title: entry.title || discussion.title || "",
-			by: discussion.author || "",
-			score: discussion.score || 0,
-			time: discussion.createdAt || 0,
-			descendants: discussion.commentCount || 0,
-			site: entry.site || "",
-		};
-	}
-
-	async function probeWatch(entry, settings) {
+	async function probeCollected(entry, settings) {
 		const marks = { ...(entry.marks || {}) };
 		let changed = false;
 		let answered = false;
@@ -5530,11 +6250,11 @@ button {
 		return { marks, changed, answered };
 	}
 
-	async function pollWatches(settings) {
-		const entries = await loadWatches();
-		const due = watchesDue(entries, Date.now(), WATCH_INTERVAL_MS).slice(
+	async function checkCollected(settings) {
+		const entries = await loadCollected();
+		const due = collectedDue(entries, Date.now(), COLLECTED_CHECK_INTERVAL_MS).slice(
 			0,
-			WATCH_BATCH,
+			COLLECTED_CHECK_BATCH,
 		);
 
 		if (!due.length) {
@@ -5544,7 +6264,7 @@ button {
 		const patches = new Map();
 
 		for (const entry of due) {
-			const { marks, changed, answered } = await probeWatch(entry, settings);
+			const { marks, changed, answered } = await probeCollected(entry, settings);
 			const now = Date.now();
 			const patch = {
 				marks,
@@ -5559,116 +6279,55 @@ button {
 
 				if (found.length) {
 					patch.foundAt = now;
-					patch.count = found.length;
-
-					const story = watchStory(entry, found[0]);
-
-					await mutateQueue((queued) => {
-						const placeholder = queued.find((item) =>
-							queueEntryMatchesWatch(item, entry),
-						);
-
-						if (!placeholder) {
-							return addToQueue(queued, { ...story, key: entry.key }, now);
-						}
-
-						Object.assign(placeholder, story, {
-							key: entry.key,
-							title: story.title || placeholder.title,
-							watchPlaceholder: false,
-							readAt: null,
-						});
-
-						return queued;
-					});
+					patch.count = foundCommentCount(found, Math.max(Number(entry.addedAt) || 0, Number(entry.seenAt) || 0, Number(entry.lastViewedAt) || 0));
 				}
 			}
 		}
 
-		const merged = (await loadWatches()).map((entry) =>
-			patches.has(entry.key) ? { ...entry, ...patches.get(entry.key) } : entry,
+		const merged = await mutateCollected((current) =>
+			current.map((entry) => (patches.has(entry.key) ? { ...entry, ...patches.get(entry.key) } : entry)),
 		);
 
-		await saveWatches(merged);
-
-		return unseenWatchCount(merged) > 0;
+		return freshCollectedCount(merged) > 0;
 	}
 
-	async function refreshWatchSignal() {
+	async function refreshCollectionSignal() {
 		if (!sidebarUI?.shadow) {
 			return;
 		}
 
 		await refreshQueueCount(sidebarUI.shadow);
 		await refreshNextUp(sidebarUI.shadow);
+		await refreshNotedCount(sidebarUI.shadow);
 	}
 
-	function watchQueueEntry(page, now) {
-		return {
-			id: page.key,
-			key: page.key,
-			source: "",
-			permalink: "",
-			url: page.url,
-			title: page.title || page.url,
-			by: "",
-			score: 0,
-			time: Math.floor(now / 1000),
-			descendants: 0,
-			site: page.site || "",
-			readAt: now,
-			watchPlaceholder: true,
-		};
+	function collectedPageIsOpen(key) {
+		return Boolean(key) && key === normalizeURL(pageAddress());
 	}
 
-	function watchQueueStory(page, discussions, now) {
-		if (!discussions?.length) {
-			return watchQueueEntry(page, now);
+	async function collectPage(page) {
+		await mutateCollected((entries) =>
+			addToCollected(entries, page, Date.now(), { viewed: collectedPageIsOpen(page.key) }),
+		);
+		seedCollectedMarks(page.key).catch(console.error);
+	}
+
+	async function keepCollected(entry) {
+		if (!entry?.key || (await loadCollected()).some((each) => each.key === entry.key)) {
+			return;
 		}
 
-		const total = discussions.reduce(
-			(sum, each) => sum + (each.commentCount || 0),
-			0,
-		);
-
-		const best = discussions.reduce((pick, each) =>
-			(each.score || 0) > (pick.score || 0) ||
-			((each.score || 0) === (pick.score || 0) &&
-				(each.commentCount || 0) > (pick.commentCount || 0))
-				? each
-				: pick,
-		);
-
-		return {
-			...watchStory(page, best),
-			key: page.key,
-			descendants: total,
-			readAt: now,
-		};
+		await collectPage(entry);
 	}
 
-	async function startWatching(page, discussions) {
-		const now = Date.now();
-
-		await saveWatches(addToWatchList(await loadWatches(), page, now));
-
-		await mutateQueue((queued) =>
-			queued.some((entry) => queueEntryMatchesWatch(entry, page))
-				? undefined
-				: addToQueue(queued, watchQueueStory(page, discussions, now), now),
-		);
-
-		seedWatchMarks(page.key).catch(console.error);
-	}
-
-	async function seedWatchMarks(key) {
-		const entry = (await loadWatches()).find((each) => each.key === key);
+	async function seedCollectedMarks(key) {
+		const entry = (await loadCollected()).find((each) => each.key === key);
 
 		if (!entry || entry.checkedAt) {
 			return;
 		}
 
-		const { marks, answered } = await probeWatch(entry, await loadSettings());
+		const { marks, answered } = await probeCollected(entry, await loadSettings());
 
 		if (!answered) {
 			return;
@@ -5676,98 +6335,19 @@ button {
 
 		const now = Date.now();
 
-		await saveWatches(
-			(await loadWatches()).map((each) =>
-				each.key === key && !each.checkedAt
-					? { ...each, marks, checkedAt: now }
-					: each,
+		await mutateCollected((entries) =>
+			entries.map((each) =>
+				each.key === key && !each.checkedAt ? { ...each, marks, checkedAt: now } : each,
 			),
 		);
 	}
 
-	async function stopWatching(key) {
-		await saveWatches(removeFromWatchList(await loadWatches(), key));
-	}
-
-	function wireRowWatchLink(button, story, options) {
-		if (!button) {
-			return;
-		}
-
-		const url = story.url || "";
-		const key = normalizeURL(url);
-
-		if (!key) {
-			button.hidden = true;
-
-			return;
-		}
-
-		const paint = (on) => {
-			button.textContent = on ? "unwatch" : "watch";
-			button.classList.toggle("item-action-on", on);
-			button.setAttribute("aria-pressed", on ? "true" : "false");
-		};
-
-		paint(Boolean(options.watching));
-
-		if (!options.watching) {
-			if (options.watchKeys) {
-				paint(options.watchKeys.has(key));
-			} else {
-				loadWatches()
-					.then((entries) => paint(entries.some((entry) => entry.key === key)))
-					.catch(console.error);
-			}
-		}
-
-		button.onclick = async () => {
-			const entries = await loadWatches();
-			const on = entries.some((entry) => entry.key === key);
-
-			if (on) {
-				await stopWatching(key);
-			} else {
-				await startWatching(
-					{
-						key,
-						url,
-						title: story.title || "",
-						site: story.site || "",
-					},
-					options.discussions,
-				);
-			}
-
-			paint(!on);
-
-			if (typeof options.reload === "function") {
-				await options.reload();
-			}
-
-			const root = button.getRootNode();
-
-			refreshQueueCount(root);
-			refreshNextUp(root);
-		};
-	}
-
-	function wireWatchToggle(button, title, discussions) {
-		const url = pageAddress();
-
-		wireRowWatchLink(
-			button,
-			{ url, title: title || pageDocumentTitle(), site: hostLabel(url) },
-			{ discussions },
-		);
-	}
-
-	function scheduleWatchPoll(settings) {
+	function scheduleCollectedChecks(settings) {
 		const run = () => {
-			pollWatches(settings)
+			checkCollected(settings)
 				.then((found) => {
 					if (found) {
-						refreshWatchSignal().catch(console.error);
+						refreshCollectionSignal().catch(console.error);
 					}
 				})
 				.catch(console.error);
@@ -5778,7 +6358,7 @@ button {
 			return;
 		}
 
-		setTimeout(run, WATCH_POLL_DELAY_MS);
+		setTimeout(run, COLLECTED_CHECK_DELAY_MS);
 	}
 
 	const THREAD_CEILING_MS = 20000;
@@ -9949,10 +10529,7 @@ html[data-backchannel-installed] .chin {
 			? `in ${escapeHTML(story.context)}${story.site ? ` (${escapeHTML(story.site)})` : ""}`
 			: "";
 
-		const rowQueueLink = () =>
-			options.watching
-				? ""
-				: `|
+		const rowQueueLink = () => `|
 	<button class="browse-save-link" type="button">queue</button>`;
 
 		const rowHideLink = () =>
@@ -9962,15 +10539,11 @@ html[data-backchannel-installed] .chin {
 				: "";
 
 		const rowActions = () => {
-			const watchLink = options.watchable
-				? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
-				: "";
-
 			return options.unfavorite
-				? `${watchLink ? `\n      |\n      ${watchLink}` : ""}
+				? `
       |
       <button class="item-action-link browse-unfavorite-link" type="button">unfavorite</button>`
-				: itemActionLinksHTML(story.id, story.source, watchLink, {
+				: itemActionLinksHTML(story.id, story.source, {
 						key: favoriteKeyFor(story),
 						url: story.url,
 						title: story.title,
@@ -9993,12 +10566,6 @@ html[data-backchannel-installed] .chin {
 	<button class="item-action-link browse-edit-note-link" type="button">edit</button>
 	|
 	<button class="item-action-link browse-delete-note-link" type="button">delete</button>`;
-			}
-
-			if (story.watchPlaceholder) {
-				return `<span class="item-age">watching since ${escapeHTML(timeAgo(story.time))}</span>
-	${rowQueueLink()}
-	${rowActions()}`;
 			}
 
 			const discussions = [story, ...(options.also || [])];
@@ -10040,34 +10607,26 @@ html[data-backchannel-installed] .chin {
 		const row = document.createElement("div");
 		row.className =
 			"story browse-row" +
-			(!rank && !options.bullet && !unreadMark ? " browse-row-loose" : "") +
-			((unreadMark && options.unreadDot) || (options.bullet && options.fresh) ? " is-unread" : "");
+			(!rank && !unreadMark ? " browse-row-loose" : "") +
+			(unreadMark && options.unreadDot ? " is-unread" : "");
 		row.dataset.storyId = String(story.id);
 		row.innerHTML = `
 	<div class="browse-rank${unreadMark ? " app-unread-mark" : ""}"${
-		unreadMark
-			? ` title="${options.unreadDot ? "Unread" : ""}"`
-			: options.bullet
-				? ` title="${options.fresh ? "New since you last looked" : "Watching; nothing new yet"}"`
-				: ""
+		unreadMark ? ` title="${options.unreadDot ? "Unread" : ""}"` : ""
 	}>${
 		unreadMark
 			? options.unreadDot
 				? "&#9679;"
 				: ""
-			: options.bullet
-				? options.fresh
-					? "&#9679;"
-					: "&#9675;"
-				: rank
-					? `${rank}.`
-					: ""
+			: rank
+				? `${rank}.`
+				: ""
 	}</div>
 	${appState && !isWriting ? appRowThumbHTML(story) : ""}
 	<div class="browse-main">
 	<div class="story-title">
 	<a class="browse-title-link${isWriting ? " browse-quote" : ""}" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
-	${story.site && !isWriting ? `<span class="browse-site">(${escapeHTML(story.site)}${appState && !story.watchPlaceholder && story.time ? `, ${age}` : ""})</span>` : ""}
+	${story.site && !isWriting ? `<span class="browse-site">(${escapeHTML(story.site)}${appState && story.time ? `, ${age}` : ""})</span>` : ""}
 	</div>
 	<div class="story-meta">
 	${meta}
@@ -10093,8 +10652,6 @@ html[data-backchannel-installed] .chin {
 				openStoryFromRow(story, event, { openPanel: true });
 			};
 		}
-
-		wireRowWatchLink(row.querySelector(".browse-watch-link"), story, options);
 
 		const hide = row.querySelector(".browse-hide-link");
 
@@ -10274,25 +10831,6 @@ html[data-backchannel-installed] .chin {
 		applyCommentFocus(pending.commentKey);
 	}
 
-	async function loadCollectedNotes() {
-		const documents = await loadNotedIndex();
-		const lists = await Promise.all(
-			documents.map(async (document) => {
-				const notes = keptNotes(await load(document.key, null));
-
-				return notes.map((note) => ({ note, document }));
-			}),
-		);
-
-		return lists
-			.flat()
-			.sort(
-				(a, b) =>
-					(b.note.edited || b.note.created || 0) -
-					(a.note.edited || a.note.created || 0),
-			);
-	}
-
 	async function loadNotedIndex() {
 		return notedDocuments(await load(NOTES_INDEX_KEY, [])).sort(
 			(a, b) => (b.updated || 0) - (a.updated || 0),
@@ -10328,13 +10866,16 @@ html[data-backchannel-installed] .chin {
 			return;
 		}
 
-		const [favorites, noted] = await Promise.all([
+		const [favorites, noted, collected] = await Promise.all([
 			loadFavoriteEntries(),
 			loadNotedIndex(),
+			loadCollected(),
 		]);
-		const entries = favorites.length + noted.length;
+		const state = collectionTabState(favorites, noted, collected);
 
-		notedHasItems = entries > 0;
+		notedHasItems = state.has;
+		tab.classList.toggle("has-fresh", state.fresh > 0);
+		tab.title = state.fresh ? pluralize(state.fresh, "page") + " with something new" : "";
 
 		paintBrowseTab(
 			tab,
@@ -10353,93 +10894,6 @@ html[data-backchannel-installed] .chin {
 				setBrowseMode(sidebarUI, false);
 			}
 		}
-	}
-
-	function collectionRow(entry, list, rank, options = {}) {
-		const kind = entry.kind === "comment" ? "comment" : options.noted ? "noted" : "discussion";
-		const page = entry.title || entry.url || entry.id;
-
-		const row = renderBrowseRow(
-			{
-				id: entry.id || entry.key,
-				key: entry.key,
-				source: entry.source || "",
-				kind,
-				permalink: "",
-				url: entry.url || "",
-				title: page,
-				context: entry.context || "",
-				by: entry.by || "",
-				score: 0,
-				time:
-					entry.time || Math.floor((entry.updated || entry.addedAt || Date.now()) / 1000),
-				descendants: entry.count,
-				site: entry.site || (entry.url ? hostLabel(entry.url) : ""),
-			},
-			list,
-			rank,
-			{
-				watchable: kind !== "comment" && kind !== "noted",
-				...options,
-			},
-		);
-
-		row.classList.add("browse-row-collected");
-
-		return row;
-	}
-
-	function noteCollectionRow({ note, document: page }, list, { onDelete, onEdit }) {
-		const row = collectionRow(
-			{
-				key: note.id,
-				kind: "noted",
-				url: page.url || "",
-				title: favoriteExcerpt(note.text, FAVORITE_EXCERPT_CHARS),
-				context: page.title || page.url || page.id,
-				time: note.edited || note.created || 0,
-				site: page.url ? hostLabel(page.url) : "",
-			},
-			list,
-			null,
-			{ noted: true },
-		);
-
-		const drop = row.querySelector(".browse-delete-note-link");
-
-		if (drop) {
-			drop.onclick = () => onDelete(page, note).catch(console.error);
-		}
-
-		const edit = row.querySelector(".browse-edit-note-link");
-
-		if (edit) {
-			edit.onclick = () => startCollectionNoteEdit(row, page, note, onEdit);
-		}
-
-		return row;
-	}
-
-	function startCollectionNoteEdit(row, page, note, onEdit) {
-		const main = row.querySelector(".browse-main");
-
-		if (!main || row.querySelector(".note-editor")) {
-			return;
-		}
-
-		const title = row.querySelector(".story-title");
-		const held = inlineNoteEditor(note, {
-			canAnchor: null,
-			onSave: (parsed) => onEdit(page, note, parsed).catch(console.error),
-			onClose: () => {
-				held.editor.remove();
-				title.hidden = false;
-			},
-		});
-
-		title.hidden = true;
-		title.after(held.editor);
-		held.field.focus({ preventScroll: true });
 	}
 
 	async function collectedNotesFor(page) {
@@ -10476,80 +10930,994 @@ html[data-backchannel-installed] .chin {
 		);
 	}
 
-	async function renderCollectionView(ui, list) {
-		const [favorites, noted] = await Promise.all([
-			loadFavoriteEntries(),
-			loadCollectedNotes(),
-		]);
-		const saved = favoritesOfKind(favorites, "discussion");
-		const comments = favoritesOfKind(favorites, "comment");
+	function documentKindsLabel(doc) {
+		return [
+			[doc.discussions.length, "discussion"],
+			[doc.quotes.length, "quote"],
+			[doc.notes.length, "note"],
+		]
+			.filter(([count]) => count > 0)
+			.map(([count, word]) => pluralize(count, word))
+			.join(" · ");
+	}
 
-		list.replaceChildren();
+	function documentStory(doc) {
+		const first = doc.discussions[0];
 
-		if (!favorites.length && !noted.length) {
-			const empty = document.createElement("div");
-			empty.className = "browse-empty";
-			empty.textContent =
-				"Nothing collected yet. Favorite a discussion, or write a note on any page, and it will be kept here.";
-			list.appendChild(empty);
+		return {
+			id: first?.id || doc.key,
+			key: first?.key || doc.key,
+			kind: "document",
+			source: first?.source || "",
+			permalink: "",
+			url: doc.url,
+			title: doc.title,
+			site: doc.site,
+			time: Math.floor(doc.touched / 1000),
+			score: 0,
+			by: "",
+			context: "",
+			descendants: 0,
+		};
+	}
+
+	function documentCard(doc, wall) {
+		const card = document.createElement("div");
+		const parts = [escapeHTML(doc.site), escapeHTML(documentKindsLabel(doc))];
+
+		card.className = "browse-card";
+		card.classList.toggle("is-fresh", Boolean(doc.fresh));
+
+		if (appState) {
+			card.classList.add("app-row");
+		}
+
+		card.dataset.documentKey = doc.key;
+		card.innerHTML = `
+<div class="browse-card-pic"></div>
+${doc.fresh ? `<span class="browse-card-stamp">NEW</span>` : ""}
+<button class="browse-card-more" type="button" aria-label="Actions for this page" aria-haspopup="menu" aria-expanded="false">${CARD_MORE_ICON}</button>
+<div class="browse-card-text">
+<div class="browse-card-title">${doc.url ? `<a class="browse-title-link" href="${escapeHTML(doc.url)}">${escapeHTML(doc.title)}</a>` : escapeHTML(doc.title)}</div>
+${doc.excerpt ? `<div class="browse-card-note"><span class="browse-quote">${escapeHTML(doc.excerpt)}</span></div>` : ""}
+${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(doc.found, "new comment"))}</div>` : ""}
+<div class="browse-card-meta"><span>${parts.filter(Boolean).join(", ")}</span></div>
+</div>`;
+
+		const open = card.querySelector(".browse-title-link");
+
+		if (open) {
+			open.onclick = (event) => openStoryFromRow(documentStory(doc), event);
+		}
+
+		const more = card.querySelector(".browse-card-more");
+
+		more.onclick = (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			openCardMenu(more, doc, { keyboard: event.detail === 0 });
+		};
+
+		if (open) {
+			card.classList.add("is-openable");
+		}
+
+		if (open && !appState) {
+			const fromCard = (event) => !event.defaultPrevented && !event.target.closest?.(".browse-title-link, .browse-card-more");
+
+			card.onclick = (event) => {
+				if (!fromCard(event)) {
+					return;
+				}
+
+				if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+					openInNewTab(doc.url);
+					return;
+				}
+
+				openStoryFromRow(documentStory(doc), event);
+			};
+			card.onauxclick = (event) => {
+				if (event.button === 1 && fromCard(event)) {
+					openInNewTab(doc.url);
+				}
+			};
+		}
+
+		wall.appendChild(card);
+		applyCardLook(card, doc.look).catch(console.error);
+
+		return card;
+	}
+
+	let cardMenuOpener = null;
+	let cardMenuCleanup = null;
+
+	function openCardMenu(button, doc, { inTag = false, keyboard = true } = {}) {
+		const root = button.getRootNode();
+		const existing = root.querySelector?.(".card-menu") || null;
+
+		if (existing && !existing.hidden && cardMenuOpener === button) {
+			closeCardMenu();
 			return;
 		}
 
-		const reload = async () => {
-			await renderCollectionView(ui, list);
-			await refreshNotedCount(ui.shadow);
+		closeCardMenu();
+
+		const menu = existing || document.createElement("div");
+
+		if (!existing) {
+			menu.className = "card-menu dropdown";
+			menu.setAttribute("role", "menu");
+			menu.setAttribute("aria-label", "Page actions");
+			(root.host ? root : document.body).appendChild(menu);
+		}
+
+		menu.replaceChildren(
+			...cardMenuItems(doc, { inTag }).map((item) => {
+				const entry = document.createElement("button");
+
+				entry.type = "button";
+				entry.className = "dropdown-item card-menu-item";
+				entry.setAttribute("role", "menuitem");
+				entry.dataset.action = item.id;
+				entry.textContent = item.label;
+				entry.onclick = (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					closeCardMenu({ refocus: true });
+					runCardAction(item.id, doc, event).catch(console.error);
+				};
+
+				return entry;
+			}),
+		);
+		menu.hidden = false;
+		cardMenuOpener = button;
+		button.setAttribute("aria-expanded", "true");
+		placeCardMenu(menu, button);
+
+		if (keyboard) {
+			menu.querySelector(".card-menu-item")?.focus({ preventScroll: true });
+		}
+
+		const outside = (event) => {
+			const path = event.composedPath();
+
+			if (!path.includes(menu) && !path.includes(button)) {
+				closeCardMenu();
+			}
+		};
+		const keys = (event) => {
+			if (event.key === "Escape") {
+				event.preventDefault();
+				event.stopPropagation();
+				closeCardMenu({ refocus: true });
+				return;
+			}
+
+			if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+				const items = [...menu.querySelectorAll(".card-menu-item")];
+				const at = items.indexOf(root.activeElement);
+				const step = event.key === "ArrowDown" ? 1 : -1;
+
+				event.preventDefault();
+				items[(at + step + items.length) % items.length]?.focus();
+				return;
+			}
+
+			if (!["Enter", " ", "Tab", "Shift"].includes(event.key)) {
+				closeCardMenu();
+			}
+		};
+		const away = () => {
+			const box = button.isConnected ? button.getBoundingClientRect() : null;
+
+			if (!box || (!box.width && !box.height) || box.bottom < 0 || box.top > window.innerHeight) {
+				closeCardMenu();
+				return;
+			}
+
+			placeCardMenu(menu, button);
+		};
+		const leave = (event) => {
+			if (!menu.contains(event.relatedTarget) && event.relatedTarget !== button) {
+				closeCardMenu();
+			}
 		};
 
-		if (saved.length) {
-			const section = subhead(list, "favorite discussions", { collapsible: true });
+		window.addEventListener("pointerdown", outside, true);
+		window.addEventListener("keydown", keys, true);
+		window.addEventListener("resize", away);
+		window.addEventListener("scroll", away, true);
+		root.addEventListener("scroll", away, true);
+		menu.addEventListener("focusout", leave);
+		cardMenuCleanup = () => {
+			window.removeEventListener("pointerdown", outside, true);
+			window.removeEventListener("keydown", keys, true);
+			window.removeEventListener("resize", away);
+			window.removeEventListener("scroll", away, true);
+			root.removeEventListener("scroll", away, true);
+			menu.removeEventListener("focusout", leave);
+		};
+	}
 
-			for (const entry of saved) {
-				collectionRow(entry, section, null, {
-					unfavorite: entry.key,
-					reload,
-				});
+	function closeCardMenu({ refocus = false } = {}) {
+		const opener = cardMenuOpener;
+		const menu = opener?.getRootNode().querySelector?.(".card-menu");
+
+		cardMenuCleanup?.();
+		cardMenuCleanup = null;
+		cardMenuOpener = null;
+
+		if (menu) {
+			menu.hidden = true;
+		}
+
+		if (opener) {
+			opener.setAttribute("aria-expanded", "false");
+
+			if (refocus) {
+				opener.focus({ preventScroll: true });
+			}
+		}
+	}
+
+	function placeCardMenu(menu, button) {
+		const box = button.getBoundingClientRect();
+		const width = menu.offsetWidth;
+		const height = menu.offsetHeight;
+		const gap = 3;
+		const below = box.bottom + gap + height <= window.innerHeight - 8;
+
+		menu.style.left = `${Math.max(8, Math.min(box.right - width, window.innerWidth - width - 8))}px`;
+		menu.style.top = `${below ? box.bottom + gap : Math.max(8, box.top - gap - height)}px`;
+	}
+
+	function openInNewTab(url) {
+		window.open(url, "_blank", "noopener");
+	}
+
+	function copyText(text) {
+		return navigator.clipboard.writeText(text);
+	}
+
+	async function runCardAction(id, doc, event) {
+		if (id === "open") {
+			openStoryFromRow(documentStory(doc), event);
+			return;
+		}
+
+		if (id === "tab") {
+			openInNewTab(doc.url);
+			return;
+		}
+
+		if (id === "copy") {
+			try {
+				await copyText(doc.url);
+				showToast("Link copied");
+			} catch {
+				showToast("Couldn't copy the link");
+			}
+
+			return;
+		}
+
+		if (id === "seen") {
+			await mutateCollected((entries) => markCollectedSeen(entries, doc.key, Date.now()));
+			settleCardFreshness(doc.key);
+			await refreshCollectionViews();
+			return;
+		}
+
+		if (id === "watch" || id === "unwatch") {
+			await setCollectedWatched(doc, id === "watch");
+			showToast(id === "watch" ? "Watched" : "Unwatched");
+			await refreshCollectionViews();
+			return;
+		}
+
+		if (id === "delete") {
+			const snapshot = await removeCollectedDocument(doc);
+			const removals = [...(removalToastShowing() ? removalUndo.removals : []), { snapshot, notes: doc.notes?.length || 0 }];
+			const notes = removals.reduce((sum, each) => sum + each.notes, 0);
+			const message = `${removals.length > 1 ? `Removed ${removals.length} pages from Collection` : "Removed from Collection"}${notes ? `, with ${pluralize(notes, "note")}` : ""}`;
+
+			removalUndo = { removals, message };
+			removeDocumentCards(doc.key);
+			showToast(message, {
+				action: {
+					label: "undo",
+					onAct: () => {
+						removalUndo = null;
+						(async () => {
+							for (const each of [...removals].reverse()) {
+								await restoreCollectedDocument(each.snapshot);
+							}
+
+							await refreshCollectionViews();
+
+							for (const each of removals) {
+								await refreshOpenPage(each.snapshot.key);
+							}
+						})().catch(console.error);
+					},
+				},
+			});
+			await refreshCollectionViews();
+			await refreshOpenPage(doc.key);
+		}
+	}
+
+	let removalUndo = null;
+
+	function removalToastShowing() {
+		const toast = sidebarUI?.shadow?.getElementById("toast");
+
+		return Boolean(
+			removalUndo && toast?.classList.contains("is-showing") && toast.firstChild?.textContent === removalUndo.message,
+		);
+	}
+
+	async function refreshOpenPage(key) {
+		if (!collectedPageKeys().includes(key)) {
+			return;
+		}
+
+		await refreshNotepadInPlace();
+		await refreshCollectionTag();
+	}
+
+	async function setCollectedWatched(doc, watched) {
+		const known = (await loadCollected()).some((entry) => entry.key === doc.key);
+
+		if (known) {
+			await mutateCollected((entries) => withWatched(entries, doc.key, watched));
+		} else if (watched && doc.url) {
+			await collectPage({ key: doc.key, url: doc.url, title: doc.title || "", site: doc.site || "" });
+		}
+	}
+
+	async function removeCollectedDocument(doc) {
+		const key = doc.key;
+		const notesKey = doc.noteDocument?.key || "";
+		const [favorites, looks, index, notes] = await Promise.all([
+			loadFavoriteEntries(),
+			loadLooks(),
+			load(NOTES_INDEX_KEY, []),
+			notesKey ? load(notesKey, null) : null,
+		]);
+		const notedIndex = Array.isArray(index) ? index : [];
+		const snapshot = {
+			key,
+			url: doc.url || "",
+			favorites: favorites.filter((entry) => documentKeyFor(entry) === key),
+			collected: [],
+			look: lookFor(looks, key),
+			notesKey,
+			notes,
+			indexEntry: notedIndex.find((entry) => entry?.key === notesKey) || null,
+		};
+
+		await mutateCollected((entries) => {
+			snapshot.collected = entries.filter((entry) => entry.key === key);
+
+			return removeFromCollected(entries, key);
+		});
+		await saveFavorites(favorites.filter((entry) => documentKeyFor(entry) !== key));
+		await forgetLook(key);
+
+		if (notesKey) {
+			await save(notesKey, { version: 1, notes: [] });
+			await save(NOTES_INDEX_KEY, notedIndex.filter((entry) => entry?.key !== notesKey));
+		}
+
+		return snapshot;
+	}
+
+	async function restoreCollectedDocument(snapshot) {
+		const favorites = await loadFavoriteEntries();
+		const held = new Set(favorites.map((entry) => entry.key));
+
+		await saveFavorites([...favorites, ...snapshot.favorites.filter((entry) => !held.has(entry.key))]);
+		await mutateCollected((entries) => [
+			...entries,
+			...snapshot.collected.filter((entry) => !entries.some((each) => each.key === entry.key)),
+		]);
+
+		if (snapshot.look && snapshot.url) {
+			await rememberLook(snapshot.url, snapshot.look);
+		}
+
+		if (snapshot.notesKey && snapshot.notes) {
+			const index = await load(NOTES_INDEX_KEY, []);
+			const rest = (Array.isArray(index) ? index : []).filter((entry) => entry?.key !== snapshot.notesKey);
+
+			await save(snapshot.notesKey, snapshot.notes);
+			await save(NOTES_INDEX_KEY, snapshot.indexEntry ? [...rest, snapshot.indexEntry] : rest);
+		}
+	}
+
+	function removeDocumentCards(key) {
+		for (const root of cardRoots()) {
+			for (const card of root.querySelectorAll(".browse-card")) {
+				if (card.dataset.documentKey === key) {
+					card.remove();
+				}
+			}
+		}
+	}
+
+	async function refreshCollectionViews() {
+		if (appState) {
+			if (appState.view === "collection") {
+				await renderAppList();
+			}
+		} else if (sidebarUI && browseTab === "collection" && isBrowsing(sidebarUI)) {
+			await renderBrowseView(sidebarUI);
+		}
+
+		await refreshCollectionSignal();
+		refreshFavoriteControls().catch(console.error);
+		await refreshCollectionTag();
+	}
+
+	function applyCardLook(card, look) {
+		const safe = safeLook(look) || {};
+		const token = String((Number(card.dataset.lookPaint) || 0) + 1);
+		const still = () => card.dataset.lookPaint === token && card.isConnected;
+		const picture = card.querySelector(".browse-card-pic");
+		const meta = card.querySelector(".browse-card-meta");
+		const colors = {
+			"--card-bg": safe.bg,
+			"--card-ink": safe.bg ? safe.text : "",
+			"--card-head": safe.bg ? safe.color || safe.text : "",
+			"--card-font": safe.font,
+			"--card-weight": safe.weight,
+		};
+
+		for (const [name, value] of Object.entries(colors)) {
+			if (value) {
+				card.style.setProperty(name, value);
+			} else {
+				card.style.removeProperty(name);
 			}
 		}
 
-		if (comments.length) {
-			const section = subhead(list, "favorite comments", { collapsible: true });
+		card.dataset.lookPaint = token;
+		card.classList.remove("has-pic");
+		picture?.replaceChildren();
+		meta?.querySelector(".browse-card-icon")?.remove();
 
-			for (const entry of comments) {
-				const row = collectionRow(entry, section, null, {
-					unfavorite: entry.key,
-					reload,
-				});
+		return Promise.all([
+			safe.image && picture
+				? showCardImage(picture, safe.image, { sharp: cardPictureIsSharp, width: 720, still }).then((shown) => {
+						if (still()) {
+							card.classList.toggle("has-pic", shown);
+						}
+					})
+				: null,
+			safe.icon && meta
+				? showCardImage(meta, safe.icon, { sharp: () => true, width: 64, className: "browse-card-icon", first: true, still })
+				: null,
+		]);
+	}
 
-				const open = row.querySelector(".browse-title-link");
+	function showCardImage(slot, url, options) {
+		if (!appState) {
+			return paintCardCanvas(slot, url, options);
+		}
 
-				if (open && entry.focus && entry.url) {
-					open.onclick = (event) => {
-						openStoryFromRow(
-							{ url: entry.url, source: entry.source || "", id: entry.id || "" },
-							event,
-							{ openPanel: true, focus: entry.focus },
-						);
-					};
+		return new Promise((resolve) => {
+			const image = document.createElement("img");
+			const done = () => {
+				image.onload = null;
+				image.onerror = null;
+			};
+
+			image.alt = "";
+			image.decoding = "async";
+			image.loading = "lazy";
+			image.referrerPolicy = "no-referrer";
+
+			if (options.className) {
+				image.className = options.className;
+			}
+
+			image.onload = () => {
+				done();
+
+				if (options.sharp(image.naturalWidth, image.naturalHeight)) {
+					resolve(true);
+					return;
+				}
+
+				image.remove();
+				resolve(false);
+			};
+			image.onerror = () => {
+				done();
+				image.remove();
+				paintCardCanvas(slot, url, options).then(resolve, () => resolve(false));
+			};
+			image.src = url;
+
+			if (options.first) {
+				slot.prepend(image);
+			} else {
+				slot.append(image);
+			}
+		});
+	}
+
+	async function paintCardCanvas(slot, url, { sharp, width, className = "", first = false, still = () => true }) {
+		if (!(await whenNearViewport(slot)) || !still()) {
+			return false;
+		}
+
+		const bitmap = await decodeCardImage(await requestCardImage(url));
+
+		if (!bitmap) {
+			return false;
+		}
+
+		if (!sharp(bitmap.width, bitmap.height) || !still()) {
+			bitmap.close?.();
+			return false;
+		}
+
+		const canvas = document.createElement("canvas");
+
+		if (className) {
+			canvas.className = className;
+		}
+
+		drawCardBitmap(canvas, bitmap, width);
+
+		if (first) {
+			slot.prepend(canvas);
+		} else {
+			slot.append(canvas);
+		}
+
+		return true;
+	}
+
+	async function decodeCardImage(blob) {
+		if (!blob || typeof createImageBitmap !== "function") {
+			return null;
+		}
+
+		try {
+			return await createImageBitmap(blob);
+		} catch {
+			return null;
+		}
+	}
+
+	function drawCardBitmap(canvas, bitmap, width) {
+		const scale = Math.min(1, width / bitmap.width);
+
+		canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+		canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+
+		const context = canvas.getContext("2d");
+
+		context.imageSmoothingQuality = "high";
+		context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+		bitmap.close?.();
+	}
+
+	const cardImageRequests = new Map();
+	const cardImageFailures = new Set();
+	const cardImageQueue = [];
+	let cardImagesActive = 0;
+
+	function requestCardImage(url) {
+		if (cardImageFailures.has(url)) {
+			return Promise.resolve(null);
+		}
+
+		if (cardImageRequests.has(url)) {
+			return cardImageRequests.get(url);
+		}
+
+		const pending = new Promise((resolve) => {
+			const start = () => {
+				cardImagesActive += 1;
+
+				const finish = (blob) => {
+					cardImagesActive -= 1;
+					cardImageRequests.delete(url);
+
+					if (!blob) {
+						cardImageFailures.add(url);
+					}
+
+					cardImageQueue.shift()?.();
+					resolve(blob);
+				};
+
+				try {
+					GM.xmlHttpRequest({
+						method: "GET",
+						url,
+						timeout: 15000,
+						anonymous: true,
+						responseType: "blob",
+						headers: { Accept: "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8,*/*;q=0.5" },
+						onload: (response) => finish(response.status >= 200 && response.status < 400 ? imageBlobOf(response.response) : null),
+						onerror: () => finish(null),
+						ontimeout: () => finish(null),
+					});
+				} catch {
+					finish(null);
+				}
+			};
+
+			if (cardImagesActive < CARD_IMAGES_PARALLEL) {
+				start();
+			} else {
+				cardImageQueue.push(start);
+			}
+		});
+
+		cardImageRequests.set(url, pending);
+
+		return pending;
+	}
+
+	function imageBlobOf(body) {
+		if (body && typeof body === "object" && typeof body.size === "number" && typeof body.arrayBuffer === "function") {
+			return body.size ? body : null;
+		}
+
+		if (Object.prototype.toString.call(body) === "[object ArrayBuffer]") {
+			return body.byteLength ? new Blob([body]) : null;
+		}
+
+		return null;
+	}
+
+	const nearViewportWaiters = new Map();
+	const NEAR_VIEWPORT_STALE_MS = 2000;
+	let nearViewportObserver = null;
+
+	function whenNearViewport(element) {
+		if (typeof IntersectionObserver !== "function") {
+			return Promise.resolve(true);
+		}
+
+		nearViewportObserver ??= new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					if (!entry.isIntersecting) {
+						continue;
+					}
+
+					nearViewportObserver.unobserve(entry.target);
+					nearViewportWaiters.get(entry.target)?.resolvers.forEach((resolve) => resolve(true));
+					nearViewportWaiters.delete(entry.target);
+				}
+			},
+			{ rootMargin: "400px", scrollMargin: "400px" },
+		);
+
+		const now = Date.now();
+
+		for (const [waiting, { since, resolvers }] of nearViewportWaiters) {
+			if (!waiting.isConnected && now - since > NEAR_VIEWPORT_STALE_MS) {
+				nearViewportObserver.unobserve(waiting);
+				nearViewportWaiters.delete(waiting);
+				resolvers.forEach((resolve) => resolve(false));
+			}
+		}
+
+		return new Promise((resolve) => {
+			const waiting = nearViewportWaiters.get(element) || { since: now, resolvers: [] };
+
+			waiting.resolvers.push(resolve);
+			nearViewportWaiters.set(element, waiting);
+			nearViewportObserver.observe(element);
+		});
+	}
+
+	function cardRoots() {
+		return [...new Set([appState?.ui?.shadow, sidebarUI?.shadow].filter(Boolean))];
+	}
+
+	function paintCardLook(key, look, roots = cardRoots()) {
+		const painting = [];
+
+		for (const root of roots) {
+			for (const card of root.querySelectorAll(".browse-card")) {
+				if (card.dataset.documentKey === key) {
+					painting.push(applyCardLook(card, look));
 				}
 			}
 		}
 
-		if (noted.length) {
-			const section = subhead(list, "notes", { collapsible: true });
+		return Promise.all(painting);
+	}
 
-			for (const entry of noted) {
-				noteCollectionRow(entry, section, {
-					onDelete: async (page, note) => {
-						await deleteCollectedNote(page, note);
-						await reload();
-					},
-					onEdit: async (page, note, parsed) => {
-						await updateCollectedNote(page, note, parsed);
-						await reload();
-					},
-				});
+	const lookBackfillTried = new Set();
+
+	async function backfillCardLooks(documents, tried = lookBackfillTried) {
+		const due = documents
+			.filter((doc) => !doc.look && /^https?:\/\//i.test(doc.url || "") && !tried.has(doc.key))
+			.slice(0, LOOK_BACKFILL_PER_PASS);
+
+		await Promise.all(
+			due.map(async (doc) => {
+				tried.add(doc.key);
+
+				const response = await requestPage(doc.url);
+
+				if (response.ok && response.text) {
+					await rememberLookIfMissing(doc.url, lookFromHTML(pageHead(response.text), response.finalUrl || doc.url));
+				}
+			}),
+		);
+	}
+
+	function settleCardFreshness(key) {
+		for (const card of cardRoots().flatMap((root) => [...root.querySelectorAll(".browse-card.is-fresh")])) {
+			if (card.dataset.documentKey !== key) {
+				continue;
+			}
+
+			card.classList.remove("is-fresh");
+			card.querySelector(".browse-card-stamp")?.remove();
+			card.querySelector(".browse-card-new")?.remove();
+		}
+	}
+
+	async function loadCollectionDocuments() {
+		const [favorites, index, collected, looks] = await Promise.all([
+			loadFavoriteEntries(),
+			loadNotedIndex(),
+			loadCollected(),
+			loadLooks(),
+		]);
+		const notesByKey = new Map(
+			await Promise.all(index.map(async (entry) => [entry.key, await load(entry.key, null)])),
+		);
+
+		return collectDocuments(favorites, index, notesByKey, collected, looks);
+	}
+
+	let openCollectedDocument = null;
+	let collectionTagContext = null;
+
+	function collectedPageKeys() {
+		const urls = [...pageAddresses(), appState?.open?.row?.url || "", appState?.open?.url || ""];
+
+		return [...new Set([appState?.open?.key || "", ...urls.map((url) => normalizeURL(url || ""))].filter(Boolean))];
+	}
+
+	async function findCollectedDocument(keys) {
+		const wanted = (Array.isArray(keys) ? keys : [keys]).filter(Boolean);
+
+		if (!wanted.length) {
+			return null;
+		}
+
+		const [favorites, index, collected, looks] = await Promise.all([
+			loadFavoriteEntries(),
+			loadNotedIndex(),
+			loadCollected(),
+			loadLooks(),
+		]);
+		const keyOfIndex = (entry) => (entry.url ? documentKeyFor(entry) : `${entry.kind}:${entry.id}`);
+
+		for (const key of wanted) {
+			const noted = index.filter((entry) => keyOfIndex(entry) === key);
+			const mine = favorites.filter((entry) => documentKeyFor(entry) === key);
+			const entries = collected.filter((entry) => entry.key === key);
+
+			if (!noted.length && !mine.length && !entries.length) {
+				continue;
+			}
+
+			const notesByKey = new Map(await Promise.all(noted.map(async (entry) => [entry.key, await load(entry.key, null)])));
+			const doc = collectDocuments(mine, noted, notesByKey, entries, looks).find((each) => each.key === key);
+
+			if (doc) {
+				return doc;
 			}
 		}
+
+		return null;
+	}
+
+	async function loadOpenCollectedDocument() {
+		openCollectedDocument = await findCollectedDocument(collectedPageKeys());
+
+		return openCollectedDocument;
+	}
+
+	function paintKeptMarks(body) {
+		for (const element of body?.querySelectorAll(".comment[data-comment-id]") || []) {
+			const kept = isKeptComment(openCollectedDocument?.quotes, element.dataset.commentId);
+			const status = element.querySelector(".comment-vote-status");
+			const mark = status?.parentElement?.querySelector(":scope > .kept-mark");
+
+			element.classList.toggle("is-kept", kept);
+
+			if (kept && status && !mark) {
+				const added = document.createElement("span");
+
+				added.className = "kept-mark";
+				added.textContent = "kept";
+				status.before(" ", added);
+			} else if (!kept && mark) {
+				mark.remove();
+			}
+		}
+	}
+
+	function collectionTagElement(model, doc) {
+		const tag = document.createElement("section");
+
+		tag.className = "collection-tag";
+		tag.setAttribute("aria-label", model.title);
+		tag.innerHTML = `
+<div class="collection-tag-head"><span class="collection-tag-title">${escapeHTML(model.title)}</span>${model.unwatched ? '<span class="collection-tag-chip">Unwatched</span>' : ""}</div>
+<button class="browse-card-more collection-tag-more" type="button" aria-label="Actions for this page" aria-haspopup="menu" aria-expanded="false">${CARD_MORE_ICON}</button>
+<div class="collection-tag-dates">${escapeHTML(model.dates)}</div>
+${model.changes ? `<div class="collection-tag-changes">${escapeHTML(model.changes)}</div>` : ""}
+${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(collectionTagItemHTML).join("")}</ul>` : ""}`;
+
+		const more = tag.querySelector(".collection-tag-more");
+
+		more.onclick = (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			openCardMenu(more, doc, { inTag: true, keyboard: event.detail === 0 });
+		};
+
+		for (const jump of tag.querySelectorAll(".collection-tag-jump")) {
+			jump.onclick = (event) => {
+				event.preventDefault();
+				applyCommentFocus(jump.dataset.commentKey);
+			};
+		}
+
+		return tag;
+	}
+
+	async function paintCollectionTag(ui, stories = [], seenTimes = new Map(), { counted = true } = {}) {
+		const body = ui?.body;
+		const doc = openCollectedDocument;
+
+		collectionTagContext = { ui, stories, seenTimes };
+
+		if (!body) {
+			return;
+		}
+
+		const arrival = doc && collectedArrival.key === doc.key ? collectedArrival : null;
+		const before = arrival ? await arrival.before : null;
+
+		body.querySelector(":scope > .collection-tag")?.remove();
+
+		if (!doc || openCollectedDocument !== doc || !body.isConnected) {
+			return;
+		}
+
+		const seen = Math.max(0, ...[...seenTimes.values()].map(Number).filter(Number.isFinite)) * 1000;
+		const previousView = Math.max(Number(before?.lastViewedAt) || 0, seen);
+		const firstViewedAt = before
+			? before.viewedAt === null || before.viewedAt === undefined
+				? arrival.at
+				: Number(before.viewedAt) || 0
+			: Number(doc.collected?.viewedAt) || 0;
+		const thread = body.querySelector(":scope > .top-level-comments");
+		const fresh = new Set();
+
+		for (const story of stories) {
+			const seenAt = Number(seenTimes.get(story.key)) || 0;
+
+			for (const element of thread?.querySelectorAll(`.comment[data-story-id="${CSS.escape(String(story.id))}"]`) || []) {
+				const isFresh =
+					seenAt > 0
+						? element.classList.contains("new-comment")
+						: previousView > 0 && Number(element.dataset.createdAt) * 1000 > previousView;
+
+				if (isFresh) {
+					fresh.add(element);
+				}
+			}
+		}
+
+		const freshIn = (scope) => (scope ? [...scope.querySelectorAll(".comment")].filter((element) => fresh.has(element)).length : 0);
+		const storyFor = new Map(stories.map((story) => [story.key, story]));
+		const model = collectionTagModel(doc, {
+			previousView,
+			firstViewedAt,
+			newComments: fresh.size,
+			newDiscussions: previousView
+				? stories.filter((story) => (Number(story.createdAt) || 0) * 1000 > previousView).length
+				: 0,
+			discussionCounts: new Map(
+				doc.discussions.map((entry) => {
+					const story = storyFor.get(entry.key);
+
+					return [
+						entry.key,
+						story ? [...fresh].filter((element) => element.dataset.storyId === String(story.id)).length : 0,
+					];
+				}),
+			),
+			replyCounts: new Map(
+				doc.quotes.map((entry) => {
+					const key = entry.focus || entry.key;
+
+					return [key, freshIn(thread?.querySelector(`.comment[data-comment-id="${CSS.escape(key)}"]`))];
+				}),
+			),
+			labelFor: (id) => getSource(id)?.label || "",
+		});
+
+		if (!counted) {
+			model.changes = null;
+		}
+
+		const tag = collectionTagElement(model, doc);
+		const anchor = body.querySelector(":scope > .submission-details") || body.querySelector(":scope > .page-header");
+
+		body.querySelector(":scope > .collection-tag")?.remove();
+
+		if (anchor) {
+			anchor.after(tag);
+		} else {
+			body.prepend(tag);
+		}
+	}
+
+	async function refreshCollectionTag() {
+		const context = collectionTagContext;
+
+		if (!context?.ui?.body?.isConnected) {
+			return;
+		}
+
+		await loadOpenCollectedDocument();
+		paintKeptMarks(context.ui.body);
+		await paintCollectionTag(context.ui, context.stories, context.seenTimes);
+	}
+
+	async function renderCollectionView(ui, list) {
+		const documents = await loadCollectionDocuments();
+
+		list.replaceChildren();
+
+		if (!documents.length) {
+			const empty = document.createElement("div");
+
+			empty.className = "browse-empty";
+			empty.textContent =
+				"Nothing collected yet. Favorite a discussion or a comment, or write a note on any page, and it will be kept here.";
+			list.appendChild(empty);
+			return;
+		}
+
+		const wall = document.createElement("div");
+
+		wall.className = "bc-wall";
+
+		for (const doc of documents) {
+			documentCard(doc, wall);
+		}
+
+		list.appendChild(wall);
+
+		if (appState) {
+			decorateAppRows(wall);
+		}
+
+		backfillCardLooks(documents).catch(console.error);
 
 		refreshFavoriteControls().catch(console.error);
 	}
@@ -10713,6 +12081,29 @@ html[data-backchannel-installed] .chin {
 			: "No discussion found for this page yet. Minimize to submit it, or read something else.";
 
 		body.appendChild(message);
+
+		const address = pageAddress();
+		const keep = favoriteButtonHTML({
+			key: normalizeURL(address) || "",
+			url: address,
+			title: pageDocumentTitle(),
+			site: hostLabel(address),
+			kind: "discussion",
+		});
+
+		if (keep) {
+			const line = document.createElement("div");
+
+			line.className = "no-discussion-keep";
+			line.innerHTML = keep;
+			line.firstElementChild.title = "Keep this page in your Collection and hear when a discussion starts";
+			body.appendChild(line);
+			refreshFavoriteControls().catch(console.error);
+		}
+
+		loadOpenCollectedDocument()
+			.then(() => paintCollectionTag(ui, [], new Map()))
+			.catch(console.error);
 	}
 
 	const PANEL_ENTER_MS = 180;
@@ -10933,96 +12324,48 @@ html[data-backchannel-installed] .chin {
 		return body;
 	}
 
-	async function renderQueueView(ui, list, { part = "" } = {}) {
+	async function renderQueueView(ui, list) {
 		const entries = sortQueue(await loadQueue());
-		const watching = await loadWatches();
-		const { queued: rest, watched, watchFor } = splitQueueEntries(entries, watching);
-		const kept = sortWatchedEntries(watched, watchFor);
-		const watchKeys = new Set(watching.map((entry) => entry.key));
-		const showQueued = part !== "watching";
-		const showWatching = part !== "queued";
-		const reload = () => renderQueueView(ui, list, { part });
+		const reload = () => renderQueueView(ui, list);
 		let rank = 0;
 
 		list.replaceChildren();
 
-		if (!(showQueued ? rest.length : 0) && !(showWatching ? kept.length : 0)) {
+		if (!entries.length) {
 			const empty = document.createElement("div");
 			empty.className = "browse-empty";
 			empty.textContent =
-				part === "watching"
-					? "Nothing watched yet. Use watch on any discussion to hear when it grows."
-					: "Nothing queued yet. Use queue on any article, here or on Hacker News, to read it later.";
+				"Nothing queued yet. Use queue on any article, here or on Hacker News, to read it later.";
 			list.appendChild(empty);
 			return;
 		}
 
-		if (showQueued && showWatching && kept.length && rest.length) {
-			subhead(list, "queued");
-		}
-
-		for (const entry of showQueued ? rest : []) {
+		for (const entry of entries) {
 			const row = renderBrowseRow(entry, list, (rank += 1), {
 				inQueue: true,
-				watchable: true,
-				watchKeys,
 				reload,
 			});
 
 			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
 		}
 
-		if (showQueued && showWatching && kept.length) {
-			subhead(list, "watching");
-		}
-
-		for (const entry of showWatching ? kept : []) {
-			const state = watchFor(entry);
-			const fresh = watchIsFresh(state);
-			const row = renderBrowseRow(entry, list, 0, {
-				inQueue: true,
-				watchable: true,
-				watching: true,
-				bullet: true,
-				fresh,
-				reload,
-			});
-
-			row.classList.add("browse-row-watching");
-			row.classList.toggle("browse-row-fresh", fresh);
-
-			row.classList.toggle("browse-row-stalled", watchIsStalled(state));
-		}
-
 		refreshFavoriteControls().catch(console.error);
 
 		refreshQueueEntries(entries).then((refreshed) => {
 			if (refreshed && isBrowsing(ui) && browseTab === "queue") {
-				renderQueueView(ui, list, { part }).catch(console.error);
+				renderQueueView(ui, list).catch(console.error);
 			}
 		});
 
-		if (showQueued && entries.some((entry) => entry.readAt && !watchFor(entry))) {
+		if (entries.some((entry) => entry.readAt)) {
 			const clear = document.createElement("button");
 			clear.type = "button";
 			clear.className = "browse-nav-link browse-clear-read";
 			clear.textContent = "clear read";
 			clear.onclick = async () => {
-				const watches = await loadWatches();
+				await mutateQueue((queued) => clearReadFromQueue(queued));
 
-				await mutateQueue((queued) => {
-					const keep = new Set(
-						queued
-							.filter((entry) =>
-								watches.some((watch) => queueEntryMatchesWatch(entry, watch)),
-							)
-							.map(queueKey),
-					);
-
-					return clearReadFromQueue(queued, keep);
-				});
-
-				await renderQueueView(ui, list, { part });
+				await renderQueueView(ui, list);
 				refreshQueueCount(ui.shadow);
 				refreshNextUp(ui.shadow);
 			};
@@ -11034,10 +12377,9 @@ html[data-backchannel-installed] .chin {
 		}
 	}
 
-	const QUEUE_NOTE = "Discussions you've queued or are watching";
+	const QUEUE_NOTE = "Discussions you've queued";
 
-	const COLLECTION_NOTE =
-		"All of your favorited discussions, comments, and notes";
+	const COLLECTION_NOTE = "The pages you kept, with what you kept about them";
 
 	function setBrowseNote(ui, text) {
 		const note = ui?.shadow?.querySelector("#browse-blend-note");
@@ -12280,11 +13622,7 @@ header {
 	gap:0;
 }
 
-.hide-menu {
-	position:absolute;
-	top:calc(50% + 18px);
-	right:8px;
-	z-index:5;
+.dropdown {
 	display:flex;
 	flex-direction:column;
 	width:max-content;
@@ -12297,20 +13635,20 @@ header {
 	box-shadow:0 6px 18px rgba(0,0,0,.18);
 }
 
-.hide-menu[hidden] {
+.dropdown[hidden] {
 	display:none;
 }
 
-.hide-menu-rule {
+.dropdown-rule {
 	margin:4px 2px;
 	border-top:1px solid var(--surface-border);
 }
 
-.hide-menu-rule[hidden] {
+.dropdown-rule[hidden] {
 	display:none;
 }
 
-.hide-menu button {
+.dropdown-item {
 	padding:5px 8px;
 	border:0;
 	border-radius:4px;
@@ -12323,9 +13661,16 @@ header {
 }
 
 @media (hover: hover) {
-	.hide-menu button:hover {
+	.dropdown-item:hover {
 		background:var(--hover-tint);
 	}
+}
+
+.hide-menu {
+	position:absolute;
+	top:calc(50% + 18px);
+	right:8px;
+	z-index:5;
 }
 
 .header-actions {
@@ -12545,18 +13890,6 @@ header {
 }
 
 
-.browse-row-watching .browse-rank {
-	color:var(--accent);
-}
-
-.browse-row-stalled .story-title::before {
-	opacity:.3;
-}
-
-.browse-row-stalled .story-title a {
-	opacity:.55;
-}
-
 #browse-tab-front::after {
 	content:none;
 	display:inline-block;
@@ -12574,6 +13907,17 @@ header {
 	overflow:hidden;
 	white-space:nowrap;
 	opacity:1;
+}
+
+#browse-tab-collection.has-fresh::after {
+	content:"";
+	display:inline-block;
+	width:6px;
+	height:6px;
+	margin-left:5px;
+	border-radius:50%;
+	background:var(--accent);
+	vertical-align:1px;
 }
 
 #browse-tab-collection.is-collapsed {
@@ -12844,6 +14188,353 @@ header {
 	color:var(--text);
 }
 
+.bc-wall {
+	display:grid;
+	grid-template-columns:repeat(auto-fill, minmax(max(112px, calc((100% - 11px) / 2)), 1fr));
+	gap:10px;
+	padding-right:8px;
+}
+
+.browse-card {
+	position:relative;
+	display:flex;
+	flex-direction:column;
+	justify-content:flex-end;
+	min-width:0;
+	aspect-ratio:1;
+	container-type:inline-size;
+	border-radius:8px;
+	background:var(--card-bg, var(--surface));
+	color:var(--card-ink, var(--surface-text));
+	box-shadow:inset 0 0 0 1px rgba(127, 127, 127, .22);
+}
+
+.browse-card-pic {
+	position:absolute;
+	inset:0;
+	border-radius:inherit;
+	overflow:hidden;
+}
+
+.browse-card:not(.has-pic) .browse-card-pic {
+	opacity:0;
+}
+
+.browse-card-pic > img,
+.browse-card-pic > canvas {
+	display:block;
+	width:100%;
+	height:100%;
+	object-fit:cover;
+}
+
+.browse-card-text {
+	position:relative;
+	display:flex;
+	flex-direction:column;
+	gap:4px;
+	padding:10px 11px;
+	border-radius:0 0 8px 8px;
+}
+
+.browse-card.has-pic .browse-card-text {
+	padding-top:40px;
+	background:linear-gradient(to top, rgba(0, 0, 0, .82), rgba(0, 0, 0, .62) 55%, rgba(0, 0, 0, 0));
+	color:#fff;
+}
+
+.browse-card-title {
+	font-size:13px;
+	line-height:1.25;
+	font-weight:600;
+	overflow-wrap:anywhere;
+	display:-webkit-box;
+	-webkit-line-clamp:3;
+	-webkit-box-orient:vertical;
+	overflow:hidden;
+}
+
+.browse-card:not(.has-pic) .browse-card-title {
+	font-family:var(--card-font);
+	font-weight:var(--card-weight, 700);
+	font-size:15px;
+	line-height:1.2;
+	color:var(--card-head);
+}
+
+.browse-card-title .browse-title-link {
+	color:inherit;
+	text-decoration:none;
+}
+
+.browse-card-note {
+	font-size:11px;
+	line-height:1.35;
+	overflow-wrap:anywhere;
+	display:-webkit-box;
+	-webkit-line-clamp:2;
+	-webkit-box-orient:vertical;
+	overflow:hidden;
+}
+
+.browse-card-note .browse-quote {
+	display:inline;
+	color:inherit;
+}
+
+.browse-card-note .browse-quote::before {
+	color:inherit;
+	opacity:.55;
+}
+
+.browse-card-meta {
+	display:flex;
+	align-items:center;
+	gap:5px;
+	min-width:0;
+	font:10px/1.4 Verdana, Geneva, sans-serif;
+	opacity:.78;
+}
+
+.browse-card-meta > span {
+	min-width:0;
+	overflow-wrap:anywhere;
+	display:-webkit-box;
+	-webkit-line-clamp:2;
+	-webkit-box-orient:vertical;
+	overflow:hidden;
+}
+
+.browse-card-icon {
+	flex:none;
+	width:12px;
+	height:12px;
+	border-radius:2px;
+	object-fit:contain;
+}
+
+.browse-card-stamp {
+	position:absolute;
+	top:7px;
+	left:7px;
+	z-index:1;
+	padding:2px 6px;
+	border-radius:3px;
+	background:var(--accent);
+	color:#fff;
+	font:700 9px/1.4 Verdana, Geneva, sans-serif;
+	letter-spacing:.04em;
+}
+
+.browse-card-new {
+	font:700 10px/1.4 Verdana, Geneva, sans-serif;
+}
+
+.browse-card.is-openable {
+	cursor:pointer;
+}
+
+.browse-card-more {
+	position:absolute;
+	top:6px;
+	right:6px;
+	z-index:2;
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	width:28px;
+	height:28px;
+	padding:0;
+	border:0;
+	border-radius:14px;
+	background:rgba(0, 0, 0, .5);
+	color:#fff;
+	cursor:pointer;
+	opacity:0;
+	transition:opacity .12s ease;
+}
+
+.browse-card:hover .browse-card-more,
+.browse-card:focus-within .browse-card-more,
+.browse-card-more[aria-expanded="true"] {
+	opacity:1;
+}
+
+.browse-card-more:focus-visible {
+	outline:2px solid #fff;
+	outline-offset:1px;
+}
+
+@media (hover: none) {
+	.browse-card-more {
+		opacity:1;
+	}
+
+}
+
+.card-menu {
+	position:fixed;
+	z-index:2147483647;
+}
+
+.comment.is-kept > .comment-layout {
+	box-shadow:inset 2px 0 0 var(--accent);
+	padding-left:8px;
+}
+
+.kept-mark {
+	color:var(--accent);
+	font-size:10px;
+	font-weight:700;
+}
+
+.no-discussion-keep {
+	margin-top:6px;
+	text-align:center;
+}
+
+.collection-tag {
+	position:relative;
+	margin:10px 0 14px;
+	padding:10px 42px 11px 12px;
+	border:1px solid var(--surface-border);
+	border-radius:8px;
+	background:var(--surface);
+	color:var(--surface-text);
+	font-size:12px;
+	line-height:1.45;
+}
+
+.collection-tag-head {
+	display:flex;
+	align-items:center;
+	gap:8px;
+	margin-bottom:2px;
+}
+
+.collection-tag-title {
+	font-size:13px;
+	font-weight:700;
+}
+
+.collection-tag-chip {
+	padding:1px 6px;
+	border-radius:4px;
+	background:var(--active-tint);
+	color:var(--meta);
+	font:600 10px/1.5 Verdana, Geneva, sans-serif;
+}
+
+.collection-tag .collection-tag-more {
+	top:6px;
+	right:6px;
+	opacity:1;
+	background:none;
+	color:var(--meta);
+}
+
+.collection-tag .collection-tag-more:hover,
+.collection-tag .collection-tag-more[aria-expanded="true"] {
+	background:var(--hover-tint);
+}
+
+.collection-tag .collection-tag-more:focus-visible {
+	outline:2px solid var(--accent);
+}
+
+.collection-tag-dates {
+	color:var(--meta);
+	font:11px/1.45 Verdana, Geneva, sans-serif;
+}
+
+.collection-tag-changes {
+	margin-top:4px;
+	font-weight:600;
+}
+
+.collection-tag-yours {
+	display:grid;
+	gap:6px;
+	margin:8px 0 0;
+	padding:8px 0 0;
+	border-top:1px solid var(--surface-divider);
+	list-style:none;
+}
+
+.collection-tag-item {
+	display:grid;
+	grid-template-columns:52px minmax(0, 1fr);
+	column-gap:6px;
+	align-items:start;
+}
+
+.collection-tag-kind {
+	padding-top:1px;
+	color:var(--meta);
+	font:10px/1.6 Verdana, Geneva, sans-serif;
+}
+
+.collection-tag-body {
+	min-width:0;
+	overflow-wrap:anywhere;
+}
+
+.collection-tag-jump {
+	padding:0;
+	border:0;
+	background:none;
+	color:inherit;
+	font:inherit;
+	text-align:left;
+	cursor:pointer;
+}
+
+.collection-tag-jump .browse-quote {
+	display:inline;
+}
+
+.collection-tag-jump:hover .browse-quote,
+.collection-tag-jump:focus-visible .browse-quote {
+	text-decoration:underline;
+}
+
+.collection-tag-by,
+.collection-tag-detail,
+.collection-tag-detail-only {
+	color:var(--meta);
+	font:11px/1.45 Verdana, Geneva, sans-serif;
+}
+
+.collection-tag-detail::before {
+	content:"· ";
+}
+
+@container (max-width: 160px) {
+	.browse-card-text {
+		gap:3px;
+		padding:8px 9px;
+	}
+
+	.browse-card.has-pic .browse-card-text {
+		padding-top:28px;
+	}
+
+	.browse-card-title {
+		font-size:12px;
+		-webkit-line-clamp:2;
+	}
+
+	.browse-card:not(.has-pic) .browse-card-title {
+		font-size:13px;
+		-webkit-line-clamp:3;
+	}
+
+	.browse-card-note,
+	.browse-card-meta > span {
+		-webkit-line-clamp:1;
+	}
+}
+
 .browse-nav {
 	display:flex;
 	align-items:baseline;
@@ -12877,14 +14568,12 @@ header {
 }
 
 .item-action-link:enabled:focus-visible,
-.page-header-watch:focus-visible,
 .page-header-disclosure:focus-visible {
 	text-decoration:underline;
 }
 
 @media (hover: hover) {
 	.item-action-link:enabled:hover,
-	.page-header-watch:hover,
 	.page-header-disclosure:hover {
 		text-decoration:underline;
 	}
@@ -13457,7 +15146,6 @@ header > .settings-panel {
 }
 
 .page-header-disclosure,
-.page-header-watch,
 .page-header-meta .item-action-link {
 	font:inherit;
 	color:inherit;
@@ -15053,11 +16741,11 @@ ${
 }
 </div>
 ${
-	hide ? `<div id="hide-menu" class="hide-menu" role="menu" hidden>
-<button type="button" role="menuitem" data-hide-scope="page">Disable on this page only</button>
-<button type="button" role="menuitem" data-hide-scope="site">Disable on all ${escapeHTML(siteKey())} pages</button>
-<div class="hide-menu-rule" data-pdf-reader-only hidden></div>
-<button id="close-pdf-reader" type="button" role="menuitem" data-pdf-reader-only hidden>Close the PDF reader</button>
+	hide ? `<div id="hide-menu" class="hide-menu dropdown" role="menu" hidden>
+<button class="dropdown-item" type="button" role="menuitem" data-hide-scope="page">Disable on this page only</button>
+<button class="dropdown-item" type="button" role="menuitem" data-hide-scope="site">Disable on all ${escapeHTML(siteKey())} pages</button>
+<div class="dropdown-rule" data-pdf-reader-only hidden></div>
+<button id="close-pdf-reader" class="dropdown-item" type="button" role="menuitem" data-pdf-reader-only hidden>Close the PDF reader</button>
 </div>` : ""
 }
 ${settings ? settingsPanelHTML() : ""}
@@ -18242,10 +19930,6 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		const hnURL = discussionURL(story);
 		const articleTarget = story.articleURL || story.url || hnURL || "";
 		const title = options.title ?? story.title;
-		const watchLink = options.watchable
-			? `<button class="item-action-link browse-watch-link" type="button">watch</button>`
-			: "";
-
 		const showTitle = options.showTitle !== false;
 		const showComposer = options.compose === true;
 		const storyAuthor = story.author ?? story.by;
@@ -18302,7 +19986,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 	}${
 		ageLabel ? escapeHTML(ageLabel) + " " : ""
 	}<span class="item-age" data-age-id="${escapeHTML(storyID)}">${timeAgo(storyCreatedAt)}</span><span class="story-vote-status" data-vote-status-id="${escapeHTML(storyID)}"></span>
-	${itemActionLinksHTML(storyID, story.source, watchLink, {
+	${itemActionLinksHTML(storyID, story.source, {
 		key: favoriteKeyFor({ ...story, id: storyID, url: articleTarget }),
 		url: articleTarget,
 		title: title || "",
@@ -18345,16 +20029,6 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		storyElement.dataset.storyId = storyID;
 
 		wrapLooseCommentText(storyElement.querySelector(".story-text"));
-
-		if (options.watchable) {
-			const address = pageAddress();
-
-			wireRowWatchLink(
-				storyElement.querySelector(".browse-watch-link"),
-				{ url: address, title: story.title || "", site: hostLabel(address) },
-				{ discussions: [story] },
-			);
-		}
 
 		container.appendChild(storyElement);
 
@@ -19619,9 +21293,13 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 
 		const storyID = discussion.id;
 
+		const isKept = isKeptComment(openCollectedDocument?.quotes, comment.key);
+
 		div.className = "comment";
 		div.dataset.commentId = comment.key;
 		div.dataset.storyId = String(storyID);
+		div.dataset.createdAt = String(comment.createdAt || 0);
+		div.classList.toggle("is-kept", isKept);
 
 		if (!comment.local && isNewComment(comment, seenTime)) {
 			div.classList.add("new-comment");
@@ -19670,7 +21348,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			permalink
 				? `<a class="item-age" data-age-id="${escapeHTML(commentID)}" target="_blank" rel="noopener noreferrer" href="${escapeHTML(permalink)}">${timeAgo(comment.createdAt)}</a>`
 				: `<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span>`
-		}<span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
+		}${isKept ? ' <span class="kept-mark">kept</span>' : ""}<span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
 
 		${
 				capabilities.reply
@@ -19689,7 +21367,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		${
 			isLocalSource
 				? ""
-				: itemActionLinksHTML(commentID, comment.source || "hn", "", {
+				: itemActionLinksHTML(commentID, comment.source || "hn", {
 						key: `${comment.source || "hn"}:${commentID}`,
 						url: discussion.articleURL || discussionURL(comment) || "",
 						focus: comment.key,
@@ -19700,6 +21378,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 						time: comment.createdAt || 0,
 						kind: "comment",
 						parent: String(comment.storyID || ""),
+						text: favoriteExcerpt(comment.bodyHTML, FAVORITE_TEXT_CHARS),
 					})
 		}
 
@@ -20069,7 +21748,6 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 				compose: false,
 				title: resolved,
 				showTitle: true,
-				watchable: !disambiguating,
 			});
 
 			if (block) {
@@ -20099,6 +21777,14 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 				stories.map(async (story) => [story.key, await visitSeenTime(story.key)]),
 			),
 		);
+
+		await loadOpenCollectedDocument();
+
+		if (generation !== sidebarGeneration) {
+			return;
+		}
+
+		await paintCollectionTag(ui, stories, seenTimes, { counted: false });
 
 		const notes = settings.notepad ? await loadNotes() : [];
 		const notesDiscussion = notesCollective(notes, pageAddress());
@@ -20225,6 +21911,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		reconcileWholeThreads(stories, ui);
 		refreshFavoriteControls().catch(console.error);
 		applyPendingFocus().catch(console.error);
+		await paintCollectionTag(ui, stories, seenTimes);
 
 		for (const story of stories) {
 			await markSeen(story.key);
@@ -20589,16 +22276,8 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 	stories.length > 1
 		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <span class="source-menu-anchor"><button type="button" class="page-header-disclosure" aria-expanded="false" aria-haspopup="true" aria-controls="source-menu">${escapeHTML(pluralize(stories.length, "discussion"))}</button>${sourceMenuHTML(stories)}</span><span class="page-header-sep">|</span>`
 		: ""
-}${
-	stories.length > 1
-		? `<button type="button" class="page-header-watch" aria-pressed="false">watch</button>${
-			pageFavorite ? `<span class="page-header-sep">|</span>${pageFavorite}` : ""
-		}`
-		: ""
-}</div>
+}${stories.length > 1 && pageFavorite ? pageFavorite : ""}</div>
 `;
-
-		wireWatchToggle(wrapper.querySelector(".page-header-watch"), page, stories);
 
 		const disclosure = wrapper.querySelector(".page-header-disclosure");
 
@@ -26985,11 +28664,6 @@ ${APP_ICON_CSS}
 	display:none;
 }
 
-.app-head-watch {
-	--head-fill:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 3.7c-3.2 0-5.6 2.6-6.4 4.3.8 1.7 3.2 4.3 6.4 4.3s5.6-2.6 6.4-4.3C13.6 6.3 11.2 3.7 8 3.7zM9.2 8a1.2 1.2 0 1 1 -2.4 0a1.2 1.2 0 1 1 2.4 0z' fill='black' fill-rule='evenodd'/%3E%3Cpath d='M8 3.7c-3.2 0-5.6 2.6-6.4 4.3.8 1.7 3.2 4.3 6.4 4.3s5.6-2.6 6.4-4.3C13.6 6.3 11.2 3.7 8 3.7z' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E");
-	--head-outline:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 3.7c-3.2 0-5.6 2.6-6.4 4.3.8 1.7 3.2 4.3 6.4 4.3s5.6-2.6 6.4-4.3C13.6 6.3 11.2 3.7 8 3.7z' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='8' cy='8' r='1.9' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-}
-
 #app-article-actions [data-item-action="fave"] {
 	--head-fill:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.8 2.5h6.4a.8.8 0 0 1 .8.8v10.1L8 10.8l-4 2.6V3.3a.8.8 0 0 1 .8-.8z' fill='black' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 	--head-outline:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.8 2.5h6.4a.8.8 0 0 1 .8.8v10.1L8 10.8l-4 2.6V3.3a.8.8 0 0 1 .8-.8z' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -27252,6 +28926,15 @@ ${SETTINGS_MODAL_CSS}
 	padding:8px 12px 9px 8px;
 }
 
+#app-list-body .bc-wall {
+	padding:8px 12px 0;
+}
+
+#app-list-body .browse-card.is-open {
+	outline:2px solid var(--text);
+	outline-offset:2px;
+}
+
 #app-list-body .app-row {
 	cursor:pointer;
 }
@@ -27259,6 +28942,10 @@ ${SETTINGS_MODAL_CSS}
 @media (hover: hover) {
 	#app-list-body .app-row:not(.is-open):hover {
 		background:var(--hover-tint);
+	}
+
+	#app-list-body .browse-card.app-row:hover {
+		background:var(--card-bg, var(--surface));
 	}
 }
 
@@ -27301,6 +28988,10 @@ ${SETTINGS_MODAL_CSS}
 
 #app-list-body .app-row:not(.is-unread) .browse-title-link {
 	color:var(--muted);
+}
+
+#app-list-body .browse-card.app-row .browse-title-link {
+	color:inherit;
 }
 
 .app-list-pull {
@@ -28469,7 +30160,6 @@ header .item-action-link {
 	}
 
 	#app-rail [data-app-view="queue"],
-	#app-rail [data-app-view="watching"],
 	#app-rail [data-app-view="collection"] {
 		display:none;
 	}
@@ -28982,8 +30672,7 @@ header .item-action-link {
 	#app-list-body .story-meta .browse-save-link,
 	#app-list-body .story-meta .item-action-link,
 	#app-list-body .story-meta .browse-hide-link,
-	#app-list-body .story-meta .browse-comments-total,
-	#app-list-body .story-meta .browse-watch-link {
+	#app-list-body .story-meta .browse-comments-total {
 		display:none;
 	}
 
@@ -29212,11 +30901,6 @@ ${SETTINGS_MODAL_PHONE_CSS}
 			icon: APP_ICON('<rect x="2.5" y="3" width="11" height="2.6" rx="1.3" fill="currentColor"/><rect x="2.5" y="6.7" width="11" height="2.6" rx="1.3" fill="currentColor"/><rect x="2.5" y="10.4" width="11" height="2.6" rx="1.3" fill="currentColor"/>'),
 		},
 		{
-			id: "watching",
-			label: "Watching",
-			icon: APP_ICON('<path fill="currentColor" fill-rule="evenodd" d="M8 3.3c-3.6 0-6.2 2.9-7 4.7.8 1.8 3.4 4.7 7 4.7s6.2-2.9 7-4.7c-.8-1.8-3.4-4.7-7-4.7zm0 2.3a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z"/>'),
-		},
-		{
 			id: "collection",
 			label: "Collection",
 			icon: APP_ICON('<path d="M4.6 1.8h6.8a1.1 1.1 0 0 1 1.1 1.1v11.3L8 11.2l-4.5 3V2.9a1.1 1.1 0 0 1 1.1-1.1z" fill="currentColor"/>'),
@@ -29249,8 +30933,6 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M9.6 2.4h4v4M13.6 2.4 7.8 8.2M11.6 9.4v3.1a1.1 1.1 0 0 1-1.1 1.1H3.5a1.1 1.1 0 0 1-1.1-1.1V5.5a1.1 1.1 0 0 1 1.1-1.1h3.1" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 	const APP_HEAD_TITLES = {
-		watch: "Watch",
-		unwatch: "Stop watching",
 		favorite: "Favorite",
 		unfavorite: "Unfavorite",
 	};
@@ -29295,7 +30977,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		),
 	};
 
-	const APP_FILLED_VIEWS = ["queue", "watching", "collection"];
+	const APP_FILLED_VIEWS = ["queue", "collection"];
 
 	function appRailButtonHTML(id, label, inner) {
 		return `<button class="rail-button${APP_FILLED_VIEWS.includes(id) ? " rail-empty" : ""}" type="button" data-app-view="${escapeHTML(id)}" data-tip="${escapeHTML(label)}" aria-label="${escapeHTML(label)}" aria-pressed="false"><span class="rail-icon">${inner}<span class="rail-badge" data-app-badge="${escapeHTML(id)}"></span></span><span class="rail-label" aria-hidden="true">${escapeHTML(label)}</span></button>`;
@@ -30388,6 +32070,10 @@ ${settingsModalHTML()}
 		probe.src = address;
 	}
 
+	function openAppRowMenuButtons(row) {
+		return [...row.querySelectorAll(".story-meta button")].filter((link) => link.textContent.trim());
+	}
+
 	function openAppRowMenu(row, button) {
 		const shadow = appState?.ui.shadow;
 		const menu = shadow?.querySelector("#app-row-menu");
@@ -30401,7 +32087,7 @@ ${settingsModalHTML()}
 			return;
 		}
 
-		const links = [...row.querySelectorAll(".story-meta button")].filter((link) => link.textContent.trim());
+		const links = openAppRowMenuButtons(row);
 
 		menu.replaceChildren(
 			...links.map((link) => {
@@ -31030,7 +32716,7 @@ ${settingsModalHTML()}
 		}
 
 		for (const item of state.savedIndex) {
-			entries.push({ group: "Saved", title: item.title, note: item.note, keys: `${item.title} ${item.note}`, run: () => openAppURL(item.url) });
+			entries.push({ group: "Saved", title: item.title, note: item.note, keys: item.keys || `${item.title} ${item.note}`, run: () => openAppURL(item.url) });
 		}
 
 		const panel = shadow.querySelector("#settings-panel");
@@ -31061,18 +32747,18 @@ ${settingsModalHTML()}
 			return;
 		}
 
-		const [queue, favorites] = await Promise.all([loadQueue(), loadFavoriteEntries()]);
+		const [queue, documents] = await Promise.all([loadQueue(), loadCollectionDocuments()]);
 		const index = [];
 
 		for (const entry of queue) {
 			if (entry.title && entry.url) {
-				index.push({ title: entry.title, note: entry.site ? `${entry.site} · Queue` : "Queue", url: entry.url });
+				index.push({ title: entry.title, note: entry.site ? `${entry.site} · Queue` : "Queue", url: entry.url, keys: `${entry.title} ${entry.site || ""} queue` });
 			}
 		}
 
-		for (const entry of favorites) {
-			if (entry.title && entry.url) {
-				index.push({ title: entry.title, note: entry.site ? `${entry.site} · Collection` : "Collection", url: entry.url });
+		for (const doc of documents) {
+			if (doc.title && doc.url) {
+				index.push({ title: doc.title, note: doc.site ? `${doc.site} · Collection` : "Collection", url: doc.url, keys: `${collectionHaystack(doc)} collection` });
 			}
 		}
 
@@ -31270,8 +32956,8 @@ ${frontPageChooserHTML()}
 			resetAppListScroll();
 		}
 
-		if (view === "queue" || view === "watching") {
-			await renderQueueView(ui, list, { part: view === "queue" ? "queued" : "watching" });
+		if (view === "queue") {
+			await renderQueueView(ui, list);
 		} else if (view === "collection") {
 			await renderCollectionView(ui, list);
 		} else if (state.noSources) {
@@ -31349,11 +33035,11 @@ ${frontPageChooserHTML()}
 	function decorateAppRows(list) {
 		fillAppRowThumbs(list);
 
-		for (const element of list.querySelectorAll(".browse-row")) {
+		for (const element of list.querySelectorAll(".browse-row, .browse-card")) {
 			const href = element.querySelector(".browse-title-link")?.getAttribute("href") || "";
 
 			element.classList.add("app-row");
-			element.dataset.appKey = normalizeURL(href) || href;
+			element.dataset.appKey = element.dataset.documentKey || normalizeURL(href) || href;
 			element.classList.toggle(
 				"is-open",
 				Boolean(appState.open) && element.dataset.appKey === appState.open.key,
@@ -31371,33 +33057,31 @@ ${frontPageChooserHTML()}
 		}
 
 		const seq = ++state.countSeq;
-		const [queue, watches, favorites, notes] = await Promise.all([
+		const [queue, collected, favorites, notes] = await Promise.all([
 			loadQueue(),
-			loadWatches(),
+			loadCollected(),
 			loadFavoriteEntries(),
-			loadCollectedNotes(),
+			loadNotedIndex(),
 		]);
 
 		if (seq !== state.countSeq) {
 			return;
 		}
 
-		const { queued, watched } = splitQueueEntries(queue, watches);
 		const counts = appViewCounts(state.rows, state.seen, state.sourceIds, state.topicIds || []);
 
 		paintAppRailFill({
-			queue: queued.length > 0,
-			watching: watched.length > 0,
-			collection: favorites.length + notes.length > 0,
+			queue: queue.length > 0,
+			collection: favorites.length + notes.length + collected.length > 0,
 		});
 		const badges = {
 			unread: counts.unread,
 			all: counts.all,
-			queue: unreadQueueCount(queued),
-			watching: unseenWatchCount(watches),
+			queue: unreadQueueCount(queue),
+			collection: freshCollectedCount(collected),
 		};
 
-		badges.saved = badges.queue + badges.watching;
+		badges.saved = badges.queue + badges.collection;
 
 		for (const id of state.sourceIds) {
 			badges["source:" + id] = counts.sources[id];
@@ -31515,6 +33199,14 @@ ${frontPageChooserHTML()}
 		}
 
 		state.open = { url, key, row: entry };
+		markCollectedArrival(url)
+			.then((marked) => {
+				if (marked) {
+					settleCardFreshness(key);
+					return paintAppCounts();
+				}
+			})
+			.catch(console.error);
 		const shell = state.ui.shadow.querySelector("#app");
 
 		if (!shell.classList.contains("has-story")) {
@@ -31546,16 +33238,17 @@ ${frontPageChooserHTML()}
 		paintAppChrome();
 
 		markQueueArrival(url).catch(console.error);
-		markWatchArrival(url).catch(console.error);
 
 		const keys = rowDiscussionKeys(entry);
+		const previousSeen = keys.length ? await markManySeen(keys) : {};
+
+		state.openSeen = previousSeen;
 
 		if (keys.length) {
-			await markManySeen(keys);
 			await refreshAppSeen();
 		}
 
-		await openAppDiscussion(entry, { focus });
+		await openAppDiscussion(entry, { focus, previousSeen });
 	}
 
 	function openAppURL(url) {
@@ -31589,7 +33282,7 @@ ${frontPageChooserHTML()}
 		appState.ui.shadow.querySelector("#app-discussion-sort")?.replaceChildren();
 	}
 
-	async function openAppDiscussion(row, { focus = "" } = {}) {
+	async function openAppDiscussion(row, { focus = "", previousSeen = appState?.openSeen || {} } = {}) {
 		const state = appState;
 		const ui = state.ui;
 		const url = state.open?.url;
@@ -31598,6 +33291,11 @@ ${frontPageChooserHTML()}
 		clearArticleAnnotations();
 		stopObservingNewComments();
 		forgetVisitSeenTimes();
+
+		for (const [key, value] of Object.entries(previousSeen)) {
+			visitSeenTimes.set(key, Number(value) || 0);
+		}
+
 		renderedComments = [];
 		activeCommentFilter = null;
 		sidebarHasDiscussion = true;
@@ -31695,9 +33393,15 @@ ${frontPageChooserHTML()}
 					source: story.source,
 					id: story.id,
 				})}`
-			: "";
+			: favoriteButtonHTML({
+					key: normalizeURL(story.url) || "",
+					url: story.url,
+					title: story.title || "",
+					site: story.site || hostLabel(story.url),
+					kind: "discussion",
+				});
 
-		holder.innerHTML = `<span class="app-head-group app-head-reading">${votes}<button class="item-action-link app-head-icon app-head-watch" type="button">watch</button>${favorite}</span>`;
+		holder.innerHTML = `<span class="app-head-group app-head-reading">${votes}${favorite}</span>`;
 		holder.querySelector('[data-item-action="fave"]')?.classList.add("app-head-icon");
 
 		const titleActions = () => {
@@ -31732,10 +33436,6 @@ ${frontPageChooserHTML()}
 				})
 				.catch(console.error);
 		}
-
-		const relist = () => renderAppList().catch(console.error);
-
-		wireRowWatchLink(holder.querySelector(".app-head-watch"), story, { reload: relist });
 
 		refreshFavoriteControls().catch(console.error);
 	}
@@ -32150,6 +33850,7 @@ ${frontPageChooserHTML()}
 
 		if (response.ok && !probe.pdf && (article.http || probe.refused || article.reply)) {
 			article.reader = extractReaderArticle(response.text, response.finalUrl || article.url);
+			rememberLookIfMissing(article.url, lookFromHTML(response.text, response.finalUrl || article.url)).catch(console.error);
 			probe.readerChars = article.reader?.chars || 0;
 		}
 
@@ -32586,6 +34287,10 @@ ${frontPageChooserHTML()}
 
 		setAppSubject({ url, canonical: String(data.canonical || ""), title: title || article.title });
 		noteAppPreview(article.url, data.preview);
+
+		if (data.look) {
+			rememberLook(article.url, data.look).catch(console.error);
+		}
 
 		if (appState.open && !sameURL(pageAddress(), before)) {
 			appState.open.url = url;
@@ -33062,6 +34767,7 @@ ${frontPageChooserHTML()}
 					url: location.href,
 					canonical: canonicalHint(),
 					preview: document.querySelector('meta[property="og:image"], meta[name="twitter:image"]')?.getAttribute("content") || "",
+					look: pageLook(document),
 					title: pageTitle(),
 					visible: frameVisibility(),
 					image: /^image\//i.test(document.contentType || ""),
@@ -34001,17 +35707,6 @@ ${frontPageChooserHTML()}
 		await save(STORAGE.seen, restoreSeen(seen, previous));
 	}
 
-	function splitQueueEntries(entries, watching) {
-		const watchFor = (entry) =>
-			watching.find((watch) => queueEntryMatchesWatch(entry, watch)) || null;
-
-		return {
-			queued: entries.filter((entry) => !watchFor(entry)),
-			watched: entries.filter((entry) => watchFor(entry)),
-			watchFor,
-		};
-	}
-
 	// -------------------------
 	// Soft navigation
 	// -------------------------
@@ -34178,7 +35873,8 @@ ${frontPageChooserHTML()}
 		sweepBridgePayloads().catch(console.error);
 
 		markQueueArrival().catch(console.error);
-		markWatchArrival().catch(console.error);
+		markCollectedArrival().catch(console.error);
+		captureLookOnArrival().catch(console.error);
 
 		await ensurePdfReader(settings);
 		await loadPdfTitle(pdfViewerApp());
@@ -34223,7 +35919,7 @@ ${frontPageChooserHTML()}
 
 		const found = await discoverAll(pageAddresses(), settings);
 
-		scheduleWatchPoll(settings);
+		scheduleCollectedChecks(settings);
 
 		const recoverable = arrivedFromClick && last.source === "hn";
 
