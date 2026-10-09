@@ -994,6 +994,78 @@
 		);
 	}
 
+	function fileSavedItems(saved, notedIndex, folders, now) {
+		const before = new Set((Array.isArray(folders) ? folders : []).map((folder) => folder?.key));
+		let list = (Array.isArray(folders) ? folders : [])
+			.filter((folder) => folder?.key)
+			.map((folder) => (Array.isArray(folder.addresses) && folder.addresses[0] === folder.key ? folder : { ...folder, addresses: [...new Set([folder.key, ...(folder.addresses || [])])] }));
+		const orphans = [];
+		const fileTo = (link, title, at) => {
+			const placed = fileInFolder(list, { link, title, addresses: [] }, at);
+
+			list = placed.folders;
+
+			return placed.key;
+		};
+		const items = (Array.isArray(saved) ? saved : []).map((entry) => {
+			if (!entry?.key || entry.page) {
+				return entry;
+			}
+
+			const kind = entry.kind || "discussion";
+			const link = /^https?:\/\//i.test(String(entry.url || "")) ? entry.url : kind === "discussion" ? threadAddress(entry.source, entry.id) : "";
+
+			if (!link) {
+				if (kind === "comment") {
+					orphans.push(entry.key);
+				}
+
+				return entry;
+			}
+
+			const page = fileTo(link, kind === "comment" ? entry.context || entry.title : entry.title, Number(entry.addedAt) || now);
+
+			return page ? { ...entry, page, url: entry.url || link } : entry;
+		});
+		const index = (Array.isArray(notedIndex) ? notedIndex : []).map((entry) => {
+			if (!entry?.key || entry.page || !/^https?:\/\//i.test(String(entry.url || ""))) {
+				return entry;
+			}
+
+			const page = fileTo(entry.url, entry.title, Number(entry.updated) || now);
+
+			return page ? { ...entry, page } : entry;
+		});
+
+		list = list.map((folder) => (before.has(folder.key) ? folder : { ...folder, viewedAt: 0, lastViewedAt: null }));
+
+		const filed = new Set([
+			...items.filter((entry) => entry?.key).map((entry) => savedFolderKey(entry, list)),
+			...notedDocuments(index).map((entry) => notedFolderKey(entry, list)),
+		]);
+		const pages = list
+			.filter((folder) => !filed.has(folder.key))
+			.map((folder) => ({
+				key: folder.key,
+				url: folder.url || "",
+				title: folder.title || "",
+				site: folder.site || "",
+				kind: "discussion",
+				context: "",
+				by: "",
+				time: 0,
+				focus: "",
+				source: "",
+				id: "",
+				parent: "",
+				text: "",
+				addedAt: Number(folder.addedAt) || now,
+				page: folder.key,
+			}));
+
+		return { saved: [...items, ...pages], notedIndex: index, folders: list, orphans };
+	}
+
 	function documentExcerpt(doc) {
 		const latest = [
 			...doc.quotes.map((quote) => ({
@@ -1809,6 +1881,51 @@
 	}
 
 	const mutateCollected = serializeMutations(loadCollected, saveCollected);
+
+	const COLLECTION_FILED_KEY = "HNewhere:collection_filed";
+
+	async function fileSavedOnce() {
+		if (await load(COLLECTION_FILED_KEY, false)) {
+			return;
+		}
+
+		await loadCollected();
+
+		const read = async (key) => {
+			try {
+				const value = (await GM.getValue(key, null)) ?? [];
+
+				return Array.isArray(value) ? { ok: true, value } : { ok: false };
+			} catch {
+				return { ok: false };
+			}
+		};
+		const [folders, saved, index] = await Promise.all([
+			read(STORAGE.collected),
+			read(STORAGE.saved),
+			read(NOTES_INDEX_KEY),
+		]);
+
+		if (!folders.ok || !saved.ok || !index.ok) {
+			return;
+		}
+
+		const filed = fileSavedItems(saved.value, index.value, folders.value, Date.now());
+
+		if (JSON.stringify(filed.folders) !== JSON.stringify(folders.value)) {
+			await saveCollected(filed.folders);
+		}
+
+		if (JSON.stringify(filed.saved) !== JSON.stringify(saved.value)) {
+			await storeSavedItems(filed.saved);
+		}
+
+		if (JSON.stringify(filed.notedIndex) !== JSON.stringify(index.value)) {
+			await save(NOTES_INDEX_KEY, filed.notedIndex);
+		}
+
+		await save(COLLECTION_FILED_KEY, true);
+	}
 
 	async function loadSiteWidth() {
 		const widths = await load(STORAGE.widths, {});
@@ -36104,6 +36221,8 @@ ${frontPageChooserHTML()}
 		await migrateStorage();
 		await migrateSourceKeys();
 		await migrateQueue();
+
+		await fileSavedOnce().catch(console.error);
 
 		const bridge = writeBridgeForHost(writeBridges(), location.hostname);
 		const onHN = location.hostname === "news.ycombinator.com";
