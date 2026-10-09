@@ -1066,6 +1066,84 @@
 		return { saved: [...items, ...pages], notedIndex: index, folders: list, orphans };
 	}
 
+	const ORPHAN_TRACES_PER_LOAD = 6;
+	const ORPHAN_TRACE_LIMIT = 5;
+
+	function orphanedComments(saved) {
+		return (Array.isArray(saved) ? saved : []).filter(
+			(entry) => entry?.kind === "comment" && !entry.page && !/^https?:\/\//i.test(String(entry.url || "")) && (Number(entry.traceTries) || 0) < ORPHAN_TRACE_LIMIT,
+		);
+	}
+
+	function hnStoryOfItem(item) {
+		const id = Number(item?.story_id);
+
+		return Number.isFinite(id) && id > 0 ? String(id) : "";
+	}
+
+	function lobstersStoryOfComment(comment) {
+		return /\/s\/([A-Za-z0-9]+)/.exec(String(comment?.url || ""))?.[1] || "";
+	}
+
+	function lemmyPostOfComment(view) {
+		const post = view?.comment_view?.post;
+
+		return post?.id ? { id: String(post.id), url: String(post.url || "") } : null;
+	}
+
+	async function traceOrphanLink(entry, saved, folders, get = request) {
+		const held = (key) => {
+			const thread = (Array.isArray(saved) ? saved : []).find((each) => each?.key === key && (each.kind || "discussion") === "discussion");
+
+			return thread ? savedFolderKey(thread, folders) : "";
+		};
+		const id = encodeURIComponent(String(entry?.id || ""));
+
+		if (!id) {
+			return null;
+		}
+
+		if (entry.source === "hn") {
+			const story = hnStoryOfItem(await get(`https://hn.algolia.com/api/v1/items/${id}`));
+
+			if (!story) {
+				return null;
+			}
+
+			if (held(`hn:${story}`)) {
+				return { page: held(`hn:${story}`), thread: story };
+			}
+
+			const item = await get(`https://hacker-news.firebaseio.com/v0/item/${story}.json`);
+
+			return item ? { link: /^https?:\/\//i.test(String(item.url || "")) ? item.url : threadAddress("hn", story), title: item.title || entry.context || "", thread: story } : null;
+		}
+
+		if (entry.source === "lobsters") {
+			const story = lobstersStoryOfComment(await get(`https://lobste.rs/c/${id}.json`));
+
+			if (!story) {
+				return null;
+			}
+
+			if (held(`lobsters:${story}`)) {
+				return { page: held(`lobsters:${story}`), thread: story };
+			}
+
+			const item = await get(`https://lobste.rs/s/${story}.json`);
+
+			return item ? { link: /^https?:\/\//i.test(String(item.url || "")) ? item.url : threadAddress("lobsters", story), title: item.title || entry.context || "", thread: story } : null;
+		}
+
+		if (entry.source === "lemmy") {
+			const post = lemmyPostOfComment(await get(`https://lemmy.world/api/v3/comment?id=${id}`));
+
+			return post ? { link: /^https?:\/\//i.test(post.url) ? post.url : threadAddress("lemmy", post.id), title: entry.context || "", thread: post.id } : null;
+		}
+
+		return null;
+	}
+
 	function documentExcerpt(doc) {
 		const latest = [
 			...doc.quotes.map((quote) => ({
@@ -1925,6 +2003,50 @@
 		}
 
 		await save(COLLECTION_FILED_KEY, true);
+	}
+
+	const orphanTraceTried = new Set();
+
+	async function traceOrphanedComments() {
+		const [saved, folders, settings] = await Promise.all([loadSavedItems(), loadCollected(), loadSettings()]);
+		const on = new Set(enabledSources(settings).map((source) => source.id));
+		const due = orphanedComments(saved).filter((entry) => on.has(entry.source) && !orphanTraceTried.has(entry.key)).slice(0, ORPHAN_TRACES_PER_LOAD);
+		let traced = false;
+
+		for (const entry of due) {
+			orphanTraceTried.add(entry.key);
+		}
+
+		for (const entry of due) {
+			const found = await traceOrphanLink(entry, saved, folders).catch(() => null);
+
+			if (found && !found.page && !(await loadSavedItems()).some((each) => each.key === entry.key)) {
+				continue;
+			}
+
+			const page = found ? found.page || (await fileSaved({ row: true, link: found.link, title: found.title, addresses: [] })) : "";
+			const url = found?.link || (await loadCollected()).find((each) => each.key === page)?.url || "";
+			const current = await loadSavedItems();
+
+			if (!current.some((each) => each.key === entry.key)) {
+				continue;
+			}
+
+			await storeSavedItems(
+				current.map((each) =>
+					each.key !== entry.key
+						? each
+						: page
+							? { ...each, page, url: each.url || url, parent: each.parent || found.thread }
+							: { ...each, traceTries: (Number(each.traceTries) || 0) + 1 },
+				),
+			);
+			traced = traced || Boolean(page);
+		}
+
+		if (traced) {
+			await refreshCollectionViews();
+		}
 	}
 
 	async function loadSiteWidth() {
@@ -31506,6 +31628,8 @@ ${settingsModalHTML()}
 	}
 
 	async function runAppPass() {
+		traceOrphanedComments().catch(console.error);
+
 		await documentReady();
 
 		const ui = await createSidebar({ appMode: true });
@@ -36293,6 +36417,7 @@ ${frontPageChooserHTML()}
 
 		markQueueArrival().catch(console.error);
 		markCollectedArrival().catch(console.error);
+		traceOrphanedComments().catch(console.error);
 		captureLookOnArrival().catch(console.error);
 
 		await ensurePdfReader(settings);
