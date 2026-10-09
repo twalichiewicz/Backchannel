@@ -817,6 +817,7 @@
 				id: item.id || "",
 				parent: item.parent || "",
 				text: item.text || "",
+				page: item.page || "",
 				addedAt: now,
 			},
 		];
@@ -959,6 +960,13 @@
 			key,
 			moves: new Map(),
 		};
+	}
+
+	function rowContext(item) {
+		const url = String(item?.url || "");
+		const link = (/^https?:\/\//i.test(url) ? url : "") || threadAddress(item?.source, item?.id);
+
+		return { row: true, link, title: item?.title || "", site: link ? hostLabel(link) : "", addresses: [] };
 	}
 
 	function repointFolders(entries, moves) {
@@ -1384,22 +1392,6 @@
 			icon: address(text(look.icon)),
 			site: plain(text(look.site)),
 			at: Number(look.at) || 0,
-		};
-	}
-
-	function collectedEntryFor(item) {
-		const url = String(item?.url || "");
-		const key = normalizeURL(url);
-
-		if (!key) {
-			return null;
-		}
-
-		return {
-			key,
-			url,
-			title: (item.kind === "comment" ? item.context || item.title : item.title) || "",
-			site: hostLabel(url),
 		};
 	}
 
@@ -1934,7 +1926,7 @@
 		return normalizeURL(story.url || "") || String(story.id ?? "");
 	}
 
-	function savedCovers(entry, item) {
+	function savedCovers(entry, item, folderKey = "", folders = []) {
 		if (!entry?.key || !item?.key) {
 			return false;
 		}
@@ -1948,6 +1940,10 @@
 			(item.kind || "discussion") !== "discussion"
 		) {
 			return false;
+		}
+
+		if (folderKey) {
+			return savedFolderKey(entry, folders) === folderKey;
 		}
 
 		const page = normalizeURL(item.url || "");
@@ -1976,7 +1972,7 @@
       data-save-time="${escapeHTML(String(about.time || ""))}"
       data-save-focus="${escapeHTML(about.focus || "")}"
       data-save-parent="${escapeHTML(about.parent || "")}"
-      data-save-text="${escapeHTML(about.text || "")}">save</button>`;
+      data-save-text="${escapeHTML(about.text || "")}"${about.row ? ' data-save-row="1"' : ""}>save</button>`;
 	}
 
 	function itemActionLinksHTML(itemId, sourceID, about = {}) {
@@ -1996,7 +1992,7 @@
       ${button}`;
 	}
 
-	function paintSaveControls(root, entries) {
+	function paintSaveControls(root, entries, folderOf = () => "", folders = []) {
 		const list = Array.isArray(entries) ? entries : [];
 
 		for (const button of root.querySelectorAll(`[data-item-action="save"]`)) {
@@ -2005,7 +2001,8 @@
 				url: button.dataset.saveUrl || "",
 				kind: button.dataset.saveKind || "discussion",
 			};
-			const on = list.some((entry) => savedCovers(entry, item));
+			const folder = folderOf(button);
+			const on = list.some((entry) => savedCovers(entry, item, folder, folders));
 
 			button.textContent = on ? "unsave" : "save";
 			button.classList.toggle("item-action-on", on);
@@ -2014,32 +2011,151 @@
 
 	// #endregion hnewhere-test-export
 
-	async function refreshSaveControls() {
-		const root = sidebarUI?.shadow;
+	function openPageContext() {
+		const discussed = renderedDiscussions.map((story) => story?.articleURL || "").filter(Boolean);
 
-		if (root) {
-			paintSaveControls(root, await loadSavedItems());
+		if (appState) {
+			const open = appState.open;
+			const story = open?.row?.story || {};
+			const link = story.url || open?.url || "";
+
+			return {
+				link,
+				title: story.title || pageTitle(),
+				site: link ? hostLabel(link) : "",
+				addresses: [open?.key || "", open?.url || "", ...(appSubject ? pageAddresses() : []), ...discussed],
+			};
+		}
+
+		const here = pageAddress();
+
+		return { link: here, title: pageTitle(), site: hostLabel(here), addresses: [...pageAddresses(), pageHref(), ...discussed] };
+	}
+
+	function saveContextFor(button, open = null) {
+		if (button?.dataset.saveRow) {
+			return rowContext({
+				url: button.dataset.saveUrl || "",
+				title: button.dataset.saveTitle || "",
+				source: button.dataset.itemActionSource || "",
+				id: button.dataset.itemActionId || "",
+			});
+		}
+
+		return open || openPageContext();
+	}
+
+	function openPageKey() {
+		return appState ? appState.open?.key || "" : normalizeURL(pageAddress());
+	}
+
+	async function repointSaved(moves) {
+		const [saved, index] = await Promise.all([loadSavedItems(), load(NOTES_INDEX_KEY, null)]);
+		const nextSaved = repointFolders(saved, moves);
+
+		if (nextSaved !== saved) {
+			await storeSavedItems(nextSaved);
+		}
+
+		if (Array.isArray(index)) {
+			const nextIndex = repointFolders(index, moves);
+
+			if (nextIndex !== index) {
+				await save(NOTES_INDEX_KEY, nextIndex);
+			}
 		}
 	}
 
-	async function toggleSaved(item, settings) {
-		const entries = await loadSavedItems();
-		const kept = entries.filter((entry) => !savedCovers(entry, item));
-		const on = kept.length !== entries.length;
+	async function fileSaved(context) {
+		const viewed = !context?.row || addressKey(context?.link) === openPageKey();
+		let key = "";
+		let moves = new Map();
 
-		await storeSavedItems(
-			on ? kept : addToSaved(entries, item, Date.now()),
-		);
+		await mutateCollected((entries) => {
+			const filed = fileInFolder(entries, context, Date.now(), { viewed });
 
-		if (!on) {
-			await keepCollected(collectedEntryFor(item)).catch(console.error);
+			key = filed.key;
+			moves = filed.moves;
 
-			if (!appState && normalizeURL(pageHref()) === normalizeURL(String(item.url || ""))) {
-				rememberLook(pageHref(), pageLook(document)).catch(console.error);
-			}
+			return filed.folders === entries ? undefined : filed.folders;
+		});
+
+		if (moves.size) {
+			await repointSaved(moves);
 		}
 
-		return !on;
+		if (key) {
+			seedCollectedMarks(key).catch(console.error);
+		}
+
+		return key;
+	}
+
+	async function pruneFolders(keys) {
+		const wanted = [...new Set((Array.isArray(keys) ? keys : []).filter(Boolean))];
+
+		if (!wanted.length) {
+			return;
+		}
+
+		const [saved, index] = await Promise.all([loadSavedItems(), loadNotedIndex()]);
+		const gone = [];
+
+		await mutateCollected((entries) => {
+			const empty = wanted.filter((key) => entries.some((entry) => entry.key === key) && folderIsEmpty(key, saved, index, entries));
+
+			gone.push(...empty);
+
+			return empty.length ? entries.filter((entry) => !empty.includes(entry.key)) : undefined;
+		});
+
+		for (const key of gone) {
+			await forgetLook(key);
+		}
+	}
+
+	async function refreshSaveControls() {
+		const root = sidebarUI?.shadow;
+
+		if (!root) {
+			return;
+		}
+
+		const [entries, folders] = await Promise.all([loadSavedItems(), loadCollected()]);
+		const open = openPageContext();
+
+		paintSaveControls(
+			root,
+			entries,
+			(button) => {
+				const context = saveContextFor(button, open);
+
+				return folderKeyFor([context.link, ...context.addresses], folders);
+			},
+			folders,
+		);
+	}
+
+	async function toggleSaved(item, context = openPageContext()) {
+		const [entries, folders] = await Promise.all([loadSavedItems(), loadCollected()]);
+		const folder = folderKeyFor([context.link, ...(context.addresses || [])], folders);
+		const covering = entries.filter((entry) => savedCovers(entry, item, folder, folders));
+
+		if (covering.length) {
+			await storeSavedItems(entries.filter((entry) => !covering.includes(entry)));
+			await pruneFolders(covering.map((entry) => savedFolderKey(entry, folders)));
+			return false;
+		}
+
+		const page = await fileSaved(context);
+
+		await storeSavedItems(addToSaved(await loadSavedItems(), page ? { ...item, page } : item, Date.now()));
+
+		if (!appState && !context.row) {
+			rememberLook(pageHref(), pageLook(document)).catch(console.error);
+		}
+
+		return true;
 	}
 
 	async function submitItemAction(button) {
@@ -2067,7 +2183,7 @@
 				id: itemId,
 				parent: button.dataset.saveParent || "",
 				text: button.dataset.saveText || "",
-			});
+			}, saveContextFor(button));
 
 			button.textContent = on ? "unsave" : "save";
 			button.classList.toggle("item-action-on", on);
@@ -5983,18 +6099,20 @@ button {
 
 	async function saveNotes(notes, ref = noteDocumentRefForPage()) {
 		const kept = notes.slice(-NOTES_PER_DOCUMENT);
+		const page = kept.length ? await fileSaved(openPageContext()) : "";
 
 		await save(noteStorageKey(ref), { version: 1, notes: kept });
-		await rememberNotedDocument(ref, kept);
 
-		if (kept.length && ref.kind === "url") {
-			if (!appState) {
+		const previous = await rememberNotedDocument(ref, kept, page);
+
+		if (kept.length) {
+			if (!appState && ref.kind === "url") {
 				rememberLook(pageHref(), pageLook(document)).catch(console.error);
 			}
 
-			keepCollected(collectedEntryFor({ url: pageHref(), title: pageTitle() }))
-				.then(refreshCollectionTag)
-				.catch(console.error);
+			refreshCollectionTag().catch(console.error);
+		} else if (previous?.page) {
+			await pruneFolders([previous.page]);
 		}
 
 		return kept;
@@ -6022,12 +6140,13 @@ button {
 			excerpt: latestNoteExcerpt(notes),
 			count: notes.length,
 			updated: now,
+			page: here.page || previous?.page || "",
 		};
 	}
 
 	// #endregion hnewhere-test-export
 
-	async function rememberNotedDocument(ref, notes) {
+	async function rememberNotedDocument(ref, notes, page = "") {
 		const key = noteStorageKey(ref);
 		const stored = await load(NOTES_INDEX_KEY, []);
 		const list = Array.isArray(stored) ? stored : [];
@@ -6041,13 +6160,15 @@ button {
 					notes,
 					previous,
 					noteDocumentRefForPage(),
-					{ url: pageHref(), title: pageTitle() },
+					{ url: pageHref(), title: pageTitle(), page },
 					Date.now(),
 				),
 			);
 		}
 
 		await save(NOTES_INDEX_KEY, entries);
+
+		return previous || null;
 	}
 
 	// #region hnewhere-test-export
@@ -6440,25 +6561,6 @@ button {
 		await refreshQueueCount(sidebarUI.shadow);
 		await refreshNextUp(sidebarUI.shadow);
 		await refreshNotedCount(sidebarUI.shadow);
-	}
-
-	function collectedPageIsOpen(key) {
-		return Boolean(key) && key === normalizeURL(pageAddress());
-	}
-
-	async function collectPage(page) {
-		await mutateCollected((entries) =>
-			addToCollected(entries, page, Date.now(), { viewed: collectedPageIsOpen(page.key) }),
-		);
-		seedCollectedMarks(page.key).catch(console.error);
-	}
-
-	async function keepCollected(entry) {
-		if (!entry?.key || (await loadCollected()).some((each) => each.key === entry.key)) {
-			return;
-		}
-
-		await collectPage(entry);
 	}
 
 	async function seedCollectedMarks(key) {
@@ -10686,6 +10788,7 @@ html[data-backchannel-installed] .chin {
 				title: story.title,
 				site: story.site,
 				kind: "discussion",
+				row: true,
 			});
 
 		const rowMeta = () => {
@@ -11397,29 +11500,29 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 		if (known) {
 			await mutateCollected((entries) => withWatched(entries, doc.key, watched));
 		} else if (watched && doc.url) {
-			await collectPage({ key: doc.key, url: doc.url, title: doc.title || "", site: doc.site || "" });
+			await fileSaved({ row: true, link: doc.url, title: doc.title || "", site: doc.site || "", addresses: [doc.key] });
 		}
 	}
 
 	async function removeCollectedDocument(doc) {
 		const key = doc.key;
-		const notesKey = doc.noteDocument?.key || "";
-		const [saved, looks, index, notes] = await Promise.all([
+		const notesKeys = (doc.noteDocuments?.length ? doc.noteDocuments : doc.noteDocument ? [doc.noteDocument] : []).map((entry) => entry.key).filter(Boolean);
+		const [saved, folders, looks, index, ...notes] = await Promise.all([
 			loadSavedItems(),
+			loadCollected(),
 			loadLooks(),
 			load(NOTES_INDEX_KEY, []),
-			notesKey ? load(notesKey, null) : null,
+			...notesKeys.map((each) => load(each, null)),
 		]);
 		const notedIndex = Array.isArray(index) ? index : [];
+		const mine = (entry) => savedFolderKey(entry, folders) === key;
 		const snapshot = {
 			key,
 			url: doc.url || "",
-			saved: saved.filter((entry) => documentKeyFor(entry) === key),
+			saved: saved.filter(mine),
 			collected: [],
 			look: lookFor(looks, key),
-			notesKey,
-			notes,
-			indexEntry: notedIndex.find((entry) => entry?.key === notesKey) || null,
+			notes: notesKeys.map((each, i) => ({ key: each, value: notes[i], indexEntry: notedIndex.find((entry) => entry?.key === each) || null })),
 		};
 
 		await mutateCollected((entries) => {
@@ -11427,12 +11530,15 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 
 			return removeFromCollected(entries, key);
 		});
-		await storeSavedItems(saved.filter((entry) => documentKeyFor(entry) !== key));
+		await storeSavedItems(saved.filter((entry) => !mine(entry)));
 		await forgetLook(key);
 
-		if (notesKey) {
-			await save(notesKey, { version: 1, notes: [] });
-			await save(NOTES_INDEX_KEY, notedIndex.filter((entry) => entry?.key !== notesKey));
+		for (const each of notesKeys) {
+			await save(each, { version: 1, notes: [] });
+		}
+
+		if (notesKeys.length) {
+			await save(NOTES_INDEX_KEY, notedIndex.filter((entry) => !notesKeys.includes(entry?.key)));
 		}
 
 		return snapshot;
@@ -11452,12 +11558,18 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 			await rememberLook(snapshot.url, snapshot.look);
 		}
 
-		if (snapshot.notesKey && snapshot.notes) {
+		if (snapshot.notes?.length) {
 			const index = await load(NOTES_INDEX_KEY, []);
-			const rest = (Array.isArray(index) ? index : []).filter((entry) => entry?.key !== snapshot.notesKey);
+			const keys = snapshot.notes.map((each) => each.key);
+			const rest = (Array.isArray(index) ? index : []).filter((entry) => !keys.includes(entry?.key));
 
-			await save(snapshot.notesKey, snapshot.notes);
-			await save(NOTES_INDEX_KEY, snapshot.indexEntry ? [...rest, snapshot.indexEntry] : rest);
+			for (const each of snapshot.notes) {
+				if (each.value) {
+					await save(each.key, each.value);
+				}
+			}
+
+			await save(NOTES_INDEX_KEY, [...rest, ...snapshot.notes.map((each) => each.indexEntry).filter(Boolean)]);
 		}
 	}
 
@@ -33399,6 +33511,8 @@ ${frontPageChooserHTML()}
 		waiting.className = "browse-empty app-discussion-empty";
 		waiting.textContent = "Finding what people said…";
 		body.replaceChildren(waiting);
+		renderedDiscussions = [];
+		sidebarGeneration++;
 		appState.discussionSync = null;
 		appState.ui.shadow.querySelector("#app-discussion-meta")?.replaceChildren();
 		appState.ui.shadow.querySelector("#app-discussion-sort")?.replaceChildren();
@@ -35844,6 +35958,7 @@ ${frontPageChooserHTML()}
 
 		stopObservingNewComments();
 		forgetVisitSeenTimes();
+		renderedDiscussions = [];
 		renderedComments = [];
 		activeCommentFilter = null;
 	}
