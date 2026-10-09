@@ -487,6 +487,7 @@
 	let sidebar = null;
 	let sidebarUI = null;
 	let renderedDiscussions = [];
+	let renderedFor = "";
 	let opening = false;
 	let openingRun = null;
 	let sidebarGeneration = 0;
@@ -967,6 +968,13 @@
 		const link = (/^https?:\/\//i.test(url) ? url : "") || threadAddress(item?.source, item?.id);
 
 		return { row: true, link, title: item?.title || "", site: link ? hostLabel(link) : "", addresses: [] };
+	}
+
+	function sameDocumentAddress(a, b) {
+		const key = (value) => (/^https?:\/\//i.test(String(value || "")) ? normalizeURL(value).replace(/^www\./, "") : "");
+		const left = key(a);
+
+		return left !== "" && left === key(b);
 	}
 
 	function repointFolders(entries, moves) {
@@ -1461,9 +1469,9 @@
 		return (Array.isArray(entries) ? entries : []).filter(collectedIsFresh).length;
 	}
 
-	function arriveAtCollected(entries, url, now) {
+	function arriveAtCollected(entries, urls, now) {
 		const list = Array.isArray(entries) ? entries : [];
-		const key = normalizeURL(url || "");
+		const key = folderKeyFor(Array.isArray(urls) ? urls : [urls], list);
 		const before = key ? list.find((entry) => entry?.key === key) || null : null;
 
 		if (!before) {
@@ -1605,12 +1613,13 @@
 			loadNotedIndex(),
 			loadLooks(),
 		]);
+		const folder = collected.find((entry) => entry.key === folderKeyFor([url, ...pageAddresses()], collected));
 		const kept =
+			Boolean(folder) ||
 			saved.some((entry) => normalizeURL(entry.url || "") === key) ||
-			collected.some((entry) => entry.key === key) ||
 			index.some((entry) => normalizeURL(entry.url || "") === key);
 
-		if (!kept || lookFor(looks, key)) {
+		if (!kept || lookFor(looks, key) || (folder && folderAddresses(folder).some((each) => lookFor(looks, each)))) {
 			return;
 		}
 
@@ -1618,16 +1627,17 @@
 			await new Promise((resolve) => (page.defaultView || page).addEventListener("load", resolve, { once: true }));
 		}
 
-		await rememberLook(url, pageLook(page));
+		await rememberLook(folder?.url || url, pageLook(page));
 	}
 
-	let collectedArrival = { key: "", at: 0, before: Promise.resolve(null) };
+	let collectedArrival = { key: "", keys: new Set(), at: 0, before: Promise.resolve(null) };
 
-	function markCollectedArrival(url = pageAddress(), now = Date.now()) {
-		const key = normalizeURL(url || "");
+	function markCollectedArrival(urls = [...pageAddresses(), pageHref()], now = Date.now()) {
+		const addresses = (Array.isArray(urls) ? urls : [urls]).filter(Boolean);
+		const key = addressKey(addresses[0] || "");
 		let before = null;
 		const arrived = mutateCollected((entries) => {
-			const result = arriveAtCollected(entries, url, now);
+			const result = arriveAtCollected(entries, addresses, now);
 
 			before = result.before;
 
@@ -1637,7 +1647,7 @@
 			() => null,
 		);
 
-		collectedArrival = { key, at: now, before: arrived };
+		collectedArrival = { key, keys: new Set(addresses.map(addressKey)), at: now, before: arrived };
 
 		return arrived.then((entry) => collectedIsFresh(entry));
 	}
@@ -2012,24 +2022,27 @@
 	// #endregion hnewhere-test-export
 
 	function openPageContext() {
-		const discussed = renderedDiscussions.map((story) => story?.articleURL || "").filter(Boolean);
+		const held = renderedFor === openPageKey() ? renderedDiscussions.map((story) => story?.articleURL || "") : [];
+		const discussedBy = (own) => held.filter((url) => own.some((each) => sameDocumentAddress(url, each)));
 
 		if (appState) {
 			const open = appState.open;
 			const story = open?.row?.story || {};
 			const link = story.url || open?.url || "";
+			const reported = [open?.url || "", ...(appSubject ? pageAddresses() : [])].filter((address) => sameDocumentAddress(address, link));
 
 			return {
 				link,
 				title: story.title || pageTitle(),
 				site: link ? hostLabel(link) : "",
-				addresses: [open?.key || "", open?.url || "", ...(appSubject ? pageAddresses() : []), ...discussed],
+				addresses: [open?.key || "", ...reported, ...discussedBy([link, ...reported])],
 			};
 		}
 
 		const here = pageAddress();
+		const own = [...pageAddresses(), pageHref()];
 
-		return { link: here, title: pageTitle(), site: hostLabel(here), addresses: [...pageAddresses(), pageHref(), ...discussed] };
+		return { link: here, title: pageTitle(), site: hostLabel(here), addresses: [...own, ...discussedBy(own)] };
 	}
 
 	function saveContextFor(button, open = null) {
@@ -11943,6 +11956,19 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 			loadCollected(),
 			loadLooks(),
 		]);
+		const folder = wanted.map((key) => folderKeyFor([key], collected)).find(Boolean) || "";
+
+		if (folder) {
+			const noted = index.filter((entry) => notedFolderKey(entry, collected) === folder);
+			const mine = saved.filter((entry) => savedFolderKey(entry, collected) === folder);
+			const notesByKey = new Map(await Promise.all(noted.map(async (entry) => [entry.key, await load(entry.key, null)])));
+			const doc = collectDocuments(mine, noted, notesByKey, collected.filter((entry) => entry.key === folder), looks).find((each) => each.key === folder);
+
+			if (doc) {
+				return doc;
+			}
+		}
+
 		const keyOfIndex = (entry) => (entry.url ? documentKeyFor(entry) : `${entry.kind}:${entry.id}`);
 
 		for (const key of wanted) {
@@ -11969,6 +11995,37 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 		openCollectedDocument = await findCollectedDocument(collectedPageKeys());
 
 		return openCollectedDocument;
+	}
+
+	async function learnOpenPage() {
+		if (renderedDiscussions.length && renderedFor !== openPageKey()) {
+			return "";
+		}
+
+		const context = openPageContext();
+		const addresses = [context.link, ...context.addresses];
+
+		if (!folderKeyFor(addresses, await loadCollected())) {
+			return "";
+		}
+
+		let key = "";
+		let moves = new Map();
+
+		await mutateCollected((entries) => {
+			const settled = settleFolders(entries, addresses);
+
+			key = settled.key;
+			moves = settled.moves;
+
+			return settled.folders === entries ? undefined : settled.folders;
+		});
+
+		if (moves.size) {
+			await repointSaved(moves);
+		}
+
+		return key;
 	}
 
 	function paintSavedMarks(body) {
@@ -12031,7 +12088,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			return;
 		}
 
-		const arrival = doc && collectedArrival.key === doc.key ? collectedArrival : null;
+		const arrival = doc && [doc.key, ...folderAddresses(doc.collected)].some((each) => collectedArrival.keys?.has(each)) ? collectedArrival : null;
 		const before = arrival ? await arrival.before : null;
 
 		body.querySelector(":scope > .collection-tag")?.remove();
@@ -12335,7 +12392,9 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			refreshSaveControls().catch(console.error);
 		}
 
-		loadOpenCollectedDocument()
+		learnOpenPage()
+			.catch(console.error)
+			.then(loadOpenCollectedDocument)
 			.then(() => paintCollectionTag(ui, [], new Map()))
 			.catch(console.error);
 	}
@@ -21882,6 +21941,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 	}
 
 	async function renderDiscussions(stories, ui) {
+		renderedFor = stories === renderedDiscussions ? renderedFor : openPageKey();
 		renderedDiscussions = stories;
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
@@ -22012,6 +22072,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			),
 		);
 
+		await learnOpenPage().catch(console.error);
 		await loadOpenCollectedDocument();
 
 		if (generation !== sidebarGeneration) {
@@ -33512,6 +33573,7 @@ ${frontPageChooserHTML()}
 		waiting.textContent = "Finding what people said…";
 		body.replaceChildren(waiting);
 		renderedDiscussions = [];
+		renderedFor = "";
 		sidebarGeneration++;
 		appState.discussionSync = null;
 		appState.ui.shadow.querySelector("#app-discussion-meta")?.replaceChildren();
@@ -35959,6 +36021,7 @@ ${frontPageChooserHTML()}
 		stopObservingNewComments();
 		forgetVisitSeenTimes();
 		renderedDiscussions = [];
+		renderedFor = "";
 		renderedComments = [];
 		activeCommentFilter = null;
 	}
