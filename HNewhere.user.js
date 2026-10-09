@@ -838,6 +838,146 @@
 		return normalizeURL(entry?.url || "") || String(entry?.url || entry?.key || "");
 	}
 
+	const THREAD_ADDRESSES = {
+		hn: "https://news.ycombinator.com/item?id=",
+		lobsters: "https://lobste.rs/s/",
+		lemmy: "https://lemmy.world/post/",
+	};
+
+	function addressKey(value) {
+		const text = String(value || "");
+
+		return /^https?:\/\//i.test(text) ? normalizeURL(text) : text;
+	}
+
+	function threadAddress(source, id) {
+		const value = String(id ?? "");
+
+		return value && Object.prototype.hasOwnProperty.call(THREAD_ADDRESSES, source)
+			? THREAD_ADDRESSES[source] + encodeURIComponent(value)
+			: "";
+	}
+
+	function folderAddresses(folder) {
+		return [folder?.key, ...(Array.isArray(folder?.addresses) ? folder.addresses : [])].filter(Boolean);
+	}
+
+	function foldersMatching(addresses, folders) {
+		const wanted = new Set((Array.isArray(addresses) ? addresses : [addresses]).map(addressKey).filter(Boolean));
+
+		if (!wanted.size) {
+			return [];
+		}
+
+		return (Array.isArray(folders) ? folders : [])
+			.filter((folder) => folder?.key && folderAddresses(folder).some((each) => wanted.has(each)))
+			.sort((a, b) => (Number(a.addedAt) || 0) - (Number(b.addedAt) || 0));
+	}
+
+	function folderKeyFor(addresses, folders) {
+		return foldersMatching(addresses, folders)[0]?.key || "";
+	}
+
+	function savedFolderKey(entry, folders) {
+		return (
+			(entry?.page && folderKeyFor([entry.page], folders)) ||
+			folderKeyFor([entry?.url], folders) ||
+			entry?.page ||
+			documentKeyFor(entry)
+		);
+	}
+
+	function notedFolderKey(index, folders) {
+		return (
+			(index?.page && folderKeyFor([index.page], folders)) ||
+			(index?.url && folderKeyFor([index.url], folders)) ||
+			index?.page ||
+			(index?.url ? documentKeyFor(index) : `${index?.kind}:${index?.id}`)
+		);
+	}
+
+	function withAddresses(folder, addresses) {
+		const known = new Set(folderAddresses(folder));
+		const added = (Array.isArray(addresses) ? addresses : []).map(addressKey).filter((each) => each && !known.has(each));
+
+		return added.length ? { ...folder, addresses: [...new Set([...folderAddresses(folder), ...added])] } : folder;
+	}
+
+	function settleFolders(folders, addresses) {
+		const list = Array.isArray(folders) ? folders : [];
+		const [keep, ...rest] = foldersMatching(addresses, list);
+
+		if (!keep) {
+			return { folders: list, key: "", moves: new Map() };
+		}
+
+		const all = [keep, ...rest];
+		const pick = (field, choose) => {
+			const values = all.map((each) => Number(each[field])).filter((value) => value > 0);
+
+			return values.length ? choose(...values) : keep[field];
+		};
+		const joined = rest.length
+			? {
+					...keep,
+					addresses: [...new Set(all.flatMap(folderAddresses))],
+					addedAt: pick("addedAt", Math.min),
+					viewedAt: pick("viewedAt", Math.min),
+					lastViewedAt: pick("lastViewedAt", Math.max),
+				}
+			: keep;
+		const merged = withAddresses(joined, addresses);
+		const gone = new Set(rest.map((each) => each.key));
+
+		return {
+			folders: merged === keep ? list : list.filter((each) => !gone.has(each.key)).map((each) => (each === keep ? merged : each)),
+			key: keep.key,
+			moves: new Map(rest.map((each) => [each.key, keep.key])),
+		};
+	}
+
+	function fileInFolder(folders, context, now, { viewed = false } = {}) {
+		const list = Array.isArray(folders) ? folders : [];
+		const url = String(context?.link || "");
+		const addresses = [url, ...(Array.isArray(context?.addresses) ? context.addresses : [])];
+		const settled = settleFolders(list, addresses);
+
+		if (settled.key) {
+			return settled;
+		}
+
+		const key = /^https?:\/\//i.test(url) ? normalizeURL(url) : "";
+
+		if (!key) {
+			return settled;
+		}
+
+		return {
+			folders: addToCollected(list, { key, url, title: context.title || "", site: context.site || hostLabel(url) }, now, { viewed }).map((each) =>
+				each.key === key ? withAddresses({ ...each, addresses: [key] }, addresses) : each,
+			),
+			key,
+			moves: new Map(),
+		};
+	}
+
+	function repointFolders(entries, moves) {
+		const list = Array.isArray(entries) ? entries : [];
+
+		if (!moves?.size || !list.some((entry) => entry?.page && moves.has(entry.page))) {
+			return entries;
+		}
+
+		return list.map((entry) => (entry?.page && moves.has(entry.page) ? { ...entry, page: moves.get(entry.page) } : entry));
+	}
+
+	function folderIsEmpty(key, saved, notedIndex, folders) {
+		return (
+			!(Array.isArray(saved) ? saved : []).some((entry) => entry?.key && savedFolderKey(entry, folders) === key) &&
+			!notedDocuments(notedIndex).some((entry) => notedFolderKey(entry, folders) === key)
+		);
+	}
+
 	function documentExcerpt(doc) {
 		const latest = [
 			...doc.quotes.map((quote) => ({
@@ -854,6 +994,7 @@
 	}
 
 	function collectDocuments(saved, notedIndex, notesByKey, collected = [], looks = {}) {
+		const folders = Array.isArray(collected) ? collected : [];
 		const documents = new Map();
 
 		const documentFor = (key, url) => {
@@ -868,6 +1009,7 @@
 					quotes: [],
 					notes: [],
 					noteDocument: null,
+					noteDocuments: [],
 					excerpt: "",
 					collected: null,
 					fresh: false,
@@ -890,7 +1032,7 @@
 				continue;
 			}
 
-			const doc = documentFor(documentKeyFor(entry), entry.url);
+			const doc = documentFor(savedFolderKey(entry, folders), entry.url);
 
 			((entry.kind || "discussion") === "comment" ? doc.quotes : doc.discussions).push(entry);
 			doc.touched = Math.max(doc.touched, Number(entry.addedAt) || 0);
@@ -903,13 +1045,11 @@
 				continue;
 			}
 
-			const doc = documentFor(
-				index.url ? documentKeyFor(index) : `${index.kind}:${index.id}`,
-				index.url,
-			);
+			const doc = documentFor(notedFolderKey(index, folders), index.url);
 
-			doc.noteDocument = index;
-			doc.notes = [...notes].sort(
+			doc.noteDocument = doc.noteDocument || index;
+			doc.noteDocuments.push(index);
+			doc.notes = [...doc.notes, ...notes].sort(
 				(a, b) => (b.edited || b.created || 0) - (a.edited || a.created || 0),
 			);
 
@@ -920,13 +1060,14 @@
 			doc.touched = Math.max(doc.touched, Number(index.updated) || 0);
 		}
 
-		for (const entry of Array.isArray(collected) ? collected : []) {
+		for (const entry of folders) {
 			if (!entry?.key) {
 				continue;
 			}
 
 			const doc = documentFor(entry.key, entry.url);
 
+			doc.url = entry.url || doc.url;
 			doc.collected = entry;
 			doc.fresh = collectedIsFresh(entry);
 			doc.found = Number(entry.count) || 0;
@@ -942,7 +1083,7 @@
 				doc.url ||
 				doc.key;
 			doc.site = doc.url ? hostLabel(doc.url) : doc.collected?.site || "";
-			doc.look = lookFor(looks, doc.key);
+			doc.look = lookFor(looks, doc.key) || folderAddresses(doc.collected).map((each) => lookFor(looks, each)).find(Boolean) || null;
 			doc.excerpt = documentExcerpt(doc);
 		}
 
@@ -10913,7 +11054,7 @@ html[data-backchannel-installed] .chin {
 
 	function documentKindsLabel(doc) {
 		return [
-			[doc.discussions.length, "discussion"],
+			[doc.discussions.filter((entry) => entry.source).length, "discussion"],
 			[doc.quotes.length, "quote"],
 			[doc.notes.length, "note"],
 		]
