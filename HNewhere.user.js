@@ -10474,6 +10474,8 @@ html[data-backchannel-installed] .chin {
 		};
 		const primary = thumb(main);
 
+		primary.classList.add("app-article-disc");
+
 		if (down && main !== down) {
 			primary.title = `${main.title} · shift-click to downvote`;
 		}
@@ -29306,13 +29308,10 @@ ${APP_ICON_CSS}
 }
 
 .app-pane-middle {
-	flex:1 1 auto;
 	display:flex;
 	align-items:center;
 	justify-content:center;
-	gap:2px;
-	min-width:0;
-	overflow:hidden;
+	gap:6px;
 }
 
 .app-article-actions {
@@ -29328,6 +29327,7 @@ ${APP_ICON_CSS}
 #app-article-actions .app-head-votes {
 	display:inline-flex;
 	align-items:center;
+	width:auto;
 }
 
 #app-article-actions .app-head-votes.hidden {
@@ -29389,6 +29389,7 @@ ${APP_ICON_CSS}
 	z-index:30;
 	padding-top:8px;
 	transform:translateX(-50%);
+	pointer-events:auto;
 }
 
 #app-article-actions .app-vote-more[hidden] {
@@ -29407,21 +29408,7 @@ ${APP_ICON_CSS}
 .app-head-group {
 	display:inline-flex;
 	align-items:center;
-	gap:2px;
-}
-
-.app-head-sep {
-	margin:0 5px;
-	color:var(--meta);
-	font-size:11px;
-	line-height:1;
-	opacity:.55;
-	-webkit-user-select:none;
-	user-select:none;
-}
-
-.app-head-sep[hidden] {
-	display:none;
+	gap:6px;
 }
 
 #app-article-actions .item-action-link {
@@ -29440,10 +29427,9 @@ ${APP_ICON_CSS}
 }
 
 .app-view-toggle {
-	align-items:baseline;
+	display:block;
 	box-sizing:border-box;
-	padding-top:6px;
-	line-height:1;
+	line-height:24px;
 }
 
 #app-view-toggle[hidden] {
@@ -29528,41 +29514,46 @@ ${APP_ICON_CSS}
 	height:24px;
 	padding:0;
 	border:0;
-	border-radius:5px;
-	background:none;
-	color:var(--meta);
 	cursor:pointer;
-}
-
-.app-pane-toggle .pane-fill {
-	fill:var(--pressed-fill);
-}
-
-.app-pane-head > .app-pane-toggle {
-	gap:5px;
-	width:auto;
-	padding:0 6px;
-	font:inherit;
-	font-size:12px;
 }
 
 @media (min-width: 701px) {
 	#app-article > .app-pane-head {
-		display:grid;
-		grid-template-columns:1fr auto 1fr;
+		position:absolute;
+		top:0;
+		right:0;
+		left:0;
+		z-index:3;
+		display:block;
+		height:0;
+		padding:0;
+		border:0;
+		overflow:visible;
+	}
+
+	.app-pane-middle {
+		position:absolute;
+		top:5.5px;
+		right:0;
+		left:0;
+		pointer-events:none;
+	}
+
+	.app-pane-middle :is(button, a) {
+		pointer-events:auto;
 	}
 
 	#app-toggle-list {
-		justify-self:start;
+		position:absolute;
+		top:5.5px;
+		left:13.5px;
 	}
 
 	#app-toggle-discussion {
-		justify-self:end;
+		position:absolute;
+		top:5.5px;
+		right:13.5px;
 	}
-}
-
-.app-pane-toggle-label {
-	white-space:nowrap;
 }
 
 .app-wide-only {
@@ -29974,6 +29965,7 @@ ${SETTINGS_MODAL_CSS}
 }
 
 #app-article {
+	position:relative;
 	display:flex;
 	flex-direction:column;
 	min-width:0;
@@ -30705,6 +30697,49 @@ ${SETTINGS_MODAL_CSS}
 	}
 }
 
+.app-stack-button,
+#app #app-article .app-article-disc {
+	background:var(--surface);
+	box-shadow:0 0 0 1px var(--surface-border), 0 1px 2px rgba(0,0,0,.16), 0 6px 14px rgba(0,0,0,.16);
+	color:var(--surface-text);
+	--icon-on:var(--surface-text);
+}
+
+#app-bar-save[aria-pressed="true"],
+#app-bar-like[aria-pressed="true"],
+#app-bar-discussion[aria-pressed="true"],
+#app #app-article .app-article-disc:is(.item-action-on, .vote-button-active, [aria-expanded="true"]) {
+	background:var(--rail-bg);
+	box-shadow:0 1px 2px rgba(0,0,0,.16), 0 6px 14px rgba(0,0,0,.16);
+	color:var(--rail-fg);
+	--icon-on:var(--rail-fg);
+	--icon-fill:var(--rail-fg);
+}
+
+#app #app-article .app-article-disc {
+	border-radius:12px;
+}
+
+@media (hover: hover) {
+	#app #app-article .app-article-disc:hover:where(:not(:disabled)) {
+		background:linear-gradient(var(--hover-tint), var(--hover-tint)) var(--surface);
+	}
+
+	#app #app-article .app-article-disc:is(.item-action-on, .vote-button-active, [aria-expanded="true"]):hover {
+		background:linear-gradient(var(--hover-tint), var(--hover-tint)) var(--rail-bg);
+	}
+}
+
+#app #app-article .app-article-disc:active:where(:not(:disabled)) {
+	background:linear-gradient(var(--active-tint), var(--active-tint)) var(--surface);
+	--pressed-layer:none;
+}
+
+#app #app-article .app-article-disc:is(.item-action-on, .vote-button-active, [aria-expanded="true"]):active {
+	background:linear-gradient(var(--active-tint), var(--active-tint)) var(--rail-bg);
+	--pressed-layer:block;
+}
+
 #app-mark-read circle {
 	fill:var(--pressed-fill);
 }
@@ -31037,10 +31072,6 @@ header .item-action-link {
 		padding:0;
 		border:0;
 		border-radius:18px;
-		background:var(--surface);
-		box-shadow:0 0 0 1px var(--surface-border), 0 1px 2px rgba(0,0,0,.16), 0 6px 14px rgba(0,0,0,.16);
-		color:var(--surface-text);
-		--icon-on:var(--surface-text);
 		font:inherit;
 		cursor:pointer;
 		-webkit-tap-highlight-color:transparent;
@@ -31060,15 +31091,6 @@ header .item-action-link {
 
 	.app-stack-button[hidden] {
 		display:none;
-	}
-
-	#app-bar-save[aria-pressed="true"],
-	#app-bar-like[aria-pressed="true"],
-	#app-bar-discussion[aria-pressed="true"] {
-		background:var(--rail-bg);
-		box-shadow:0 1px 2px rgba(0,0,0,.16), 0 6px 14px rgba(0,0,0,.16);
-		color:var(--rail-fg);
-		--icon-on:var(--rail-fg);
 	}
 
 	#app-bar-discussion:has(.rail-badge:not(:empty)) {
@@ -31676,11 +31698,11 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		unsave: "Unsave",
 	};
 
-	const APP_PANE_ICON = (region, divider) =>
-		`<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path class="pane-fill" d="${region}"/><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="${divider}" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>`;
+	const APP_PANE_ICON = (divider) =>
+		`<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="${divider}" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>`;
 
-	const APP_LIST_TOGGLE_ICON = APP_PANE_ICON("M6.3 3.3H4a2 2 0 0 0-2 2v5.4a2 2 0 0 0 2 2h2.3z", "M6.3 3.3v9.4");
-	const APP_DISCUSSION_TOGGLE_ICON = APP_PANE_ICON("M9.7 3.3H12a2 2 0 0 1 2 2v5.4a2 2 0 0 1-2 2H9.7z", "M9.7 3.3v9.4");
+	const APP_LIST_TOGGLE_ICON = APP_PANE_ICON("M6.3 3.3v9.4");
+	const APP_DISCUSSION_TOGGLE_ICON = APP_PANE_ICON("M9.7 3.3v9.4");
 
 	const APP_BRAND_ICON = (d, rule = "nonzero", size = 18) =>
 		`<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="${rule}" d="${d}"/></svg>`;
@@ -31788,7 +31810,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
 <section id="app-article" aria-label="Article">
-<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true">${APP_LIST_TOGGLE_ICON}<span class="app-pane-toggle-label">Front Pages</span></button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><span id="app-article-tools-sep" class="app-head-sep" aria-hidden="true" hidden>|</span><button id="app-view-toggle" class="app-head-icon app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-wide-only" type="button" aria-pressed="true" disabled><span class="app-pane-toggle-label">Discussions</span>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
+<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="Front Pages">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="Discussion" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
 <div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick an article to read it here, with what people said about it beside it.</div></div>
 <div id="app-next" class="app-next" hidden><span class="app-next-label">Read next</span><button id="app-next-link" class="app-next-link" type="button"><span class="app-next-title"></span><span class="app-next-meta"></span></button></div>
 </section>
@@ -31943,11 +31965,7 @@ ${settingsModalHTML()}
 		const paneSlides = {};
 
 		const paintPaneToggles = () => {
-			const label = `${paneHidden.discussion ? "Show" : "Hide"} the discussion`;
-
 			discussionToggle.setAttribute("aria-pressed", paneHidden.discussion ? "false" : "true");
-			discussionToggle.setAttribute("aria-label", label);
-			discussionToggle.title = label;
 			paintAppListToggle();
 		};
 
@@ -33168,11 +33186,8 @@ ${settingsModalHTML()}
 			hidden: appState.panesHidden.list,
 			drawerOpen: shadow.querySelector("#app").classList.contains("list-open"),
 		});
-		const label = `${shown ? "Hide" : "Show"} the article list`;
 
 		toggle.setAttribute("aria-pressed", shown ? "true" : "false");
-		toggle.setAttribute("aria-label", label);
-		toggle.title = label;
 	}
 
 	function setAppDrawer(open) {
@@ -34291,7 +34306,7 @@ ${frontPageChooserHTML()}
 				});
 
 		holder.innerHTML = `<span class="app-head-group app-head-reading">${votes}${saveControl}</span>`;
-		holder.querySelector('[data-item-action="save"]')?.classList.add("app-head-icon");
+		holder.querySelector('[data-item-action="save"]')?.classList.add("app-head-icon", "app-article-disc");
 
 		const titleActions = () => {
 			for (const button of holder.querySelectorAll("button:not(.vote-button)")) {
@@ -34390,7 +34405,6 @@ ${frontPageChooserHTML()}
 			setAppViewMenuOpen(false);
 		}
 
-		shadow.querySelector("#app-article-tools-sep").hidden = !url;
 		open.href = url || "";
 		open.hidden = !url;
 	}
