@@ -29030,6 +29030,14 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	--rail-knock:var(--rail-fg);
 }
 
+#app-rail-search {
+	border-radius:50%;
+	background:var(--rail-fg);
+	color:var(--rail-bg);
+	--rail-glyph:var(--rail-bg);
+	--rail-knock:var(--rail-fg);
+}
+
 .rail-button:disabled {
 	opacity:.33;
 	cursor:default;
@@ -29099,7 +29107,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	background:var(--rail-fg);
 	color:#000;
 	font:400 11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-	white-space:nowrap;
+	white-space:pre;
 	box-shadow:0 4px 14px rgba(0,0,0,.22);
 	pointer-events:none;
 	transform:translateY(-50%);
@@ -29126,11 +29134,94 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 }
 
 #app-rail-sources {
-	display:contents;
+	display:flex;
+	flex-direction:column;
+	align-items:center;
+	align-self:stretch;
+	gap:6px;
+	flex:0 1 auto;
+	min-height:0;
+	margin:-8px -6px;
+	padding:8px 6px;
+	overflow-x:hidden;
+	overflow-y:auto;
+	scroll-padding:8px 0;
+	scrollbar-width:none;
+	border-radius:0;
+	background:rgba(0,0,0,0);
+	box-shadow:none;
+}
+
+#app-rail-sources .rail-button {
+	box-shadow:none;
+}
+
+#app-rail-sources::-webkit-scrollbar {
+	display:none;
 }
 
 .rail-spacer {
 	flex:1 1 auto;
+}
+
+#app-rail-foot-rule {
+	display:none;
+}
+
+@media (min-width: 701px) and (hover: hover) {
+	#app-rail-sources .rail-button:hover:not(:disabled):not(.is-current) {
+		background-color:color-mix(in srgb, var(--rail-bg) 84%, #fff);
+	}
+}
+
+@media (min-width: 701px) {
+	#app-rail-sources .rail-button:not(.is-current) {
+		background-color:var(--rail-bg);
+	}
+
+	#app-rail-sources .rail-button:active:not(:disabled):not(.is-current) {
+		background-color:color-mix(in srgb, var(--rail-bg) 74%, #fff);
+	}
+
+	#app-rail.rail-overflowing #app-rail-foot-rule {
+		display:block;
+	}
+
+	#app-rail.rail-overflowing #app-rail-sources {
+		margin:-5px -6px -11px;
+		padding:18px 6px 12px;
+		scroll-padding:18px 0 12px;
+		border-radius:22px;
+		background:rgba(0,0,0,.26);
+		box-shadow:inset 0 1px 3px rgba(0,0,0,.2), inset 0 -1px 0 rgba(255,255,255,.08), 0 1px 0 rgba(255,255,255,.12);
+	}
+
+	#app-rail.rail-overflowing #app-rail-sources .rail-button {
+		border-radius:50%;
+		box-shadow:0 1px 2px rgba(0,0,0,.2), inset 0 1px 0 rgba(255,255,255,.15), inset 0 -1px 2px rgba(0,0,0,.1);
+	}
+
+	#app-rail.rail-overflowing #app-rail-sources .rail-button:active:not(:disabled):not(.is-current) {
+		box-shadow:inset 0 1px 2px rgba(0,0,0,.2);
+	}
+
+	#app-rail.rail-overflowing #app-rail-sources .rail-button.is-current {
+		box-shadow:0 1px 2px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.6), inset 0 -1px 2px rgba(0,0,0,.09);
+	}
+
+	#app-rail.rail-overflowing #app-rail-sources .rail-badge {
+		box-shadow:0 0 0 1.5px color-mix(in srgb, var(--rail-bg) 74%, #000);
+	}
+}
+
+@media (min-width: 701px) and (prefers-reduced-motion: no-preference) {
+	#app-rail-sources {
+		transition:margin .38s ease, padding .38s ease, border-radius .38s ease, background-color .38s ease, box-shadow .38s ease;
+	}
+
+	#app-rail-sources .rail-button {
+		transition:border-radius .38s ease, box-shadow .38s ease;
+	}
 }
 
 #app-list {
@@ -30734,7 +30825,7 @@ header .item-action-link {
 		border-right:0;
 	}
 
-	#app-rail-rule,
+	.rail-rule,
 	#app-rail-sources,
 	.rail-spacer {
 		display:none;
@@ -31674,12 +31765,14 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <button id="app-search" class="app-stack-button" type="button" aria-label="Search the list" aria-expanded="false" aria-controls="app-search-bar" hidden>${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</button>
 <div id="app-search-page" class="app-search-page" role="dialog" aria-label="Search Backchannel" hidden><div class="app-search-head"><input id="app-search-input" class="app-search-input" type="search" placeholder="Search Backchannel" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search Backchannel"><button id="app-search-close" class="app-search-close" type="button">Cancel</button></div><div id="app-search-results" class="app-search-results"></div></div>
 <nav id="app-rail" aria-label="Views">
+<button id="app-rail-search" class="rail-button" type="button" data-tip="${appSearchTip()}" aria-label="Search Backchannel" aria-pressed="false" aria-controls="app-search-page"><span class="rail-icon">${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</span><span class="rail-label" aria-hidden="true">Search</span></button>
+<div class="rail-rule" aria-hidden="true"></div>
 <button id="app-rail-welcome" class="rail-button is-current" type="button" data-tip="Welcome" aria-label="Welcome" aria-current="page" hidden><span class="rail-icon">${APP_ICON('<path fill="currentColor" d="M8 1.3 10 5.6l4.7.5-3.5 3.2 1 4.6L8 11.5l-4.2 2.4 1-4.6-3.5-3.2 4.7-.5z"/>')}</span><span class="rail-label" aria-hidden="true">Welcome</span></button>
 ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).join("\n")}
-<button id="app-rail-search" class="rail-button" type="button" data-tip="Search" aria-label="Search Backchannel" aria-pressed="false" aria-controls="app-search-page"><span class="rail-icon">${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</span><span class="rail-label" aria-hidden="true">Search</span></button>
 <div id="app-rail-rule" class="rail-rule" aria-hidden="true"></div>
 <div id="app-rail-sources"></div>
 <div class="rail-spacer"></div>
+<div id="app-rail-foot-rule" class="rail-rule" aria-hidden="true"></div>
 <button id="settings-toggle" class="rail-button" type="button" data-tip="Settings" aria-label="Open Backchannel settings" aria-expanded="false" aria-controls="settings-panel"><span class="rail-icon">${APP_SETTINGS_ICON}</span><span class="rail-label" aria-hidden="true">Settings</span></button>
 </nav>
 <button id="app-bar-back" class="app-stack-button" type="button" aria-label="Back to the articles" data-glyph="down" hidden>${APP_ICON('<path d="M2.2 5.1a1 1 0 0 1 1.4-.1L8 9l4.4-4a1 1 0 0 1 1.3 1.5l-5 4.6a1 1 0 0 1-1.4 0l-5-4.6a1 1 0 0 1-.1-1.4z"/>')}</button>
@@ -31722,6 +31815,7 @@ ${settingsModalHTML()}
 			listSeq: 0,
 			countSeq: 0,
 			railFilled: null,
+			revealed: "",
 			panesHidden: { list: false, discussion: false },
 			scrolls: { list: 0, article: 0, discussion: 0 },
 			openTotal: 0,
@@ -32271,8 +32365,12 @@ ${settingsModalHTML()}
 		const searchInput = shadow.querySelector("#app-search-input");
 
 		searchButton.onclick = () => {
-			indexAppLists().catch(console.error).then(() => renderAppSearch(searchInput.value));
-			setAppSearchOpen(searchBar.hidden);
+			if (searchBar.hidden) {
+				openAppSearch();
+				return;
+			}
+
+			setAppSearchOpen(false);
 		};
 		shadow.querySelector("#app-rail-search").onclick = searchButton.onclick;
 		shadow.querySelector("#app-search-close").onclick = () => setAppSearchOpen(false);
@@ -32370,10 +32468,51 @@ ${settingsModalHTML()}
 				placeAppSettings(true);
 			}
 		});
+		const section = shadow.querySelector("#app-rail-sources");
+
+		section.addEventListener("scroll", () => {
+			const focused = shadow.activeElement;
+
+			if (!focused?.matches(".rail-button:focus-visible")) {
+				return;
+			}
+
+			const frame = section.getBoundingClientRect();
+			const box = focused.getBoundingClientRect();
+
+			if (section.contains(focused) && (box.bottom <= frame.top || box.top >= frame.bottom)) {
+				if (shadow.querySelector("#app-tip").textContent === focused.dataset.tip) {
+					hideAppTip();
+				}
+
+				return;
+			}
+
+			showAppTip(focused);
+		});
+
+		const pills = shadow.querySelector("#app-list-tags");
+		let fit = "";
+
+		const refit = new ResizeObserver(() => {
+			const next = appIsPhone() ? `p${pills.clientWidth}` : `d${section.clientHeight}`;
+
+			if (appState?.ui.shadow === shadow && next !== fit) {
+				fit = next;
+				appState.revealed = "";
+				paintAppRail();
+			}
+
+			requestAnimationFrame(paintAppRailFit);
+		});
+
+		refit.observe(section);
+		refit.observe(pills);
 		rail.addEventListener("scroll", hideAppTip);
 		rail.addEventListener("click", hideAppTip);
 
 		wireSettingsModal(shadow);
+		document.addEventListener("keydown", onAppShortcut, true);
 		document.addEventListener("keydown", onAppKey);
 		window.addEventListener("message", onAppMessage);
 	}
@@ -32511,6 +32650,7 @@ ${settingsModalHTML()}
 			setOpen(true);
 			showSection(section);
 		};
+		closeAppSettings = () => setOpen(false);
 
 		modal.addEventListener("click", (event) => {
 			event.stopPropagation();
@@ -32563,24 +32703,61 @@ ${settingsModalHTML()}
 		}
 	}
 
+	function appRailFilters() {
+		const state = appState;
+
+		return {
+			topics: (state.topicIds || []).map((id) => ({
+				view: "topic:" + id,
+				label: TOPICS.find((topic) => topic.id === id)?.label || id,
+				mark: TOPIC_ICONS[id],
+			})),
+			sources: state.sourceIds.map((id) => {
+				const label = getSource(id)?.label || id;
+
+				return {
+					id,
+					view: "source:" + id,
+					label,
+					mark: APP_SOURCE_ICONS[id] || `<span class="rail-monogram" aria-hidden="true">${escapeHTML(label.slice(0, 2))}</span>`,
+				};
+			}),
+		};
+	}
+
+	function paintAppRailFit() {
+		const shadow = appState?.ui.shadow;
+		const section = shadow?.querySelector("#app-rail-sources");
+
+		if (!section) {
+			return;
+		}
+
+		const rail = shadow.querySelector("#app-rail");
+		const was = rail.classList.contains("rail-overflowing");
+		const first = section.firstElementChild;
+		let lack = 0;
+
+		if (first && !appIsPhone()) {
+			const rule = shadow.querySelector("#app-rail-foot-rule");
+			const edges = (element, ...sides) => {
+				const style = getComputedStyle(element);
+
+				return sides.reduce((sum, side) => sum + (parseFloat(style[side]) || 0), 0);
+			};
+			const held = rule.getClientRects().length ? rule.getBoundingClientRect().height + edges(rule, "marginTop", "marginBottom") + edges(rail, "rowGap") : 0;
+			const room = section.getBoundingClientRect().height + edges(section, "marginTop", "marginBottom") + held;
+
+			lack = section.lastElementChild.getBoundingClientRect().bottom - first.getBoundingClientRect().top - room;
+		}
+
+		rail.classList.toggle("rail-overflowing", lack > (was ? 0.25 : 0.5));
+	}
+
 	function renderAppRailSources() {
 		const state = appState;
 		const holder = state.ui.shadow.querySelector("#app-rail-sources");
-
-		const topicFilters = (state.topicIds || []).map((id) => ({
-			view: "topic:" + id,
-			label: TOPICS.find((topic) => topic.id === id)?.label || id,
-			mark: TOPIC_ICONS[id],
-		}));
-		const sourceFilters = state.sourceIds.map((id) => {
-			const label = getSource(id)?.label || id;
-
-			return {
-				view: "source:" + id,
-				label,
-				mark: APP_SOURCE_ICONS[id] || `<span class="rail-monogram" aria-hidden="true">${escapeHTML(label.slice(0, 2))}</span>`,
-			};
-		});
+		const { topics: topicFilters, sources: sourceFilters } = appRailFilters();
 		const topics = topicFilters.map((filter) => appRailButtonHTML(filter.view, filter.label, filter.mark));
 		const sources = sourceFilters.map((filter) => appRailButtonHTML(filter.view, filter.label, filter.mark));
 
@@ -32613,7 +32790,9 @@ ${settingsModalHTML()}
 			state.view = "unread";
 		}
 
+		state.revealed = "";
 		paintAppRail();
+		paintAppRailFit();
 	}
 
 	function appViewIsFrontPage(view) {
@@ -32796,22 +32975,58 @@ ${settingsModalHTML()}
 		state.ui.shadow.querySelector("#app-list-foot").hidden = !appViewIsFrontPage(state.view);
 		state.ui.shadow.querySelector("#app-list-title").textContent = appViewLabel(state.view);
 		state.ui.shadow.querySelector("#app-list-heading").textContent = appViewLabel(state.view);
+
+		if (state.revealed !== state.view && revealAppFilter()) {
+			state.revealed = state.view;
+		}
 	}
 
-	function chooseAppView(view) {
+	function revealAppFilter() {
+		const state = appState;
+		const phone = appIsPhone();
+		const container = state.ui.shadow.querySelector(phone ? "#app-list-tags" : "#app-rail-sources");
+		const control = [...container.querySelectorAll("[data-app-view]")].find((each) => each.dataset.appView === state.view);
+
+		if (!control) {
+			return true;
+		}
+
+		if (!control.getClientRects().length) {
+			return false;
+		}
+
+		const style = getComputedStyle(container);
+		const frame = container.getBoundingClientRect();
+		const box = control.getBoundingClientRect();
+		const [start, end, scroll, before, after] = phone
+			? ["left", "right", "scrollLeft", style.paddingLeft, style.paddingRight]
+			: ["top", "bottom", "scrollTop", style.scrollPaddingTop, style.scrollPaddingBottom];
+		const early = frame[start] + (parseFloat(before) || 0) - box[start];
+		const late = box[end] - (frame[end] - (parseFloat(after) || 0));
+
+		if (early > 0) {
+			container[scroll] -= early;
+		} else if (late > 0) {
+			container[scroll] += late;
+		}
+
+		return true;
+	}
+
+	function chooseAppView(view, fromSearch = false) {
 		const state = appState;
 
 		if (!state) {
 			return;
 		}
 
-		const searching = !state.ui.shadow.querySelector("#app-search-page").hidden;
+		const searching = fromSearch || !state.ui.shadow.querySelector("#app-search-page").hidden;
 
 		setAppSearchOpen(false);
 
 		if (view === state.view) {
-			if (appIsNarrow() && !searching) {
-				setAppDrawer(!state.ui.shadow.querySelector("#app").classList.contains("list-open"));
+			if (appIsNarrow()) {
+				setAppDrawer(searching || !state.ui.shadow.querySelector("#app").classList.contains("list-open"));
 			}
 
 			return;
@@ -33311,16 +33526,50 @@ ${settingsModalHTML()}
 		input.blur();
 	}
 
+	function openAppSearch() {
+		const shadow = appState?.ui.shadow;
+		const page = shadow?.querySelector("#app-search-page");
+		const input = shadow?.querySelector("#app-search-input");
+
+		if (!page || !input) {
+			return;
+		}
+
+		if (!page.hidden) {
+			input.focus({ preventScroll: true });
+			return;
+		}
+
+		indexAppLists().catch(console.error).then(() => renderAppSearch(input.value));
+		setAppSearchOpen(true);
+	}
+
+	function appIsApple() {
+		return /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "");
+	}
+
+	function appSearchTip() {
+		return `Search  ${appIsApple() ? "⌘K" : "Ctrl+K"}`;
+	}
+
 	function appSearchEntries() {
 		const state = appState;
 		const shadow = state.ui.shadow;
 		const entries = [];
 
 		for (const view of APP_VIEWS) {
-			entries.push({ group: "Go to", title: view.label, note: "", keys: view.id === "collection" ? `${view.label} saved` : view.label, run: () => chooseAppView(view.id) });
+			entries.push({ group: "Go to", title: view.label, note: "", keys: view.id === "collection" ? `${view.label} saved` : view.label, run: () => chooseAppView(view.id, true) });
 		}
 
 		entries.push({ group: "Go to", title: "Settings", note: "", keys: "settings preferences", run: () => openAppSettingsSection("general") });
+
+		const filters = appRailFilters();
+
+		for (const [kind, list] of [["Topic", filters.topics], ["Source", filters.sources]]) {
+			for (const filter of list) {
+				entries.push({ group: "Go to", title: filter.label, note: kind, keys: [filter.label, kind, `${kind}s`, filter.id].filter(Boolean).join(" "), typed: true, run: () => chooseAppView(filter.view, true) });
+			}
+		}
 
 		for (const entry of state.rowsByURL.values()) {
 			const story = entry.story;
@@ -33390,7 +33639,34 @@ ${settingsModalHTML()}
 
 		const needle = String(query || "").trim().toLowerCase();
 		const terms = needle.split(/\s+/).filter(Boolean);
-		const matches = appSearchEntries().filter((entry) => (needle ? terms.every((term) => entry.keys.toLowerCase().includes(term)) : entry.group === "Go to"));
+		const plain = (text) => String(text).split(/\s+/).map(readerKey).filter(Boolean).join(" ");
+		const lead = plain(needle);
+		const words = lead ? lead.split(" ") : [];
+		const hit = (entry) => {
+			if (entry.group !== "Go to" || !words.length) {
+				return terms.every((term) => entry.keys.toLowerCase().includes(term));
+			}
+
+			const keys = plain(entry.keys);
+
+			return words.every((word) => keys.includes(word));
+		};
+		const found = appSearchEntries().filter((entry) => (needle ? hit(entry) : entry.group === "Go to" && !entry.typed));
+		const tier = (entry) => {
+			if (!lead || entry.group !== "Go to") {
+				return 3;
+			}
+
+			if (plain(entry.title).startsWith(lead)) {
+				return 0;
+			}
+
+			const keyWords = plain(entry.keys).split(" ");
+
+			return words.every((word) => keyWords.some((key) => key.startsWith(word))) ? 1 : 2;
+		};
+		const ranked = found.map((entry) => [tier(entry), entry]);
+		const matches = [0, 1, 2, 3].flatMap((rank) => ranked.filter(([at]) => at === rank).map(([, entry]) => entry));
 		const groups = new Map();
 
 		for (const entry of matches) {
@@ -33443,6 +33719,7 @@ ${settingsModalHTML()}
 	}
 
 	let openAppSettingsSection = () => {};
+	let closeAppSettings = () => {};
 
 	function resetAppListScroll() {
 		const list = appState?.ui.shadow.querySelector("#app-list-body");
@@ -35074,6 +35351,28 @@ ${frontPageChooserHTML()}
 		if (activeCommentFilter?.type === "quote") {
 			applyCommentFilter(activeCommentFilter.key, { scroll: false, animate: false });
 		}
+	}
+
+	function onAppShortcut(event) {
+		if (!appState || event.defaultPrevented || event.isComposing) {
+			return;
+		}
+
+		const modifier = appIsApple() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+
+		if (String(event.key || "").toLowerCase() !== "k" || !modifier || event.altKey || event.shiftKey) {
+			return;
+		}
+
+		if (appIsPhone() && (appState.ui.shadow.querySelector("#app").dataset.stage || "list") !== "list") {
+			return;
+		}
+
+		event.preventDefault();
+		closeAppSettings();
+		setAppViewMenuOpen(false);
+		closeAppRowMenu();
+		openAppSearch();
 	}
 
 	function onAppKey(event) {
