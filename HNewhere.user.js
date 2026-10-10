@@ -27245,6 +27245,99 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		);
 	}
 
+	function pointInGroupArea(point, rects) {
+		const contains = (box) =>
+			point.x >= box.left &&
+			point.x <= box.left + box.width &&
+			point.y >= box.top &&
+			point.y <= box.top + box.height;
+
+		if (rects.some(contains)) {
+			return true;
+		}
+
+		for (const first of rects) {
+			for (const second of rects) {
+				const taller = Math.max(first.height, second.height);
+
+				if (shareALine(first, second)) {
+					const left = first.left + first.width;
+					const gap = second.left - left;
+					const top = Math.max(first.top, second.top);
+					const bottom = Math.min(first.top + first.height, second.top + second.height);
+
+					if (gap > 0 && gap <= taller && contains({ left, top, width: gap, height: bottom - top })) {
+						return true;
+					}
+
+					continue;
+				}
+
+				const top = first.top + first.height;
+				const gap = second.top - top;
+				const left = Math.max(first.left, second.left);
+				const right = Math.min(first.left + first.width, second.left + second.width);
+
+				if (
+					gap > 0 &&
+					gap <= 1.5 * taller &&
+					right > left &&
+					contains({ left, top, width: right - left, height: gap })
+				) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	function quoteSpanOfKey(key) {
+		const match = /^(\d+):(\d+)$/.exec(typeof key === "string" ? key : "");
+
+		if (!match) {
+			return null;
+		}
+
+		const start = Number(match[1]);
+		const end = Number(match[2]);
+
+		return start <= end ? { start, end } : null;
+	}
+
+	function carriedGroupKey(groups, active) {
+		if (!active?.key || !active.litByHover || active.leaving) {
+			return null;
+		}
+
+		if (groups.some((group) => group.key === active.key)) {
+			return active.key;
+		}
+
+		const old = quoteSpanOfKey(active.key);
+
+		if (!old) {
+			return null;
+		}
+
+		let best = null;
+
+		for (const group of groups) {
+			const span = quoteSpanOfKey(group.key);
+
+			if (
+				span &&
+				span.start <= old.start &&
+				span.end >= old.end &&
+				(!best || span.end - span.start < best.width)
+			) {
+				best = { key: group.key, width: span.end - span.start };
+			}
+		}
+
+		return best ? best.key : null;
+	}
+
 	const OWN_SURFACE_SELECTOR = `[data-hnewhere-annotation-overlay],[data-hnewhere-sidebar],[data-hnewhere-note-composer],[data-hnewhere-note-add],[data-hnewhere-submit-popover]`;
 
 	function pressableRectsAround(range, source = documentSource()) {
@@ -27745,7 +27838,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		}
 	}
 
-	function createAnnotationOverlay(groups, regions, settings) {
+	function createAnnotationOverlay(groups, regions, settings, options = {}) {
 		const overlay = document.createElement("div");
 		overlay.setAttribute("data-hnewhere-annotation-overlay", "1");
 		overlay.style.cssText = `
@@ -27761,11 +27854,12 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		const heatLayer = document.createElement("div");
 		const baseLayer = document.createElement("div");
 		const activeLayer = document.createElement("div");
+		const carriedKey = carriedGroupKey(groups, options.active);
 
 		baseLayer.style.opacity = String(QUOTE_FILL_OPACITY);
 
 		activeLayer.style.cssText = `
-			opacity:0;
+			opacity:${carriedKey ? QUOTE_ACTIVE_OPACITY : 0};
 			pointer-events:none;
 			${prefersReducedMotion() ? "" : "transition:opacity .12s ease;"}
 		`;
@@ -27774,6 +27868,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 		const source = documentSource();
 		const overlayHost = source.hostFor(groups[0]?.range || regions?.[0]?.range);
+		const overlayDocument = overlayHost.ownerDocument;
 
 		overlayHost.appendChild(overlay);
 
@@ -27783,13 +27878,26 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		let renderFrame = 0;
 
 		const rectsByGroup = new Map();
-		let activeGroupKey = null;
+		let activeGroupKey = carriedKey;
+		let litByHover = Boolean(carriedKey);
 		let leaveTimer = 0;
 
 		const hoverQuery =
 			typeof window.matchMedia === "function"
 				? window.matchMedia("(hover: hover)")
 				: null;
+
+		const schemeQuery =
+			typeof window.matchMedia === "function"
+				? window.matchMedia("(prefers-color-scheme: dark)")
+				: null;
+
+		const boxOf = (node) => ({
+			left: parseFloat(node.style.left),
+			top: parseFloat(node.style.top),
+			width: parseFloat(node.style.width),
+			height: parseFloat(node.style.height),
+		});
 
 		const paintActiveLayer = () => {
 			const rects = activeGroupKey ? rectsByGroup.get(activeGroupKey) : null;
@@ -27801,15 +27909,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 			activeLayer.replaceChildren(
 				...rects.map((node) =>
-					createHighlightRect(
-						{
-							left: parseFloat(node.style.left),
-							top: parseFloat(node.style.top),
-							width: parseFloat(node.style.width),
-							height: parseFloat(node.style.height),
-						},
-						{ interactive: false, variant: "highlight" },
-					),
+					createHighlightRect(boxOf(node), { interactive: false, variant: "highlight" }),
 				),
 			);
 
@@ -27822,7 +27922,59 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			}
 
 			activeGroupKey = groupKey;
+			litByHover = false;
 			paintActiveLayer();
+		};
+
+		const pointerInActiveGroup = (event) => {
+			const rects = activeGroupKey ? rectsByGroup.get(activeGroupKey) : null;
+
+			if (!rects?.length) {
+				return false;
+			}
+
+			const origin = overlay.getBoundingClientRect();
+
+			return pointInGroupArea(
+				{ x: event.clientX - origin.left, y: event.clientY - origin.top },
+				rects.map(boxOf),
+			);
+		};
+
+		const cancelLeave = () => {
+			clearTimeout(leaveTimer);
+			leaveTimer = 0;
+		};
+
+		const scheduleLeave = (groupKey) => {
+			cancelLeave();
+			leaveTimer = setTimeout(() => {
+				leaveTimer = 0;
+
+				if (activeGroupKey === groupKey) {
+					setActiveGroup(null);
+				}
+			}, 120);
+		};
+
+		const onPointerMove = (event) => {
+			if (!litByHover || event.pointerType === "touch") {
+				return;
+			}
+
+			if (pointerInActiveGroup(event)) {
+				cancelLeave();
+			} else if (!leaveTimer) {
+				scheduleLeave(activeGroupKey);
+			}
+		};
+
+		const onPointerOut = (event) => {
+			if (!litByHover || event.relatedTarget || leaveTimer) {
+				return;
+			}
+
+			scheduleLeave(activeGroupKey);
 		};
 
 		const pressRect = (group, rect) => {
@@ -27837,18 +27989,18 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 			node.addEventListener("pointerenter", () => {
 				if (hoverQuery?.matches !== false) {
-					clearTimeout(leaveTimer);
+					cancelLeave();
 					setActiveGroup(group.key);
+					litByHover = true;
 				}
 			});
 
-			node.addEventListener("pointerleave", () => {
-				clearTimeout(leaveTimer);
-				leaveTimer = setTimeout(() => {
-					if (activeGroupKey === group.key) {
-						setActiveGroup(null);
-					}
-				}, 120);
+			node.addEventListener("pointerleave", (event) => {
+				if (pointerInActiveGroup(event)) {
+					return;
+				}
+
+				scheduleLeave(group.key);
 			});
 
 			node.addEventListener("focus", () => {
@@ -28021,12 +28173,21 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		window.addEventListener("resize", scheduleRender);
 		window.addEventListener("load", scheduleRender, true);
 		document.fonts?.addEventListener?.("loadingdone", onFontsSettled);
+		schemeQuery?.addEventListener("change", scheduleRender);
+		overlayDocument.addEventListener("pointermove", onPointerMove, { capture: true, passive: true });
+		overlayDocument.addEventListener("pointerout", onPointerOut, { capture: true, passive: true });
 		render();
 		watchGeometry();
 
 		return {
 			groups,
 			groupsByKey,
+			activeState() {
+				return { key: activeGroupKey, litByHover, leaving: leaveTimer !== 0 };
+			},
+			heatRegions() {
+				return heatRegions;
+			},
 			setHeatRegions(next) {
 				heatRegions = next || [];
 				scheduleRender();
@@ -28046,6 +28207,9 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 				window.removeEventListener("resize", scheduleRender);
 				window.removeEventListener("load", scheduleRender, true);
 				document.fonts?.removeEventListener?.("loadingdone", onFontsSettled);
+				schemeQuery?.removeEventListener("change", scheduleRender);
+				overlayDocument.removeEventListener("pointermove", onPointerMove, { capture: true });
+				overlayDocument.removeEventListener("pointerout", onPointerOut, { capture: true });
 				geometryObserver?.disconnect();
 
 				if (renderFrame) {
@@ -28207,20 +28371,21 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	}
 
 	async function refreshLocalAnnotations() {
-		clearArticleAnnotations();
-
 		if (!sidebar || !renderedComments.length) {
+			clearArticleAnnotations();
 			return;
 		}
 
 		const settings = await loadSettings();
 
 		if (!settings.annotations) {
+			clearArticleAnnotations();
 			clearCommentFilter({ animate: false });
 			return;
 		}
 
 		if (!shouldShowArticleAnnotations(settings)) {
+			clearArticleAnnotations();
 			return;
 		}
 
@@ -28233,7 +28398,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			clearCommentFilter({ animate: false });
 		}
 
-		annotationController = createAnnotationOverlay(groups, [], settings);
+		const active = annotationController?.activeState?.();
+		const heat = annotationController?.heatRegions?.();
+
+		clearArticleAnnotations();
+		annotationController = createAnnotationOverlay(groups, heat, settings, { active });
 		decorateSidebarMatches(annotationController);
 
 		let queued = 0;
@@ -31336,8 +31505,8 @@ ${SETTINGS_MODAL_PHONE_CSS}
 			return host.scrollHeight;
 		},
 
-		backdropFor(range) {
-			return nearestElement(range?.commonAncestorContainer);
+		backdropFor() {
+			return appReaderScroller();
 		},
 
 		scrollIntoView(range) {
