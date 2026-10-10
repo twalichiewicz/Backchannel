@@ -31846,10 +31846,6 @@ ${settingsModalHTML()}
 			node.hidden = true;
 		}
 
-		for (const node of document.querySelectorAll("[data-backchannel-version]")) {
-			node.textContent = SCRIPT_VERSION;
-		}
-
 		wireApp(ui);
 		renderAppDiscussionEmpty();
 		setAppDrawer(true);
