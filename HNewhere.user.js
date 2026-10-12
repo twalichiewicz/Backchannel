@@ -205,6 +205,7 @@
 		hiddenStories: "HNewhere:hidden_stories",
 		zoomBySite: "HNewhere:zoom_by_site",
 		appListWidth: "HNewhere:app_list_width",
+		appSplit: "HNewhere:app_split",
 		appPanes: "HNewhere:app_panes",
 		appZoom: "HNewhere:app_zoom",
 		readOut: "HNewhere:read_out",
@@ -20113,7 +20114,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 <div id="next-up" class="next-up hidden"></div>
 </div>
 
-</div>${appMode ? "</div>" : ""}
+</div>${appMode ? "</div></div>" : ""}
 `;
 
 		adoptStyles(shadow);
@@ -20154,7 +20155,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		const resizeHandle = shadow.querySelector("#resize-handle");
 
 		const onResizeMouseDown = (e) => {
-			if (e.button !== 0) {
+			if (e.button !== 0 || (appMode && appIsStacked())) {
 				return;
 			}
 
@@ -20212,7 +20213,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		const onTouchStart = (e) => {
 			const touch = e.touches[0];
 
-			if (!touch) {
+			if (!touch || (appMode && appIsStacked())) {
 				return;
 			}
 
@@ -28450,6 +28451,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 	const APP_LIST_MIN_WIDTH = 220;
 	const APP_LIST_MAX_WIDTH = 480;
+	const APP_SPLIT_MIN = 0.2;
+	const APP_SPLIT_MAX = 0.8;
 	const APP_PULL_TRIGGER = 56;
 	const APP_ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 	const APP_PULL_MAX = 96;
@@ -28867,8 +28870,9 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	position:relative;
 	overscroll-behavior:none;
 	--rail-column:50px;
+	--app-split:.6;
 	display:grid;
-	grid-template-columns:var(--rail-column) var(--app-list-width, 300px) minmax(0, 1fr) auto;
+	grid-template-columns:var(--rail-column) min(var(--app-list-width, 300px), calc(100% - var(--rail-column) - 201px)) minmax(0, 1fr);
 	grid-template-rows:minmax(0, 1fr);
 	width:100%;
 	height:100%;
@@ -29568,13 +29572,6 @@ ${APP_ICON_CSS}
 	overflow:hidden;
 }
 
-@media (min-width: 701px) and (max-width: 1100px) {
-	#app-article {
-		border-radius:12px 0 0 12px;
-		overflow:hidden;
-	}
-}
-
 #app.list-moving #app-list,
 #app.discussion-moving #panel.app-docked {
 	position:absolute;
@@ -29860,6 +29857,10 @@ ${SETTINGS_MODAL_CSS}
 	user-select:none;
 }
 
+#app.is-splitting {
+	cursor:row-resize;
+}
+
 #app.is-resizing .app-article-frame {
 	pointer-events:none;
 }
@@ -29962,8 +29963,16 @@ ${SETTINGS_MODAL_CSS}
 	box-shadow:0 0 0 2px var(--bg, #fff);
 }
 
+#app-reading {
+	position:relative;
+	display:flex;
+	min-width:0;
+	min-height:0;
+}
+
 #app-article {
 	position:relative;
+	flex:1 1 0;
 	display:flex;
 	flex-direction:column;
 	min-width:0;
@@ -30601,6 +30610,7 @@ ${SETTINGS_MODAL_CSS}
 	position:relative;
 	top:auto;
 	right:auto;
+	flex:0 0 auto;
 	height:100%;
 	min-height:0;
 	max-width:calc(100vw - 428px - var(--app-list-width, 300px));
@@ -30790,7 +30800,7 @@ header .item-action-link {
 	}
 }
 
-@media (min-width: 1101px) {
+@media (min-width: 701px) {
 	#app-rail {
 		grid-column:1;
 	}
@@ -30799,41 +30809,115 @@ header .item-action-link {
 		grid-column:2;
 	}
 
-	#app-article {
+	#app-reading {
 		grid-column:3;
-	}
-
-	#panel.app-docked {
-		grid-column:4;
 	}
 }
 
-@media (max-width: 1100px) {
-	#app {
-		grid-template-columns:var(--rail-column) minmax(0, 1fr) auto;
+@media (min-width: 701px) and (max-width: 1335px) {
+	#app-reading {
+		flex-direction:column;
+		--app-article-height:min(calc(var(--app-split) * 100%), calc(100% - 160px));
 	}
 
-	#app-list {
-		position:absolute;
-		top:0;
+	#app-article {
+		flex:0 0 var(--app-article-height);
+	}
+
+	#app.discussion-hidden #app-article,
+	#app.discussion-moving #app-article,
+	#app:not(.has-story) #app-article {
+		flex:1 1 0;
+	}
+
+	#app.list-hidden #app-reading {
+		border-radius:12px 0 0 12px;
+		overflow:hidden;
+	}
+
+	#app.list-hidden.has-story:not(.discussion-hidden) #app-article {
+		border-bottom-left-radius:0;
+	}
+
+	#app-article > .app-pane-head {
 		bottom:0;
-		left:var(--rail-column);
-		z-index:4;
-		width:var(--app-list-width, 300px);
-		box-shadow:6px 0 18px rgba(0,0,0,.18);
-		transform:translateX(calc(-100% - 60px));
-		visibility:hidden;
-		transition:transform .18s ease, visibility 0s linear .18s;
+		height:auto;
+		pointer-events:none;
 	}
 
-	#app.list-open #app-list {
-		transform:none;
-		visibility:visible;
-		transition:transform .18s ease;
+	#app-toggle-list,
+	#app-toggle-discussion {
+		pointer-events:auto;
+	}
+
+	#app-toggle-discussion {
+		top:auto;
+		bottom:5.5px;
 	}
 
 	#panel.app-docked {
-		max-width:calc(100vw - 420px);
+		flex:1 1 0;
+		width:auto !important;
+		min-width:0;
+		max-width:none;
+		height:auto;
+		border-top:1px solid var(--border-soft);
+		border-left:0;
+	}
+
+	#panel.app-docked #resize-handle {
+		top:-4px;
+		right:0;
+		bottom:auto;
+		z-index:2;
+		width:auto;
+		height:8px;
+		cursor:row-resize;
+	}
+
+	#app.discussion-moving #panel.app-docked {
+		top:var(--app-article-height);
+		left:0;
+		width:auto !important;
+	}
+
+	#app.discussion-out #panel.app-docked {
+		transform:translateY(100%);
+	}
+}
+
+@media (min-width: 701px) and (max-width: 1335px) and (pointer: coarse) {
+	#panel.app-docked #resize-handle {
+		top:-10px;
+		height:20px;
+	}
+
+	#panel.app-docked #resize-handle::before {
+		width:40px;
+		height:4px;
+	}
+
+	#panel.app-docked > header .header-actions {
+		position:relative;
+		z-index:3;
+	}
+}
+
+@media (min-width: 701px) and (max-width: 1335px) and (prefers-reduced-motion: no-preference) {
+	#app.discussion-entering #panel.app-docked {
+		animation-name:bc-app-discussion-up;
+	}
+}
+
+@keyframes bc-app-discussion-up {
+	from {
+		opacity:0;
+		transform:translateY(14px);
+	}
+
+	to {
+		opacity:1;
+		transform:none;
 	}
 }
 
@@ -30935,6 +31019,10 @@ header .item-action-link {
 
 	.rail-label {
 		display:none;
+	}
+
+	#app-reading {
+		display:contents;
 	}
 
 	#app-list,
@@ -31807,13 +31895,14 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div id="app-list-foot" hidden><button id="app-list-mark-read" class="item-action-link" type="button">Mark all as read</button></div>
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
+${settingsPanelHTML()}
+${settingsModalHTML()}
+<div id="app-reading">
 <section id="app-article" aria-label="Article">
 <div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="Front Pages">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="Discussion" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
 <div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick an article to read it here, with what people said about it beside it.</div></div>
 <div id="app-next" class="app-next" hidden><span class="app-next-label">Read next</span><button id="app-next-link" class="app-next-link" type="button"><span class="app-next-title"></span><span class="app-next-meta"></span></button></div>
 </section>
-${settingsPanelHTML()}
-${settingsModalHTML()}
 `;
 	}
 
@@ -31868,7 +31957,6 @@ ${settingsModalHTML()}
 
 		wireApp(ui);
 		renderAppDiscussionEmpty();
-		setAppDrawer(true);
 		watchNoteSelection(await loadSettings());
 		await refreshAppSources();
 	}
@@ -32138,43 +32226,27 @@ ${settingsModalHTML()}
 		}
 
 		appState.revealList = () => {
-			if (appIsNarrow()) {
-				setAppDrawer(true);
-			} else if (paneHidden.list) {
+			if (paneHidden.list) {
 				setPaneHidden("list", false);
 			}
 		};
-		listToggle.onclick = () => {
-			if (appIsNarrow()) {
-				setAppDrawer(!appRoot.classList.contains("list-open"));
-				return;
-			}
-
-			setPaneHidden("list", !paneHidden.list);
-		};
+		listToggle.onclick = () => setPaneHidden("list", !paneHidden.list);
 		discussionToggle.onclick = () => setPaneHidden("discussion", !paneHidden.discussion);
 		paintPaneToggles();
 
-		for (const query of ["(max-width: 700px)", "(max-width: 1100px)"]) {
-			window.matchMedia(query).addEventListener("change", () => {
-				setAppSearchOpen(false);
+		window.matchMedia("(max-width: 700px)").addEventListener("change", () => {
+			setAppSearchOpen(false);
+			settleAppList();
+			setAppViewMenuOpen(false);
+			paintAppZoom();
+			setAppSearchOpen(false);
 
-				if (appLayout() === "narrow") {
-					setAppDrawer(!appRoot.classList.contains("has-story"));
-				}
+			if (!appIsPhone() && appRoot.dataset.stage !== "list") {
+				appRoot.dataset.stage = "list";
+			}
 
-				settleAppList();
-				setAppViewMenuOpen(false);
-				paintAppZoom();
-				setAppSearchOpen(false);
-
-				if (!appIsPhone() && appRoot.dataset.stage !== "list") {
-					appRoot.dataset.stage = "list";
-				}
-
-				paintAppChrome();
-			});
-		}
+			paintAppChrome();
+		});
 
 		load(STORAGE.appPanes, null)
 			.then((panes) => {
@@ -32230,6 +32302,49 @@ ${settingsModalHTML()}
 		listHandle.addEventListener("pointerup", endListDrag);
 		listHandle.addEventListener("pointercancel", endListDrag);
 		listHandle.addEventListener("lostpointercapture", endListDrag);
+
+		const reading = shadow.querySelector("#app-reading");
+		const article = shadow.querySelector("#app-article");
+		const splitHandle = shadow.querySelector("#resize-handle");
+		let splitDrag = null;
+		let splitSaveTimer = 0;
+
+		load(STORAGE.appSplit, null)
+			.then((split) => applyAppSplit(appRoot, split))
+			.catch(console.error);
+
+		splitHandle.addEventListener("pointerdown", (event) => {
+			if (event.button !== 0 || !appIsStacked()) {
+				return;
+			}
+
+			splitDrag = { y: event.clientY, height: article.getBoundingClientRect().height, room: reading.getBoundingClientRect().height };
+			splitHandle.setPointerCapture(event.pointerId);
+			appRoot.classList.add("is-resizing", "is-splitting");
+			event.preventDefault();
+		});
+
+		splitHandle.addEventListener("pointermove", (event) => {
+			if (!splitDrag || !splitDrag.room) {
+				return;
+			}
+
+			const split = applyAppSplit(appRoot, (splitDrag.height + event.clientY - splitDrag.y) / splitDrag.room);
+
+			clearTimeout(splitSaveTimer);
+			splitSaveTimer = setTimeout(() => {
+				save(STORAGE.appSplit, split).catch(console.error);
+			}, 250);
+		});
+
+		const endSplitDrag = () => {
+			splitDrag = null;
+			appRoot.classList.remove("is-resizing", "is-splitting");
+		};
+
+		splitHandle.addEventListener("pointerup", endSplitDrag);
+		splitHandle.addEventListener("pointercancel", endSplitDrag);
+		splitHandle.addEventListener("lostpointercapture", endSplitDrag);
 
 		const pull = shadow.querySelector("#app-list-pull");
 		let pullStart = null;
@@ -32428,21 +32543,6 @@ ${settingsModalHTML()}
 				lowerAppSheet();
 			}
 		});
-		shadow.addEventListener("pointerdown", (event) => {
-			const path = event.composedPath();
-			const inside = ["#app-list", "#app-rail", "#app-toggle-list"].some((selector) =>
-				path.includes(shadow.querySelector(selector)),
-			);
-
-			if (appIsNarrow() && !inside) {
-				setAppDrawer(false);
-			}
-		});
-		window.addEventListener("blur", () => {
-			if (appIsNarrow() && shadow.activeElement?.tagName === "IFRAME") {
-				setAppDrawer(false);
-			}
-		});
 
 		const rail = shadow.querySelector("#app-rail");
 		const railButton = (event) => event.target?.closest?.(".rail-button") || null;
@@ -32546,6 +32646,34 @@ ${settingsModalHTML()}
 		const report = credits?.querySelector('a[href$="/issues"]');
 		const version = modal.querySelector(".app-settings-version");
 		const close = shadow.querySelector("#app-settings-close");
+		const app = shadow.querySelector("#app");
+		const behind = app ? ["#app-rail", "#app-list", "#app-reading"].map((selector) => shadow.querySelector(selector)).filter(Boolean) : [];
+
+		const holdBehind = (held) => {
+			for (const element of behind) {
+				element.toggleAttribute("inert", held);
+			}
+		};
+
+		const tabStops = () => {
+			const stops = [];
+
+			for (const element of modal.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")) {
+				if (element.disabled || element.tabIndex < 0 || !element.getClientRects().length || getComputedStyle(element).visibility === "hidden") {
+					continue;
+				}
+
+				const group = element.type === "radio" && element.name ? stops.findIndex((stop) => stop.type === "radio" && stop.name === element.name) : -1;
+
+				if (group < 0) {
+					stops.push(element);
+				} else if (element.checked) {
+					stops[group] = element;
+				}
+			}
+
+			return stops;
+		};
 
 		version.textContent = SCRIPT_VERSION ? `v${SCRIPT_VERSION}` : "";
 
@@ -32628,6 +32756,7 @@ ${settingsModalHTML()}
 				}
 
 				modal.hidden = false;
+				holdBehind(true);
 
 				if (panel.classList.contains("hidden")) {
 					toggleDropdown?.(new Event("click"));
@@ -32639,6 +32768,7 @@ ${settingsModalHTML()}
 			}
 
 			modal.hidden = true;
+			holdBehind(false);
 
 			if (!panel.classList.contains("hidden")) {
 				toggleDropdown?.(new Event("click"));
@@ -32677,11 +32807,25 @@ ${settingsModalHTML()}
 				event.preventDefault();
 				setOpen(false);
 			}
+
+			if (event.key !== "Tab" || !app) {
+				return;
+			}
+
+			const stops = tabStops();
+			const active = shadow.activeElement;
+			const edge = event.shiftKey ? stops[0] : stops.at(-1);
+
+			if (edge && (active === edge || (active?.type === "radio" && edge.type === "radio" && active.name === edge.name))) {
+				event.preventDefault();
+				(event.shiftKey ? stops.at(-1) : stops[0]).focus();
+			}
 		});
 
 		new MutationObserver(() => {
 			if (!modal.hidden && panel.classList.contains("hidden")) {
 				modal.hidden = true;
+				holdBehind(false);
 			}
 		}).observe(panel, { attributes: true, attributeFilter: ["class"] });
 	}
@@ -33036,21 +33180,17 @@ ${settingsModalHTML()}
 
 		setAppSearchOpen(false);
 
-		if (view === state.view) {
-			if (appIsNarrow()) {
-				setAppDrawer(searching || !state.ui.shadow.querySelector("#app").classList.contains("list-open"));
-			}
+		if (searching && !appIsPhone()) {
+			state.revealList?.();
+		}
 
+		if (view === state.view) {
 			return;
 		}
 
 		state.view = view;
 		paintAppRail();
 		renderAppList().catch(console.error);
-
-		if (appIsNarrow()) {
-			setAppDrawer(true);
-		}
 	}
 
 	function showAppTip(button) {
@@ -33080,6 +33220,17 @@ ${settingsModalHTML()}
 		const clamped = Math.round(Math.min(Math.max(width, APP_LIST_MIN_WIDTH), APP_LIST_MAX_WIDTH));
 
 		app.style.setProperty("--app-list-width", `${clamped}px`);
+		return clamped;
+	}
+
+	function applyAppSplit(app, split) {
+		if (!app || typeof split !== "number" || !Number.isFinite(split)) {
+			return null;
+		}
+
+		const clamped = Math.round(Math.min(Math.max(split, APP_SPLIT_MIN), APP_SPLIT_MAX) * 1000) / 1000;
+
+		app.style.setProperty("--app-split", String(clamped));
 		return clamped;
 	}
 
@@ -33147,25 +33298,17 @@ ${settingsModalHTML()}
 		return window.matchMedia("(max-width: 700px)").matches;
 	}
 
-	function appIsNarrow() {
-		return window.matchMedia("(max-width: 1100px)").matches && !appIsPhone();
+	function appIsStacked() {
+		return window.matchMedia("(max-width: 1335px)").matches && !appIsPhone();
 	}
 
 	function appLayout() {
-		if (appIsPhone()) {
-			return "phone";
-		}
-
-		return appIsNarrow() ? "narrow" : "wide";
+		return appIsPhone() ? "phone" : "wide";
 	}
 
-	function appListPlacement({ layout = "wide", hidden = false, drawerOpen = false } = {}) {
+	function appListPlacement({ layout = "wide", hidden = false } = {}) {
 		if (layout === "phone") {
 			return { column: true, shown: true };
-		}
-
-		if (layout === "narrow") {
-			return { column: true, shown: drawerOpen };
 		}
 
 		return { column: !hidden, shown: !hidden };
@@ -33179,22 +33322,9 @@ ${settingsModalHTML()}
 			return;
 		}
 
-		const { shown } = appListPlacement({
-			layout: appLayout(),
-			hidden: appState.panesHidden.list,
-			drawerOpen: shadow.querySelector("#app").classList.contains("list-open"),
-		});
+		const { shown } = appListPlacement({ layout: appLayout(), hidden: appState.panesHidden.list });
 
 		toggle.setAttribute("aria-pressed", shown ? "true" : "false");
-	}
-
-	function setAppDrawer(open) {
-		appState?.ui.shadow.querySelector("#app")?.classList.toggle("list-open", Boolean(open));
-		paintAppListToggle();
-
-		if (!open) {
-			setAppSearchOpen(false);
-		}
 	}
 
 	function setAppStage(stage) {
@@ -34119,10 +34249,6 @@ ${frontPageChooserHTML()}
 		setAppSubject({ url, title: story.title || "" });
 		state.openTotal = 0;
 		loadAppArticle(url, story.title || "");
-
-		if (appIsNarrow()) {
-			setAppDrawer(false);
-		}
 
 		if (appIsPhone()) {
 			state.scrolls.article = 0;
@@ -35411,11 +35537,6 @@ ${frontPageChooserHTML()}
 
 			if (appIsPhone() && shadow.querySelector("#app").dataset.stage !== "list") {
 				lowerAppSheet();
-				return;
-			}
-
-			if (appIsNarrow()) {
-				setAppDrawer(false);
 				return;
 			}
 		}
