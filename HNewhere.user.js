@@ -205,6 +205,7 @@
 		hiddenStories: "HNewhere:hidden_stories",
 		zoomBySite: "HNewhere:zoom_by_site",
 		appListWidth: "HNewhere:app_list_width",
+		appSplit: "HNewhere:app_split",
 		appPanes: "HNewhere:app_panes",
 		appZoom: "HNewhere:app_zoom",
 		readOut: "HNewhere:read_out",
@@ -20115,7 +20116,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 <div id="next-up" class="next-up hidden"></div>
 </div>
 
-</div>${appMode ? "</div>" : ""}
+</div>${appMode ? "</div></div>" : ""}
 `;
 
 		adoptStyles(shadow);
@@ -20156,7 +20157,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		const resizeHandle = shadow.querySelector("#resize-handle");
 
 		const onResizeMouseDown = (e) => {
-			if (e.button !== 0) {
+			if (e.button !== 0 || (appMode && appIsStacked())) {
 				return;
 			}
 
@@ -20214,7 +20215,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		const onTouchStart = (e) => {
 			const touch = e.touches[0];
 
-			if (!touch) {
+			if (!touch || (appMode && appIsStacked())) {
 				return;
 			}
 
@@ -28452,6 +28453,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 	const APP_LIST_MIN_WIDTH = 220;
 	const APP_LIST_MAX_WIDTH = 480;
+	const APP_SPLIT_MIN = 0.2;
+	const APP_SPLIT_MAX = 0.8;
 	const APP_PULL_TRIGGER = 56;
 	const APP_ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 	const APP_PULL_MAX = 96;
@@ -28869,8 +28872,9 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	position:relative;
 	overscroll-behavior:none;
 	--rail-column:50px;
+	--app-split:.6;
 	display:grid;
-	grid-template-columns:var(--rail-column) var(--app-list-width, 300px) minmax(0, 1fr) auto;
+	grid-template-columns:var(--rail-column) min(var(--app-list-width, 300px), calc(100% - var(--rail-column) - 201px)) minmax(0, 1fr);
 	grid-template-rows:minmax(0, 1fr);
 	width:100%;
 	height:100%;
@@ -29570,13 +29574,6 @@ ${APP_ICON_CSS}
 	overflow:hidden;
 }
 
-@media (min-width: 701px) and (max-width: 1100px) {
-	#app-article {
-		border-radius:12px 0 0 12px;
-		overflow:hidden;
-	}
-}
-
 #app.list-moving #app-list,
 #app.discussion-moving #panel.app-docked {
 	position:absolute;
@@ -29862,6 +29859,10 @@ ${SETTINGS_MODAL_CSS}
 	user-select:none;
 }
 
+#app.is-splitting {
+	cursor:row-resize;
+}
+
 #app.is-resizing .app-article-frame {
 	pointer-events:none;
 }
@@ -29964,8 +29965,16 @@ ${SETTINGS_MODAL_CSS}
 	box-shadow:0 0 0 2px var(--bg, #fff);
 }
 
+#app-reading {
+	position:relative;
+	display:flex;
+	min-width:0;
+	min-height:0;
+}
+
 #app-article {
 	position:relative;
+	flex:1 1 0;
 	display:flex;
 	flex-direction:column;
 	min-width:0;
@@ -30603,6 +30612,7 @@ ${SETTINGS_MODAL_CSS}
 	position:relative;
 	top:auto;
 	right:auto;
+	flex:0 0 auto;
 	height:100%;
 	min-height:0;
 	max-width:calc(100vw - 428px - var(--app-list-width, 300px));
@@ -30708,6 +30718,7 @@ ${SETTINGS_MODAL_CSS}
 #app-bar-save[aria-pressed="true"],
 #app-bar-like[aria-pressed="true"],
 #app-bar-discussion[aria-pressed="true"],
+#app-bar-view[aria-expanded="true"],
 #app #app-article .app-article-disc:is(.item-action-on, .vote-button-active, [aria-expanded="true"]) {
 	background:var(--rail-bg);
 	box-shadow:0 1px 2px rgba(0,0,0,.16), 0 6px 14px rgba(0,0,0,.16);
@@ -30721,21 +30732,25 @@ ${SETTINGS_MODAL_CSS}
 }
 
 @media (hover: hover) {
-	#app #app-article .app-article-disc:hover:where(:not(:disabled)) {
+	#app #app-article .app-article-disc:hover:where(:not(:disabled)),
+	#app #app-article .app-stack-button:hover {
 		background:linear-gradient(var(--hover-tint), var(--hover-tint)) var(--surface);
 	}
 
-	#app #app-article .app-article-disc:is(.item-action-on, .vote-button-active, [aria-expanded="true"]):hover {
+	#app #app-article .app-article-disc:is(.item-action-on, .vote-button-active, [aria-expanded="true"]):hover,
+	#app #app-article .app-stack-button:is([aria-pressed="true"], [aria-expanded="true"]):hover {
 		background:linear-gradient(var(--hover-tint), var(--hover-tint)) var(--rail-bg);
 	}
 }
 
-#app #app-article .app-article-disc:active:where(:not(:disabled)) {
+#app #app-article .app-article-disc:active:where(:not(:disabled)),
+#app #app-article .app-stack-button:active {
 	background:linear-gradient(var(--active-tint), var(--active-tint)) var(--surface);
 	--pressed-layer:none;
 }
 
-#app #app-article .app-article-disc:is(.item-action-on, .vote-button-active, [aria-expanded="true"]):active {
+#app #app-article .app-article-disc:is(.item-action-on, .vote-button-active, [aria-expanded="true"]):active,
+#app #app-article .app-stack-button:is([aria-pressed="true"], [aria-expanded="true"]):active {
 	background:linear-gradient(var(--active-tint), var(--active-tint)) var(--rail-bg);
 	--pressed-layer:block;
 }
@@ -30792,7 +30807,7 @@ header .item-action-link {
 	}
 }
 
-@media (min-width: 1101px) {
+@media (min-width: 701px) {
 	#app-rail {
 		grid-column:1;
 	}
@@ -30801,41 +30816,186 @@ header .item-action-link {
 		grid-column:2;
 	}
 
-	#app-article {
+	#app-reading {
 		grid-column:3;
-	}
-
-	#panel.app-docked {
-		grid-column:4;
 	}
 }
 
-@media (max-width: 1100px) {
-	#app {
-		grid-template-columns:var(--rail-column) minmax(0, 1fr) auto;
+@media (min-width: 701px) and (max-width: 1335px) {
+	#app-reading {
+		flex-direction:column;
+		--app-article-height:min(max(calc(var(--app-split) * 100%), var(--app-stack-room, 0px)), calc(100% - 160px));
 	}
 
-	#app-list {
-		position:absolute;
-		top:0;
+	#app-article {
+		flex:0 0 var(--app-article-height);
+	}
+
+	#app.discussion-hidden #app-article,
+	#app.discussion-moving #app-article,
+	#app:not(.has-story) #app-article {
+		flex:1 1 0;
+	}
+
+	#app.list-hidden #app-reading {
+		border-radius:12px 0 0 12px;
+		overflow:hidden;
+	}
+
+	#app.list-hidden.has-story:not(.discussion-hidden) #app-article {
+		border-bottom-left-radius:0;
+	}
+
+	#app-article > .app-pane-head {
 		bottom:0;
-		left:var(--rail-column);
-		z-index:4;
-		width:var(--app-list-width, 300px);
-		box-shadow:6px 0 18px rgba(0,0,0,.18);
-		transform:translateX(calc(-100% - 60px));
-		visibility:hidden;
-		transition:transform .18s ease, visibility 0s linear .18s;
+		height:auto;
+		pointer-events:none;
 	}
 
-	#app.list-open #app-list {
-		transform:none;
-		visibility:visible;
-		transition:transform .18s ease;
+	#app-toggle-list {
+		pointer-events:auto;
+	}
+
+	#app-article .app-pane-middle,
+	#app-toggle-discussion {
+		display:none;
+	}
+
+	#app-article > #app-bar {
+		display:flex !important;
+		position:absolute;
+		right:12px;
+		bottom:12px;
+		z-index:3;
+		flex-direction:column;
+		align-items:center;
+		gap:8px;
+	}
+
+	#app-article > #app-bar[hidden] {
+		display:none !important;
 	}
 
 	#panel.app-docked {
-		max-width:calc(100vw - 420px);
+		flex:1 1 0;
+		width:auto !important;
+		min-width:0;
+		max-width:none;
+		height:auto;
+		border-top:1px solid var(--border-soft);
+		border-left:0;
+	}
+
+	#panel.app-docked #resize-handle {
+		top:-4px;
+		right:0;
+		bottom:auto;
+		z-index:2;
+		width:auto;
+		height:8px;
+		cursor:row-resize;
+	}
+
+	#app.discussion-moving #panel.app-docked {
+		top:var(--app-article-height);
+		left:0;
+		width:auto !important;
+	}
+
+	#app.discussion-out #panel.app-docked {
+		transform:translateY(100%);
+	}
+}
+
+@media (min-width: 701px) and (max-width: 1335px) and (pointer: coarse) {
+	#panel.app-docked #resize-handle {
+		top:-10px;
+		height:20px;
+	}
+
+	#panel.app-docked #resize-handle::before {
+		width:40px;
+		height:4px;
+	}
+
+	#panel.app-docked > header .header-actions {
+		position:relative;
+		z-index:3;
+	}
+}
+
+@media (min-width: 701px) and (max-width: 1335px) and (prefers-reduced-motion: no-preference) {
+	#app.discussion-entering #panel.app-docked {
+		animation-name:bc-app-discussion-up;
+	}
+}
+
+@keyframes bc-app-discussion-up {
+	from {
+		opacity:0;
+		transform:translateY(14px);
+	}
+
+	to {
+		opacity:1;
+		transform:none;
+	}
+}
+
+@media (max-width: 1335px) {
+	.app-stack-button {
+		display:flex;
+		position:relative;
+		flex-direction:column;
+		align-items:center;
+		justify-content:center;
+		gap:1px;
+		box-sizing:border-box;
+		width:36px;
+		height:36px;
+		margin:0;
+		padding:0;
+		border:0;
+		border-radius:18px;
+		font:inherit;
+		cursor:pointer;
+		-webkit-tap-highlight-color:transparent;
+	}
+
+	.app-stack-button::before {
+		content:"";
+		position:absolute;
+		inset:-4px;
+	}
+
+	.app-stack-button svg {
+		width:18px;
+		height:18px;
+		fill:currentColor;
+	}
+
+	.app-stack-button[hidden] {
+		display:none;
+	}
+
+	#app-bar-discussion:has(.rail-badge:not(:empty)) {
+		height:50px;
+	}
+
+	#app-bar-discussion .rail-badge {
+		position:static;
+		min-width:0;
+		height:auto;
+		padding:0;
+		border-radius:0;
+		background:none;
+		box-shadow:none;
+		color:inherit;
+		font:600 10px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, sans-serif;
+	}
+
+	#app-bar-view .app-view-glyph {
+		line-height:1;
 	}
 }
 
@@ -30937,6 +31097,10 @@ header .item-action-link {
 
 	.rail-label {
 		display:none;
+	}
+
+	#app-reading {
+		display:contents;
 	}
 
 	#app-list,
@@ -31056,57 +31220,6 @@ header .item-action-link {
 	#app-bar[hidden],
 	#app-bar-back[hidden] {
 		display:none !important;
-	}
-
-	.app-stack-button {
-		display:flex;
-		position:relative;
-		flex-direction:column;
-		align-items:center;
-		justify-content:center;
-		gap:1px;
-		box-sizing:border-box;
-		width:36px;
-		height:36px;
-		margin:0;
-		padding:0;
-		border:0;
-		border-radius:18px;
-		font:inherit;
-		cursor:pointer;
-		-webkit-tap-highlight-color:transparent;
-	}
-
-	.app-stack-button::before {
-		content:"";
-		position:absolute;
-		inset:-4px;
-	}
-
-	.app-stack-button svg {
-		width:18px;
-		height:18px;
-		fill:currentColor;
-	}
-
-	.app-stack-button[hidden] {
-		display:none;
-	}
-
-	#app-bar-discussion:has(.rail-badge:not(:empty)) {
-		height:50px;
-	}
-
-	#app-bar-discussion .rail-badge {
-		position:static;
-		min-width:0;
-		height:auto;
-		padding:0;
-		border-radius:0;
-		background:none;
-		box-shadow:none;
-		color:inherit;
-		font:600 10px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, sans-serif;
 	}
 
 	#app-next {
@@ -31799,7 +31912,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 </nav>
 <button id="app-bar-back" class="app-stack-button" type="button" aria-label="Back to the articles" data-glyph="down" hidden>${APP_ICON('<path d="M2.2 5.1a1 1 0 0 1 1.4-.1L8 9l4.4-4a1 1 0 0 1 1.3 1.5l-5 4.6a1 1 0 0 1-1.4 0l-5-4.6a1 1 0 0 1-.1-1.4z"/>')}</button>
 <div id="app-row-menu" class="app-view-menu app-row-menu" role="menu" aria-label="This article" hidden></div>
-<div id="app-bar" class="app-bar" hidden><button id="app-bar-open" class="app-stack-button" type="button" aria-label="Open the original page" hidden>${APP_ICON('<path d="M9 2h5v5h-1.7V4.9L7.7 9.5 6.5 8.3l4.6-4.6H9z"/><path d="M3.5 4H7v1.7H4.7v5.6h5.6V9H12v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-pressed="false" aria-label="Save" hidden>${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-like" class="app-stack-button" type="button" aria-pressed="false" aria-label="Like" hidden>${APP_ICON('<path d="M2 7.2h2.6V14H2.5a.5.5 0 0 1-.5-.5z"/><path d="M5.8 14V6.7l2.5-4.4a1.2 1.2 0 0 1 2.2.9L10 6h3a1.4 1.4 0 0 1 1.37 1.7l-1 4.7A2 2 0 0 1 11.4 14z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
+<div id="app-bar" class="app-bar" hidden><button id="app-bar-view" class="app-stack-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-glyph"><span class="app-view-big">A</span><span class="app-view-small">a</span></span></button><button id="app-bar-open" class="app-stack-button" type="button" aria-label="Open the original page" hidden>${APP_ICON('<path d="M9 2h5v5h-1.7V4.9L7.7 9.5 6.5 8.3l4.6-4.6H9z"/><path d="M3.5 4H7v1.7H4.7v5.6h5.6V9H12v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-pressed="false" aria-label="Save" hidden>${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-like" class="app-stack-button" type="button" aria-pressed="false" aria-label="Like" hidden>${APP_ICON('<path d="M2 7.2h2.6V14H2.5a.5.5 0 0 1-.5-.5z"/><path d="M5.8 14V6.7l2.5-4.4a1.2 1.2 0 0 1 2.2.9L10 6h3a1.4 1.4 0 0 1 1.37 1.7l-1 4.7A2 2 0 0 1 11.4 14z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
 <section id="app-list" aria-label="Articles">
 <div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="app-head-icon" type="button" aria-label="Mark all as read" title="Mark all as read">${APP_MARK_READ_ICON}</button><button id="app-list-sync" class="app-head-icon" type="button" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button></span></div>
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
@@ -31809,13 +31922,14 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div id="app-list-foot" hidden><button id="app-list-mark-read" class="item-action-link" type="button">Mark all as read</button></div>
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
+${settingsPanelHTML()}
+${settingsModalHTML()}
+<div id="app-reading">
 <section id="app-article" aria-label="Article">
 <div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="Front Pages">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="Discussion" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
 <div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick an article to read it here, with what people said about it beside it.</div></div>
 <div id="app-next" class="app-next" hidden><span class="app-next-label">Read next</span><button id="app-next-link" class="app-next-link" type="button"><span class="app-next-title"></span><span class="app-next-meta"></span></button></div>
 </section>
-${settingsPanelHTML()}
-${settingsModalHTML()}
 `;
 	}
 
@@ -31870,7 +31984,6 @@ ${settingsModalHTML()}
 
 		wireApp(ui);
 		renderAppDiscussionEmpty();
-		setAppDrawer(true);
 		watchNoteSelection(await loadSettings());
 		await refreshAppSources();
 	}
@@ -31967,6 +32080,10 @@ ${settingsModalHTML()}
 		const paintPaneToggles = () => {
 			discussionToggle.setAttribute("aria-pressed", paneHidden.discussion ? "false" : "true");
 			paintAppListToggle();
+
+			if (!appIsPhone()) {
+				shadow.querySelector("#app-bar-discussion").setAttribute("aria-pressed", paneHidden.discussion ? "false" : "true");
+			}
 		};
 
 		const openListColumn = (open) => {
@@ -32112,18 +32229,22 @@ ${settingsModalHTML()}
 		viewMenu.addEventListener("keydown", (event) => {
 			if (event.key === "Escape") {
 				setAppViewMenuOpen(false);
-				viewToggle.focus();
+				shadow.querySelector(appIsStacked() ? "#app-bar-view" : "#app-view-toggle").focus();
 			}
 		});
 		shadow.addEventListener("pointerdown", (event) => {
 			const path = event.composedPath();
 
-			if (!viewMenu.hidden && !path.includes(viewMenu) && !path.includes(viewToggle)) {
+			if (!viewMenu.hidden && !path.includes(viewMenu) && !path.includes(viewToggle) && !path.includes(shadow.querySelector("#app-bar-view"))) {
 				setAppViewMenuOpen(false);
 			}
 		});
 		window.addEventListener("blur", () => setAppViewMenuOpen(false));
 		window.addEventListener("resize", () => placeAppViewMenu());
+		window.matchMedia("(max-width: 1335px)").addEventListener("change", () => {
+			setAppViewMenuOpen(false);
+			paintAppChrome();
+		});
 		load(STORAGE.appZoom, null)
 			.then((zoom) => {
 				const at = APP_ZOOM_STEPS.indexOf(Number(zoom));
@@ -32140,43 +32261,27 @@ ${settingsModalHTML()}
 		}
 
 		appState.revealList = () => {
-			if (appIsNarrow()) {
-				setAppDrawer(true);
-			} else if (paneHidden.list) {
+			if (paneHidden.list) {
 				setPaneHidden("list", false);
 			}
 		};
-		listToggle.onclick = () => {
-			if (appIsNarrow()) {
-				setAppDrawer(!appRoot.classList.contains("list-open"));
-				return;
-			}
-
-			setPaneHidden("list", !paneHidden.list);
-		};
+		listToggle.onclick = () => setPaneHidden("list", !paneHidden.list);
 		discussionToggle.onclick = () => setPaneHidden("discussion", !paneHidden.discussion);
 		paintPaneToggles();
 
-		for (const query of ["(max-width: 700px)", "(max-width: 1100px)"]) {
-			window.matchMedia(query).addEventListener("change", () => {
-				setAppSearchOpen(false);
+		window.matchMedia("(max-width: 700px)").addEventListener("change", () => {
+			setAppSearchOpen(false);
+			settleAppList();
+			setAppViewMenuOpen(false);
+			paintAppZoom();
+			setAppSearchOpen(false);
 
-				if (appLayout() === "narrow") {
-					setAppDrawer(!appRoot.classList.contains("has-story"));
-				}
+			if (!appIsPhone() && appRoot.dataset.stage !== "list") {
+				appRoot.dataset.stage = "list";
+			}
 
-				settleAppList();
-				setAppViewMenuOpen(false);
-				paintAppZoom();
-				setAppSearchOpen(false);
-
-				if (!appIsPhone() && appRoot.dataset.stage !== "list") {
-					appRoot.dataset.stage = "list";
-				}
-
-				paintAppChrome();
-			});
-		}
+			paintAppChrome();
+		});
 
 		load(STORAGE.appPanes, null)
 			.then((panes) => {
@@ -32232,6 +32337,49 @@ ${settingsModalHTML()}
 		listHandle.addEventListener("pointerup", endListDrag);
 		listHandle.addEventListener("pointercancel", endListDrag);
 		listHandle.addEventListener("lostpointercapture", endListDrag);
+
+		const reading = shadow.querySelector("#app-reading");
+		const article = shadow.querySelector("#app-article");
+		const splitHandle = shadow.querySelector("#resize-handle");
+		let splitDrag = null;
+		let splitSaveTimer = 0;
+
+		load(STORAGE.appSplit, null)
+			.then((split) => applyAppSplit(appRoot, split))
+			.catch(console.error);
+
+		splitHandle.addEventListener("pointerdown", (event) => {
+			if (event.button !== 0 || !appIsStacked()) {
+				return;
+			}
+
+			splitDrag = { y: event.clientY, height: article.getBoundingClientRect().height, room: reading.getBoundingClientRect().height };
+			splitHandle.setPointerCapture(event.pointerId);
+			appRoot.classList.add("is-resizing", "is-splitting");
+			event.preventDefault();
+		});
+
+		splitHandle.addEventListener("pointermove", (event) => {
+			if (!splitDrag || !splitDrag.room) {
+				return;
+			}
+
+			const split = applyAppSplit(appRoot, (splitDrag.height + event.clientY - splitDrag.y) / splitDrag.room);
+
+			clearTimeout(splitSaveTimer);
+			splitSaveTimer = setTimeout(() => {
+				save(STORAGE.appSplit, split).catch(console.error);
+			}, 250);
+		});
+
+		const endSplitDrag = () => {
+			splitDrag = null;
+			appRoot.classList.remove("is-resizing", "is-splitting");
+		};
+
+		splitHandle.addEventListener("pointerup", endSplitDrag);
+		splitHandle.addEventListener("pointercancel", endSplitDrag);
+		splitHandle.addEventListener("lostpointercapture", endSplitDrag);
 
 		const pull = shadow.querySelector("#app-list-pull");
 		let pullStart = null;
@@ -32354,7 +32502,14 @@ ${settingsModalHTML()}
 		};
 
 		shadow.querySelector("#app-bar-back").onclick = () => setAppStage("list");
-		shadow.querySelector("#app-bar-discussion").onclick = () => setAppStage(appRoot.dataset.stage === "discussion" ? "article" : "discussion");
+		shadow.querySelector("#app-bar-discussion").onclick = () => {
+			if (appIsPhone()) {
+				setAppStage(appRoot.dataset.stage === "discussion" ? "article" : "discussion");
+			} else {
+				setPaneHidden("discussion", !paneHidden.discussion);
+			}
+		};
+		shadow.querySelector("#app-bar-view").onclick = () => setAppViewMenuOpen(shadow.querySelector("#app-view-menu").hidden);
 		shadow.addEventListener("pointerdown", (event) => {
 			const path = event.composedPath();
 			const rowMenu = shadow.querySelector("#app-row-menu");
@@ -32428,21 +32583,6 @@ ${settingsModalHTML()}
 		watchPullDown(window, () => {
 			if (appIsPhone()) {
 				lowerAppSheet();
-			}
-		});
-		shadow.addEventListener("pointerdown", (event) => {
-			const path = event.composedPath();
-			const inside = ["#app-list", "#app-rail", "#app-toggle-list"].some((selector) =>
-				path.includes(shadow.querySelector(selector)),
-			);
-
-			if (appIsNarrow() && !inside) {
-				setAppDrawer(false);
-			}
-		});
-		window.addEventListener("blur", () => {
-			if (appIsNarrow() && shadow.activeElement?.tagName === "IFRAME") {
-				setAppDrawer(false);
 			}
 		});
 
@@ -32548,6 +32688,34 @@ ${settingsModalHTML()}
 		const report = credits?.querySelector('a[href$="/issues"]');
 		const version = modal.querySelector(".app-settings-version");
 		const close = shadow.querySelector("#app-settings-close");
+		const app = shadow.querySelector("#app");
+		const behind = app ? ["#app-rail", "#app-list", "#app-reading"].map((selector) => shadow.querySelector(selector)).filter(Boolean) : [];
+
+		const holdBehind = (held) => {
+			for (const element of behind) {
+				element.toggleAttribute("inert", held);
+			}
+		};
+
+		const tabStops = () => {
+			const stops = [];
+
+			for (const element of modal.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")) {
+				if (element.disabled || element.tabIndex < 0 || !element.getClientRects().length || getComputedStyle(element).visibility === "hidden") {
+					continue;
+				}
+
+				const group = element.type === "radio" && element.name ? stops.findIndex((stop) => stop.type === "radio" && stop.name === element.name) : -1;
+
+				if (group < 0) {
+					stops.push(element);
+				} else if (element.checked) {
+					stops[group] = element;
+				}
+			}
+
+			return stops;
+		};
 
 		version.textContent = SCRIPT_VERSION ? `v${SCRIPT_VERSION}` : "";
 
@@ -32630,6 +32798,7 @@ ${settingsModalHTML()}
 				}
 
 				modal.hidden = false;
+				holdBehind(true);
 
 				if (panel.classList.contains("hidden")) {
 					toggleDropdown?.(new Event("click"));
@@ -32641,6 +32810,7 @@ ${settingsModalHTML()}
 			}
 
 			modal.hidden = true;
+			holdBehind(false);
 
 			if (!panel.classList.contains("hidden")) {
 				toggleDropdown?.(new Event("click"));
@@ -32679,11 +32849,25 @@ ${settingsModalHTML()}
 				event.preventDefault();
 				setOpen(false);
 			}
+
+			if (event.key !== "Tab" || !app) {
+				return;
+			}
+
+			const stops = tabStops();
+			const active = shadow.activeElement;
+			const edge = event.shiftKey ? stops[0] : stops.at(-1);
+
+			if (edge && (active === edge || (active?.type === "radio" && edge.type === "radio" && active.name === edge.name))) {
+				event.preventDefault();
+				(event.shiftKey ? stops.at(-1) : stops[0]).focus();
+			}
 		});
 
 		new MutationObserver(() => {
 			if (!modal.hidden && panel.classList.contains("hidden")) {
 				modal.hidden = true;
+				holdBehind(false);
 			}
 		}).observe(panel, { attributes: true, attributeFilter: ["class"] });
 	}
@@ -33038,21 +33222,17 @@ ${settingsModalHTML()}
 
 		setAppSearchOpen(false);
 
-		if (view === state.view) {
-			if (appIsNarrow()) {
-				setAppDrawer(searching || !state.ui.shadow.querySelector("#app").classList.contains("list-open"));
-			}
+		if (searching && !appIsPhone()) {
+			state.revealList?.();
+		}
 
+		if (view === state.view) {
 			return;
 		}
 
 		state.view = view;
 		paintAppRail();
 		renderAppList().catch(console.error);
-
-		if (appIsNarrow()) {
-			setAppDrawer(true);
-		}
 	}
 
 	function showAppTip(button) {
@@ -33082,6 +33262,17 @@ ${settingsModalHTML()}
 		const clamped = Math.round(Math.min(Math.max(width, APP_LIST_MIN_WIDTH), APP_LIST_MAX_WIDTH));
 
 		app.style.setProperty("--app-list-width", `${clamped}px`);
+		return clamped;
+	}
+
+	function applyAppSplit(app, split) {
+		if (!app || typeof split !== "number" || !Number.isFinite(split)) {
+			return null;
+		}
+
+		const clamped = Math.round(Math.min(Math.max(split, APP_SPLIT_MIN), APP_SPLIT_MAX) * 1000) / 1000;
+
+		app.style.setProperty("--app-split", String(clamped));
 		return clamped;
 	}
 
@@ -33149,25 +33340,17 @@ ${settingsModalHTML()}
 		return window.matchMedia("(max-width: 700px)").matches;
 	}
 
-	function appIsNarrow() {
-		return window.matchMedia("(max-width: 1100px)").matches && !appIsPhone();
+	function appIsStacked() {
+		return window.matchMedia("(max-width: 1335px)").matches && !appIsPhone();
 	}
 
 	function appLayout() {
-		if (appIsPhone()) {
-			return "phone";
-		}
-
-		return appIsNarrow() ? "narrow" : "wide";
+		return appIsPhone() ? "phone" : "wide";
 	}
 
-	function appListPlacement({ layout = "wide", hidden = false, drawerOpen = false } = {}) {
+	function appListPlacement({ layout = "wide", hidden = false } = {}) {
 		if (layout === "phone") {
 			return { column: true, shown: true };
-		}
-
-		if (layout === "narrow") {
-			return { column: true, shown: drawerOpen };
 		}
 
 		return { column: !hidden, shown: !hidden };
@@ -33181,22 +33364,9 @@ ${settingsModalHTML()}
 			return;
 		}
 
-		const { shown } = appListPlacement({
-			layout: appLayout(),
-			hidden: appState.panesHidden.list,
-			drawerOpen: shadow.querySelector("#app").classList.contains("list-open"),
-		});
+		const { shown } = appListPlacement({ layout: appLayout(), hidden: appState.panesHidden.list });
 
 		toggle.setAttribute("aria-pressed", shown ? "true" : "false");
-	}
-
-	function setAppDrawer(open) {
-		appState?.ui.shadow.querySelector("#app")?.classList.toggle("list-open", Boolean(open));
-		paintAppListToggle();
-
-		if (!open) {
-			setAppSearchOpen(false);
-		}
 	}
 
 	function setAppStage(stage) {
@@ -33407,6 +33577,11 @@ ${settingsModalHTML()}
 		like.setAttribute("aria-pressed", vote?.getAttribute("aria-pressed") || "false");
 		like.setAttribute("aria-label", vote?.title || "Like");
 		shadow.querySelector("#app-bar-open").hidden = shadow.querySelector("#app-article-open").hidden;
+		shadow.querySelector("#app-bar-view").hidden = appIsPhone() || shadow.querySelector("#app-view-toggle").hidden;
+
+		const bar = shadow.querySelector("#app-bar");
+
+		shadow.querySelector("#app").style.setProperty("--app-stack-room", appIsStacked() && !bar.hidden ? `${bar.offsetHeight + 24}px` : "0px");
 	}
 
 	function appNextRow() {
@@ -33483,7 +33658,13 @@ ${settingsModalHTML()}
 		const total = appState.openTotal;
 		const discussion = shadow.querySelector("#app-bar-discussion");
 
-		bar.hidden = stage === "list";
+		const home = shadow.querySelector(appIsStacked() ? "#app-article" : "#app");
+
+		if (bar.parentElement !== home) {
+			home.insertBefore(bar, appIsStacked() ? null : shadow.querySelector("#app-list"));
+		}
+
+		bar.hidden = appIsStacked() ? !shadow.querySelector("#app").classList.contains("has-story") : stage === "list";
 		shadow.querySelector("#app-bar-back").hidden = stage === "list";
 		shadow.querySelector("#app-search").hidden = stage !== "list";
 
@@ -33491,7 +33672,7 @@ ${settingsModalHTML()}
 			setAppSearchOpen(false);
 		}
 
-		discussion.setAttribute("aria-pressed", String(stage === "discussion"));
+		discussion.setAttribute("aria-pressed", String(appIsPhone() ? stage === "discussion" : !appState.panesHidden.discussion));
 		discussion.querySelector(".rail-badge").textContent = total ? compactCount(total) : "";
 		paintAppBarActions();
 		paintAppNext();
@@ -34122,10 +34303,6 @@ ${frontPageChooserHTML()}
 		state.openTotal = 0;
 		loadAppArticle(url, story.title || "");
 
-		if (appIsNarrow()) {
-			setAppDrawer(false);
-		}
-
 		if (appIsPhone()) {
 			state.scrolls.article = 0;
 			state.scrolls.discussion = 0;
@@ -34347,7 +34524,7 @@ ${frontPageChooserHTML()}
 	function setAppViewMenuOpen(open) {
 		const shadow = appState?.ui.shadow;
 		const menu = shadow?.querySelector("#app-view-menu");
-		const toggle = shadow?.querySelector("#app-view-toggle");
+		const toggle = shadow?.querySelector(appIsStacked() ? "#app-bar-view" : "#app-view-toggle");
 
 		if (!menu || !toggle) {
 			return;
@@ -34357,8 +34534,11 @@ ${frontPageChooserHTML()}
 
 		menu.hidden = !show;
 		shadow.querySelector("#app-view-arrow")?.toggleAttribute("hidden", !show);
-		toggle.setAttribute("aria-expanded", String(show));
-		toggle.classList.toggle("is-open", show);
+
+		for (const each of shadow.querySelectorAll("#app-view-toggle, #app-bar-view")) {
+			each.setAttribute("aria-expanded", String(show && each === toggle));
+			each.classList.toggle("is-open", show && each === toggle);
+		}
 
 		if (show) {
 			placeAppViewMenu();
@@ -34368,12 +34548,14 @@ ${frontPageChooserHTML()}
 	function placeAppViewMenu() {
 		const shadow = appState?.ui.shadow;
 		const menu = shadow?.querySelector("#app-view-menu");
-		const toggle = shadow?.querySelector("#app-view-toggle");
+		const toggle = shadow?.querySelector(appIsStacked() ? "#app-bar-view" : "#app-view-toggle");
 		const pane = shadow?.querySelector("#app-article");
 
 		if (!menu || menu.hidden || !toggle || !pane) {
 			return;
 		}
+
+		const above = appIsStacked();
 
 		const box = toggle.getBoundingClientRect();
 		const room = pane.getBoundingClientRect();
@@ -34386,11 +34568,12 @@ ${frontPageChooserHTML()}
 		const arrow = shadow.querySelector("#app-view-arrow");
 
 		menu.style.left = `${Math.round(left)}px`;
-		menu.style.top = `${Math.round(box.bottom + 9)}px`;
+		menu.style.top = `${Math.round(above ? box.top - 9 - menu.offsetHeight : box.bottom + 9)}px`;
 
 		if (arrow) {
+			arrow.classList.toggle("is-down", above);
 			arrow.style.left = `${Math.round(box.left + box.width / 2 - 5)}px`;
-			arrow.style.top = `${Math.round(box.bottom + 4)}px`;
+			arrow.style.top = `${Math.round(above ? box.top - 14 : box.bottom + 4)}px`;
 		}
 	}
 
@@ -35413,11 +35596,6 @@ ${frontPageChooserHTML()}
 
 			if (appIsPhone() && shadow.querySelector("#app").dataset.stage !== "list") {
 				lowerAppSheet();
-				return;
-			}
-
-			if (appIsNarrow()) {
-				setAppDrawer(false);
 				return;
 			}
 		}
