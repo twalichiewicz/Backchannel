@@ -12696,6 +12696,13 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			return;
 		}
 
+		const control = ui.shadow?.querySelector("#comment-toggle");
+
+		if (control) {
+			control.hidden = true;
+		}
+
+		closeComposeDock(ui.shadow);
 		body.replaceChildren();
 
 		const message = document.createElement("div");
@@ -13737,6 +13744,7 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 			control.hidden = true;
 		}
 
+		closeComposeDock(ui.shadow);
 		target.innerHTML = `
 <div class="source-picker">
 <div class="source-picker-title">Pick your sources</div>
@@ -20553,11 +20561,16 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			dock.hidden = true;
 			control.classList.remove("is-open");
 			control.setAttribute("aria-expanded", "false");
-			spacer.replaceWith(box);
+
+			if (spacer.isConnected) {
+				spacer.replaceWith(box);
+			} else {
+				box.remove();
+			}
 		};
 
 		const dockBox = () => {
-			if (docked) {
+			if (docked || !box.isConnected) {
 				return;
 			}
 
@@ -20595,7 +20608,15 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			}
 		});
 
-		return { undock, stop: () => undock() };
+		return { undock, home: () => (docked ? spacer : box), stop: () => undock() };
+	}
+
+	function dockedComposeBox(shadow) {
+		return shadow?.querySelector("#compose-dock-slot .compose-box") || null;
+	}
+
+	function closeComposeDock(shadow) {
+		dockedComposeBox(shadow)?._hnewhereDock?.undock();
 	}
 
 	function replyTargets(stories = renderedDiscussions || []) {
@@ -20643,7 +20664,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			outside(dock) &&
 			outside(shadow.querySelector("#comment-toggle"))
 		) {
-			dock.querySelector(".compose-box")?._hnewhereDock?.undock();
+			closeComposeDock(shadow);
 		}
 
 		for (const box of shadow.querySelectorAll(".comment-composer")) {
@@ -20722,7 +20743,13 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		field.setAttribute("aria-label", placeholder);
 	}
 
-	function mountComposeBox(ui, stories, settings, before) {
+	function mountComposeBox(ui, stories, settings, before, kept = null) {
+		if (kept) {
+			ui.body.insertBefore(kept._hnewhereDock.home(), before);
+			syncComposeBox();
+			return kept;
+		}
+
 		const canNote = Boolean(settings.notepad);
 		const canComment = stories.some(
 			(story) => getSource(story.source)?.capabilities.reply,
@@ -20804,11 +20831,23 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		const menu = box.querySelector(".compose-targets");
 		const first = stories[0];
 
+		box._hnewhereStoryKey = first?.key ?? null;
+
 		const held = canComment
 			? wireComposer(box, {
 					source: first?.source || "hn",
 					storyID: first?.id,
 					onPosted: () => {},
+					onRestored: () => {
+						syncComposeSendable(box);
+						grow();
+						new ResizeObserver((_, watch) => {
+							if (textarea.getClientRects().length) {
+								watch.disconnect();
+								grow();
+							}
+						}).observe(textarea);
+					},
 				})
 			: null;
 
@@ -20854,7 +20893,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			});
 
 			commentButton.onclick = () => {
-				const targets = replyTargets(stories);
+				const targets = replyTargets();
 
 				if (!targets.length) {
 					return;
@@ -21114,7 +21153,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 
 	function wireComposer(
 		composer,
-		{ source = "hn", storyID, parentId = null, onPosted } = {},
+		{ source = "hn", storyID, parentId = null, onPosted, onRestored } = {},
 	) {
 		if (!composer) {
 			return null;
@@ -21173,6 +21212,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			.then((draft) => {
 				if (draft && !textarea.value) {
 					textarea.value = draft;
+					onRestored?.();
 				}
 			})
 			.catch(console.error);
@@ -22129,6 +22169,13 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 	}
 
 	async function renderDiscussions(stories, ui, { arrival = true } = {}) {
+		const docked = dockedComposeBox(ui.shadow);
+		const kept = docked && stories.some((story) => story.key === docked._hnewhereStoryKey) ? docked : null;
+
+		if (!kept) {
+			closeComposeDock(ui.shadow);
+		}
+
 		renderedFor = stories === renderedDiscussions ? renderedFor : openPageKey();
 		renderedDiscussions = stories;
 		clearArticleAnnotations();
@@ -22137,6 +22184,11 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		stopObservingNewComments();
 		renderedComments = [];
 		ui.body.innerHTML = "";
+
+		if (kept) {
+			ui.body.appendChild(kept._hnewhereDock.home());
+		}
+
 		setSidebarRestingSubtitle(ui, "");
 
 		const generation = sidebarGeneration;
@@ -22251,7 +22303,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			ui.body.insertBefore(sortRow, comments);
 		}
 
-		mountComposeBox(ui, stories, settings, sortRow || comments);
+		mountComposeBox(ui, stories, settings, sortRow || comments, kept);
 
 		const collapsedKeys = await loadCollapsed();
 		const seenTimes = new Map(
@@ -34522,6 +34574,7 @@ ${frontPageChooserHTML()}
 
 		waiting.className = "browse-empty app-discussion-empty";
 		waiting.textContent = "Finding what people said…";
+		closeComposeDock(appState.ui.shadow);
 		body.replaceChildren(waiting);
 		renderedDiscussions = [];
 		renderedFor = "";
