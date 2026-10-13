@@ -209,6 +209,7 @@
 		appPanes: "HNewhere:app_panes",
 		appZoom: "HNewhere:app_zoom",
 		readOut: "HNewhere:read_out",
+		shortcuts: "HNewhere:shortcuts",
 	};
 
 	const COLLECTED_LEGACY_KEY = "HNewhere:watches";
@@ -20657,6 +20658,8 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		}
 	}
 
+	let composeTargetsMenu = null;
+
 	function closeComposeTargets(box) {
 		const button = box.querySelector(".compose-send-comment");
 
@@ -20822,6 +20825,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		const closeMenu = () => closeComposeTargets(box);
 
 		const openMenu = () => {
+			composeTargetsMenu = menu;
 			menu.classList.remove("hidden");
 			commentButton.classList.add("is-open");
 			commentButton.setAttribute("aria-expanded", "true");
@@ -31858,7 +31862,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <button id="app-search" class="app-stack-button" type="button" aria-label="Search the list" aria-expanded="false" aria-controls="app-search-bar" hidden>${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</button>
 <div id="app-search-page" class="app-search-page" role="dialog" aria-label="Search Backchannel" hidden><div class="app-search-head"><input id="app-search-input" class="app-search-input" type="search" placeholder="Search Backchannel" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search Backchannel"><button id="app-search-close" class="app-search-close" type="button">Cancel</button></div><div id="app-search-results" class="app-search-results"></div></div>
 <nav id="app-rail" aria-label="Views">
-<button id="app-rail-search" class="rail-button" type="button" data-tip="${appSearchTip()}" aria-label="Search Backchannel" aria-pressed="false" aria-controls="app-search-page"><span class="rail-icon">${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</span><span class="rail-label" aria-hidden="true">Search</span></button>
+<button id="app-rail-search" class="rail-button" type="button" data-tip="${escapeHTML(appShortcutTip("search"))}" aria-label="Search Backchannel" aria-pressed="false" aria-controls="app-search-page"><span class="rail-icon">${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</span><span class="rail-label" aria-hidden="true">Search</span></button>
 <div class="rail-rule" aria-hidden="true"></div>
 <button id="app-rail-welcome" class="rail-button is-current" type="button" data-tip="Welcome" aria-label="Welcome" aria-current="page" hidden><span class="rail-icon">${APP_ICON('<path fill="currentColor" d="M8 1.3 10 5.6l4.7.5-3.5 3.2 1 4.6L8 11.5l-4.2 2.4 1-4.6-3.5-3.2 4.7-.5z"/>')}</span><span class="rail-label" aria-hidden="true">Welcome</span></button>
 ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).join("\n")}
@@ -31885,7 +31889,7 @@ ${settingsModalHTML()}
 <div class="toast-layer">${TOAST_HTML}</div>
 <div id="app-reading">
 <section id="app-article" aria-label="Article">
-<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="Front Pages">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="Discussion" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
+<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="${escapeHTML(appShortcutTip("front-pages"))}">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="${escapeHTML(appShortcutTip("discussion"))}" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
 <div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick an article to read it here, with what people said about it beside it.</div></div>
 <div id="app-next" class="app-next" hidden><span class="app-next-label">Read next</span><button id="app-next-link" class="app-next-link" type="button"><span class="app-next-title"></span><span class="app-next-meta"></span></button></div>
 </section>
@@ -31923,6 +31927,8 @@ ${settingsModalHTML()}
 	async function runAppPass() {
 		traceOrphanedComments().catch(console.error);
 
+		const shortcuts = readAppShortcuts();
+
 		await documentReady();
 
 		const ui = await createSidebar({ appMode: true });
@@ -31942,6 +31948,7 @@ ${settingsModalHTML()}
 		}
 
 		wireApp(ui);
+		loadAppShortcuts(shortcuts).catch(console.error);
 		renderAppDiscussionEmpty();
 		watchNoteSelection(await loadSettings());
 		await refreshAppSources();
@@ -32035,6 +32042,11 @@ ${settingsModalHTML()}
 
 		const paneHidden = appState.panesHidden;
 		const paneSlides = {};
+		const paneCaret = { list: null, discussion: null };
+		const dropPaneCaret = () => {
+			paneCaret.list = null;
+			paneCaret.discussion = null;
+		};
 
 		const paintPaneToggles = () => {
 			discussionToggle.setAttribute("aria-pressed", paneHidden.discussion ? "false" : "true");
@@ -32069,13 +32081,21 @@ ${settingsModalHTML()}
 			paintAppListToggle();
 		};
 
-		const setPaneHidden = (pane, hidden, remember = true) => {
+		const setPaneHidden = (pane, hidden, remember = true, keyed = false) => {
 			if (remember && paneHidden[pane] === hidden) {
 				return;
 			}
 
 			const list = pane === "list";
 			const element = shadow.querySelector(list ? "#app-list" : "#panel");
+			const caret = paneCaret[pane];
+
+			if (!hidden) {
+				paneCaret[pane] = null;
+			} else if (keyed) {
+				paneCaret[pane] = appCaretIn(element);
+				paneCaret[pane]?.field.blur();
+			}
 
 			if (list && hidden) {
 				setAppSearchOpen(false);
@@ -32128,6 +32148,10 @@ ${settingsModalHTML()}
 					list: !paneHidden.list,
 					discussion: !paneHidden.discussion,
 				}).catch(console.error);
+			}
+
+			if (keyed && !hidden && caret) {
+				appCaretBack(caret);
 			}
 		};
 
@@ -32216,8 +32240,15 @@ ${settingsModalHTML()}
 				setPaneHidden("list", false);
 			}
 		};
-		listToggle.onclick = () => setPaneHidden("list", !paneHidden.list);
-		discussionToggle.onclick = () => setPaneHidden("discussion", !paneHidden.discussion);
+		appState.togglePane = (pane, keyed = false) => setPaneHidden(pane, !paneHidden[pane], true, keyed);
+		listToggle.onclick = () => appState.togglePane("list");
+		discussionToggle.onclick = () => appState.togglePane("discussion");
+		document.addEventListener("focusin", dropPaneCaret, true);
+		window.addEventListener("blur", () => {
+			if (shadow.activeElement) {
+				dropPaneCaret();
+			}
+		});
 		paintPaneToggles();
 
 		window.matchMedia("(max-width: 700px)").addEventListener("change", () => {
@@ -32415,8 +32446,10 @@ ${settingsModalHTML()}
 		listPane.addEventListener("touchend", endPull);
 		listPane.addEventListener("touchcancel", endPull);
 
-		shadow.querySelector("#app-list-sync").onclick = async (event) => {
-			const button = event.currentTarget;
+		const syncButton = shadow.querySelector("#app-list-sync");
+
+		syncButton.onclick = async () => {
+			const button = syncButton;
 
 			if (button.classList.contains("is-syncing")) {
 				return;
@@ -32612,6 +32645,7 @@ ${settingsModalHTML()}
 		wireSettingsModal(shadow);
 		document.addEventListener("keydown", onAppShortcut, true);
 		document.addEventListener("keydown", onAppKey);
+		window.addEventListener("keydown", noteAppKeysBehind, true);
 		window.addEventListener("message", onAppMessage);
 	}
 
@@ -32764,7 +32798,11 @@ ${settingsModalHTML()}
 				toggleDropdown?.(new Event("click"));
 			}
 
-			gear.focus({ preventScroll: true });
+			if (!returnAppSettingsCaret()) {
+				gear.focus({ preventScroll: true });
+			}
+
+			loadAppShortcuts().catch(console.error);
 		};
 
 		gear.onclick = (event) => {
@@ -32816,6 +32854,8 @@ ${settingsModalHTML()}
 			if (!modal.hidden && panel.classList.contains("hidden")) {
 				modal.hidden = true;
 				holdBehind(false);
+				returnAppSettingsCaret();
+				loadAppShortcuts().catch(console.error);
 			}
 		}).observe(panel, { attributes: true, attributeFilter: ["class"] });
 	}
@@ -33677,8 +33717,143 @@ ${settingsModalHTML()}
 		return /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent || "");
 	}
 
-	function appSearchTip() {
-		return `Search  ${appIsApple() ? "⌘K" : "Ctrl+K"}`;
+	function appKeyBinding(key, mod = false) {
+		return { key, mod, alt: false, shift: false };
+	}
+
+	const APP_SHORTCUTS = [
+		{ id: "search", label: "Search", keys: [appKeyBinding("k", true)] },
+		{ id: "front-pages", label: "Front Pages", keys: [appKeyBinding("[")] },
+		{ id: "discussion", label: "Discussion", keys: [appKeyBinding("]")] },
+		{ id: "settings", label: "Settings", keys: [] },
+		{ id: "save", label: "Save", keys: [appKeyBinding("s")] },
+		{ id: "sync", label: "Sync", keys: [appKeyBinding("r")] },
+		{ id: "next", label: "Next", keys: [appKeyBinding("j")], repeats: true },
+		{ id: "previous", label: "Previous", keys: [appKeyBinding("k")], repeats: true },
+		{ id: "open-original", label: "Open the original", keys: [appKeyBinding("o")] },
+		{ id: "close", label: "Close", keys: [appKeyBinding("Escape")], fixed: true },
+	];
+
+	let appShortcuts = appShortcutsFrom(null);
+
+	function appKeyName(key) {
+		const text = String(key ?? "");
+
+		return /^\p{L}$/u.test(text) ? text.toLowerCase() : text;
+	}
+
+	function appKeyIgnoresShift(key) {
+		return [...key].length === 1 && !/^\p{L}$/u.test(key);
+	}
+
+	function appBindingIsValid(binding) {
+		return (
+			Boolean(binding) &&
+			typeof binding === "object" &&
+			typeof binding.key === "string" &&
+			binding.key !== "" &&
+			["mod", "alt", "shift"].every((flag) => binding[flag] === undefined || typeof binding[flag] === "boolean")
+		);
+	}
+
+	function appBindingId(binding) {
+		const shifted = binding.shift && !appKeyIgnoresShift(binding.key);
+
+		return `${binding.mod ? "mod+" : ""}${binding.alt ? "alt+" : ""}${shifted ? "shift+" : ""}${binding.key}`;
+	}
+
+	function appShortcutsFrom(stored) {
+		const held = stored && typeof stored === "object" ? stored : {};
+		const saved = held.bindings && typeof held.bindings === "object" ? held.bindings : {};
+		const taken = new Set();
+		const bindings = {};
+
+		for (const action of APP_SHORTCUTS.filter((each) => each.fixed)) {
+			bindings[action.id] = action.keys;
+
+			for (const binding of action.keys) {
+				taken.add(appBindingId(binding));
+			}
+		}
+
+		for (const action of APP_SHORTCUTS) {
+			const list = saved[action.id];
+
+			if (action.fixed || !Array.isArray(list) || !list.every(appBindingIsValid)) {
+				continue;
+			}
+
+			bindings[action.id] = [];
+
+			for (const entry of list) {
+				const binding = { key: appKeyName(entry.key), mod: entry.mod === true, alt: entry.alt === true, shift: entry.shift === true };
+				const id = appBindingId(binding);
+
+				if (!taken.has(id)) {
+					taken.add(id);
+					bindings[action.id].push(binding);
+					break;
+				}
+			}
+		}
+
+		for (const action of APP_SHORTCUTS) {
+			if (!bindings[action.id]) {
+				bindings[action.id] = action.keys.filter((binding) => !taken.has(appBindingId(binding)));
+			}
+		}
+
+		return { enabled: held.enabled !== false, bindings };
+	}
+
+	async function readAppShortcuts() {
+		return appShortcutsFrom(await load(STORAGE.shortcuts, null));
+	}
+
+	async function loadAppShortcuts(started) {
+		if (!appState) {
+			return;
+		}
+
+		appShortcuts = await (started || readAppShortcuts());
+		paintAppShortcutTips();
+		postToFrame({ type: "shortcuts", shortcuts: appShortcuts });
+	}
+
+	function appKeyLabel(key) {
+		const named = { ArrowUp: "↑", ArrowDown: "↓", ArrowLeft: "←", ArrowRight: "→", Escape: "Esc", " ": "Space" };
+
+		return named[key] || (key.length === 1 ? key.toUpperCase() : key);
+	}
+
+	function appShortcutLabel(binding) {
+		const key = appKeyLabel(binding.key);
+		const shifted = binding.shift && !appKeyIgnoresShift(binding.key);
+
+		if (appIsApple()) {
+			return `${binding.alt ? "⌥" : ""}${shifted ? "⇧" : ""}${binding.mod ? "⌘" : ""}${key}`;
+		}
+
+		return [binding.mod && "Ctrl", binding.alt && "Alt", shifted && "Shift", key].filter(Boolean).join("+");
+	}
+
+	function appShortcutTip(id) {
+		const label = APP_SHORTCUTS.find((action) => action.id === id).label;
+		const first = appShortcuts.enabled ? appShortcuts.bindings[id][0] : null;
+
+		return first ? `${label}  ${appShortcutLabel(first)}` : label;
+	}
+
+	function paintAppShortcutTips() {
+		const shadow = appState?.ui.shadow;
+
+		if (!shadow) {
+			return;
+		}
+
+		shadow.querySelector("#app-rail-search").dataset.tip = appShortcutTip("search");
+		shadow.querySelector("#app-toggle-list").title = appShortcutTip("front-pages");
+		shadow.querySelector("#app-toggle-discussion").title = appShortcutTip("discussion");
 	}
 
 	function appSearchEntries() {
@@ -33850,6 +34025,7 @@ ${settingsModalHTML()}
 
 	let openAppSettingsSection = () => {};
 	let closeAppSettings = () => {};
+	let appSettingsCaret = null;
 
 	function resetAppListScroll() {
 		const list = appState?.ui.shadow.querySelector("#app-list-body");
@@ -34730,7 +34906,7 @@ ${frontPageChooserHTML()}
 		const hello = () => {
 			try {
 				article.frame?.contentWindow?.postMessage(
-					{ bc: APP_MESSAGE_VERSION, type: "hello" },
+					{ bc: APP_MESSAGE_VERSION, type: "hello", shortcuts: appShortcuts },
 					"*",
 				);
 			} catch {
@@ -35292,10 +35468,15 @@ ${frontPageChooserHTML()}
 		if (data.type === "hi") {
 			const visible = Boolean(data.visible);
 			const changed = !article.reply || article.reply.visible !== visible;
+			const learned = article.origin !== event.origin;
 
 			article.origin = event.origin;
 			article.reply = { visible, image: Boolean(data.image) };
 			article.everReplied = true;
+
+			if (learned) {
+				postToFrame({ type: "shortcuts", shortcuts: appShortcuts });
+			}
 
 			if (visible) {
 				clearInterval(article.helloTimer);
@@ -35306,6 +35487,11 @@ ${frontPageChooserHTML()}
 			}
 
 			tickAppArticle(article);
+			return;
+		}
+
+		if (data.type === "key") {
+			runAppFrameKey(data);
 			return;
 		}
 
@@ -35478,37 +35664,239 @@ ${frontPageChooserHTML()}
 		}
 	}
 
-	function onAppShortcut(event) {
-		if (!appState || event.defaultPrevented || event.isComposing) {
-			return;
+	const appKeysBehind = new WeakSet();
+
+	function appSurfaceOpen() {
+		const shadow = appState.ui.shadow;
+		const drawn = (surface) => Boolean(surface) && !surface.hidden && !surface.classList.contains("hidden") && surface.getClientRects().length > 0;
+
+		return (
+			["app-settings-modal", "app-search-page", "app-row-menu", "app-view-menu", "source-menu"].some((id) => drawn(shadow.getElementById(id))) ||
+			drawn(cardMenuOpener?.getRootNode().querySelector(".card-menu")) ||
+			drawn(composeTargetsMenu)
+		);
+	}
+
+	function noteAppKeysBehind(event) {
+		if (appState && appSurfaceOpen()) {
+			appKeysBehind.add(event);
+		}
+	}
+
+	function isAppEditable(element) {
+		return element instanceof Element && (element.matches(EDITABLE_SELECTOR) || element.isContentEditable);
+	}
+
+	function appFocusedElement() {
+		let focused = document.activeElement;
+
+		while (focused?.shadowRoot?.activeElement) {
+			focused = focused.shadowRoot.activeElement;
 		}
 
-		const modifier = appIsApple() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+		return focused;
+	}
 
-		if (String(event.key || "").toLowerCase() !== "k" || !modifier || event.altKey || event.shiftKey) {
-			return;
+	function appCaretIn(scope) {
+		const field = appFocusedElement();
+
+		if ((scope && !scope.contains(field)) || !isAppEditable(field)) {
+			return null;
 		}
 
-		if (appIsPhone() && (appState.ui.shadow.querySelector("#app").dataset.stage || "list") !== "list") {
+		const text = typeof field.selectionStart === "number";
+
+		return { field, open: appState.open?.key ?? null, start: text ? field.selectionStart : null, end: text ? field.selectionEnd : null, direction: text ? field.selectionDirection : null };
+	}
+
+	function appCaretBack({ field, open, start, end, direction }) {
+		if (!field.getClientRects().length || open !== (appState.open?.key ?? null)) {
+			return false;
+		}
+
+		field.focus({ preventScroll: true });
+
+		if (start !== null) {
+			field.setSelectionRange(start, end, direction);
+		}
+
+		return true;
+	}
+
+	function returnAppSettingsCaret() {
+		const caret = appSettingsCaret;
+
+		appSettingsCaret = null;
+
+		return Boolean(caret) && appCaretBack(caret);
+	}
+
+	function appShortcutControl(selector) {
+		const control = appState.ui.shadow.querySelector(selector);
+
+		return control && !control.disabled && control.getClientRects().length > 0 ? control : null;
+	}
+
+	function appShortcutPress(selector) {
+		const control = appShortcutControl(selector);
+
+		return control
+			? () => {
+					control.onclick(new Event("click"));
+				}
+			: null;
+	}
+
+	function closeAppPopups() {
+		setAppViewMenuOpen(false);
+		closeAppRowMenu();
+	}
+
+	function closeAppMenus() {
+		closeAppSettings();
+		closeAppPopups();
+	}
+
+	function appShortcutPane(pane, selector) {
+		return appShortcutControl(selector)
+			? () => {
+					closeAppMenus();
+					appState.togglePane(pane, true);
+				}
+			: null;
+	}
+
+	function appShortcutSettings() {
+		const control = appShortcutControl("#settings-toggle");
+		const modal = appState.ui.shadow.querySelector("#app-settings-modal");
+
+		return control
+			? () => {
+					closeAppPopups();
+
+					const caret = modal.hidden ? appCaretIn(null) : null;
+
+					control.onclick(new Event("click"));
+					appSettingsCaret = modal.hidden ? null : caret;
+				}
+			: null;
+	}
+
+	function closeAppTransients() {
+		const shadow = appState.ui.shadow;
+
+		if (!shadow.querySelector("#app-view-menu").hidden || !shadow.querySelector("#app-search-page").hidden || !shadow.querySelector("#app-row-menu").hidden) {
+			return () => {
+				setAppViewMenuOpen(false);
+				setAppSearchOpen(false);
+				closeAppRowMenu();
+			};
+		}
+
+		return appIsPhone() && shadow.querySelector("#app").dataset.stage !== "list" ? lowerAppSheet : null;
+	}
+
+	const APP_SHORTCUT_RUNNERS = {
+		search: () =>
+			appIsPhone() && (appState.ui.shadow.querySelector("#app").dataset.stage || "list") !== "list"
+				? null
+				: () => {
+						closeAppMenus();
+						openAppSearch();
+					},
+		"front-pages": () => appShortcutPane("list", "#app-toggle-list"),
+		discussion: () => appShortcutPane("discussion", "#app-toggle-discussion"),
+		settings: appShortcutSettings,
+		save: () => {
+			const control = appShortcutControl(appIsPhone() ? "#app-bar-save" : '#app-article-actions [data-item-action="save"]');
+			const button = appState.ui.shadow.querySelector('#app-article-actions [data-item-action="save"]');
+
+			return control && button ? () => submitItemAction(button).catch(console.error) : null;
+		},
+		sync: () => appShortcutPress("#app-list-sync"),
+		next: () => () => stepAppSelection(1),
+		previous: () => () => stepAppSelection(-1),
+		"open-original": () => {
+			const url = appState.open?.url;
+
+			return url && appShortcutControl(appIsPhone() ? "#app-bar-open" : "#app-article-open")
+				? () => {
+						rememberAppArrival(url).catch(console.error);
+						window.open(url, "_blank", "noopener");
+					}
+				: null;
+		},
+		close: closeAppTransients,
+	};
+
+	function appShortcutFor(event, mod, shortcuts = appShortcuts) {
+		const key = appKeyName(event.key);
+		const held = appIsApple() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+
+		return (
+			APP_SHORTCUTS.find((action) =>
+				shortcuts.bindings[action.id].some(
+					(binding) =>
+						binding.mod === mod &&
+						binding.key === key &&
+						binding.alt === event.altKey &&
+						(mod ? held : !event.metaKey && !event.ctrlKey) &&
+						(appKeyIgnoresShift(key) || binding.shift === event.shiftKey),
+				),
+			) || null
+		);
+	}
+
+	function runAppShortcut(action, event) {
+		const run = APP_SHORTCUT_RUNNERS[action.id]();
+
+		if (!run) {
 			return;
 		}
 
 		event.preventDefault();
-		closeAppSettings();
-		setAppViewMenuOpen(false);
-		closeAppRowMenu();
-		openAppSearch();
+
+		if (!event.repeat || action.repeats) {
+			run();
+		}
+	}
+
+	function onAppShortcut(event) {
+		if (!appState || event.defaultPrevented || event.isComposing || !appShortcuts.enabled) {
+			return;
+		}
+
+		const action = appShortcutFor(event, true);
+
+		if (action) {
+			runAppShortcut(action, event);
+			return;
+		}
+
+		if (event.repeat && event.composedPath()[0]?.id === "app-search-input" && appShortcutFor(event, false)?.id === "search") {
+			event.preventDefault();
+		}
 	}
 
 	function onAppKey(event) {
-		if (!appState || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) {
+		if (!appState || event.defaultPrevented || event.isComposing) {
+			return;
+		}
+
+		const action = appShortcutFor(event, false);
+
+		if (!action || (!action.fixed && !appShortcuts.enabled)) {
 			return;
 		}
 
 		const path = event.composedPath();
 		const origin = path[0];
 
-		if (origin instanceof Element && origin.matches(EDITABLE_SELECTOR)) {
+		if (isAppEditable(origin)) {
+			return;
+		}
+
+		if (!action.fixed && appKeysBehind.has(event)) {
 			return;
 		}
 
@@ -35516,33 +35904,36 @@ ${frontPageChooserHTML()}
 			origin === document.body ||
 			origin === document.documentElement ||
 			path.some((node) => node?.id === "app-list" || node?.id === "app-rail");
-		if (event.key === "Escape") {
-			const shadow = appState.ui.shadow;
 
-			if (!shadow.querySelector("#app-view-menu").hidden || !shadow.querySelector("#app-search-page").hidden || !shadow.querySelector("#app-row-menu").hidden) {
-				setAppViewMenuOpen(false);
-				setAppSearchOpen(false);
-				closeAppRowMenu();
-				return;
-			}
-
-			if (appIsPhone() && shadow.querySelector("#app").dataset.stage !== "list") {
-				lowerAppSheet();
-				return;
-			}
-		}
-
-		const step = { j: 1, k: -1, ...(inList ? { ArrowDown: 1, ArrowUp: -1 } : {}) }[event.key];
-
-		if (step) {
-			event.preventDefault();
-			stepAppSelection(step);
+		if (event.key.startsWith("Arrow") && !inList) {
 			return;
 		}
 
-		if (event.key === "o" && appState.open?.url) {
-			rememberAppArrival(appState.open.url).catch(console.error);
-			window.open(appState.open.url, "_blank", "noopener");
+		runAppShortcut(action, event);
+	}
+
+	const APP_FRAME_KEPT_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "PageUp", "PageDown", "Home", "End", "Escape"]);
+
+	function runAppFrameKey(data) {
+		const key = typeof data.key === "string" ? data.key : "";
+
+		if (!appShortcuts.enabled || APP_FRAME_KEPT_KEYS.has(key)) {
+			return;
+		}
+
+		const pressed = {
+			key,
+			metaKey: data.metaKey === true,
+			ctrlKey: data.ctrlKey === true,
+			altKey: data.altKey === true,
+			shiftKey: data.shiftKey === true,
+			repeat: data.repeat === true,
+			preventDefault() {},
+		};
+		const action = appShortcutFor(pressed, true) || (appSurfaceOpen() ? null : appShortcutFor(pressed, false));
+
+		if (action) {
+			runAppShortcut(action, pressed);
 		}
 	}
 
@@ -35659,6 +36050,7 @@ ${frontPageChooserHTML()}
 
 	let frameAgentActive = false;
 	let frameGreeted = false;
+	let frameShortcuts = null;
 
 	function postToApp(message) {
 		if (!frameGreeted) {
@@ -35736,6 +36128,55 @@ ${frontPageChooserHTML()}
 		}
 	}
 
+	function takeFrameShortcuts(shortcuts) {
+		frameShortcuts = shortcuts && typeof shortcuts === "object" ? appShortcutsFrom(shortcuts) : null;
+	}
+
+	function isFrameField(element) {
+		if (isAppEditable(element)) {
+			return true;
+		}
+
+		if (!(element instanceof Element)) {
+			return false;
+		}
+
+		return (
+			element.closest('[role="textbox"], [role="searchbox"]') !== null ||
+			(element === appFocusedElement() && element.localName.includes("-") && element.tabIndex < 0 && !element.hasAttribute("tabindex"))
+		);
+	}
+
+	function forwardFrameKey(event) {
+		if (!frameGreeted || !frameShortcuts?.enabled || event.defaultPrevented || event.isComposing) {
+			return;
+		}
+
+		if (APP_FRAME_KEPT_KEYS.has(event.key) || isFrameField(event.composedPath()[0])) {
+			return;
+		}
+
+		if (!appShortcutFor(event, true, frameShortcuts) && !appShortcutFor(event, false, frameShortcuts)) {
+			return;
+		}
+
+		event.preventDefault();
+		postToApp({
+			type: "key",
+			key: event.key,
+			metaKey: event.metaKey,
+			ctrlKey: event.ctrlKey,
+			altKey: event.altKey,
+			shiftKey: event.shiftKey,
+			repeat: event.repeat,
+		});
+	}
+
+	function forwardFrameKeyLast() {
+		window.removeEventListener("keydown", forwardFrameKey);
+		window.addEventListener("keydown", forwardFrameKey);
+	}
+
 	function installFrameAgent() {
 		frameAgentActive = true;
 		watchPullDown(window, () => postToApp({ type: "collapse" }));
@@ -35754,6 +36195,7 @@ ${frontPageChooserHTML()}
 
 			if (data.type === "hello") {
 				frameGreeted = true;
+				takeFrameShortcuts(data.shortcuts);
 				postToApp({
 					type: "hi",
 					url: location.href,
@@ -35765,6 +36207,11 @@ ${frontPageChooserHTML()}
 					image: /^image\//i.test(document.contentType || ""),
 				});
 				watchFrameSize();
+				return;
+			}
+
+			if (data.type === "shortcuts") {
+				takeFrameShortcuts(data.shortcuts);
 				return;
 			}
 
@@ -35799,6 +36246,8 @@ ${frontPageChooserHTML()}
 			},
 			true,
 		);
+
+		window.addEventListener("keydown", forwardFrameKeyLast, true);
 	}
 
 	let frameComments = [];
