@@ -9771,11 +9771,118 @@ html[data-backchannel-installed] .chin {
 	// #endregion hnewhere-test-export
 
 	let toastTimer = 0;
+	let pageToastHost = null;
 
 	const TOAST_DISMISS_MS = 5200;
 
-	function showToast(message, { persist = false, action = null } = {}) {
-		const toast = sidebarUI?.shadow?.getElementById("toast");
+	const TOAST_HTML = `<div id="toast" class="toast" role="status" aria-live="polite"></div>`;
+
+	const TOAST_CSS = `
+.toast {
+	position:absolute;
+	top:8px;
+	left:50%;
+	transform:translate(-50%,-14px);
+	max-width:calc(100% - 24px);
+	padding:8px 12px;
+	border-radius:6px;
+	background:var(--accent);
+	color:var(--accent-ink);
+	box-shadow:0 4px 14px rgba(0,0,0,.22);
+	font-size:12px;
+	line-height:1.4;
+	text-align:center;
+	opacity:0;
+	visibility:hidden;
+	pointer-events:none;
+	transition:opacity .18s ease, transform .18s ease, visibility .18s;
+}
+
+.toast.is-showing {
+	opacity:1;
+	visibility:visible;
+	transform:translate(-50%,0);
+}
+
+.toast.has-action.is-showing {
+	pointer-events:auto;
+}
+
+.toast-trailer {
+	opacity:.65;
+}
+
+.toast .toast-action {
+	color:inherit;
+	font-size:inherit;
+	text-decoration-color:currentColor;
+}
+`;
+
+	const PAGE_TOAST_CSS = `
+.toast-layer {
+	all:initial;
+	position:fixed;
+	left:0;
+	right:0;
+	bottom:0;
+	height:0;
+	z-index:2147483647;
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+}
+
+.toast {
+	top:auto;
+	bottom:calc(16px + env(safe-area-inset-bottom, 0px));
+	transform:translate(-50%,14px);
+}
+`;
+
+	function removePageToast() {
+		pageToastHost?._cleanup?.();
+		pageToastHost?.remove();
+		pageToastHost = null;
+	}
+
+	function pageToastShadow(create) {
+		if (pageToastHost && !pageToastHost.isConnected) {
+			removePageToast();
+		}
+
+		if (!pageToastHost && create) {
+			const host = document.createElement("div");
+
+			host.setAttribute("data-hnewhere-toast", "1");
+			host._cleanup = watchTheme(host);
+
+			const shadow = host.attachShadow({ mode: "open" });
+
+			shadow.innerHTML = `<style>${THEME_CSS}${CHROME_CSS}${TOAST_CSS}${PAGE_TOAST_CSS}</style><div class="toast-layer">${TOAST_HTML}</div>`;
+			adoptStyles(shadow);
+			document.documentElement.appendChild(host);
+			shadow.getElementById("toast").getBoundingClientRect();
+			pageToastHost = host;
+		}
+
+		return pageToastHost?.shadowRoot || null;
+	}
+
+	function releasePageToast(toast) {
+		if (pageToastHost?.shadowRoot.contains(toast)) {
+			window.setTimeout(() => {
+				if (!toast.classList.contains("is-showing") && pageToastHost?.shadowRoot.contains(toast)) {
+					removePageToast();
+				}
+			}, 300);
+		}
+	}
+
+	function showToast(message, { persist = false, action = null, page = false } = {}) {
+		if (sidebarUI?.shadow) {
+			removePageToast();
+		}
+
+		const toast = (sidebarUI?.shadow || pageToastShadow(page && Boolean(message)))?.getElementById("toast");
 
 		if (!toast) {
 			return;
@@ -9785,6 +9892,7 @@ html[data-backchannel-installed] .chin {
 
 		if (!message) {
 			toast.classList.remove("is-showing", "has-action");
+			releasePageToast(toast);
 			return;
 		}
 
@@ -9813,8 +9921,10 @@ html[data-backchannel-installed] .chin {
 		toast.classList.add("is-showing");
 
 		if (!persist) {
-			const dismiss = () =>
+			const dismiss = () => {
 				toast.classList.remove("is-showing", "has-action");
+				releasePageToast(toast);
+			};
 
 			toastTimer = window.setTimeout(dismiss, TOAST_DISMISS_MS);
 
@@ -15320,12 +15430,6 @@ header {
 	border-top:1px solid var(--surface-divider);
 }
 
-.settings-group + .settings-group.settings-group-tight {
-	margin-top:9px;
-	padding-top:0;
-	border-top:0;
-}
-
 header button svg {
 	display:block;
 }
@@ -15972,7 +16076,7 @@ header > .settings-panel {
 	margin-bottom:0;
 }
 
-.settings-panel.sidebar-off .settings-group:has(#setting-sidebar-enabled) > :not(.settings-app-only) {
+.settings-panel.sidebar-off .settings-group:has(#setting-sidebar-enabled) > :not(.settings-app-only):not(#settings-blocked-section) {
 	display:none;
 }
 
@@ -16120,7 +16224,7 @@ header > .settings-panel {
 	line-height:1.35;
 }
 
-#app-settings-modal:is([data-section="sources"], [data-section="appearance"], [data-section="blocked"]) #app-settings-heading {
+#app-settings-modal:is([data-section="sources"], [data-section="appearance"]) #app-settings-heading {
 	margin-bottom:4px;
 }
 
@@ -16432,70 +16536,6 @@ header > .settings-panel {
 .settings-crumb-sep {
 	font-weight:400;
 	color:var(--muted);
-}
-
-.segmented {
-	display:flex;
-	border:1px solid var(--help-border);
-	border-radius:5px;
-	background:var(--help-bg);
-	overflow:hidden;
-}
-
-.segment {
-	position:relative;
-	flex:1 1 0;
-	min-width:0;
-}
-
-.segment + .segment {
-	border-left:1px solid var(--help-border);
-}
-
-.settings-panel .settings-field .segmented {
-	display:grid;
-	grid-auto-flow:column;
-	grid-auto-columns:1fr;
-	width:fit-content;
-	max-width:100%;
-}
-
-.settings-panel .settings-field .segment span {
-	padding:4px 14px;
-}
-
-.segment input {
-	position:absolute;
-	inset:0;
-	width:100%;
-	height:100%;
-	margin:0;
-	opacity:0;
-	cursor:pointer;
-}
-
-.segment span {
-	display:block;
-	padding:4px 5px;
-	text-align:center;
-	font-size:11px;
-	line-height:1.3;
-	color:var(--help-text);
-	white-space:nowrap;
-	overflow:hidden;
-	text-overflow:ellipsis;
-	transition:background .14s ease, color .14s ease;
-}
-
-.segment input:checked + span {
-	background:var(--accent);
-	color:var(--accent-ink);
-	font-weight:600;
-}
-
-.segment input:focus-visible + span {
-	outline:2px solid var(--accent);
-	outline-offset:-2px;
 }
 
 .front-page-card {
@@ -17052,19 +17092,6 @@ header > .settings-panel {
 	opacity:.6;
 }
 
-.settings-hidden-section[hidden] {
-	display:none;
-}
-
-.manage-kinds,
-.settings-pane[data-pane="blocked"] > .settings-section-hint {
-	flex-shrink:0;
-}
-
-.manage-kinds {
-	margin-bottom:10px;
-}
-
 .manage-table {
 	display:flex;
 	flex-direction:column;
@@ -17095,6 +17122,7 @@ header > .settings-panel {
 .manage-table-body {
 	flex:1 1 auto;
 	min-height:72px;
+	max-height:169px;
 	overflow-y:auto;
 	outline:none;
 }
@@ -17103,6 +17131,8 @@ header > .settings-panel {
 	min-height:26px;
 	font-size:11.5px;
 	cursor:default;
+	content-visibility:auto;
+	contain-intrinsic-size:auto 26px;
 }
 
 .manage-row:nth-child(even) {
@@ -17270,7 +17300,7 @@ ${settings ? settingsPanelHTML() : ""}
 <div id="settings-head" class="settings-head">
 <button id="settings-blocked-back" class="settings-back" type="button" aria-label="Back to settings" disabled>&lsaquo;</button>
 <button id="settings-crumb-root" class="settings-crumb-root" type="button" disabled>Settings</button>
-<span id="settings-crumb-tail" class="settings-crumb-tail" aria-hidden="true"><span class="settings-crumb-sep">/</span><span id="settings-crumb-name">Manage disabled/hidden</span></span>
+<span id="settings-crumb-tail" class="settings-crumb-tail" aria-hidden="true"><span class="settings-crumb-sep">/</span><span id="settings-crumb-name">Sources</span></span>
 </div>
 <div id="settings-panes" class="settings-panes">
 
@@ -17307,6 +17337,15 @@ ${settings ? settingsPanelHTML() : ""}
 <input id="setting-keep-sidebar-size" data-setting="keepSidebarSize" type="checkbox">
 <span>Keep the Sidebar the same size when a page is zoomed</span>
 </label>
+<div id="settings-blocked-section">
+<div class="sources-subhead">Disabled sites</div>
+<div class="sources-subhint">Sites and pages where you've turned Backchannel off.</div>
+<div class="manage-table">
+<div class="manage-table-head" aria-hidden="true"><span>Site</span><span>Covers</span></div>
+<div id="settings-blocked-list" class="manage-table-body" role="listbox" aria-label="Disabled sites" tabindex="0"></div>
+<div class="manage-table-tools"><button type="button" class="manage-table-add" aria-label="Disable Backchannel on a site or page" title="Disable Backchannel on a site or page">+</button><button type="button" class="manage-table-remove" aria-label="Turn Backchannel back on for the chosen site" title="Turn Backchannel back on for the chosen site" disabled>&minus;</button></div>
+</div>
+</div>
 </div>
 
 <div class="settings-group">
@@ -17400,32 +17439,6 @@ All stored locally.
 <div class="settings-group">
 <button id="settings-manage-sources" class="settings-link-button" type="button" data-pane="sources" data-pane-name="Sources">Sources<span class="settings-link-chevron">&rsaquo;</span></button>
 </div>
-
-<div class="settings-group settings-group-tight">
-<button id="settings-manage-blocked" class="settings-link-button" type="button" data-pane="blocked" data-pane-name="Hidden &amp; disabled">Hidden &amp; disabled<span class="settings-link-chevron">&rsaquo;</span></button>
-</div>
-</div>
-
-<div class="settings-pane settings-pane-secondary" data-pane="blocked">
-<div class="settings-section-hint">Manage links you've hidden and sites you've disabled Backchannel on.</div>
-<div class="segmented manage-kinds">
-<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="hidden" checked><span>Hidden links</span></label>
-<label class="segment"><input type="radio" name="hnewhere-hidden-kind" value="disabled"><span>Disabled sites</span></label>
-</div>
-<div id="settings-hidden-section" class="settings-hidden-section">
-<div class="manage-table">
-<div class="manage-table-head" aria-hidden="true"><span>Link</span><span>Site</span></div>
-<div id="settings-hidden-list" class="manage-table-body" role="listbox" aria-label="Hidden links" tabindex="0"></div>
-<div class="manage-table-tools"><button type="button" class="manage-table-add" aria-label="Hide a link" title="Hide a link">+</button><button type="button" class="manage-table-remove" aria-label="Show the chosen link again" title="Show the chosen link again" disabled>&minus;</button></div>
-</div>
-</div>
-<div id="settings-blocked-section" class="settings-hidden-section" hidden>
-<div class="manage-table">
-<div class="manage-table-head" aria-hidden="true"><span>Site</span><span>Covers</span></div>
-<div id="settings-blocked-list" class="manage-table-body" role="listbox" aria-label="Disabled sites" tabindex="0"></div>
-<div class="manage-table-tools"><button type="button" class="manage-table-add" aria-label="Disable Backchannel on a site or page" title="Disable Backchannel on a site or page">+</button><button type="button" class="manage-table-remove" aria-label="Turn Backchannel back on for the chosen site" title="Turn Backchannel back on for the chosen site" disabled>&minus;</button></div>
-</div>
-</div>
 </div>
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
@@ -17434,6 +17447,15 @@ All stored locally.
 <div class="sources-subhead">Front Pages</div>
 <div class="sources-subhint">Choose what Backchannel shows in Front Pages. Links come only from the sources you've enabled above.</div>
 ${frontPageChooserHTML()}
+<div id="settings-hidden-section">
+<div class="sources-subhead">Hidden links</div>
+<div class="sources-subhint">Links you've hidden from Front Pages.</div>
+<div class="manage-table">
+<div class="manage-table-head" aria-hidden="true"><span>Link</span><span>Site</span></div>
+<div id="settings-hidden-list" class="manage-table-body" role="listbox" aria-label="Hidden links" tabindex="0"></div>
+<div class="manage-table-tools"><button type="button" class="manage-table-add" aria-label="Hide a link" title="Hide a link">+</button><button type="button" class="manage-table-remove" aria-label="Show the chosen link again" title="Show the chosen link again" disabled>&minus;</button></div>
+</div>
+</div>
 </div>
 
 </div>
@@ -17713,6 +17735,7 @@ ${frontPageChooserHTML()}
 		applySettingsPanelState(await loadSettings());
 
 		let setHideMenuOpen = () => {};
+		let refreshManageLists = () => Promise.resolve();
 
 		const setSettingsOpen = (open) => {
 			settingsPanel.classList.toggle("hidden", !open);
@@ -17726,6 +17749,7 @@ ${frontPageChooserHTML()}
 			if (open) {
 				setHideMenuOpen(false);
 				refreshNotesCount?.().catch(console.error);
+				refreshManageLists().catch(console.error);
 			}
 
 			if (open) {
@@ -18485,35 +18509,14 @@ ${frontPageChooserHTML()}
 			},
 		});
 
-		const blockedSection = shadow.querySelector("#settings-blocked-section");
-		const hiddenSection = shadow.querySelector("#settings-hidden-section");
+		refreshManageLists = () => Promise.all([renderBlockedList(), renderHiddenList()]);
 
-		for (const input of shadow.querySelectorAll(
-			'input[name="hnewhere-hidden-kind"]',
-		)) {
-			input.onchange = () => {
-				const showHidden = input.value === "hidden";
-
-				blockedSection.hidden = showHidden;
-				hiddenSection.hidden = !showHidden;
-				syncPanesHeight();
-			};
-		}
-
-		await renderBlockedList();
-		await renderHiddenList();
+		await refreshManageLists();
 
 		for (const entry of settingsPanel.querySelectorAll(
 			".settings-link-button[data-pane]",
 		)) {
-			entry.onclick = async () => {
-				if (entry.dataset.pane === "blocked") {
-					await renderBlockedList();
-					await renderHiddenList();
-				}
-
-				showSecondaryPane(entry.dataset.pane);
-			};
+			entry.onclick = () => showSecondaryPane(entry.dataset.pane);
 		}
 
 		for (const control of [crumbBack, crumbRoot]) {
@@ -20044,46 +20047,7 @@ blockquote.comment-quote-redundant {
 	z-index:6;
 }
 
-.toast {
-	position:absolute;
-	top:8px;
-	left:50%;
-	transform:translate(-50%,-14px);
-	max-width:calc(100% - 24px);
-	padding:8px 12px;
-	border-radius:6px;
-	background:var(--accent);
-	color:var(--accent-ink);
-	box-shadow:0 4px 14px rgba(0,0,0,.22);
-	font-size:12px;
-	line-height:1.4;
-	text-align:center;
-	opacity:0;
-	visibility:hidden;
-	pointer-events:none;
-	transition:opacity .18s ease, transform .18s ease, visibility .18s;
-}
-
-.toast.is-showing {
-	opacity:1;
-	visibility:visible;
-	transform:translate(-50%,0);
-}
-
-.toast.has-action.is-showing {
-	pointer-events:auto;
-}
-
-.toast-trailer {
-	opacity:.65;
-}
-
-.toast .toast-action {
-	color:inherit;
-	font-size:inherit;
-	text-decoration-color:currentColor;
-}
-
+${TOAST_CSS}
 ${appMode ? APP_CSS : SIDEBAR_SETTINGS_MODAL_CSS}
 </style>
 
@@ -20092,7 +20056,7 @@ ${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-dock
 <div id="resize-handle" aria-hidden="true"></div>
 
 ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMode, settings: !appMode, title: appMode ? "Discussion" : "" })}
-<div class="toast-layer"><div id="toast" class="toast" role="status" aria-live="polite"></div><div id="compose-dock" class="compose-dock" hidden><button id="compose-dock-close" class="compose-dock-close" type="button" aria-label="Close the composer" title="Close">&times;</button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
+<div class="toast-layer">${appMode ? "" : TOAST_HTML}<div id="compose-dock" class="compose-dock" hidden><button id="compose-dock-close" class="compose-dock-close" type="button" aria-label="Close the composer" title="Close">&times;</button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
 <div class="filter-banner-head">
@@ -22158,7 +22122,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		);
 	}
 
-	async function renderDiscussions(stories, ui) {
+	async function renderDiscussions(stories, ui, { arrival = true } = {}) {
 		renderedFor = stories === renderedDiscussions ? renderedFor : openPageKey();
 		renderedDiscussions = stories;
 		clearArticleAnnotations();
@@ -22426,8 +22390,10 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		applyPendingFocus().catch(console.error);
 		await paintCollectionTag(ui, stories, seenTimes);
 
-		for (const story of stories) {
-			await markSeen(story.key);
+		if (arrival) {
+			for (const story of stories) {
+				await markSeen(story.key);
+			}
 		}
 
 		if (appState) {
@@ -23415,7 +23381,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 			const settings = await loadSettings();
 
-			await renderDiscussions(loaded, ui);
+			await renderDiscussions(loaded, ui, { arrival: options.arrival !== false });
 			await refreshSubmitAffordance(ui.shadow);
 
 			if (generation === sidebarGeneration) {
@@ -28357,9 +28323,37 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 			return;
 		}
 
+		const added = !sites.has(entry);
+
 		sites.add(entry);
 		await saveBlockedSites(sites);
 		teardownForBlockedSite();
+		showToast(scope === "site" ? `Backchannel disabled on ${siteKey()}` : "Backchannel disabled on this page", {
+			page: true,
+			action: added
+				? {
+						label: "undo",
+						onAct: () => {
+							restoreSite(entry).catch(console.error);
+						},
+					}
+				: null,
+		});
+	}
+
+	async function restoreSite(entry) {
+		const sites = await loadBlockedSites();
+
+		sites.delete(entry);
+		await saveBlockedSites(sites);
+
+		openRequestedWhileChecking = true;
+
+		try {
+			await runPagePass({ arrival: !sameURL(arrivedAddress, pageAddress()) });
+		} finally {
+			openRequestedWhileChecking = false;
+		}
 	}
 
 	async function refreshArticleAnnotations() {
@@ -28712,23 +28706,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 #app-settings-content .settings-group {
 	margin-bottom:12px;
-}
-
-#app-settings-modal[data-section="blocked"] #app-settings-content {
-	display:flex;
-	flex-direction:column;
-	overflow:hidden;
-}
-
-#app-settings-modal[data-section="blocked"] #app-settings-content > .settings-panel,
-#app-settings-modal[data-section="blocked"] #app-settings-content .settings-panes,
-#app-settings-modal[data-section="blocked"] #app-settings-content .settings-pane[data-pane="blocked"],
-#app-settings-modal[data-section="blocked"] #app-settings-content .settings-hidden-section:not([hidden]),
-#app-settings-modal[data-section="blocked"] #app-settings-content .settings-hidden-section:not([hidden]) > .manage-table {
-	display:flex;
-	flex-direction:column;
-	flex:1 1 auto;
-	min-height:0;
 }
 `;
 
@@ -30107,13 +30084,22 @@ ${SETTINGS_MODAL_CSS}
 	z-index:40;
 }
 
-#panel.app-docked .toast {
+#app > .toast-layer {
+	position:fixed;
+	left:0;
+	right:0;
+	bottom:0;
+	height:0;
+	z-index:40;
+}
+
+#app > .toast-layer .toast {
 	top:auto;
 	bottom:16px;
 	transform:translate(-50%,14px);
 }
 
-#panel.app-docked .toast.is-showing {
+#app > .toast-layer .toast.is-showing {
 	transform:translate(-50%,0);
 }
 
@@ -31383,8 +31369,8 @@ header .item-action-link {
 		display:none !important;
 	}
 
-	#panel.app-docked .toast {
-		bottom:76px;
+	#app > .toast-layer .toast {
+		bottom:calc(76px + env(safe-area-inset-bottom, 0px));
 	}
 
 	:host {
@@ -31839,9 +31825,8 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <nav class="app-settings-nav" aria-label="Settings sections">
 <button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="appearance"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.2a5.8 5.8 0 1 0 0 11.6c.9 0 1.4-.6 1.4-1.3 0-.7-.5-1-.5-1.6 0-.7.6-1.2 1.3-1.2h1.4a2.2 2.2 0 0 0 2.2-2.2C13.8 4.5 11.2 2.2 8 2.2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5.2" cy="7.6" r=".95" fill="currentColor"/><circle cx="7.4" cy="5.1" r=".95" fill="currentColor"/><circle cx="10.5" cy="5.6" r=".95" fill="currentColor"/></svg><span>Appearance</span></button>
-<button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
-<button type="button" class="app-settings-tab" data-settings-section="blocked"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 12 12 4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Hidden &amp; disabled</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
 </nav>
 <div id="app-settings-content" class="app-settings-content"><div id="app-settings-heading" class="app-settings-heading">General</div></div>
 </div>
@@ -31897,6 +31882,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 </section>
 ${settingsPanelHTML()}
 ${settingsModalHTML()}
+<div class="toast-layer">${TOAST_HTML}</div>
 <div id="app-reading">
 <section id="app-article" aria-label="Article">
 <div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="Front Pages">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="Discussion" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
@@ -32701,7 +32687,7 @@ ${settingsModalHTML()}
 			nav?.append(credits);
 		}
 
-		const showSection = (section) => {
+		const showSection = (section, target = "") => {
 			const tab = tabs.find((each) => each.dataset.settingsSection === section) || tabs[0];
 			const panes = panel.querySelector(".settings-panes");
 
@@ -32718,13 +32704,17 @@ ${settingsModalHTML()}
 
 			if (tab.dataset.settingsSection === "sources") {
 				shadow.querySelector("#settings-manage-sources")?.click();
-			} else if (tab.dataset.settingsSection === "blocked") {
-				shadow.querySelector("#settings-manage-blocked")?.click();
 			} else if (panes?.classList.contains("is-secondary")) {
 				shadow.querySelector("#settings-crumb-root")?.click();
 			}
 
 			content.scrollTop = 0;
+
+			const place = target && shadow.querySelector(target);
+
+			if (place) {
+				content.scrollTop += place.getBoundingClientRect().top - content.getBoundingClientRect().top - parseFloat(getComputedStyle(content).paddingTop);
+			}
 		};
 
 		const setOpen = (open) => {
@@ -32788,9 +32778,9 @@ ${settingsModalHTML()}
 		}
 
 		shadow.querySelector("#app-settings-close").onclick = () => setOpen(false);
-		openAppSettingsSection = (section) => {
+		openAppSettingsSection = (section, target) => {
 			setOpen(true);
-			showSection(section);
+			showSection(section, target);
 		};
 		closeAppSettings = () => setOpen(false);
 
@@ -33738,7 +33728,8 @@ ${settingsModalHTML()}
 		}
 
 		entries.push({ group: "Settings", title: "Sources", note: "Where comments come from", keys: "sources reddit hacker news bluesky lobsters mastodon lemmy settings", run: () => openAppSettingsSection("sources") });
-		entries.push({ group: "Settings", title: "Hidden & disabled", note: "Hidden links and disabled sites", keys: "hidden links blocked disabled sites manage settings", run: () => openAppSettingsSection("blocked") });
+		entries.push({ group: "Settings", title: "Disabled sites", note: "Sidebar", keys: "disabled sites blocked hidden manage settings sidebar", run: () => openAppSettingsSection("sidebar", "#settings-blocked-section") });
+		entries.push({ group: "Settings", title: "Hidden links", note: "Sources", keys: "hidden links blocked disabled manage settings sources", run: () => openAppSettingsSection("sources", "#settings-hidden-section") });
 
 		return entries;
 	}
@@ -36851,7 +36842,9 @@ ${frontPageChooserHTML()}
 		await runPagePass();
 	}
 
-	async function runPagePass() {
+	let arrivedAddress = "";
+
+	async function runPagePass({ arrival = true } = {}) {
 		if (appState) {
 			return;
 		}
@@ -36877,10 +36870,13 @@ ${frontPageChooserHTML()}
 
 		sweepBridgePayloads().catch(console.error);
 
-		markQueueArrival().catch(console.error);
-		markCollectedArrival().catch(console.error);
-		traceOrphanedComments().catch(console.error);
-		captureLookOnArrival().catch(console.error);
+		if (arrival) {
+			arrivedAddress = pageAddress();
+			markQueueArrival().catch(console.error);
+			markCollectedArrival().catch(console.error);
+			traceOrphanedComments().catch(console.error);
+			captureLookOnArrival().catch(console.error);
+		}
 
 		await ensurePdfReader(settings);
 		await loadPdfTitle(pdfViewerApp());
@@ -36941,7 +36937,7 @@ ${frontPageChooserHTML()}
 
 			if (requestedOpen || arrivedForComments) {
 				destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
-				await openSidebar(stories);
+				await openSidebar(stories, { arrival });
 				return;
 			}
 
@@ -36954,6 +36950,7 @@ ${frontPageChooserHTML()}
 						arrivedFromSourceId,
 						enabledSourceIds(settings, registeredSourceIds()),
 					),
+				arrival,
 			);
 			return;
 		}
@@ -36971,16 +36968,16 @@ ${frontPageChooserHTML()}
 		stopButtonSpinner(pendingButton);
 	}
 
-	async function presentDiscussion(storyRefs, settings, siteState, fromHN = false) {
+	async function presentDiscussion(storyRefs, settings, siteState, fromHN = false, arrival = true) {
 		if (shouldAutoOpenSidebar(settings, siteState, fromHN)) {
 			destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
 
-			await openSidebar(storyRefs, { remember: false });
+			await openSidebar(storyRefs, { remember: false, arrival });
 			return;
 		}
 
 		if (shouldPreloadHiddenSidebar(settings, siteState, fromHN)) {
-			await openSidebar(storyRefs, { startHidden: true });
+			await openSidebar(storyRefs, { startHidden: true, arrival });
 			return;
 		}
 
