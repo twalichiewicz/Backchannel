@@ -18003,13 +18003,7 @@ ${frontPageChooserHTML()}
 
 			const editMark = () => {
 				previewMark.focus();
-
-				const range = previewMark.ownerDocument.createRange();
-				const selection = previewMark.ownerDocument.getSelection();
-
-				range.selectNodeContents(previewMark);
-				selection?.removeAllRanges();
-				selection?.addRange(range);
+				previewMark.ownerDocument.getSelection()?.selectAllChildren(previewMark);
 			};
 
 			previewMark.addEventListener("keydown", (event) => {
@@ -18017,12 +18011,12 @@ ${frontPageChooserHTML()}
 
 				if (event.key === "Enter" || event.key === "Escape") {
 					event.preventDefault();
-					previewMark.blur();
+					preview.focus({ preventScroll: true });
 					return;
 				}
 
 				const selection = previewMark.ownerDocument.getSelection();
-				const replacing = selection && !selection.isCollapsed;
+				const replacing = Boolean(selection?.toString());
 
 				if (
 					event.key.length === 1 &&
@@ -18202,11 +18196,14 @@ ${frontPageChooserHTML()}
 			});
 
 			const typedValue = (input, key, normalize, current) => {
+				let pending = null;
+
+				const saved = () => pending ?? current();
 				const commit = async () => {
 					const parsed = Number.parseInt(input.value, 10);
 
 					if (!Number.isFinite(parsed)) {
-						input.value = String(current());
+						input.value = String(saved());
 						return;
 					}
 
@@ -18214,8 +18211,16 @@ ${frontPageChooserHTML()}
 
 					input.value = String(next);
 
-					if (next !== current()) {
-						await saveDesigner({ [key]: next });
+					if (next !== saved()) {
+						pending = next;
+
+						try {
+							await saveDesigner({ [key]: next });
+						} finally {
+							if (pending === next) {
+								pending = null;
+							}
+						}
 					}
 				};
 
@@ -18224,15 +18229,19 @@ ${frontPageChooserHTML()}
 					commit().catch(console.error);
 				};
 				input.onkeydown = (event) => {
+					if (event.key === "Tab" || (event.key === "Escape" && input.value === String(saved()))) {
+						return;
+					}
+
 					event.stopPropagation();
 
 					if (event.key === "Enter") {
 						event.preventDefault();
-						input.blur();
+						commit().catch(console.error);
+						input.select();
 					} else if (event.key === "Escape") {
 						event.preventDefault();
-						input.value = String(current());
-						input.blur();
+						input.value = String(saved());
 					}
 				};
 			};
@@ -18298,6 +18307,10 @@ ${frontPageChooserHTML()}
 					row.setAttribute("aria-selected", String(row.dataset.key === chosen));
 				}
 
+				if (!chosen && body.getRootNode().activeElement === removeButton) {
+					body.focus({ preventScroll: true });
+				}
+
 				removeButton.disabled = !chosen;
 			};
 
@@ -18346,7 +18359,7 @@ ${frontPageChooserHTML()}
 			};
 
 			const removeChosen = async () => {
-				if (!chosen) {
+				if (!chosen || body.querySelector(".manage-add-row")) {
 					return;
 				}
 
@@ -18436,10 +18449,12 @@ ${frontPageChooserHTML()}
 					if (event.key === "Enter") {
 						event.preventDefault();
 						finish(true).catch(console.error);
+						body.focus({ preventScroll: true });
 					} else if (event.key === "Escape") {
 						event.preventDefault();
 						event.stopPropagation();
 						finish(false).catch(console.error);
+						body.focus({ preventScroll: true });
 					}
 				});
 				input.addEventListener("blur", () => {
@@ -28707,6 +28722,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	padding:12px 18px 16px;
 }
 
+.app-settings-dialog:focus,
+.app-settings-content:focus {
+	outline:none;
+}
+
 .app-settings-heading {
 	margin:0 0 10px;
 	font-size:13px;
@@ -31875,7 +31895,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	function settingsModalHTML() {
 		return `
 <div id="app-settings-modal" class="app-settings-modal" hidden>
-<div class="app-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="app-settings-title">
+<div class="app-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="app-settings-title" tabindex="-1">
 <div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><span class="app-settings-version" hidden></span><span class="app-settings-top-spacer"></span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
 <div class="app-settings-body">
 <nav class="app-settings-nav" aria-label="Settings sections">
@@ -31884,7 +31904,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
 </nav>
-<div id="app-settings-content" class="app-settings-content"><div id="app-settings-heading" class="app-settings-heading">General</div></div>
+<div id="app-settings-content" class="app-settings-content" tabindex="-1" role="group" aria-labelledby="app-settings-heading"><div id="app-settings-heading" class="app-settings-heading">General</div></div>
 </div>
 </div>
 </div>
@@ -32714,6 +32734,7 @@ ${settingsModalHTML()}
 		const toggleDropdown = gear.onclick;
 		const tabs = [...modal.querySelectorAll("[data-settings-section]")];
 		const nav = modal.querySelector(".app-settings-nav");
+		const dialog = modal.querySelector(".app-settings-dialog");
 		const credits = panel.querySelector(".settings-credits");
 		const report = credits?.querySelector('a[href$="/issues"]');
 		const version = modal.querySelector(".app-settings-version");
@@ -32896,7 +32917,7 @@ ${settingsModalHTML()}
 			const active = shadow.activeElement;
 			const edge = event.shiftKey ? stops[0] : stops.at(-1);
 
-			if (edge && (active === edge || (active?.type === "radio" && edge.type === "radio" && active.name === edge.name))) {
+			if (edge && (active === edge || (event.shiftKey && active === dialog) || (active?.type === "radio" && edge.type === "radio" && active.name === edge.name))) {
 				event.preventDefault();
 				(event.shiftKey ? stops.at(-1) : stops[0]).focus();
 			}
