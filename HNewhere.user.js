@@ -4437,17 +4437,28 @@
 		return [...SOURCES.keys()];
 	}
 
-	function sourceListHTML({ idPrefix = "", cells = false } = {}) {
+	function sourcePoints(source) {
+		return [...(source.points || []), ...(source.slow ? ["Slower comment fetch source"] : [])];
+	}
+
+	function sourceHelpHTML(source) {
+		const points = escapeHTML(sourcePoints(source).join("\n"));
+
+		return `<button class="source-help" type="button" aria-label="About ${escapeHTML(source.label)}" aria-description="${points}" data-tip="${points}">?</button>`;
+	}
+
+	function sourceListHTML({ idPrefix = "", cells = false, help = false } = {}) {
 		return [...SOURCES.values()]
 			.map(
-				(source) => `${cells ? '<div class="source-cell">' : ""}
+				(source) => `${cells ? '<div class="source-cell">' : ""}${help ? '<div class="source-line">' : ""}
 <label class="settings-option">
 <input${idPrefix ? ` id="${escapeHTML(idPrefix + source.id)}"` : ""} data-source="${escapeHTML(source.id)}" type="checkbox">
-<span>${escapeHTML(source.label)}${source.slow ? ` <span class="op-pill op-pill-slow" tabindex="0" role="note" aria-label="Slower comment fetch source">⧗<span class="op-pill-tip" aria-hidden="true">Slower comment fetch source</span></span>` : ""}</span>
+<span>${escapeHTML(source.label)}</span>
 </label>
+${help && sourcePoints(source).length ? sourceHelpHTML(source) : ""}${help ? "</div>" : ""}
 ${
-	source.points
-		? `<ul class="source-points">${source.points.map((point) => `<li>${escapeHTML(point)}</li>`).join("")}</ul>`
+	sourcePoints(source).length && !help
+		? `<ul class="source-points">${sourcePoints(source).map((point) => `<li>${escapeHTML(point)}</li>`).join("")}</ul>`
 		: ""
 }${cells ? "</div>" : ""}`,
 			)
@@ -16134,8 +16145,7 @@ header > .settings-panel {
 	line-height:1.2;
 }
 
-.op-pill-front,
-.op-pill-slow {
+.op-pill-front {
 	display:none;
 	position:relative;
 	background:var(--muted);
@@ -16143,8 +16153,7 @@ header > .settings-panel {
 	cursor:default;
 }
 
-.settings-option-on .op-pill-front,
-.settings-option-on .op-pill-slow {
+.settings-option-on .op-pill-front {
 	display:inline-block;
 }
 
@@ -16153,7 +16162,7 @@ header > .settings-panel {
 	bottom:calc(100% + 6px);
 	left:50%;
 	transform:translateX(-50%);
-	white-space:nowrap;
+	white-space:pre;
 	padding:4px 6px;
 	border-radius:4px;
 	background:var(--surface-text);
@@ -16167,8 +16176,8 @@ header > .settings-panel {
 
 .op-pill-front:hover .op-pill-tip,
 .op-pill-front:focus .op-pill-tip,
-.op-pill-slow:hover .op-pill-tip,
-.op-pill-slow:focus .op-pill-tip {
+.source-help:hover .op-pill-tip,
+.source-help:focus .op-pill-tip {
 	opacity:1;
 }
 
@@ -16528,6 +16537,65 @@ button.shortcut-key {
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
+}
+
+.source-line {
+	display:flex;
+	align-items:flex-start;
+	gap:6px;
+}
+
+.source-line .settings-option {
+	min-width:0;
+}
+
+.source-help {
+	position:relative;
+	flex:0 0 auto;
+	box-sizing:border-box;
+	width:15px;
+	height:15px;
+	margin:.6px 0 0;
+	padding:0;
+	border:1px solid var(--help-border);
+	border-radius:50%;
+	background:none;
+	color:var(--muted);
+	font:inherit;
+	font-size:10px;
+	font-weight:600;
+	line-height:1;
+	cursor:help;
+}
+
+.source-help::before {
+	content:"";
+	position:absolute;
+	inset:-5px;
+}
+
+.source-help:hover,
+.source-help:focus-visible {
+	border-color:currentColor;
+	color:var(--surface-text);
+}
+
+.source-help:focus-visible {
+	outline:2px solid var(--accent);
+	outline-offset:1px;
+}
+
+.source-help .op-pill-tip {
+	left:0;
+	transform:none;
+	font-weight:400;
+	line-height:1.35;
+	text-align:left;
+}
+
+.source-cell:nth-child(even) .source-help .op-pill-tip {
+	right:0;
+	left:auto;
 }
 
 .settings-section-hint {
@@ -17550,7 +17618,7 @@ All stored locally.
 
 <div class="settings-pane settings-pane-secondary" data-pane="sources">
 <div class="settings-section-hint">Where Backchannel looks for discussions and links for Front Pages. <a href="${escapeHTML(REPO_URL)}#what-exactly-is-the-script-doing-with-my-information" target="_blank" rel="noopener noreferrer">How each source works</a></div>
-<div class="sources-grid">${sourceListHTML({ idPrefix: "setting-source-", cells: true })}</div>
+<div class="sources-grid">${sourceListHTML({ idPrefix: "setting-source-", cells: true, help: true })}</div>
 <div class="sources-subhead">Front Pages</div>
 <div class="sources-subhint">Choose what Backchannel shows in Front Pages. Links come only from the sources you've enabled above.</div>
 ${frontPageChooserHTML()}
@@ -29286,7 +29354,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 .app-tip {
 	position:absolute;
-	z-index:20;
+	z-index:70;
 	top:0;
 	left:0;
 	padding:5px 9px;
@@ -29310,6 +29378,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 	margin-top:-4px;
 	background:inherit;
 	transform:rotate(45deg);
+}
+
+.app-tip.is-flipped::before {
+	right:-4px;
+	left:auto;
 }
 
 .rail-rule {
@@ -32925,6 +32998,67 @@ ${settingsModalHTML()}
 			nav?.append(credits);
 		}
 
+		if (app) {
+			const helpIn = (event) => event.target?.closest?.(".source-help") || null;
+
+			content.addEventListener("pointerover", (event) => {
+				const help = helpIn(event);
+
+				if (help && event.pointerType !== "touch") {
+					showAppTip(help, { phone: true });
+				}
+			});
+			content.addEventListener("pointerout", (event) => {
+				const help = helpIn(event);
+
+				if (help && !help.contains(event.relatedTarget)) {
+					hideAppTip();
+				}
+			});
+			content.addEventListener("focusin", (event) => {
+				const help = helpIn(event);
+
+				if (help?.matches(":focus-visible")) {
+					showAppTip(help, { phone: true });
+				}
+			});
+			content.addEventListener("focusout", (event) => {
+				if (helpIn(event)) {
+					hideAppTip();
+				}
+			});
+			content.addEventListener(
+				"click",
+				(event) => {
+					const help = helpIn(event);
+
+					if (help) {
+						showAppTip(help, { phone: true });
+					}
+				},
+				true,
+			);
+			content.addEventListener("scroll", hideAppTip);
+			modal.addEventListener(
+				"pointerdown",
+				(event) => {
+					if (!helpIn(event)) {
+						hideAppTip();
+					}
+				},
+				true,
+			);
+		} else {
+			for (const help of panel.querySelectorAll(".source-help")) {
+				const tip = document.createElement("span");
+
+				tip.className = "op-pill-tip";
+				tip.setAttribute("aria-hidden", "true");
+				tip.textContent = help.dataset.tip;
+				help.append(tip);
+			}
+		}
+
 		const showSection = (section, target = "") => {
 			const tab = tabs.find((each) => each.dataset.settingsSection === section) || tabs[0];
 			const panes = panel.querySelector(".settings-panes");
@@ -32999,6 +33133,7 @@ ${settingsModalHTML()}
 
 			modal.hidden = true;
 			holdBehind(false);
+			hideAppTip();
 
 			if (!panel.classList.contains("hidden")) {
 				toggleDropdown?.(new Event("click"));
@@ -33429,13 +33564,13 @@ ${settingsModalHTML()}
 		renderAppList().catch(console.error);
 	}
 
-	function showAppTip(button) {
+	function showAppTip(button, { phone = false } = {}) {
 		const shadow = appState?.ui.shadow;
 		const tip = shadow?.querySelector("#app-tip");
 		const app = shadow?.querySelector("#app");
 		const label = button?.dataset.tip;
 
-		if (!tip || !app || !label || appIsPhone() || button.getAttribute("aria-expanded") === "true") {
+		if (!tip || !app || !label || (appIsPhone() && !phone) || button.getAttribute("aria-expanded") === "true") {
 			return;
 		}
 
@@ -33443,9 +33578,13 @@ ${settingsModalHTML()}
 		const frame = app.getBoundingClientRect();
 
 		tip.textContent = label;
-		tip.style.left = `${Math.round(box.right + 10 - frame.left)}px`;
-		tip.style.top = `${Math.round(box.top + box.height / 2 - frame.top)}px`;
 		tip.hidden = false;
+
+		const flip = box.right + 10 + tip.offsetWidth > Math.min(frame.right, window.innerWidth) - 8;
+
+		tip.classList.toggle("is-flipped", flip);
+		tip.style.left = `${Math.round((flip ? box.left - 10 - tip.offsetWidth : box.right + 10) - frame.left)}px`;
+		tip.style.top = `${Math.round(box.top + box.height / 2 - frame.top)}px`;
 	}
 
 	function applyAppListWidth(app, width) {
