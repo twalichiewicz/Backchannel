@@ -16061,6 +16061,10 @@ header > .settings-panel {
 	display:none;
 }
 
+#app-settings-modal[data-section="shortcuts"] #app-settings-heading {
+	display:none;
+}
+
 .settings-sidebar-head {
 	display:flex;
 	align-items:center;
@@ -16261,6 +16265,82 @@ header > .settings-panel {
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
+}
+
+.shortcut-controls {
+	display:flex;
+	flex-wrap:wrap;
+	align-items:center;
+	justify-content:flex-start;
+	gap:6px 10px;
+	min-width:0;
+}
+
+.shortcut-key {
+	box-sizing:border-box;
+	min-width:24px;
+	padding:2px 7px;
+	border:1px solid var(--button-border);
+	border-bottom-width:2px;
+	border-radius:5px;
+	background:var(--button-bg);
+	color:var(--button-text);
+	font:inherit;
+	font-size:11px;
+	line-height:1.35;
+	text-align:center;
+	text-decoration:none;
+	white-space:nowrap;
+}
+
+button.shortcut-key {
+	cursor:pointer;
+}
+
+.shortcut-key.is-fixed,
+.shortcut-key.is-none {
+	color:var(--muted);
+}
+
+.shortcut-key.is-recording {
+	border-color:var(--accent);
+	box-shadow:0 0 0 1px var(--accent);
+	color:var(--muted);
+}
+
+.shortcut-key:focus-visible,
+.shortcut-reset:focus-visible,
+.shortcut-swap:focus-visible,
+.shortcut-cancel:focus-visible,
+#settings-shortcuts-reset-all:focus-visible {
+	outline:2px solid var(--accent);
+	outline-offset:1px;
+}
+
+@media (hover: hover) {
+	button.shortcut-key:not(.is-recording):hover {
+		border-color:var(--meta);
+	}
+}
+
+.shortcut-note {
+	grid-column:1 / -1;
+	display:flex;
+	flex-wrap:wrap;
+	align-items:baseline;
+	gap:4px 12px;
+	padding:2px 0 6px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
+}
+
+.shortcut-foot {
+	padding-top:10px;
+}
+
+.settings-link-button + .settings-link-button {
+	margin-top:6px;
 }
 
 .theme-tile input:focus-visible ~ .theme-tile-art,
@@ -17228,6 +17308,21 @@ header > .settings-panel {
 	outline:2px solid var(--accent);
 	outline-offset:-2px;
 }
+
+.shortcut-table .manage-table-head,
+.shortcut-table .manage-row {
+	grid-template-columns:minmax(0, 40%) minmax(0, 1fr);
+}
+
+.shortcut-table .manage-table-body {
+	max-height:none;
+	overflow:visible;
+}
+
+.shortcut-table .manage-row {
+	row-gap:0;
+	content-visibility:visible;
+}
 `;
 
 	function headerHTML({ subtitle = false, minimize = false, browse = false, hide = true, settings = true, title = "" } = {}) {
@@ -17447,6 +17542,7 @@ All stored locally.
 
 <div class="settings-group">
 <button id="settings-manage-sources" class="settings-link-button" type="button" data-pane="sources" data-pane-name="Sources">Sources<span class="settings-link-chevron">&rsaquo;</span></button>
+<button id="settings-manage-shortcuts" class="settings-link-button" type="button" data-pane="shortcuts" data-pane-name="Shortcuts">Shortcuts<span class="settings-link-chevron">&rsaquo;</span></button>
 </div>
 </div>
 
@@ -17465,6 +17561,16 @@ ${frontPageChooserHTML()}
 <div class="manage-table-tools"><button type="button" class="manage-table-add" aria-label="Hide a link" title="Hide a link">+</button><button type="button" class="manage-table-remove" aria-label="Show the chosen link again" title="Show the chosen link again" disabled>&minus;</button></div>
 </div>
 </div>
+</div>
+
+<div class="settings-pane settings-pane-secondary" data-pane="shortcuts">
+<label class="settings-option settings-sidebar-head"><span class="settings-sidebar-title">Shortcuts</span><input id="setting-shortcuts-enabled" class="settings-switch" role="switch" type="checkbox" aria-label="Keyboard shortcuts" aria-describedby="settings-shortcuts-hint" checked></label>
+<div id="settings-shortcuts-hint" class="settings-sidebar-hint">Click a key to change it: press the new keys, Delete to clear, Esc to cancel.</div>
+<div class="manage-table shortcut-table">
+<div class="manage-table-head" aria-hidden="true"><span>Action</span><span>Keys</span></div>
+<div id="settings-shortcuts-list" class="manage-table-body shortcut-list"></div>
+</div>
+<div class="shortcut-foot"><button id="settings-shortcuts-reset-all" class="settings-byline-action" type="button">Reset all</button></div>
 </div>
 
 </div>
@@ -17746,6 +17852,8 @@ ${frontPageChooserHTML()}
 		let setHideMenuOpen = () => {};
 		let refreshManageLists = () => Promise.resolve();
 
+		const shortcutsPane = wireShortcutsPane(shadow);
+
 		const setSettingsOpen = (open) => {
 			settingsPanel.classList.toggle("hidden", !open);
 			settingsToggle.classList.toggle("is-open", open);
@@ -17766,6 +17874,7 @@ ${frontPageChooserHTML()}
 				return;
 			}
 
+			shortcutsPane.close();
 			showSecondaryPane(null);
 		};
 
@@ -18540,7 +18649,13 @@ ${frontPageChooserHTML()}
 		for (const entry of settingsPanel.querySelectorAll(
 			".settings-link-button[data-pane]",
 		)) {
-			entry.onclick = () => showSecondaryPane(entry.dataset.pane);
+			entry.onclick = () => {
+				showSecondaryPane(entry.dataset.pane);
+
+				if (entry.dataset.pane === "shortcuts") {
+					shortcutsPane.refresh().catch(console.error);
+				}
+			};
 		}
 
 		for (const control of [crumbBack, crumbRoot]) {
@@ -28816,6 +28931,19 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		aspect-ratio:4 / 3;
 	}
 
+	#app-settings-content .shortcut-table .manage-table-head span:nth-child(2) {
+		text-align:right;
+	}
+
+	#app-settings-content .shortcut-table .manage-row {
+		padding-top:4px;
+		padding-bottom:4px;
+	}
+
+	#app-settings-content .shortcut-controls {
+		justify-content:flex-end;
+	}
+
 	#app-settings-modal {
 		padding:calc(12px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px));
 	}
@@ -31903,6 +32031,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <button type="button" class="app-settings-tab" data-settings-section="appearance"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.2a5.8 5.8 0 1 0 0 11.6c.9 0 1.4-.6 1.4-1.3 0-.7-.5-1-.5-1.6 0-.7.6-1.2 1.3-1.2h1.4a2.2 2.2 0 0 0 2.2-2.2C13.8 4.5 11.2 2.2 8 2.2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5.2" cy="7.6" r=".95" fill="currentColor"/><circle cx="7.4" cy="5.1" r=".95" fill="currentColor"/><circle cx="10.5" cy="5.6" r=".95" fill="currentColor"/></svg><span>Appearance</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
+<button type="button" class="app-settings-tab" data-settings-section="shortcuts"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="1.8" y="3.6" width="12.4" height="8.8" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.7 6.7h.01M8 6.7h.01M11.3 6.7h.01M5.2 9.6h5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Shortcuts</span></button>
 </nav>
 <div id="app-settings-content" class="app-settings-content" tabindex="-1" role="group" aria-labelledby="app-settings-heading"><div id="app-settings-heading" class="app-settings-heading">General</div></div>
 </div>
@@ -32809,8 +32938,10 @@ ${settingsModalHTML()}
 				}
 			}
 
-			if (tab.dataset.settingsSection === "sources") {
-				shadow.querySelector("#settings-manage-sources")?.click();
+			const paneLink = panel.querySelector(`.settings-link-button[data-pane="${tab.dataset.settingsSection}"]`);
+
+			if (paneLink) {
+				paneLink.click();
 			} else if (panes?.classList.contains("is-secondary")) {
 				shadow.querySelector("#settings-crumb-root")?.click();
 			}
@@ -33804,6 +33935,7 @@ ${settingsModalHTML()}
 		{ id: "next", label: "Next", keys: [appKeyBinding("j")], repeats: true },
 		{ id: "previous", label: "Previous", keys: [appKeyBinding("k")], repeats: true },
 		{ id: "open-original", label: "Open the original", keys: [appKeyBinding("o")] },
+		{ id: "shortcuts", label: "Shortcuts", keys: [appKeyBinding("/", true)] },
 		{ id: "close", label: "Close", keys: [appKeyBinding("Escape")], fixed: true },
 	];
 
@@ -33929,6 +34061,393 @@ ${settingsModalHTML()}
 		shadow.querySelector("#app-toggle-discussion").title = appShortcutTip("discussion");
 	}
 
+	const APP_RECORD_IGNORES = new Set(["Shift", "Control", "Alt", "Meta", "AltGraph", "CapsLock", "NumLock", "ScrollLock", "Fn", "FnLock", "Hyper", "Super", "Symbol", "SymbolLock", "Dead", "Unidentified", "Process"]);
+	const APP_ARTICLE_KEEPS_NOTE = "Saved. Inside an article, this key stays with the article.";
+
+	function appBrowserKeeps(key, mod, alt, shift) {
+		if (!mod || alt) {
+			return false;
+		}
+
+		if (["w", "t", "n"].includes(key)) {
+			return true;
+		}
+
+		if (key === "q") {
+			return !shift;
+		}
+
+		if (key === "Tab") {
+			return !appIsApple();
+		}
+
+		return shift && ["[", "]", "{", "}"].includes(key);
+	}
+
+	function appRecordedKey(event) {
+		const key = appKeyName(event.key);
+		const apple = appIsApple();
+		const mod = apple ? event.metaKey : event.ctrlKey;
+
+		if (key === "Escape") {
+			return { cancel: true };
+		}
+
+		if ((key === "Delete" || key === "Backspace") && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+			return { clear: true };
+		}
+
+		if (apple ? event.ctrlKey : event.metaKey) {
+			return { refusal: "This combination can't be used." };
+		}
+
+		if (!mod && (key === "Tab" || key === "Enter")) {
+			return { refusal: "Tab and Enter are kept for moving around." };
+		}
+
+		const binding = { key, mod, alt: event.altKey, shift: event.shiftKey && !appKeyIgnoresShift(key) };
+
+		if (appBrowserKeeps(key, mod, event.altKey, event.shiftKey)) {
+			return { refusal: `Your browser keeps ${appShortcutLabel(binding)} for itself.` };
+		}
+
+		return { binding };
+	}
+
+	function appBindingsMatch(first, second) {
+		return first.length === second.length && first.every((binding, at) => appBindingId(binding) === appBindingId(second[at]));
+	}
+
+	function appShortcutsStored(shortcuts) {
+		const stored = {};
+		const bindings = {};
+
+		for (const action of APP_SHORTCUTS) {
+			if (!action.fixed && !appBindingsMatch(shortcuts.bindings[action.id], action.keys)) {
+				bindings[action.id] = shortcuts.bindings[action.id].map(({ key, mod, alt, shift }) => ({ key, mod, alt, shift }));
+			}
+		}
+
+		if (!shortcuts.enabled) {
+			stored.enabled = false;
+		}
+
+		if (Object.keys(bindings).length) {
+			stored.bindings = bindings;
+		}
+
+		return stored;
+	}
+
+	function appShortcutNoteHTML(note) {
+		const choices = note.swap
+			? '<button class="shortcut-swap settings-byline-action" type="button">Swap</button><button class="shortcut-cancel settings-byline-action" type="button">Cancel</button>'
+			: "";
+
+		return `<div class="shortcut-note"><span role="status">${escapeHTML(note.text)}</span>${choices}</div>`;
+	}
+
+	function appShortcutRowHTML(action, keys, note) {
+		const name = escapeHTML(action.label);
+		const caps = keys.length
+			? keys
+					.map((binding, at) => {
+						const label = escapeHTML(appShortcutLabel(binding));
+
+						return action.fixed
+							? `<span class="shortcut-key is-fixed">${label}</span>`
+							: `<button class="shortcut-key" type="button" data-slot="${at}" aria-label="Change ${name}: ${label}">${label}</button>`;
+					})
+					.join("")
+			: `<button class="shortcut-key is-none" type="button" data-slot="0" aria-label="Set ${name}">None</button>`;
+		const reset = !action.fixed && !appBindingsMatch(keys, action.keys) ? '<button class="shortcut-reset settings-byline-action" type="button">Reset</button>' : "";
+
+		return `<div class="manage-row shortcut-row" role="group" aria-labelledby="shortcut-name-${action.id}" data-shortcut="${action.id}">
+<span id="shortcut-name-${action.id}" class="shortcut-name">${name}</span>
+<div class="shortcut-controls">${caps}${reset}</div>
+${note ? appShortcutNoteHTML(note) : ""}
+</div>`;
+	}
+
+	function wireShortcutsPane(shadow) {
+		const list = shadow.querySelector("#settings-shortcuts-list");
+		const enabled = shadow.querySelector("#setting-shortcuts-enabled");
+		const resetAll = shadow.querySelector("#settings-shortcuts-reset-all");
+
+		if (!list || !enabled || !resetAll) {
+			return { refresh: () => Promise.resolve(), close: () => {} };
+		}
+
+		let state = appShortcutsFrom(null);
+		let version = 0;
+		let writing = Promise.resolve();
+		let note = null;
+		let recording = null;
+		const heldKeys = new Set();
+
+		const rowFor = (id) => list.querySelector(`[data-shortcut="${id}"]`);
+		const copy = () => ({ enabled: state.enabled, bindings: Object.fromEntries(Object.entries(state.bindings).map(([id, keys]) => [id, [...keys]])) });
+
+		const paint = (focus) => {
+			list.innerHTML = APP_SHORTCUTS.map((action) => appShortcutRowHTML(action, state.bindings[action.id], note?.id === action.id ? note : null)).join("");
+			enabled.checked = state.enabled;
+
+			if (focus) {
+				const row = rowFor(focus.id);
+
+				(row.querySelector(`.shortcut-key[data-slot="${focus.slot}"]`) || row.querySelector(".shortcut-key"))?.focus({ preventScroll: true });
+			}
+		};
+
+		const paintNote = () => {
+			list.querySelector(".shortcut-note")?.remove();
+
+			if (note) {
+				rowFor(note.id).insertAdjacentHTML("beforeend", appShortcutNoteHTML(note));
+			}
+		};
+
+		const apply = (next, focus) => {
+			version += 1;
+			state = next;
+			paint(focus);
+			loadAppShortcuts(Promise.resolve(next)).catch(console.error);
+			writing = writing
+				.then(() => save(STORAGE.shortcuts, appShortcutsStored(next)))
+				.then(() => loadAppShortcuts())
+				.catch(console.error);
+		};
+
+		const endRecording = () => {
+			const ended = recording;
+
+			window.removeEventListener("keydown", onRecordKey, true);
+			window.removeEventListener("pointerdown", onRecordPointer, true);
+			ended.button.removeEventListener("blur", onRecordBlur);
+			recording = null;
+
+			if (!heldKeys.size) {
+				window.removeEventListener("keyup", onRecordRelease, true);
+			}
+		};
+
+		const dropRecording = () => {
+			if (!recording) {
+				return;
+			}
+
+			const { button, text } = recording;
+
+			endRecording();
+			button.classList.remove("is-recording");
+			button.textContent = text;
+
+			if (note) {
+				note = null;
+				paintNote();
+			}
+		};
+
+		const place = (id, slot, binding, owner) => {
+			const next = copy();
+			const keys = next.bindings[id];
+
+			if (owner) {
+				const theirs = next.bindings[owner];
+				const at = theirs.findIndex((each) => appBindingId(each) === appBindingId(binding));
+
+				if (keys[slot]) {
+					theirs[at] = keys[slot];
+				} else {
+					theirs.splice(at, 1);
+				}
+			}
+
+			keys[slot] = binding;
+			note = APP_FRAME_KEPT_KEYS.has(binding.key) ? { id, text: APP_ARTICLE_KEEPS_NOTE } : null;
+			apply(next, { id, slot });
+		};
+
+		const onRecordBlur = () => dropRecording();
+
+		const onRecordRelease = (event) => {
+			if (heldKeys.delete(event.code)) {
+				event.stopImmediatePropagation();
+			}
+
+			if (!recording && !(event.metaKey || event.ctrlKey || event.altKey || event.shiftKey)) {
+				heldKeys.clear();
+				window.removeEventListener("keyup", onRecordRelease, true);
+			}
+		};
+
+		const onRecordPointer = (event) => {
+			if (recording && !event.composedPath().includes(recording.button)) {
+				dropRecording();
+			}
+		};
+
+		const onRecordKey = (event) => {
+			if (!recording.button.isConnected) {
+				dropRecording();
+				return;
+			}
+
+			event.preventDefault();
+			event.stopImmediatePropagation();
+			heldKeys.add(event.code);
+
+			if (!event.key || event.repeat || event.isComposing || event.keyCode === 229 || APP_RECORD_IGNORES.has(event.key)) {
+				return;
+			}
+
+			const heard = appRecordedKey(event);
+			const { id, slot } = recording;
+			const keys = state.bindings[id];
+			const bound = heard.binding ? appBindingId(heard.binding) : "";
+
+			if (heard.refusal) {
+				note = { id, text: heard.refusal };
+				paintNote();
+				return;
+			}
+
+			endRecording();
+			note = null;
+
+			if (heard.clear && keys[slot]) {
+				const next = copy();
+
+				next.bindings[id].splice(slot, 1);
+				apply(next, { id, slot: Math.min(slot, next.bindings[id].length - 1) });
+				return;
+			}
+
+			if (!heard.binding || (keys[slot] && appBindingId(keys[slot]) === bound)) {
+				paint({ id, slot });
+				return;
+			}
+
+			const owner = APP_SHORTCUTS.find((action) => action.id !== id && state.bindings[action.id].some((each) => appBindingId(each) === bound));
+
+			if (owner) {
+				note = { id, text: `Used by ${owner.label}`, swap: { slot, binding: heard.binding, owner: owner.id } };
+				paint({ id, slot });
+				return;
+			}
+
+			place(id, slot, heard.binding, null);
+		};
+
+		const startRecording = (button, id, slot) => {
+			if (recording?.button === button) {
+				return;
+			}
+
+			dropRecording();
+			note = null;
+			paintNote();
+			recording = { button, id, slot, text: button.textContent };
+			button.classList.add("is-recording");
+			button.textContent = "Press keys";
+			button.focus({ preventScroll: true });
+			button.addEventListener("blur", onRecordBlur);
+			window.addEventListener("keydown", onRecordKey, true);
+			window.addEventListener("keyup", onRecordRelease, true);
+			window.addEventListener("pointerdown", onRecordPointer, true);
+		};
+
+		const reset = (id) => {
+			const next = copy();
+			const defaults = APP_SHORTCUTS.find((action) => action.id === id).keys;
+			const released = new Set(defaults.map(appBindingId));
+
+			for (const action of APP_SHORTCUTS) {
+				next.bindings[action.id] = action.id === id ? [...defaults] : next.bindings[action.id].filter((each) => action.fixed || !released.has(appBindingId(each)));
+			}
+
+			note = null;
+			apply(next, { id, slot: 0 });
+		};
+
+		const cancelSwap = () => {
+			const { id, swap } = note;
+
+			note = null;
+			paint({ id, slot: swap.slot });
+		};
+
+		list.addEventListener("click", (event) => {
+			const control = event.target.closest?.("button");
+			const id = control?.closest(".shortcut-row")?.dataset.shortcut;
+
+			if (!control || !id) {
+				return;
+			}
+
+			if (control.matches(".shortcut-key")) {
+				startRecording(control, id, Number(control.dataset.slot));
+			} else if (control.matches(".shortcut-reset")) {
+				reset(id);
+			} else if (control.matches(".shortcut-swap") && note?.swap) {
+				place(id, note.swap.slot, note.swap.binding, note.swap.owner);
+			} else if (control.matches(".shortcut-cancel") && note?.swap) {
+				cancelSwap();
+			}
+		});
+
+		list.addEventListener("keydown", (event) => {
+			if (event.key === "Escape" && note?.swap) {
+				event.preventDefault();
+				event.stopPropagation();
+				cancelSwap();
+			}
+		});
+
+		enabled.addEventListener("change", () => {
+			const next = copy();
+
+			next.enabled = enabled.checked;
+			note = null;
+			apply(next, null);
+		});
+
+		resetAll.addEventListener("click", () => {
+			const next = copy();
+
+			for (const action of APP_SHORTCUTS) {
+				next.bindings[action.id] = [...action.keys];
+			}
+
+			note = null;
+			apply(next, null);
+			resetAll.focus({ preventScroll: true });
+		});
+
+		const refresh = async () => {
+			const seen = version;
+			const stored = await readAppShortcuts();
+
+			if (seen === version && !recording) {
+				state = stored;
+				note = null;
+				paint(null);
+			}
+		};
+
+		return {
+			refresh,
+			close: () => {
+				dropRecording();
+
+				if (note) {
+					note = null;
+					paintNote();
+				}
+			},
+		};
+	}
+
 	function appSearchEntries() {
 		const state = appState;
 		const shadow = state.ui.shadow;
@@ -33969,7 +34488,7 @@ ${settingsModalHTML()}
 			const owner = field.closest("[data-app-section]");
 			const section = ["appearance", "sidebar"].includes(owner?.dataset.appSection) ? owner.dataset.appSection : "general";
 
-			if (label && label.length < 80 && !seen.has(label) && !field.closest("#app-view-menu")) {
+			if (label && label.length < 80 && !seen.has(label) && !field.closest("#app-view-menu") && !field.closest('[data-pane="shortcuts"]')) {
 				seen.add(label);
 				entries.push({ group: "Settings", title: label, note: { general: "General", appearance: "Appearance", sidebar: "Sidebar" }[section], keys: `${label} settings`, run: () => openAppSettingsSection(section) });
 			}
@@ -35840,7 +36359,7 @@ ${frontPageChooserHTML()}
 			: null;
 	}
 
-	function appShortcutSettings() {
+	function appShortcutSettings(section) {
 		const control = appShortcutControl("#settings-toggle");
 		const modal = appState.ui.shadow.querySelector("#app-settings-modal");
 
@@ -35850,8 +36369,13 @@ ${frontPageChooserHTML()}
 
 					const caret = modal.hidden ? appCaretIn(null) : null;
 
-					control.onclick(new Event("click"));
-					appSettingsCaret = modal.hidden ? null : caret;
+					if (section) {
+						openAppSettingsSection(section);
+					} else {
+						control.onclick(new Event("click"));
+					}
+
+					appSettingsCaret = modal.hidden ? null : caret || appSettingsCaret;
 				}
 			: null;
 	}
@@ -35880,7 +36404,8 @@ ${frontPageChooserHTML()}
 					},
 		"front-pages": () => appShortcutPane("list", "#app-toggle-list"),
 		discussion: () => appShortcutPane("discussion", "#app-toggle-discussion"),
-		settings: appShortcutSettings,
+		settings: () => appShortcutSettings(),
+		shortcuts: () => appShortcutSettings("shortcuts"),
 		save: () => {
 			const control = appShortcutControl(appIsPhone() ? "#app-bar-save" : '#app-article-actions [data-item-action="save"]');
 			const button = appState.ui.shadow.querySelector('#app-article-actions [data-item-action="save"]');
