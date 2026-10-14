@@ -11262,7 +11262,7 @@ html[data-backchannel-installed] .chin {
 	${meta}
 	</div>
 	</div>
-	${appState && !isWriting ? `<button class="browse-more" type="button" aria-label="More" aria-haspopup="true">${APP_ICON('<circle cx="8" cy="2.8" r="1.9"/><circle cx="8" cy="8" r="1.9"/><circle cx="8" cy="13.2" r="1.9"/>')}</button>` : ""}
+	${appState && !isWriting ? `<button class="browse-more" type="button" aria-label="More" aria-haspopup="true">${MORE_ICON}</button>` : ""}
 	`;
 
 		const more = row.querySelector(".browse-more");
@@ -14311,6 +14311,10 @@ header {
 	.dropdown-item:hover {
 		background:var(--hover-tint);
 	}
+}
+
+.dropdown-item:active {
+	background:var(--hover-tint);
 }
 
 .hide-menu {
@@ -28972,27 +28976,13 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 
 	const SETTINGS_MODAL_PHONE_CSS = `
 	#app-settings-content .appearance-row {
-		grid-template-columns:minmax(0, 2fr) minmax(0, 3fr);
-		gap:8px 14px;
+		grid-template-columns:minmax(0, 1fr);
+		gap:10px;
 	}
 
-	#app-settings-content .theme-tiles {
-		gap:8px;
-	}
-
-	#app-settings-content .theme-tile {
-		flex:1 1 0;
-		min-width:0;
-	}
-
-	#app-settings-content .theme-tile-art {
-		width:100%;
-		height:auto;
-		aspect-ratio:3 / 2;
-	}
-
+	#app-settings-content .theme-tiles,
 	#app-settings-content .toggle-colors {
-		justify-content:space-between;
+		justify-content:center;
 	}
 
 	#app-settings-content .toggle-stage {
@@ -29718,33 +29708,6 @@ ${APP_ICON_CSS}
 	text-align:left;
 }
 
-.app-menu-item {
-	display:flex;
-	align-items:center;
-	gap:10px;
-	width:100%;
-	padding:9px 10px;
-	border:0;
-	border-radius:6px;
-	background:none;
-	color:inherit;
-	font:inherit;
-	font-size:13px;
-	line-height:1.2;
-	text-align:left;
-	cursor:pointer;
-	-webkit-tap-highlight-color:transparent;
-}
-
-.app-menu-item:active {
-	background:var(--hover-tint);
-}
-
-.app-menu-item[aria-pressed="true"] {
-	background:var(--active-tint);
-	font-weight:600;
-}
-
 .app-view-menu[hidden] {
 	display:none;
 }
@@ -30329,6 +30292,10 @@ ${SETTINGS_MODAL_CSS}
 	.app-card-button:hover:not(:disabled) {
 		filter:brightness(.95);
 	}
+}
+
+.app-card-button:active:not(:disabled) {
+	filter:brightness(.9);
 }
 
 .app-card-button:focus-visible {
@@ -31042,7 +31009,6 @@ header .item-action-link {
 #app-bar-back,
 #app-search,
 #app-row-menu,
-#app-list-foot,
 #app-list-heading,
 #app-list-tags,
 #app-next,
@@ -31538,20 +31504,12 @@ header .item-action-link {
 
 	.app-list-resize,
 	#panel.app-docked #resize-handle,
-	#app-article > .app-pane-head,
-	#app-list > .app-pane-head {
+	#app-article > .app-pane-head {
 		display:none;
 	}
 
-	#app-list-foot {
-		display:flex !important;
-		justify-content:center;
-		padding:10px 0 4px;
-	}
-
-	#app-list-foot[hidden],
-	#app-list-body:not(:has(.browse-row)) + #app-list-foot {
-		display:none !important;
+	#app-list > .app-pane-head {
+		display:none;
 	}
 
 	#app-search {
@@ -31678,10 +31636,51 @@ header .item-action-link {
 	}
 
 	#app-list-heading {
-		display:block !important;
+		display:flex !important;
+		align-items:center;
 		padding:16px 16px 6px;
 		font:700 26px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 		letter-spacing:-.01em;
+	}
+
+	#app-list-heading-text {
+		min-width:0;
+		overflow:hidden;
+		text-overflow:ellipsis;
+		white-space:nowrap;
+	}
+
+	#app-list-heading-button {
+		display:inline-flex;
+		align-items:center;
+		gap:6px;
+		min-width:0;
+		max-width:calc(100% + 12px);
+		margin:-2px -6px;
+		padding:2px 6px;
+		border:0;
+		border-radius:8px;
+		background:none;
+		color:inherit;
+		font:inherit;
+		letter-spacing:inherit;
+		cursor:pointer;
+	}
+
+	#app-list-heading-button[hidden] {
+		display:none;
+	}
+
+	#app-list-heading-button:active {
+		background:var(--active-tint);
+	}
+
+	#app-list-heading-button::after {
+		content:"▾";
+		content:"▾" / "";
+		flex:0 0 auto;
+		color:var(--meta);
+		font-size:16px;
 	}
 
 	#app-list-tags:not([hidden]) {
@@ -31770,12 +31769,27 @@ header .item-action-link {
 	}
 
 	#app-list-body .browse-more svg {
-		width:18px;
-		height:18px;
+		width:16px;
+		height:16px;
 	}
 
 	#app-list-body .browse-more circle {
 		fill:currentColor;
+	}
+
+	#app-list-body .browse-more:focus-visible {
+		color:var(--text);
+	}
+
+	@media (hover: hover) {
+		#app-list-body .browse-more:hover {
+			color:var(--text);
+		}
+	}
+
+	#app-list-body .browse-more:active {
+		background:var(--active-tint);
+		color:var(--text);
 	}
 
 	#app-list-body .story-meta .browse-queue-link,
@@ -31798,9 +31812,9 @@ header .item-action-link {
 	}
 
 	#app-row-menu {
-		display:block !important;
-		min-width:150px;
-		padding:6px;
+		display:flex !important;
+		position:fixed;
+		z-index:30;
 	}
 
 	#app-row-menu[hidden] {
@@ -32149,15 +32163,14 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <button id="settings-toggle" class="rail-button" type="button" data-tip="Settings" aria-label="Open Backchannel settings" aria-expanded="false" aria-controls="settings-panel"><span class="rail-icon">${APP_SETTINGS_ICON}</span><span class="rail-label" aria-hidden="true">Settings</span></button>
 </nav>
 <button id="app-bar-back" class="app-stack-button" type="button" aria-label="Back to the articles" data-glyph="down" hidden>${APP_ICON('<path d="M2.2 5.1a1 1 0 0 1 1.4-.1L8 9l4.4-4a1 1 0 0 1 1.3 1.5l-5 4.6a1 1 0 0 1-1.4 0l-5-4.6a1 1 0 0 1-.1-1.4z"/>')}</button>
-<div id="app-row-menu" class="app-view-menu app-row-menu" role="menu" aria-label="This article" hidden></div>
+<div id="app-row-menu" class="dropdown app-row-menu" role="menu" aria-label="This article" hidden></div>
 <div id="app-bar" class="app-bar" hidden><button id="app-bar-open" class="app-stack-button" type="button" aria-label="Open the original page" hidden>${APP_ICON('<path d="M9 2h5v5h-1.7V4.9L7.7 9.5 6.5 8.3l4.6-4.6H9z"/><path d="M3.5 4H7v1.7H4.7v5.6h5.6V9H12v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-pressed="false" aria-label="Save" hidden>${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-like" class="app-stack-button" type="button" aria-pressed="false" aria-label="Like" hidden>${APP_ICON('<path d="M2 7.2h2.6V14H2.5a.5.5 0 0 1-.5-.5z"/><path d="M5.8 14V6.7l2.5-4.4a1.2 1.2 0 0 1 2.2.9L10 6h3a1.4 1.4 0 0 1 1.37 1.7l-1 4.7A2 2 0 0 1 11.4 14z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
 <section id="app-list" aria-label="Articles">
 <div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="app-head-icon" type="button" aria-label="Mark all as read" title="Mark all as read">${APP_MARK_READ_ICON}</button><button id="app-list-sync" class="app-head-icon" type="button" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button></span></div>
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
-<div id="app-list-heading" class="app-list-heading"></div>
+<div id="app-list-heading" class="app-list-heading"><span id="app-list-heading-text"></span><button id="app-list-heading-button" type="button" aria-haspopup="menu" aria-expanded="false" hidden></button></div>
 <div id="app-list-tags" class="app-list-tags" role="group" aria-label="Filters" hidden></div>
 <div id="app-list-body"></div>
-<div id="app-list-foot" hidden><button id="app-list-mark-read" class="item-action-link" type="button">Mark all as read</button></div>
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
 ${settingsPanelHTML()}
@@ -32274,9 +32287,8 @@ ${settingsModalHTML()}
 		shadow.querySelector("#app-mark-read").onclick = () => {
 			markAppViewRead().catch(console.error);
 		};
-		shadow.querySelector("#app-list-mark-read").onclick = () => {
-			markAppViewRead().catch(console.error);
-		};
+
+		shadow.querySelector("#app-list-heading-button").onclick = (event) => openAppHeadingMenu(event.currentTarget);
 
 		const listBody = shadow.querySelector("#app-list-body");
 		let rowPress = null;
@@ -32767,7 +32779,7 @@ ${settingsModalHTML()}
 			const path = event.composedPath();
 			const rowMenu = shadow.querySelector("#app-row-menu");
 
-			if (!rowMenu.hidden && !path.includes(rowMenu) && !path.some((node) => node?.classList?.contains("browse-more"))) {
+			if (!rowMenu.hidden && !path.includes(rowMenu) && !path.some((node) => node?.classList?.contains("browse-more") || node?.id === "app-list-heading-button")) {
 				closeAppRowMenu();
 			}
 		});
@@ -32807,7 +32819,7 @@ ${settingsModalHTML()}
 
 		let scrollTimer = 0;
 		const noteScrolling = () => {
-			if (!appIsPhone() || appRoot.dataset.stage === "list") {
+			if (!appIsPhone() || appRoot.dataset.stage !== "article") {
 				return;
 			}
 
@@ -32815,7 +32827,7 @@ ${settingsModalHTML()}
 			clearTimeout(scrollTimer);
 			scrollTimer = setTimeout(() => {
 				delete appRoot.dataset.scrolling;
-			}, 500);
+			}, 200);
 		};
 
 		window.addEventListener("scroll", noteScrolling, { passive: true });
@@ -33411,25 +33423,57 @@ ${settingsModalHTML()}
 			return;
 		}
 
-		const links = openAppRowMenuButtons(row);
+		closeAppRowMenu();
+		menu.setAttribute("aria-label", "This article");
+		showAppMenu(
+			menu,
+			button,
+			openAppRowMenuButtons(row).map((link) => {
+				const label = link.textContent.trim();
 
+				return { label: label.charAt(0).toUpperCase() + label.slice(1), run: () => link.click() };
+			}),
+		);
+		menu.dataset.row = row.dataset.storyId || "";
+	}
+
+	function openAppHeadingMenu(button) {
+		const menu = appState?.ui.shadow.querySelector("#app-row-menu");
+
+		if (!menu) {
+			return;
+		}
+
+		if (!menu.hidden && menu.dataset.heading) {
+			closeAppRowMenu();
+			return;
+		}
+
+		closeAppRowMenu();
+		menu.setAttribute("aria-label", appViewLabel(appState.view));
+		showAppMenu(menu, button, [{ label: "Mark all as read", run: () => markAppViewRead().catch(console.error) }], { start: true });
+		menu.dataset.heading = "1";
+		button.setAttribute("aria-expanded", "true");
+	}
+
+	function showAppMenu(menu, button, items, { start = false } = {}) {
 		menu.replaceChildren(
-			...links.map((link) => {
+			...items.map(({ label, run }) => {
 				const item = document.createElement("button");
 
 				item.type = "button";
-				item.className = "app-menu-item app-row-item";
-				item.textContent = link.textContent.trim();
+				item.className = "dropdown-item app-row-item";
+				item.setAttribute("role", "menuitem");
+				item.textContent = label;
 				item.onclick = (event) => {
 					event.stopPropagation();
 					closeAppRowMenu();
-					link.click();
+					run();
 				};
 
 				return item;
 			}),
 		);
-		menu.dataset.row = row.dataset.storyId || "";
 		menu.hidden = false;
 
 		const box = button.getBoundingClientRect();
@@ -33437,18 +33481,22 @@ ${settingsModalHTML()}
 		const height = menu.offsetHeight;
 		const below = box.bottom + 6 + height <= window.innerHeight - 8;
 
-		menu.style.left = `${Math.round(Math.max(8, Math.min(box.right - width, window.innerWidth - width - 8)))}px`;
+		menu.style.left = `${Math.round(Math.max(8, Math.min(start ? box.left : box.right - width, window.innerWidth - width - 8)))}px`;
 		menu.style.top = `${Math.round(below ? box.bottom + 6 : Math.max(8, box.top - 6 - height))}px`;
 		menu.style.bottom = "auto";
 	}
 
 	function closeAppRowMenu() {
-		const menu = appState?.ui.shadow.querySelector("#app-row-menu");
+		const shadow = appState?.ui.shadow;
+		const menu = shadow?.querySelector("#app-row-menu");
 
 		if (menu) {
 			menu.hidden = true;
 			delete menu.dataset.row;
+			delete menu.dataset.heading;
 		}
+
+		shadow?.querySelector("#app-list-heading-button")?.setAttribute("aria-expanded", "false");
 	}
 
 	function appViewLabel(view) {
@@ -33498,10 +33546,21 @@ ${settingsModalHTML()}
 			paintAppRailFill(state.railFilled);
 		}
 
-		state.ui.shadow.querySelector("#app-mark-read").hidden = !appViewIsFrontPage(state.view);
-		state.ui.shadow.querySelector("#app-list-foot").hidden = !appViewIsFrontPage(state.view);
+		const markable = appViewIsFrontPage(state.view);
+		const heading = state.ui.shadow.querySelector("#app-list-heading");
+		const headingText = state.ui.shadow.querySelector("#app-list-heading-text");
+		const headingButton = state.ui.shadow.querySelector("#app-list-heading-button");
+		const headingHolder = markable ? headingButton : heading;
+
+		state.ui.shadow.querySelector("#app-mark-read").hidden = !markable;
 		state.ui.shadow.querySelector("#app-list-title").textContent = appViewLabel(state.view);
-		state.ui.shadow.querySelector("#app-list-heading").textContent = appViewLabel(state.view);
+		headingText.textContent = appViewLabel(state.view);
+
+		if (headingText.parentElement !== headingHolder) {
+			headingHolder.prepend(headingText);
+		}
+
+		headingButton.hidden = !markable;
 
 		if (state.revealed !== state.view && revealAppFilter()) {
 			state.revealed = state.view;
@@ -33985,6 +34044,10 @@ ${settingsModalHTML()}
 		const stage = shadow.querySelector("#app").dataset.stage || "list";
 		const total = appState.openTotal;
 		const discussion = shadow.querySelector("#app-bar-discussion");
+
+		if (stage !== "article") {
+			delete shadow.querySelector("#app").dataset.scrolling;
+		}
 
 		bar.hidden = stage === "list";
 		shadow.querySelector("#app-bar-back").hidden = stage === "list";
