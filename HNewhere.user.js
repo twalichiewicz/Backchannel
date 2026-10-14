@@ -12819,6 +12819,8 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			return;
 		}
 
+		watchPageShortcuts().catch(console.error);
+
 		const button = createFloatingHNButton("hn-queue-button");
 
 		if (!button._dragController) {
@@ -33929,6 +33931,7 @@ ${settingsModalHTML()}
 		{ id: "search", label: "Search", keys: [appKeyBinding("k", true)] },
 		{ id: "front-pages", label: "Front Pages", keys: [appKeyBinding("[")] },
 		{ id: "discussion", label: "Discussion", keys: [appKeyBinding("]")] },
+		{ id: "sidebar", label: "Sidebar on other sites", keys: [appKeyBinding(".", true)] },
 		{ id: "settings", label: "Settings", keys: [] },
 		{ id: "save", label: "Save", keys: [appKeyBinding("s")] },
 		{ id: "sync", label: "Sync", keys: [appKeyBinding("r")] },
@@ -34016,7 +34019,7 @@ ${settingsModalHTML()}
 	}
 
 	async function loadAppShortcuts(started) {
-		if (!appState) {
+		if (!appState && !started) {
 			return;
 		}
 
@@ -36404,6 +36407,7 @@ ${frontPageChooserHTML()}
 					},
 		"front-pages": () => appShortcutPane("list", "#app-toggle-list"),
 		discussion: () => appShortcutPane("discussion", "#app-toggle-discussion"),
+		sidebar: () => null,
 		settings: () => appShortcutSettings(),
 		shortcuts: () => appShortcutSettings("shortcuts"),
 		save: () => {
@@ -36509,6 +36513,51 @@ ${frontPageChooserHTML()}
 		}
 
 		runAppShortcut(action, event);
+	}
+
+	const PAGE_TOGGLE_BUTTONS = "#hn-checking-button, #hn-restore-button, #hn-collapse-button, #hn-submit-button, #hn-setup-button, #hn-queue-button";
+	let pageShortcutsWatched = false;
+
+	function pageSidebarToggle() {
+		if (isSidebarVisible()) {
+			return sidebar.shadowRoot?.querySelector("#minimize") || null;
+		}
+
+		return document.querySelector(PAGE_TOGGLE_BUTTONS);
+	}
+
+	function onPageShortcut(event) {
+		if (event.defaultPrevented || event.repeat || event.isComposing || !appShortcuts.enabled) {
+			return;
+		}
+
+		const action = appShortcutFor(event, true) || appShortcutFor(event, false);
+
+		if (action?.id !== "sidebar" || isFrameField(event.composedPath()[0])) {
+			return;
+		}
+
+		const toggle = pageSidebarToggle();
+
+		if (toggle) {
+			event.preventDefault();
+			toggle.click();
+		}
+	}
+
+	function onPageShortcutLast() {
+		window.removeEventListener("keydown", onPageShortcut);
+		window.addEventListener("keydown", onPageShortcut);
+	}
+
+	async function watchPageShortcuts() {
+		if (pageShortcutsWatched) {
+			return;
+		}
+
+		pageShortcutsWatched = true;
+		await loadAppShortcuts(readAppShortcuts());
+		window.addEventListener("keydown", onPageShortcutLast, true);
 	}
 
 	const APP_FRAME_KEPT_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "PageUp", "PageDown", "Home", "End", "Escape"]);
@@ -36755,7 +36804,9 @@ ${frontPageChooserHTML()}
 			return;
 		}
 
-		if (!appShortcutFor(event, true, frameShortcuts) && !appShortcutFor(event, false, frameShortcuts)) {
+		const action = appShortcutFor(event, true, frameShortcuts) || appShortcutFor(event, false, frameShortcuts);
+
+		if (!action || action.id === "sidebar") {
 			return;
 		}
 
@@ -37913,6 +37964,8 @@ ${frontPageChooserHTML()}
 		if (blocked || settings.sidebarEnabled === false) {
 			return;
 		}
+
+		watchPageShortcuts().catch(console.error);
 
 		zoomBaselineValue = await rememberZoomForSite();
 
