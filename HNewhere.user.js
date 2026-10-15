@@ -9795,9 +9795,10 @@ html[data-backchannel-installed] .chin {
 	top:8px;
 	left:50%;
 	transform:translate(-50%,-14px);
+	width:max-content;
 	max-width:calc(100% - 24px);
 	padding:8px 12px;
-	border-radius:6px;
+	border-radius:999px;
 	background:var(--accent);
 	color:var(--accent-ink);
 	box-shadow:0 4px 14px rgba(0,0,0,.22);
