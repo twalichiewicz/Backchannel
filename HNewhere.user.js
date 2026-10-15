@@ -23107,14 +23107,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		slot.classList.toggle("app-discussion-lone", !anchor);
 
 		if (!anchor) {
-			const mark = document.createElement("span");
-
-			mark.className = "app-discussion-mark";
-			mark.setAttribute("role", "img");
-			mark.setAttribute("aria-label", summary);
-			mark.title = summary;
-			mark.innerHTML = APP_DISCUSSIONS_ICON;
-			slot.replaceChildren(mark);
+			slot.replaceChildren();
 			return;
 		}
 
@@ -30424,8 +30417,7 @@ ${SETTINGS_MODAL_CSS}
 	position:relative;
 }
 
-#panel.app-docked .app-discussion-meta .page-header-disclosure,
-.app-discussion-mark {
+#panel.app-docked .app-discussion-meta .page-header-disclosure {
 	display:inline-flex;
 	align-items:center;
 	justify-content:center;
@@ -30438,14 +30430,8 @@ ${SETTINGS_MODAL_CSS}
 	text-decoration:none;
 }
 
-.app-discussion-mark {
-	color:var(--meta);
-}
-
-@media (min-width: 701px) {
-	#app-discussion-meta.app-discussion-lone {
-		display:none;
-	}
+#app-discussion-meta.app-discussion-lone {
+	display:none;
 }
 
 @media (max-width: 700px) {
