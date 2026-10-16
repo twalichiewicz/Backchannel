@@ -31690,6 +31690,11 @@ header .item-action-link {
 
 	#app-list-tags .front-page-topic {
 		flex:0 0 auto;
+		gap:6px;
+		height:32px;
+		padding:0 12px 0 10px;
+		border-radius:16px;
+		font-size:13px;
 	}
 
 	#app-list-tags:not([hidden]) + #app-list-body > .browse-empty:only-child {
