@@ -31726,6 +31726,16 @@ header .item-action-link {
 		flex:0 0 auto;
 	}
 
+	@media (pointer: coarse) {
+		#app-list-tags .front-page-topic {
+			gap:6px;
+			height:32px;
+			padding:0 12px 0 10px;
+			border-radius:16px;
+			font-size:13px;
+		}
+	}
+
 	#app-list-tags:not([hidden]) + #app-list-body > .browse-empty:only-child {
 		position:static;
 		min-height:50vh;
