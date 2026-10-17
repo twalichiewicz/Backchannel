@@ -99,7 +99,7 @@ Worth stating plainly, because the permissions are broad by necessity:
 - **It stores data locally** through `GM.getValue` / `GM.setValue` -- settings,
   per-site Sidebar widths, the zoom level of the last forty sites you visited,
   button position, collapsed threads, seen-comment timestamps, remembered votes
-  and favorites, your reading queue, the sites you have hidden, and anything you
+  and your Collection, your reading queue, the sites you have hidden, and anything you
   write in the notepad. An article you ask the reader to scrape passes through
   the same storage on its way from its tab: the reader removes it once it is
   shown, and if the reader has gone by then it stays until the next scrape
@@ -215,6 +215,9 @@ source you have not switched on issues none of these.
 | Front Pages, by topic | `GET lobste.rs/hottest.json` | nothing. Only for Technology, and only while Lobsters is on | No |
 | Front Pages, by topic | `GET public.api.bsky.app/xrpc/app.bsky.feed.getFeed?feed=<feed>&limit=100` | a feed for a topic you picked, never `<page>`. Only while Bluesky is on | No |
 | Hypothes.is | `GET api.hypothes.is/api/search?url=<page>&limit=200` | `<page>` | No |
+| Hacker News (Collection) | `GET hn.algolia.com/api/v1/items/<id>` | the id of a comment you saved without its thread, to find that thread; at most five tries, only while Hacker News is on | No |
+| Lobsters (Collection) | `GET lobste.rs/c/<id>.json`, then `GET lobste.rs/s/<id>.json` | the id of a comment you saved without its thread, then its story's id, to find the article; at most five tries, only while Lobsters is on | Yes, if you are signed in there |
+| Lemmy (Collection) | `GET lemmy.world/api/v3/comment?id=<id>` | the id of a comment you saved without its thread, to find its post; at most five tries, only while Lemmy is on | Yes, if you are signed in there |
 | backchnnl.app reader, not a source | `GET <the page you opened>`, only when it gives no answer from its frame | nothing but the request itself | No, it is sent without cookies |
 | backchnnl.app reader's list, not a source | `GET <article's site>/favicon.ico`, as an image, one for each article the list shows | nothing but the request itself, with no referrer | Only as far as your browser sends that site's cookies with an image on another site's page; browsers differ |
 | backchnnl.app reader's list, not a source | `GET <the preview image an opened page names>`, as an image, once that page has loaded in the reader | nothing but the request itself, with no referrer | The same: whatever cookies your browser sends with an image on another site's page |
