@@ -29093,6 +29093,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 		padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px));
 	}
 
+	#app-settings-content > :is(.app-settings-heading, .settings-panel) {
+		max-width:440px;
+		margin-inline:auto;
+	}
+
 	.app-settings-version {
 		display:inline !important;
 		margin-left:8px;
