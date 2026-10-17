@@ -12914,8 +12914,9 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 	async function refreshQueueEntries(entries) {
 		const fetched = [];
+		const on = new Set(enabledSources(await loadSettings()).map((source) => source.id));
 
-		const refreshable = (entry) => entry.source === "hn";
+		const refreshable = (entry) => entry.source === "hn" && on.has(entry.source);
 
 		for (let i = 0; i < entries.length; i += QUEUE_REFRESH_BATCH) {
 			fetched.push(
@@ -35390,10 +35391,13 @@ ${frontPageChooserHTML()}
 		appState.ui.shadow.querySelector("#app-discussion-sort")?.replaceChildren();
 	}
 
-	function appRowThreads(row) {
+	function appRowThreads(row, settings) {
+		const on = new Set(enabledSources(settings).map((source) => source.id));
+
 		return [row?.story, ...(row?.also || [])].filter(
 			(story) =>
 				story?.id &&
+				on.has(story.source) &&
 				(!story.kind || story.kind === "discussion") &&
 				typeof getSource(story.source)?.recover === "function",
 		);
@@ -35443,7 +35447,7 @@ ${frontPageChooserHTML()}
 
 		try {
 			const settings = await loadSettings();
-			const threads = appRowThreads(row);
+			const threads = appRowThreads(row, settings);
 			const found = await discoverAll(pageAddresses(), settings);
 			const recovered = await recoverAppRowThreads(threads, found);
 			const loaded = await resolveDiscussions(dedupeDiscussions([...found, ...recovered]));
