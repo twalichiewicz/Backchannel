@@ -4143,8 +4143,8 @@
 		return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : 0;
 	}
 
-	function bskyCollective(url, posts) {
-		const admitted = (posts || []).filter(bskyPostPasses);
+	function bskyCollective(url, posts, passes = bskyPostPasses) {
+		const admitted = (posts || []).filter(passes);
 
 		if (!admitted.length) {
 			return null;
@@ -4588,6 +4588,10 @@ ${
 			).map(hnStory);
 		},
 
+		async recover(story) {
+			return (await loadStories([{ objectID: String(story.id) }])).map(hnDiscussion);
+		},
+
 		async loadThread(discussion) {
 			const roots = discussion.rootKeys.length
 				? discussion.rootKeys
@@ -4820,6 +4824,17 @@ ${
 				.map(redditStory);
 		},
 
+		async recover(story) {
+			const id = encodeURIComponent(story.id);
+			const result = await redditFetch("/api/info.json?id=t3_" + id, "/api/posts/ids?ids=" + id);
+			const posts =
+				result?.tier === "archive"
+					? result.json?.data || []
+					: (result?.json?.data?.children || []).map((child) => child.data);
+
+			return posts.filter((post) => post?.id === story.id).map(redditDiscussion);
+		},
+
 		async loadThread(discussion) {
 			const result = await redditFetch(
 				discussion.permalink.replace("https://www.reddit.com", "") +
@@ -5037,6 +5052,13 @@ ${
 			return collective ? [collective] : [];
 		},
 
+		async recover(story) {
+			const result = await bskyJSON(`${BSKY_APPVIEW}/app.bsky.feed.getPosts?uris=${encodeURIComponent(story.id)}`);
+			const collective = bskyCollective(story.url, result?.posts || [], () => true);
+
+			return collective ? [collective] : [];
+		},
+
 		async loadThread(discussion) {
 			const byKey = new Map();
 
@@ -5175,6 +5197,12 @@ ${
 			return (Array.isArray(stories) ? stories : [])
 				.filter((story) => isOffSiteLink(story.url, ["lobste.rs"]))
 				.map(lobstersStory);
+		},
+
+		async recover(story) {
+			const item = await lobstersJSON(`https://lobste.rs/s/${encodeURIComponent(story.id)}.json`);
+
+			return item?.short_id ? [lobstersDiscussion(item)] : [];
 		},
 
 		async loadThread(discussion) {
@@ -6632,6 +6660,15 @@ button {
 
 			return links.filter((link) => link?.url).map(mastodonTrendStory);
 		},
+
+		async recover(story) {
+			const statuses = await mastodonJSON(
+				`${MASTODON_INSTANCE}/api/v1/timelines/link?url=${encodeURIComponent(story.url)}&limit=40`,
+			);
+			const collective = Array.isArray(statuses) ? mastodonCollective(story.url, statuses) : null;
+
+			return collective ? [collective] : [];
+		},
 	});
 
 	async function lemmyJSON(url) {
@@ -6685,6 +6722,12 @@ button {
 			return (res?.posts || [])
 				.filter((view) => isOffSiteLink(view.post?.url, [], ["/pictrs/"]))
 				.map(lemmyStory);
+		},
+
+		async recover(story) {
+			const res = await lemmyJSON(`https://lemmy.world/api/v3/post?id=${encodeURIComponent(story.id)}`);
+
+			return res?.post_view?.post ? [lemmyDiscussion(res.post_view)] : [];
 		},
 
 		async loadThread(discussion) {
@@ -12701,7 +12744,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 	let sidebarHasDiscussion = true;
 
-	function renderNoDiscussion(ui) {
+	function renderNoDiscussion(ui, text = "") {
 		const body = ui?.body;
 
 		if (!body) {
@@ -12719,9 +12762,11 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 		const message = document.createElement("div");
 		message.className = "browse-empty no-discussion";
-		message.textContent = appState
-			? "No discussion found for this article yet."
-			: "No discussion found for this page yet. Minimize to submit it, or read something else.";
+		message.textContent =
+			text ||
+			(appState
+				? "No discussion found for this article yet."
+				: "No discussion found for this page yet. Minimize to submit it, or read something else.");
 
 		body.appendChild(message);
 
@@ -35339,6 +35384,38 @@ ${frontPageChooserHTML()}
 		appState.ui.shadow.querySelector("#app-discussion-sort")?.replaceChildren();
 	}
 
+	function appRowThreads(row) {
+		return [row?.story, ...(row?.also || [])].filter(
+			(story) =>
+				story?.id &&
+				(!story.kind || story.kind === "discussion") &&
+				typeof getSource(story.source)?.recover === "function",
+		);
+	}
+
+	async function recoverAppRowThreads(threads, found) {
+		const missing = threads.filter(
+			(story) =>
+				!found.some(
+					(discussion) =>
+						discussion.source === story.source &&
+						(discussion.collective || String(discussion.id) === String(story.id)),
+				),
+		);
+		const lists = await Promise.all(
+			missing.map((story) =>
+				getSource(story.source)
+					.recover(story)
+					.catch((error) => {
+						console.error("Backchannel " + story.source + " thread failed:", error);
+						return [];
+					}),
+			),
+		);
+
+		return lists.flat();
+	}
+
 	async function openAppDiscussion(row, { focus = "", previousSeen = appState?.openSeen || {} } = {}) {
 		const state = appState;
 		const ui = state.ui;
@@ -35360,19 +35437,9 @@ ${frontPageChooserHTML()}
 
 		try {
 			const settings = await loadSettings();
+			const threads = appRowThreads(row);
 			const found = await discoverAll(pageAddresses(), settings);
-			const missingHN = [row?.story, ...(row?.also || [])]
-				.filter((story) => story?.source === "hn" && story.id)
-				.map((story) => String(story.id))
-				.filter(
-					(id) =>
-						!found.some(
-							(discussion) => discussion.source === "hn" && String(discussion.id) === id,
-						),
-				);
-			const recovered = missingHN.length
-				? (await loadStories(missingHN.map((id) => ({ objectID: id })))).map(hnDiscussion)
-				: [];
+			const recovered = await recoverAppRowThreads(threads, found);
 			const loaded = await resolveDiscussions(dedupeDiscussions([...found, ...recovered]));
 
 			if (generation !== sidebarGeneration) {
@@ -35381,7 +35448,7 @@ ${frontPageChooserHTML()}
 
 			if (!loaded.length) {
 				sidebarHasDiscussion = false;
-				renderNoDiscussion(ui);
+				renderNoDiscussion(ui, threads.length ? "Couldn't load what people said about this article." : "");
 				await refreshSubmitAffordance(ui.shadow);
 				return;
 			}
