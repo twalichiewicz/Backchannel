@@ -5177,7 +5177,7 @@ ${
 			let host;
 
 			try {
-				host = new URL(url).hostname;
+				host = new URL(url).hostname.replace(/^www\./, "");
 			} catch {
 				return [];
 			}
