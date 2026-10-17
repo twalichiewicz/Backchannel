@@ -12761,7 +12761,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		body.replaceChildren();
 
 		const message = document.createElement("div");
-		message.className = "browse-empty no-discussion";
+		message.className = appState ? "browse-empty no-discussion app-discussion-empty" : "browse-empty no-discussion";
 		message.textContent =
 			text ||
 			(appState
@@ -30935,6 +30935,7 @@ ${SETTINGS_MODAL_CSS}
 	padding:24px;
 	box-sizing:border-box;
 	text-align:center;
+	pointer-events:none;
 }
 
 #app .app-head-icon {
