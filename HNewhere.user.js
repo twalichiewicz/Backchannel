@@ -28588,6 +28588,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about)
 					return;
 				}
 
+				if (isBrowsing(ui) && browseTab === "front") {
+					renderBrowseView(ui).catch(console.error);
+				}
+
 				setSidebarStage(ui, "discussion");
 
 				const discussions = await discoverAll(pageAddresses(), settings);
