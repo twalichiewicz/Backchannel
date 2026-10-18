@@ -53,7 +53,7 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Bluesky (discovery) | `constellation.microcosm.blue` | the URL of each page you visit, with no identifier attached |
   | Bluesky | `public.api.bsky.app` | post identifiers only -- never the URL of the page you are on |
   | Lobsters | `lobste.rs` | the domain of each page you visit -- never the full address. It has no URL search, so the exact match is made here |
-  | Wikipedia | `en.wikipedia.org` | the URL of each page you visit, to find the Talk pages citing it, and then those pages' names to read what was said. No account, signed in or out |
+  | Wikipedia | `en.wikipedia.org` | the URL of each page you visit, to find the Talk pages citing it, and then those pages' names to read what was said. Signed in to Wikipedia, these requests carry your session; signed out, they carry a device identifier that lasts a year |
   | Lemmy | `lemmy.world` | the URL of each page you visit, with no account |
   | Mastodon (discovery) | `www.tootfinder.ch` | the domain of each page you visit -- never the full address. An opt-in index of Mastodon posts, not Mastodon, and it holds only people who chose to be searchable |
   | Mastodon (front page) | `mastodon.social` | what that instance is currently linking to and, when you open one of those links in the reader and the search finds no posts for it, that link's address, to find the posts sharing it |
@@ -214,8 +214,8 @@ source you have not switched on issues none of these.
 | Bluesky | `GET constellation.microcosm.blue/xrpc/blue.microcosm.links.getBacklinks?subject=<page>&source=...&limit=100` | `<page>` | No |
 | Bluesky | `GET public.api.bsky.app/xrpc/app.bsky.feed.getPosts` and `...getPostThread` | post ids Constellation named, never `<page>` | No. Signed in, the cookie jar for `bsky.app` is empty -- it authenticates from local storage, which the browser never attaches |
 | Lobsters | `GET lobste.rs/domains/<domain>.json` | `<domain>` only, never the full address | No |
-| Wikipedia | `GET en.wikipedia.org/w/api.php?action=query&list=exturlusage&eunamespace=1\|3\|4\|5&euquery=<page>&eulimit=100` | `<page>`, to find the Talk and project pages citing it | No |
-| Wikipedia | `GET en.wikipedia.org/w/api.php?action=query&prop=revisions&titles=<titles>` | the names of those pages | No |
+| Wikipedia | `GET en.wikipedia.org/w/api.php?action=query&list=exturlusage&eunamespace=1\|3\|4\|5&euquery=<page>&eulimit=100` | `<page>`, to find the Talk and project pages citing it | Yes when signed in. `enwikiSession` is `SameSite=None`, so the browser attaches it cross-site. Signed in or out it carries `WMF-Uniq`, a device id Wikipedia sets on every visit, which lasts a year |
+| Wikipedia | `GET en.wikipedia.org/w/api.php?action=query&prop=revisions&titles=<titles>` | the names of those pages | The same, as in the row above |
 | Lemmy | `GET lemmy.world/api/v3/search?q=<page>&type_=Url&listing_type=All&limit=20` | `<page>` | No |
 | Lemmy | `GET lemmy.world/api/v3/comment/list?post_id=<id>&type_=All&sort=Top&max_depth=8&limit=300` | a post id it already found | No |
 | Mastodon | `GET www.tootfinder.ch/rest/api/search/<domain>` | `<domain>` only, never the full address | No |
@@ -227,13 +227,13 @@ source you have not switched on issues none of these.
 | Front Pages, by topic | `GET public.api.bsky.app/xrpc/app.bsky.feed.getFeed?feed=<feed>&limit=100` | a feed for a topic you picked, never `<page>`. Only while Bluesky is on | No |
 | Hypothes.is | `GET api.hypothes.is/api/search?url=<page>&limit=200` | `<page>` | No |
 | Hacker News (Collection) | `GET hn.algolia.com/api/v1/items/<id>` | the id of a comment you saved without its thread, to find that thread; at most five tries, only while Hacker News is on | No |
-| Lobsters (Collection) | `GET lobste.rs/c/<id>.json`, then `GET lobste.rs/s/<id>.json` | the id of a comment you saved without its thread, then its story's id, to find the article; at most five tries, only while Lobsters is on | Yes, if you are signed in there |
-| Lemmy (Collection) | `GET lemmy.world/api/v3/comment?id=<id>` | the id of a comment you saved without its thread, to find its post; at most five tries, only while Lemmy is on | Yes, if you are signed in there |
+| Lobsters (Collection) | `GET lobste.rs/c/<id>.json`, then `GET lobste.rs/s/<id>.json` | the id of a comment you saved without its thread, then its story's id, to find the article; at most five tries, only while Lobsters is on | No. Its session cookie, `lobster_trap`, is `SameSite=Lax`, which the browser withholds cross-site |
+| Lemmy (Collection) | `GET lemmy.world/api/v3/comment?id=<id>` | the id of a comment you saved without its thread, to find its post; at most five tries, only while Lemmy is on | No. Its session cookie, `jwt`, is `SameSite=Lax`, which the browser withholds cross-site |
 | Reddit (reader) | `GET www.reddit.com/api/info.json?id=t3_<id>`, or the archive mirror's `/api/posts/ids?ids=<id>` | the id of a post the reader listed, when you open its link and the search by address missed that post; only while Reddit is on | Yes when signed in, as in the Reddit row |
 | Bluesky (reader) | `GET public.api.bsky.app/xrpc/app.bsky.feed.getPosts?uris=<post>` | a post a Front Pages feed listed, when you open its link and the search by address missed it; only while Bluesky is on | No, as in the Bluesky row |
-| Lobsters (reader) | `GET lobste.rs/s/<id>.json` | the id of a story the reader listed, when you open its link and the search by domain missed it; only while Lobsters is on | Yes, if you are signed in there |
-| Mastodon (reader) | `GET mastodon.social/api/v1/timelines/link?url=<link>&limit=40` | a link mastodon.social's trends listed, when you open it and the search finds no posts for it; only while Mastodon is on | Yes, if you are signed in there |
-| Lemmy (reader) | `GET lemmy.world/api/v3/post?id=<id>` | the id of a post the reader listed, when you open its link and the search by address missed it; only while Lemmy is on | Yes, if you are signed in there |
+| Lobsters (reader) | `GET lobste.rs/s/<id>.json` | the id of a story the reader listed, when you open its link and the search by domain missed it; only while Lobsters is on | No. Its session cookie, `lobster_trap`, is `SameSite=Lax`, which the browser withholds cross-site |
+| Mastodon (reader) | `GET mastodon.social/api/v1/timelines/link?url=<link>&limit=40` | a link mastodon.social's trends listed, when you open it and the search finds no posts for it; only while Mastodon is on | No. Its session cookie, `_mastodon_session`, is `SameSite=Lax`, which the browser withholds cross-site |
+| Lemmy (reader) | `GET lemmy.world/api/v3/post?id=<id>` | the id of a post the reader listed, when you open its link and the search by address missed it; only while Lemmy is on | No. Its session cookie, `jwt`, is `SameSite=Lax`, which the browser withholds cross-site |
 | backchnnl.app reader, not a source | `GET <the page you opened>`, only when it gives no answer from its frame | nothing but the request itself | No, it is sent without cookies |
 | backchnnl.app reader's list, not a source | `GET <article's site>/favicon.ico`, as an image, one for each article the list shows | nothing but the request itself, with no referrer | Only as far as your browser sends that site's cookies with an image on another site's page; browsers differ |
 | backchnnl.app reader's list, not a source | `GET <the preview image an opened page names>`, as an image, once that page has loaded in the reader | nothing but the request itself, with no referrer | The same: whatever cookies your browser sends with an image on another site's page |
@@ -244,10 +244,12 @@ source you have not switched on issues none of these.
 | pdf.js, not a source | `GET cdn.jsdelivr.net/npm/pdfjs-dist@<version>/legacy/build/pdf.min.mjs` and `pdf.worker.min.mjs` | nothing about you, two fixed files at a pinned version | No |
 | no source enabled | none | nothing, no lookup is performed at all | -- |
 
-Two rows are worth reading twice. Reddit is the only source that learns who you
-are, which is why it is a checkbox rather than a default and why the caveat sits
-next to that checkbox; *Never contact Reddit directly* uses only the archive
-mirror row, which carries neither a session nor an identifier. Bluesky never
+Three rows are worth reading twice. Reddit learns who you are, which is why it
+is a checkbox rather than a default and why the caveat sits next to that
+checkbox; *Never contact Reddit directly* uses only the archive mirror row,
+which carries neither a session nor an identifier. Wikipedia is sent a device id
+that lasts a year, signed in or out, and your session when you are signed in to
+it. Bluesky never
 learns which page you are on -- Constellation does, and Bluesky is asked only
 about the posts Constellation named.
 
