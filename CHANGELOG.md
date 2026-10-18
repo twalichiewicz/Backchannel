@@ -8,6 +8,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.17] — 2026-10-18
+
+### Added
+
+- **The Collection keeps everything from a page on one card.** It listed
+  favorite discussions, favorite comments and notes as separate rows, so one
+  page could appear three times. It is now a wall of cards, one per page,
+  drawn with the page's own picture and colors. Everything saved while reading
+  a page is filed under it: a saved row under its own link, a text post under
+  its thread, a note on an article that redirected under the article. A card
+  learns a page's other addresses when you visit it, so a later save under any
+  of them lands on the same card. A comment saved without its thread is looked
+  up and moved to its page's card. Saves from earlier versions are filed under
+  their pages the first time this version runs.
+
+- **Watching is part of the Collection.** A saved page is checked for new
+  discussions, and its card says when something arrived. Each card has a menu
+  to open it, copy its link, mark it seen, watch or unwatch it, or delete it
+  with undo. Opening a saved page shows a tag above its discussion: when you
+  saved it and last viewed it, what is new since, and what you saved there.
+
+- **Settings has a Shortcuts tab**, in the reader and the Sidebar. Click a
+  key and press a new combination to change it, or press Delete to clear it.
+  A switch beside the heading turns every shortcut off. Keys your browser
+  keeps for itself are refused, and a combination another action uses offers
+  to swap. Reset puts one row back, Reset all every row. ⌘/ (Ctrl+/ on Windows
+  and Linux) opens the tab from the reader.
+
+- **New shortcuts in the reader.** [ shows or hides Front Pages, ] the
+  Discussion, S saves or unsaves the open article and R syncs. These, along
+  with ⌘K, J, K and O, now also work after a click into the article; a key the
+  page uses itself, or one typed in its fields, stays with the page.
+
+- **⌘. shows or hides the Sidebar on any page** (Ctrl+. on Windows and
+  Linux), wherever its button shows, Hacker News included.
+
+- **Below 1336px the article and its discussion stack**, the article above
+  and the discussion below, with a divider you can drag. The article's buttons
+  become the phone's stack at its bottom right: Text settings, Open, Save,
+  Like and Discussion.
+
+- **Disabling Backchannel on a page or a site offers Undo**, which brings the
+  Sidebar back as it was.
+
+### Changed
+
+- **Buttons read save and unsave**, once favorite and unfavorite, and a saved
+  comment is marked saved.
+
+- **Search is the first button in the reader's rail.** ⌘K (Ctrl+K on Windows
+  and Linux) opens it from anywhere in the reader. Its Go to lists every topic
+  and source the rail offers, matched by name or short name, so "hn" finds
+  Hacker News, and it lists queued and saved pages in groups of their own.
+
+- **The list stays beside the article at every desktop width.** Below 1100px
+  it slid over the article as a drawer.
+
+- **The article's controls float over the page.** The bar across the top of
+  an article is gone; its controls are small discs in the phone's style, on
+  the same line as the list's and the discussion's headers.
+
+- **Settings is General, Appearance, Sources, Sidebar and Shortcuts.** The
+  Hidden & disabled tab is gone: Disabled sites closes the Sidebar tab and
+  Hidden links the Sources tab, and Search in the reader finds each by name.
+
+- **Each source's points sit in a (?) beside its name** in Settings ›
+  Sources, shown on hover, focus or tap, instead of as bullets under it.
+
+- **The arrow keys no longer move through the reader's list.** J and K do,
+  and the arrows scroll.
+
+- **On a phone, Queue and Collection are tabs of their own**, and Mark all as
+  read is in a menu that opens from the list's title. Each Appearance setting
+  shows its controls under its name.
+
+- **Toasts fit their message on one line**, with round ends.
+
+- **The reader's footer no longer shows the version.** Settings does.
+
+### Fixed
+
+- **Highlights stay lit while you hover a quote.** The gap between two lines,
+  a paragraph break or a link inside a quote turned the highlight off and
+  faded it back in. On pages the reader re-renders, highlights went dark when
+  the discussion finished loading, blinked in Safari and didn't show in
+  Chrome.
+
+- **The reader's rail scrolls when it can't fit.** With many topics and
+  sources on, it ran past the bottom of the window and Settings could not be
+  reached.
+
+- **The reply box follows the article.** With the box docked open, moving to
+  another article left the old article's box in the dock, where Comment
+  posted to the old thread. Switching a source off did the same when it left
+  the article with no discussion. Both now close the dock, and the draft is
+  kept for when you come back. A restored draft can be posted without typing
+  first, and the box fits its text.
+
+- **The keyboard stays in Settings.** A click on a switch, a label, a tab or
+  empty space could leave nothing inside Settings focused, so Escape no
+  longer closed it and Shift+Tab went to the page behind.
+
+- **A link always shows the threads that listed it.** When the search by its
+  address missed one, as it did for Bluesky posts, Mastodon's trending links
+  and some Lobsters stories, the Discussion said No discussion found. Each is
+  now loaded by its own id. A Bluesky post with no replies yet shows as the
+  post itself.
+
+- **Lobsters threads are found for addresses that start with www.**, such as
+  YouTube videos.
+
+- **The Sidebar's Front Pages follow a source you switch in Settings.** The
+  list kept the old source's links until you left Front Pages and came back.
+
+- **No discussion found sits in the middle of the reader's Discussion**, like
+  its other notes, instead of at its top left.
+
+- **On a phone:** the Theme pictures and Color swatches no longer stretch
+  across their row; the Discussion sheet no longer shows a sources icon that
+  did nothing on an article with one discussion; Settings has the same title
+  bar in the reader and the Sidebar; the topic and source tags are as tall as
+  the reader's other buttons on a touch screen; and on a wider phone Settings
+  sits in the middle of the screen.
+
+### Security
+
+- **A source you turned off is left alone.** After you turned Hacker News
+  off, opening a Hacker News link the reader still listed, as in the Queue,
+  fetched its thread from Hacker News, and opening the Queue, in the reader or
+  the Sidebar, fetched the latest points and comments of every Hacker News
+  link in it. Both now happen only while Hacker News is on. 1.6.16 did both.
+
 ## [1.6.16] — 2026-10-06
 
 ### Added

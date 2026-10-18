@@ -8,10 +8,11 @@ fix ships as a new version that existing installs pick up automatically.
 
 | Version    | Supported |
 | ---------- | --------- |
-| 1.6.16     | Yes       |
-| < 1.6.16   | No        |
+| 1.6.17     | Yes       |
+| < 1.6.17   | No        |
 
-Your installed version is shown at the bottom of the settings panel.
+Your installed version is shown beside the word Settings, at the top of
+Settings.
 
 ## Reporting a vulnerability
 
@@ -35,6 +36,10 @@ Worth stating plainly, because the permissions are broad by necessity:
   userscript manager. Since 1.6.14 that includes frames inside those pages;
   everywhere except the reader's own article frame on backchnnl.app it stops on
   its first statement.
+- **It listens for one key on every page.** Since 1.6.17, ⌘. (Ctrl+. off Apple
+  platforms), or the key you set in Settings › Shortcuts, shows or hides the
+  Sidebar. Every other key is left to the page, typing in a field included,
+  and no key is kept or sent anywhere.
 - **It can make cross-origin requests**, via `GM.xmlHttpRequest`, restricted by
   the `@connect` header. Which hosts it *actually* contacts depends on which
   comment sources you have enabled, and on the topics you pick for the front
@@ -51,12 +56,12 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Wikipedia | `en.wikipedia.org` | the URL of each page you visit, to find the Talk pages citing it, and then those pages' names to read what was said. No account, signed in or out |
   | Lemmy | `lemmy.world` | the URL of each page you visit, with no account |
   | Mastodon (discovery) | `www.tootfinder.ch` | the domain of each page you visit -- never the full address. An opt-in index of Mastodon posts, not Mastodon, and it holds only people who chose to be searchable |
-  | Mastodon (front page) | `mastodon.social` | nothing about you. Asked only what that instance is currently linking to |
+  | Mastodon (front page) | `mastodon.social` | what that instance is currently linking to and, when you open one of those links in the reader and the search finds no posts for it, that link's address, to find the posts sharing it |
   | Front Pages, by topic | `www.reddit.com`, `news.ycombinator.com`, `lemmy.world`, `lobste.rs` and `public.api.bsky.app`, each only while that source is on | nothing about the page you are on, only the topics you picked. Signed in to Reddit or Hacker News, those requests arrive as your account |
   | Hypothes.is | `api.hypothes.is` | the URL of each page you visit, to find public annotations on it. No account, signed in or out |
   | *no source enabled* | none | nothing -- the script performs no lookup at all. Kind of weird to use it this way, but no judgements. |
 
-  Seven sit outside that table because they are not lookups:
+  Nine sit outside that table because they are not lookups:
 
   | Host | When | What it is told |
   | --- | --- | --- |
@@ -65,6 +70,8 @@ Worth stating plainly, because the permissions are broad by necessity:
   | the page you open in the reader on backchnnl.app | only when that page gives no answer from inside its frame | nothing but the request itself: one `GET` without cookies, to read whether it may be framed, whether it is a picture and, if it may not be framed, its text |
   | the site of each article in the reader's list on backchnnl.app | when the list shows the article, since 1.6.15 | nothing but a request for its icon, `/favicon.ico`, sent without a referrer |
   | wherever a page you open in the reader says its preview image is | once that page has loaded in the reader, since 1.6.15.1 | nothing but the request for the image, sent without a referrer |
+  | the site of each page in your Collection | when the Collection shows a card that has no picture or colors kept for its page, since 1.6.17: at most six at a time, and each card once until the page reloads | nothing but the request itself: one `GET` without cookies, to read the page's picture, colors, fonts and icon |
+  | wherever a page in your Collection says its picture and icon are | when the Collection shows its card, in the reader or in the Sidebar, since 1.6.17 | nothing but the requests for the images, sent without a referrer |
   | wherever an image in a comment is hosted | only with *Show images in comments* on, and it is off until you turn it on | nothing but the request for the image, over https and without a referrer |
   | the page you ask the reader to scrape | only when you press *Scrape link content* | what any visit tells it: the page opens in a tab of your own browser, signed in if you are |
 
@@ -99,8 +106,9 @@ Worth stating plainly, because the permissions are broad by necessity:
 - **It stores data locally** through `GM.getValue` / `GM.setValue` -- settings,
   per-site Sidebar widths, the zoom level of the last forty sites you visited,
   button position, collapsed threads, seen-comment timestamps, remembered votes
-  and your Collection, your reading queue, the sites you have hidden, and anything you
-  write in the notepad. An article you ask the reader to scrape passes through
+  and your Collection, with each saved page's picture, colors and icon, your
+  reading queue, the sites you have hidden, and anything you write in the
+  notepad. An article you ask the reader to scrape passes through
   the same storage on its way from its tab: the reader removes it once it is
   shown, and if the reader has gone by then it stays until the next scrape
   replaces it. On backchnnl.app it also keeps your theme and the reader's two
@@ -159,9 +167,12 @@ Worth stating plainly, because the permissions are broad by necessity:
   except a frame named `backchannel-article` it stops on its first statement. In
   that frame, inside the reader on backchnnl.app, it answers only messages from
   `https://backchnnl.app`, and tells that page only the frame's address, its
-  title, its size, the address of its preview image, whether it is showing,
-  whether it is a picture, which quotes it found, which link was pressed, a
-  passage you pressed **Add note** on, and a pull down from the top of the page.
+  title, its size, the address of its preview image, its colors, fonts and
+  icon and its site's name (for its card in the Collection), whether it is
+  showing, whether it is a picture, which quotes it found, which link was
+  pressed, a passage you pressed **Add note** on, a pull down from the top of
+  the page, and a key you pressed in it when that key is one of the reader's
+  shortcuts and you were not typing in a field.
   It performs no lookup there and writes nothing to storage; it reads your
   settings to know whether to offer **Add note**. A page in that frame could
   send the reader a passage of its own choosing: the reader would open its note
@@ -218,9 +229,16 @@ source you have not switched on issues none of these.
 | Hacker News (Collection) | `GET hn.algolia.com/api/v1/items/<id>` | the id of a comment you saved without its thread, to find that thread; at most five tries, only while Hacker News is on | No |
 | Lobsters (Collection) | `GET lobste.rs/c/<id>.json`, then `GET lobste.rs/s/<id>.json` | the id of a comment you saved without its thread, then its story's id, to find the article; at most five tries, only while Lobsters is on | Yes, if you are signed in there |
 | Lemmy (Collection) | `GET lemmy.world/api/v3/comment?id=<id>` | the id of a comment you saved without its thread, to find its post; at most five tries, only while Lemmy is on | Yes, if you are signed in there |
+| Reddit (reader) | `GET www.reddit.com/api/info.json?id=t3_<id>`, or the archive mirror's `/api/posts/ids?ids=<id>` | the id of a post the reader listed, when you open its link and the search by address missed that post; only while Reddit is on | Yes when signed in, as in the Reddit row |
+| Bluesky (reader) | `GET public.api.bsky.app/xrpc/app.bsky.feed.getPosts?uris=<post>` | a post a Front Pages feed listed, when you open its link and the search by address missed it; only while Bluesky is on | No, as in the Bluesky row |
+| Lobsters (reader) | `GET lobste.rs/s/<id>.json` | the id of a story the reader listed, when you open its link and the search by domain missed it; only while Lobsters is on | Yes, if you are signed in there |
+| Mastodon (reader) | `GET mastodon.social/api/v1/timelines/link?url=<link>&limit=40` | a link mastodon.social's trends listed, when you open it and the search finds no posts for it; only while Mastodon is on | Yes, if you are signed in there |
+| Lemmy (reader) | `GET lemmy.world/api/v3/post?id=<id>` | the id of a post the reader listed, when you open its link and the search by address missed it; only while Lemmy is on | Yes, if you are signed in there |
 | backchnnl.app reader, not a source | `GET <the page you opened>`, only when it gives no answer from its frame | nothing but the request itself | No, it is sent without cookies |
 | backchnnl.app reader's list, not a source | `GET <article's site>/favicon.ico`, as an image, one for each article the list shows | nothing but the request itself, with no referrer | Only as far as your browser sends that site's cookies with an image on another site's page; browsers differ |
 | backchnnl.app reader's list, not a source | `GET <the preview image an opened page names>`, as an image, once that page has loaded in the reader | nothing but the request itself, with no referrer | The same: whatever cookies your browser sends with an image on another site's page |
+| Collection, not a source | `GET <a page in your Collection>`, when its card has no picture or colors kept, at most six at a time | nothing but the request itself | No, it is sent without cookies |
+| Collection, not a source | `GET <a saved page's picture>` and `GET <its icon>`, as images, when the Collection shows its card | nothing but the request itself, with no referrer | The same: whatever cookies your browser sends with an image on another site's page |
 | Images in comments, not a source | `GET <the image>`, for each https image in the comments shown, only with *Show images in comments* on | nothing but the request itself, with no referrer | The same: whatever cookies your browser sends with an image on another site's page |
 | Scrape link content, not a source | a tab on `<the page you asked for>`, only when you press the button | what any visit to that page carries | Yes. It is your browser opening the page, with the session you have there |
 | pdf.js, not a source | `GET cdn.jsdelivr.net/npm/pdfjs-dist@<version>/legacy/build/pdf.min.mjs` and `pdf.worker.min.mjs` | nothing about you, two fixed files at a pinned version | No |
