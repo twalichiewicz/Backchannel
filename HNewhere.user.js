@@ -31290,6 +31290,23 @@ header .item-action-link {
 	}
 }
 
+@media (min-width: 701px) and (max-width: 1335px) and (pointer: fine) {
+	.app-stack-button {
+		width:24px;
+		height:24px;
+		border-radius:12px;
+	}
+
+	.app-stack-button svg {
+		width:15px;
+		height:15px;
+	}
+
+	#app-bar-discussion:has(.rail-badge:not(:empty)) {
+		height:34px;
+	}
+}
+
 @media (max-width: 700px) {
 	#app {
 		grid-template-columns:minmax(0, 1fr);
