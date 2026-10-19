@@ -3000,7 +3000,9 @@
 			permalink: "https://www.reddit.com" + (post.permalink || ""),
 			articleURL: post.url || "",
 			label: post.subreddit_name_prefixed || "r/" + (post.subreddit || ""),
-			bodyHTML: unescapeHTML(post.selftext_html),
+			bodyHTML: post.selftext_html
+				? unescapeHTML(post.selftext_html)
+				: markdownToHTML(post.selftext || ""),
 			rootKeys: [],
 			rootTimes: [],
 		};
@@ -3019,7 +3021,9 @@
 				? sourceKey("reddit", parent.slice(3))
 				: null,
 			author: data.author || "[deleted]",
-			bodyHTML: unescapeHTML(data.body_html),
+			bodyHTML: data.body_html
+				? unescapeHTML(data.body_html)
+				: markdownToHTML(data.body || ""),
 			score: data.score ?? null,
 			createdAt: data.created_utc ?? 0,
 			isOP: Boolean(data.is_submitter),
