@@ -22,6 +22,20 @@
       if (color) {
         document.documentElement.style.setProperty("--backchannel-chrome", color);
       }
+
+      setTimeout(() => {
+        if (document.documentElement.hasAttribute("data-backchannel-installed")) {
+          return;
+        }
+
+        document.documentElement.removeAttribute("data-backchannel-reader");
+        document.documentElement.style.removeProperty("--backchannel-chrome");
+
+        try {
+          localStorage.removeItem("backchannel:chrome");
+        } catch (error) {
+        }
+      }, 4000);
     }
   } catch (error) {
   }
@@ -297,8 +311,13 @@
     }
   }
 
-  [data-backchannel-promo][hidden] {
+  [data-backchannel-promo][hidden],
+  html[data-backchannel-reader]:not([data-backchannel-installed]) [data-backchannel-promo] {
     display: none;
+  }
+
+  html[data-backchannel-reader]:not([data-backchannel-installed]) .screen {
+    background: var(--backchannel-chrome, rgb(35, 113, 64));
   }
 
   .defs {
@@ -779,33 +798,34 @@
       overflow: visible;
     }
 
-    html[data-backchannel-installed]:has([data-hnewhere-app]) .chin {
+    html[data-backchannel-installed]:has([data-hnewhere-app]) .chin,
+    html[data-backchannel-reader]:not([data-backchannel-installed]) .chin {
       display: none;
     }
 
-    html:not([data-backchannel-installed]) body {
+    html:not([data-backchannel-installed]):not([data-backchannel-reader]) body {
       height: auto;
       min-height: 100%;
       background: rgb(28, 94, 53);
     }
 
-    html:not([data-backchannel-installed]) .bezel {
+    html:not([data-backchannel-installed]):not([data-backchannel-reader]) .bezel {
       position: static;
       display: block;
       padding-bottom: calc(30px + env(safe-area-inset-bottom, 0px));
       background: none;
     }
 
-    html:not([data-backchannel-installed]) .screen {
+    html:not([data-backchannel-installed]):not([data-backchannel-reader]) .screen {
       overflow: visible;
     }
 
-    html:not([data-backchannel-installed]) .hero {
+    html:not([data-backchannel-installed]):not([data-backchannel-reader]) .hero {
       --fit: 700;
       min-height: calc(var(--vh) - 74px);
     }
 
-    html:not([data-backchannel-installed]) .chin {
+    html:not([data-backchannel-installed]):not([data-backchannel-reader]) .chin {
       position: fixed;
       right: 0;
       bottom: 0;
@@ -815,7 +835,7 @@
     }
 
     @supports (height: 100svh) {
-      html:not([data-backchannel-installed]) .hero {
+      html:not([data-backchannel-installed]):not([data-backchannel-reader]) .hero {
         --vh: 100svh;
       }
     }
