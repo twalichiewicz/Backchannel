@@ -75,6 +75,18 @@ Worth stating plainly, because the permissions are broad by necessity:
   | wherever an image in a comment is hosted | only with *Show images in comments* on, and it is off until you turn it on | nothing but the request for the image, over https and without a referrer |
   | the page you ask the reader to scrape | only when you press *Scrape link content* | what any visit tells it: the page opens in a tab of your own browser, signed in if you are |
 
+- **It checks the pages in your Collection for new discussion.** Since 1.6.17
+  every page you save is watched until you choose *Unwatch* in its card's
+  menu; before, only what you chose to watch was. A page is checked once when
+  you save it, to note how many posts link to it. After that, each time a page
+  you visit is looked up, up to four saved pages not checked in the past hour
+  are. A check sends the saved page's address to Hacker News's search, to
+  Constellation and, while Reddit answers through its archive mirror, to that
+  mirror -- only those you have on -- and asks how many posts link to it. When
+  a count has grown, the saved page is looked up as a page you visit is, by
+  every source you have on. A page with new discussion is not checked again
+  until you have seen it, and one that no source answers five times running is
+  no longer checked.
 - **Enhanced PDF support downloads a copy of pdf.js.** The reader is
   [pdf.js](https://mozilla.github.io/pdf.js/), declared as two `@resource` files
   on `cdn.jsdelivr.net` -- 0.49 MiB for the viewer and 1.25 MiB for its worker,
@@ -200,7 +212,9 @@ Worth stating plainly, because the permissions are broad by necessity:
 
 One row per request the script can make, read from the code rather than described.
 `<page>` is the address of the page you are on; `<domain>` is only its host. A
-source you have not switched on issues none of these.
+source you have not switched on issues none of these. A page in your Collection
+that the watching rows find new discussion for is looked up by the same rows,
+with its address as `<page>`.
 
 | Source | Request | What it carries | Arrives as you? |
 | --- | --- | --- | --- |
@@ -229,6 +243,9 @@ source you have not switched on issues none of these.
 | Hacker News (Collection) | `GET hn.algolia.com/api/v1/items/<id>` | the id of a comment you saved without its thread, to find that thread; at most five tries, only while Hacker News is on | No |
 | Lobsters (Collection) | `GET lobste.rs/c/<id>.json`, then `GET lobste.rs/s/<id>.json` | the id of a comment you saved without its thread, then its story's id, to find the article; at most five tries, only while Lobsters is on | No. Its session cookie, `lobster_trap`, is `SameSite=Lax`, which the browser withholds cross-site |
 | Lemmy (Collection) | `GET lemmy.world/api/v3/comment?id=<id>` | the id of a comment you saved without its thread, to find its post; at most five tries, only while Lemmy is on | No. Its session cookie, `jwt`, is `SameSite=Lax`, which the browser withholds cross-site |
+| Hacker News (watching) | `GET hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=url&hitsPerPage=0&query=<saved page>&numericFilters=created_at_i><when you saved it>` | the address of a page in your Collection, in two spellings, and when you saved it, to count the stories posted since; only while Hacker News is on | No, and no identifier of any kind |
+| Bluesky (watching) | `GET constellation.microcosm.blue/links/count?target=<saved page>&collection=app.bsky.feed.post&path=.embed.external.uri` | the address of a page in your Collection, plus a `User-Agent` naming Backchannel and its version; only while Bluesky is on | No |
+| Reddit (watching) | `GET arctic-shift.photon-reddit.com/api/posts/search?limit=25&fields=id&url=<saved page>` | the address of a page in your Collection; only while Reddit is on and answering through the archive mirror | No identifier, no session |
 | Reddit (reader) | `GET www.reddit.com/api/info.json?id=t3_<id>`, or the archive mirror's `/api/posts/ids?ids=<id>` | the id of a post the reader listed, when you open its link and the search by address missed that post; only while Reddit is on | Yes when signed in, as in the Reddit row |
 | Bluesky (reader) | `GET public.api.bsky.app/xrpc/app.bsky.feed.getPosts?uris=<post>` | a post a Front Pages feed listed, when you open its link and the search by address missed it; only while Bluesky is on | No, as in the Bluesky row |
 | Lobsters (reader) | `GET lobste.rs/s/<id>.json` | the id of a story the reader listed, when you open its link and the search by domain missed it; only while Lobsters is on | No. Its session cookie, `lobster_trap`, is `SameSite=Lax`, which the browser withholds cross-site |
