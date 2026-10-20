@@ -20940,6 +20940,18 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			?.setAttribute("aria-expanded", "false");
 	}
 
+	function fitSourceMenuToRoom(menu) {
+		requestAnimationFrame(() => {
+			if (menu.classList.contains("hidden")) {
+				return;
+			}
+
+			const room = menu.getRootNode().querySelector("#panel").getBoundingClientRect().bottom - menu.getBoundingClientRect().top - 12;
+
+			menu.style.maxHeight = `${Math.max(160, Math.floor(room))}px`;
+		});
+	}
+
 	function closeMenusOutside(shadow, event) {
 		const path = event.composedPath();
 		const outside = (node) => node && !path.includes(node);
@@ -23169,6 +23181,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 
 			menu.classList.remove("hidden");
 			disclosure.setAttribute("aria-expanded", "true");
+			fitSourceMenuToRoom(menu);
 		};
 
 		setMenuOpen(false);
@@ -23280,18 +23293,6 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		}
 
 		menu.querySelector(".choice-head .live-pill")?.closest(".choice-group")?.classList.add("app-live-group");
-
-		disclosure.addEventListener("click", () => {
-			requestAnimationFrame(() => {
-				if (menu.classList.contains("hidden")) {
-					return;
-				}
-
-				const room = shadow.querySelector("#panel").getBoundingClientRect().bottom - menu.getBoundingClientRect().top - 12;
-
-				menu.style.maxHeight = `${Math.max(160, Math.floor(room))}px`;
-			});
-		});
 
 		const arrow = document.createElement("span");
 
