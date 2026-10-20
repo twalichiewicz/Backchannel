@@ -15829,6 +15829,21 @@ header > .settings-panel {
 	font-variant-numeric:tabular-nums;
 }
 
+.discussion-thread-link {
+	color:inherit;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
+}
+
+.source-menu .source-menu-hint {
+	margin:-1.5px 0 0 25px;
+}
+
+.source-menu .source-menu-hint + .source-menu-option {
+	margin-top:5px;
+}
+
 .source-menu-option-active .choice-label {
 	font-weight:600;
 }
@@ -19663,15 +19678,16 @@ ${SUBMIT_FORM_CSS}
 	align-items:center;
 	align-self:stretch;
 	padding-top:1px;
+	cursor:pointer;
+}
+
+.comment-vote-slot > .vote-controls {
+	cursor:default;
 }
 
 .comment-vote-slot.comment-vote-slot-empty {
 	flex-basis:var(--vote-gutter);
 	width:var(--vote-gutter);
-}
-
-.comment-vote-slot.comment-vote-slot-empty::after {
-	display:none;
 }
 
 .comment-vote-slot::after {
@@ -19702,6 +19718,13 @@ ${SUBMIT_FORM_CSS}
 
 #comments .top-level-comments > .comment:not(.comment ~ .comment) {
 	margin-top:12px;
+}
+
+@media (hover: hover) {
+	.comment > .comment-layout > .comment-vote-slot:hover:not(:has(> .vote-controls:hover))::after {
+		background:var(--muted);
+		transition-duration:.12s;
+	}
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -19931,7 +19954,9 @@ blockquote.comment-quote-redundant {
 
 .story-title a {
 	color:var(--text);
-	text-decoration:none;
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+	text-decoration-color:var(--border);
 	word-break:break-word;
 }
 
@@ -19951,6 +19976,8 @@ blockquote.comment-quote-redundant {
 
 @media (hover: hover) {
 	.story-meta a:hover,
+	.story-title a:hover,
+	.discussion-thread-link:hover,
 	.browse-nav-link:hover {
 		text-decoration:underline;
 	}
@@ -22256,6 +22283,42 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			await toggleCollapsed(comment.key, hidden);
 		};
 
+		const column = div.querySelector(":scope > .comment-layout > .comment-vote-slot");
+		const meta = div.querySelector(":scope > .comment-layout > .comment-main > .meta");
+		let pressedAt = null;
+
+		column.addEventListener("click", (event) => {
+			if (!event.target.closest(".vote-controls")) {
+				toggle.click();
+			}
+		});
+
+		meta.addEventListener("pointerdown", (event) => {
+			pressedAt = { x: event.clientX, y: event.clientY };
+		});
+
+		meta.addEventListener("click", (event) => {
+			const moved = pressedAt && Math.hypot(event.clientX - pressedAt.x, event.clientY - pressedAt.y) > 4;
+			const selected = (div.getRootNode().getSelection?.() || document.getSelection())?.toString().trim();
+
+			pressedAt = null;
+
+			if (
+				moved ||
+				selected ||
+				event.detail > 1 ||
+				event.metaKey ||
+				event.ctrlKey ||
+				event.shiftKey ||
+				event.altKey ||
+				event.target.closest("a, button, input, label, .toggle, .vote-controls")
+			) {
+				return;
+			}
+
+			toggle.click();
+		});
+
 		const replyButton = div.querySelector(".reply-link");
 		const editNoteButton = div.querySelector(".edit-note-link");
 
@@ -23351,17 +23414,29 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			.join("");
 	}
 
+	function discussionHintHTML(story, count) {
+		const text = escapeHTML(pluralize(count ?? 0, "comment"));
+		const href = discussionURL(story);
+		const label = `Open this discussion on ${sourceShortLabel(story)}`;
+
+		return `<div class="settings-option-hint source-menu-hint">${
+			href
+				? `<a class="discussion-thread-link" href="${escapeHTML(href)}" target="_blank" rel="noopener" title="${escapeHTML(label)}">${text}</a>`
+				: text
+		}</div>`;
+	}
+
 	function sourceMenuHTML(stories) {
 		const name = `source-menu-${(sourceMenuSeq += 1)}`;
-		const option = (key, about) => `
+		const option = (key, about, story = null) => `
 <label class="settings-option source-menu-option"${key ? ` data-discussion-key="${escapeHTML(key)}"` : ""}>${discussionChoiceHTML(
 			`<input type="radio" name="${name}"${key ? "" : " checked"}>`,
-			about,
-		)}</label>`;
+			{ ...about, count: null },
+		)}</label>${story ? discussionHintHTML(story, about.count) : ""}`;
 
 		return `<div class="source-menu hidden" id="source-menu" role="menu">
 <div class="choice-group">${option("", { label: "All sources" })}</div>
-${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about))}
+${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about, story))}
 </div>`;
 	}
 
@@ -30682,6 +30757,14 @@ ${SETTINGS_MODAL_CSS}
 #panel.app-docked .app-discussion-meta .choice-label {
 	flex:1 1 auto;
 	min-width:0;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu-hint {
+	margin:1.5px 0 0 23px;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu-hint + .source-menu-option {
+	margin-top:8px;
 }
 
 #panel.app-docked .app-discussion-meta .choice-group + .choice-group {
