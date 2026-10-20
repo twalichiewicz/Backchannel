@@ -218,6 +218,13 @@
 	const COLLECTED_LEGACY_KEY = "HNewhere:watches";
 	const COLLECTED_MIGRATED_KEY = "HNewhere:collected_migrated";
 
+	const SWEEP_KEY = "HNewhere:last_sweep";
+	const SWEEP_INTERVAL = 24 * 60 * 60 * 1000;
+	const SWEEP_DELAY = 10000;
+	const SWEEP_CACHE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
+	const SEEN_FORGET_AFTER = 90 * 24 * 60 * 60;
+	const SITE_MAP_MAX = 200;
+
 	// #region hnewhere-test-export
 	const SOURCE_KEY_SEPARATOR = ":";
 
@@ -9231,6 +9238,161 @@ html[data-backchannel-installed] .chin {
 		if (kept.length !== index.length) {
 			await save(BRIDGE_PAYLOAD_PREFIX + "index", kept);
 		}
+	}
+
+	function staleStorageKeys(values, now, done) {
+		const stale = [];
+		const oldKeys = new Set(Object.values(OLD_STORAGE));
+
+		for (const [key, value] of values) {
+			if (oldKeys.has(key)) {
+				if (done.migrated && done.seeded) {
+					stale.push(key);
+				}
+			} else if (!key.startsWith("HNewhere:")) {
+				continue;
+			} else if (key.startsWith("HNewhere:hn_cache:") || key === "HNewhere:item_actions") {
+				stale.push(key);
+			} else if (key === COLLECTED_LEGACY_KEY) {
+				if (done.collected) {
+					stale.push(key);
+				}
+			} else if (value === null) {
+				stale.push(key);
+			} else if (key.startsWith("HNewhere:comment_draft:")) {
+				if (value === "") {
+					stale.push(key);
+				}
+			} else if (key.startsWith(FRONT_PAGE_CACHE_KEY) || key.startsWith(FRONT_PAGE_FEED_KEY)) {
+				if (Number.isFinite(value?.timestamp) && now - value.timestamp > SWEEP_CACHE_MAX_AGE) {
+					stale.push(key);
+				}
+			}
+		}
+
+		return stale;
+	}
+
+	function pruneSeenTimes(seen, nowSeconds) {
+		if (!seen || typeof seen !== "object" || Array.isArray(seen)) {
+			return null;
+		}
+
+		const next = {};
+		let dropped = false;
+
+		for (const [key, value] of Object.entries(seen)) {
+			if (typeof value === "number" && nowSeconds - value > SEEN_FORGET_AFTER) {
+				dropped = true;
+			} else {
+				next[key] = value;
+			}
+		}
+
+		return dropped ? next : null;
+	}
+
+	function pruneSiteMap(map, keep) {
+		if (!map || typeof map !== "object" || Array.isArray(map)) {
+			return null;
+		}
+
+		const next = {};
+
+		for (const [key, value] of Object.entries(map)) {
+			if (!keep || keep(value)) {
+				next[key] = value;
+			}
+		}
+
+		const keys = Object.keys(next);
+
+		for (const key of keys.slice(0, -SITE_MAP_MAX)) {
+			delete next[key];
+		}
+
+		return Object.keys(next).length === Object.keys(map).length ? null : next;
+	}
+
+	async function sweepStorage() {
+		const now = Date.now();
+		const last = await load(SWEEP_KEY, 0);
+
+		if (Number.isFinite(last) && now - last < SWEEP_INTERVAL) {
+			return;
+		}
+
+		await save(SWEEP_KEY, now);
+
+		const keys = await listKeys();
+
+		if (keys) {
+			const oldKeys = new Set(Object.values(OLD_STORAGE));
+			const readFirst = [
+				BRIDGE_PAYLOAD_PREFIX,
+				BRIDGE_RESULT_PREFIX,
+				"HNewhere:comment_draft:",
+				FRONT_PAGE_CACHE_KEY,
+				FRONT_PAGE_FEED_KEY,
+				STORAGE.pendingFocus,
+				STORAGE.readOut,
+				STORAGE.last,
+			];
+			const values = new Map();
+			const wanted = keys.filter((key) => key.startsWith("HNewhere:") || oldKeys.has(key));
+
+			for (let i = 0; i < wanted.length; i++) {
+				const key = wanted[i];
+
+				values.set(key, readFirst.some((prefix) => key.startsWith(prefix)) ? await load(key, undefined) : undefined);
+
+				if ((i + 1) % 50 === 0) {
+					await new Promise((resolve) => window.setTimeout(resolve, 0));
+				}
+			}
+
+			const done = {
+				migrated: Boolean(await load("HNewhere:migrated", false)),
+				seeded: Boolean(await load(SOURCE_SEED_MIGRATION, false)),
+				collected: Boolean(await load(COLLECTED_MIGRATED_KEY, false)),
+			};
+			const stale = staleStorageKeys(values, now, done);
+
+			if (stale.length) {
+				await forgetMany(stale);
+			}
+		}
+
+		const seen = pruneSeenTimes(await load(STORAGE.seen, {}), Math.floor(now / 1000));
+
+		if (seen) {
+			await save(STORAGE.seen, seen);
+		}
+
+		const states = pruneSiteMap(await load(STORAGE.state, {}), (value) => value === "open");
+
+		if (states) {
+			await save(STORAGE.state, states);
+		}
+
+		const widths = pruneSiteMap(await load(STORAGE.widths, {}));
+
+		if (widths) {
+			await save(STORAGE.widths, widths);
+		}
+	}
+
+	function scheduleStorageSweep() {
+		window.setTimeout(() => {
+			const run = () => sweepStorage().catch(console.error);
+
+			if (typeof requestIdleCallback === "function") {
+				requestIdleCallback(run, { timeout: 5000 });
+				return;
+			}
+
+			setTimeout(run, 0);
+		}, SWEEP_DELAY);
 	}
 
 	async function indexBridgePayload(nonce) {
@@ -38870,6 +39032,7 @@ ${frontPageChooserHTML()}
 
 	if (window.top === window.self) {
 		init().catch(console.error);
+		scheduleStorageSweep();
 	} else {
 		installFrameAgent();
 	}
