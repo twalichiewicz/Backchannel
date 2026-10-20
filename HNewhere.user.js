@@ -2108,15 +2108,7 @@
 		}
 	}
 
-	async function loadSiteWidth() {
-		const widths = await load(STORAGE.widths, {});
-		const perSiteWidth =
-			widths && typeof widths === "object" ? widths[siteKey()] : undefined;
-
-		if (typeof perSiteWidth === "number" && Number.isFinite(perSiteWidth)) {
-			return perSiteWidth;
-		}
-
+	async function defaultSiteWidth() {
 		const savedWidth = await load(STORAGE.width, null);
 
 		if (typeof savedWidth === "number" && Number.isFinite(savedWidth)) {
@@ -2130,19 +2122,45 @@
 		return isMobile() ? Math.round((window.innerWidth * 0.75) / sidebarZoom) : 420;
 	}
 
+	async function loadSiteWidth() {
+		const widths = await load(STORAGE.widths, {});
+		const perSiteWidth =
+			widths && typeof widths === "object" ? widths[siteKey()] : undefined;
+
+		if (typeof perSiteWidth === "number" && Number.isFinite(perSiteWidth)) {
+			return perSiteWidth;
+		}
+
+		return defaultSiteWidth();
+	}
+
+	async function updateSiteMap(storageKey, site, value) {
+		const stored = await load(storageKey, {});
+		const next = {};
+
+		for (const [key, entry] of Object.entries(stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {})) {
+			if (key !== site) {
+				next[key] = entry;
+			}
+		}
+
+		if (value !== undefined) {
+			next[site] = value;
+		}
+
+		for (const key of Object.keys(next).slice(0, -SITE_MAP_MAX)) {
+			delete next[key];
+		}
+
+		await save(storageKey, next);
+	}
+
 	async function saveSiteWidth(width) {
 		if (typeof width !== "number" || !Number.isFinite(width)) {
 			return;
 		}
 
-		const widths = await load(STORAGE.widths, {});
-		const nextWidths =
-			widths && typeof widths === "object" && !Array.isArray(widths)
-				? { ...widths }
-				: {};
-
-		nextWidths[siteKey()] = width;
-		await save(STORAGE.widths, nextWidths);
+		await updateSiteMap(STORAGE.widths, siteKey(), width === (await defaultSiteWidth()) ? undefined : width);
 	}
 
 	async function loadSidebarState() {
@@ -2158,14 +2176,7 @@
 			return;
 		}
 
-		const states = await load(STORAGE.state, {});
-		const nextStates =
-			states && typeof states === "object" && !Array.isArray(states)
-				? { ...states }
-				: {};
-
-		nextStates[siteKey()] = state;
-		await save(STORAGE.state, nextStates);
+		await updateSiteMap(STORAGE.state, siteKey(), state === "open" ? "open" : undefined);
 	}
 
 	// -------------------------
