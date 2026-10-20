@@ -41,6 +41,9 @@
 // @exclude      https://*.instagram.com/*
 // @grant        GM.getValue
 // @grant        GM.setValue
+// @grant        GM.deleteValue
+// @grant        GM.deleteValues
+// @grant        GM.listValues
 // @grant        GM.xmlHttpRequest
 // @grant        GM.getResourceText
 // @grant        unsafeWindow
@@ -533,6 +536,42 @@
 			return await GM.getValue(key, fallback);
 		} catch {
 			return fallback;
+		}
+	}
+
+	async function forget(key) {
+		if (typeof GM.deleteValue === "function") {
+			await GM.deleteValue(key);
+			return;
+		}
+
+		await save(key, null);
+	}
+
+	async function forgetMany(keys) {
+		if (typeof GM.deleteValues === "function") {
+			await GM.deleteValues(keys);
+			return;
+		}
+
+		for (let i = 0; i < keys.length; i++) {
+			await forget(keys[i]);
+
+			if ((i + 1) % 100 === 0) {
+				await new Promise((resolve) => window.setTimeout(resolve, 0));
+			}
+		}
+	}
+
+	async function listKeys() {
+		if (typeof GM.listValues !== "function") {
+			return null;
+		}
+
+		try {
+			return await GM.listValues();
+		} catch {
+			return null;
 		}
 	}
 
@@ -9154,7 +9193,7 @@ html[data-backchannel-installed] .chin {
 		}
 
 		if (Number.isFinite(stored.ts) && Date.now() - stored.ts > BRIDGE_PAYLOAD_TTL) {
-			await save(BRIDGE_PAYLOAD_PREFIX + nonce, null);
+			await forget(BRIDGE_PAYLOAD_PREFIX + nonce);
 			return null;
 		}
 
@@ -9162,7 +9201,7 @@ html[data-backchannel-installed] .chin {
 	}
 
 	async function clearBridgePayload(nonce) {
-		await save(BRIDGE_PAYLOAD_PREFIX + nonce, null);
+		await forget(BRIDGE_PAYLOAD_PREFIX + nonce);
 	}
 
 	async function sweepBridgePayloads() {
@@ -9181,8 +9220,8 @@ html[data-backchannel-installed] .chin {
 			}
 
 			if (Number.isFinite(entry.ts) && now - entry.ts > BRIDGE_PAYLOAD_TTL) {
-				await save(BRIDGE_PAYLOAD_PREFIX + entry.nonce, null);
-				await save(BRIDGE_RESULT_PREFIX + entry.nonce, null);
+				await forget(BRIDGE_PAYLOAD_PREFIX + entry.nonce);
+				await forget(BRIDGE_RESULT_PREFIX + entry.nonce);
 				continue;
 			}
 
@@ -9284,7 +9323,7 @@ html[data-backchannel-installed] .chin {
 			const stored = await load(BRIDGE_RESULT_PREFIX + nonce, null);
 
 			if (stored && !stopped) {
-				await save(BRIDGE_RESULT_PREFIX + nonce, null);
+				await forget(BRIDGE_RESULT_PREFIX + nonce);
 				deliver(stored);
 			}
 
@@ -9297,7 +9336,7 @@ html[data-backchannel-installed] .chin {
 
 		return () => {
 			stopped = true;
-			save(BRIDGE_RESULT_PREFIX + nonce, null).catch(() => {});
+			forget(BRIDGE_RESULT_PREFIX + nonce).catch(() => {});
 		};
 	}
 
@@ -11671,7 +11710,7 @@ html[data-backchannel-installed] .chin {
 		}
 
 		if (Date.now() - (pending.at || 0) > PENDING_FOCUS_TTL) {
-			await save(STORAGE.pendingFocus, null);
+			await forget(STORAGE.pendingFocus);
 			return;
 		}
 
@@ -11683,7 +11722,7 @@ html[data-backchannel-installed] .chin {
 			return;
 		}
 
-		await save(STORAGE.pendingFocus, null);
+		await forget(STORAGE.pendingFocus);
 		applyCommentFocus(pending.commentKey);
 	}
 
@@ -21818,7 +21857,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			clearTimeout(saveTimer);
 
 			saveTimer = window.setTimeout(() => {
-				save(draftKey, textarea.value).catch(console.error);
+				(textarea.value ? save(draftKey, textarea.value) : forget(draftKey)).catch(console.error);
 			}, 400);
 		});
 
@@ -21865,7 +21904,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 
 					textarea.value = "";
 					clearTimeout(saveTimer);
-					await save(draftKey, null);
+					await forget(draftKey);
 
 					settleComposeSend(submitButton, "posted");
 
@@ -36657,7 +36696,7 @@ ${frontPageChooserHTML()}
 				return;
 			}
 
-			await save(STORAGE.readOut, null);
+			await forget(STORAGE.readOut);
 
 			const reader = record.article ? readerFromStored(record.article, article.url) : null;
 
@@ -38748,7 +38787,7 @@ ${frontPageChooserHTML()}
 		let last = storedLast;
 
 		if (last && Date.now() - last.timestamp > 300000) {
-			await save(STORAGE.last, null);
+			await forget(STORAGE.last);
 			last = null;
 		}
 
@@ -38761,7 +38800,7 @@ ${frontPageChooserHTML()}
 		const arrivedForComments = arrivedFromClick && Boolean(last.openPanel);
 
 		if (arrivedFromClick) {
-			await save(STORAGE.last, null);
+			await forget(STORAGE.last);
 		}
 
 		const found = await discoverAll(pageAddresses(), settings);
