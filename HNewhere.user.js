@@ -8800,13 +8800,9 @@ html[data-backchannel-installed] .chin {
 	}
 
 	function buttonGrowOrigin(button) {
-		const doc = document.documentElement;
-		const right =
-			button.offsetLeft + button.offsetWidth / 2 > (doc.clientWidth || window.innerWidth) / 2;
-		const bottom =
-			button.offsetTop + button.offsetHeight / 2 > (doc.clientHeight || window.innerHeight) / 2;
+		const { corner } = buttonCornerPlacement(button);
 
-		return `${right ? "100%" : "0"} ${bottom ? "100%" : "0"}`;
+		return `${corner.endsWith("right") ? "100%" : "0"} ${corner.startsWith("bottom") ? "100%" : "0"}`;
 	}
 
 	function syncButtonGrowth(button) {
@@ -8949,8 +8945,6 @@ html[data-backchannel-installed] .chin {
 			alignItems: "center",
 			justifyContent: "center",
 			color: "white",
-			top: "16px",
-			right: "16px",
 		});
 
 		button.style.opacity = "1";
@@ -9026,17 +9020,8 @@ html[data-backchannel-installed] .chin {
 		button.addEventListener("blur", () => setGrown("_focused", false));
 		button.addEventListener("pointerup", () => syncButtonGrowth(button));
 
-		const updateButtonStyle = () => {
-			applyButtonMobileStyle(button);
-		};
-
-		updateButtonStyle();
-		window.addEventListener("resize", updateButtonStyle);
+		applyButtonMobileStyle(button);
 		document.body.appendChild(button);
-
-		button._cleanup = () => {
-			window.removeEventListener("resize", updateButtonStyle);
-		};
 
 		return button;
 	}
@@ -10953,9 +10938,7 @@ html[data-backchannel-installed] .chin {
 	const BUTTON_EDGE_MARGIN = 4;
 
 	function buttonBounds(button) {
-		const doc = document.documentElement;
-		const width = doc.clientWidth || window.innerWidth;
-		const height = doc.clientHeight || window.innerHeight;
+		const { width, height } = buttonViewport();
 
 		return {
 			minX: BUTTON_EDGE_MARGIN,
@@ -10980,17 +10963,71 @@ html[data-backchannel-installed] .chin {
 		};
 	}
 
-	async function applyButtonPosition(button) {
-		const saved = await load(STORAGE.position, null);
+	function buttonViewport() {
+		const doc = document.documentElement;
 
-		if (!saved) {
-			pinButtonStyle(button, { left: null, top: "16px", right: "16px" });
+		return {
+			width: doc.clientWidth || window.innerWidth,
+			height: doc.clientHeight || window.innerHeight,
+		};
+	}
+
+	function buttonCornerPlacement(button) {
+		const { width, height } = buttonViewport();
+		const left = button.offsetLeft;
+		const top = button.offsetTop;
+		const right = left + button.offsetWidth / 2 > width / 2;
+		const bottom = top + button.offsetHeight / 2 > height / 2;
+
+		return {
+			corner: `${bottom ? "bottom" : "top"}-${right ? "right" : "left"}`,
+			x: right ? width - left - button.offsetWidth : left,
+			y: bottom ? height - top - button.offsetHeight : top,
+		};
+	}
+
+	function pinButtonPlacement(button, placement) {
+		const { x, y } = clampButtonToViewport(button, placement.x, placement.y);
+		const right = placement.corner.endsWith("right");
+		const bottom = placement.corner.startsWith("bottom");
+
+		pinButtonStyle(button, {
+			left: right ? "auto" : x + "px",
+			right: right ? x + "px" : "auto",
+			top: bottom ? "auto" : y + "px",
+			bottom: bottom ? y + "px" : "auto",
+		});
+	}
+
+	async function applyButtonPosition(button) {
+		let saved = await load(STORAGE.position, null);
+
+		if (!saved || !(saved.corner || (Number.isFinite(saved.x) && Number.isFinite(saved.y)))) {
+			button._placement = null;
+			pinButtonStyle(button, {
+				left: null,
+				bottom: null,
+				top: "16px",
+				right: "16px",
+			});
 			return;
 		}
 
-		const { x, y } = clampButtonToViewport(button, saved.x, saved.y);
+		if (!saved.corner) {
+			const { x, y } = clampButtonToViewport(button, saved.x, saved.y);
 
-		pinButtonStyle(button, { left: x + "px", top: y + "px", right: "auto" });
+			pinButtonStyle(button, {
+				left: x + "px",
+				top: y + "px",
+				right: "auto",
+				bottom: "auto",
+			});
+			saved = buttonCornerPlacement(button);
+			save(STORAGE.position, saved);
+		}
+
+		button._placement = saved;
+		pinButtonPlacement(button, saved);
 	}
 
 	const BUTTON_MOVE_EVENT = "hnewhere:buttonmove";
@@ -11009,13 +11046,12 @@ html[data-backchannel-installed] .chin {
 		};
 
 		const clampPosition = () => {
-			const { x, y } = clampButtonToViewport(
-				button,
-				button.offsetLeft,
-				button.offsetTop,
-			);
+			if (dragging) return;
 
-			pinButtonStyle(button, { left: x + "px", top: y + "px", right: "auto" });
+			if (button._placement) {
+				pinButtonPlacement(button, button._placement);
+			}
+
 			notifyMoved();
 		};
 
@@ -11050,7 +11086,12 @@ html[data-backchannel-installed] .chin {
 				startTop + deltaY,
 			);
 
-			pinButtonStyle(button, { left: x + "px", top: y + "px", right: "auto" });
+			pinButtonStyle(button, {
+				left: x + "px",
+				top: y + "px",
+				right: "auto",
+				bottom: "auto",
+			});
 			notifyMoved();
 		});
 
@@ -11062,10 +11103,9 @@ html[data-backchannel-installed] .chin {
 			if (moved) {
 				suppressClick = true;
 
-				save(STORAGE.position, {
-					x: button.offsetLeft,
-					y: button.offsetTop,
-				});
+				button._placement = buttonCornerPlacement(button);
+				save(STORAGE.position, button._placement);
+				pinButtonPlacement(button, button._placement);
 
 				requestAnimationFrame(() => {
 					suppressClick = false;
