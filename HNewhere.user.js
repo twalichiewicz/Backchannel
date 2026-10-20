@@ -4327,7 +4327,7 @@
 
 	function discussionURL(story) {
 		if (story?.permalink) {
-			return story.permalink;
+			return /^https?:\/\//i.test(story.permalink) ? story.permalink : null;
 		}
 
 		return story?.source ? null : commentURL(story?.id);
