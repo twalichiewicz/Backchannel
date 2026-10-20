@@ -7057,6 +7057,7 @@ button {
 	const DISCOVERY_CACHE_KEY = "HNewhere:discovery_cache";
 	const DISCOVERY_CACHE_TTL = 60 * 60 * 1000;
 	const DISCOVERY_CACHE_MAX = 30;
+	const DISCOVERY_HIT_FIELDS = ["objectID", "title", "author", "points", "num_comments", "created_at_i", "url", "story_text"];
 
 	function keptDiscoveries(stored, now) {
 		const held = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
@@ -7131,6 +7132,18 @@ button {
 		});
 	}
 
+	function discoveryHit(item) {
+		const hit = {};
+
+		for (const field of DISCOVERY_HIT_FIELDS) {
+			if (item[field] !== undefined) {
+				hit[field] = item[field];
+			}
+		}
+
+		return hit;
+	}
+
 	async function findHN(url) {
 		const target = normalizeURL(url);
 
@@ -7164,7 +7177,7 @@ button {
 
 			for (const item of result.hits) {
 				if (normalizeURL(item.url) === target) {
-					matches.set(item.objectID, item);
+					matches.set(item.objectID, discoveryHit(item));
 				}
 			}
 		}
