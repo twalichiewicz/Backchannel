@@ -6737,7 +6737,7 @@ button {
 				return [];
 			}
 
-			return links.filter((link) => link?.url).map(mastodonTrendStory);
+			return links.filter((link) => isOffSiteLink(link?.url)).map(mastodonTrendStory);
 		},
 
 		async recover(story) {
