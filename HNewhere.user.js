@@ -22228,6 +22228,8 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			const toStory = aim.storyID ?? storyID;
 			const text = textarea.value;
 			const label = getSource(toSource)?.label || "the source";
+			const shownUI = sidebarUI;
+			const shownDiscussions = renderedDiscussions;
 
 			if (!text.trim()) {
 				setStatus("Write something first.", { error: true });
@@ -22261,7 +22263,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 
 					window.setTimeout(() => {
 						onPosted?.();
-						reloadDiscussion(toStory);
+						reloadDiscussion(shownUI, shownDiscussions);
 					}, 1400);
 				} finally {
 					setBusy(false);
@@ -22343,10 +22345,16 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 	}
 	// #endregion hnewhere-test-export
 
-	function reloadDiscussion(storyID) {
+	function reloadDiscussion(ui, stories) {
 		itemCache.clear();
 
-		openSidebar([{ objectID: String(storyID) }]).catch(console.error);
+		if (!ui || !stories.length || ui !== sidebarUI || stories !== renderedDiscussions) {
+			return;
+		}
+
+		forgetThreads(stories);
+		setSidebarStage(ui, "comments");
+		renderDiscussions(stories, ui).catch(console.error);
 	}
 
 	function mountFilterBanner(afterElement, ui) {
