@@ -10635,10 +10635,13 @@ html[data-backchannel-installed] .chin {
 			return await cached;
 		}
 
+		let fetchFailed = false;
+
 		const promise = (async () => {
 			const html = await requestText(commentURL(storyID));
 
 			if (!html) {
+				fetchFailed = true;
 				return new Map();
 			}
 
@@ -10660,7 +10663,13 @@ html[data-backchannel-installed] .chin {
 
 		try {
 			const voteLinks = await promise;
-			voteLinkCache.set(cacheKey, voteLinks);
+
+			if (fetchFailed) {
+				voteLinkCache.delete(cacheKey);
+			} else {
+				voteLinkCache.set(cacheKey, voteLinks);
+			}
+
 			return voteLinks;
 		} catch {
 			voteLinkCache.delete(cacheKey);
