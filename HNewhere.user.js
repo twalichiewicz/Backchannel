@@ -9406,6 +9406,41 @@ html[data-backchannel-installed] .chin {
 		}
 	}
 
+	function isCacheKey(key) {
+		return (
+			key === DISCOVERY_CACHE_KEY ||
+			key === REDDIT_TIER_KEY ||
+			key === "HNewhere:item_actions" ||
+			Object.values(OLD_STORAGE).includes(key) ||
+			key.startsWith(FRONT_PAGE_CACHE_KEY) ||
+			key.startsWith(FRONT_PAGE_FEED_KEY) ||
+			key.startsWith(AUTH_PREFIX) ||
+			key.startsWith("HNewhere:hn_cache:")
+		);
+	}
+
+	async function clearCache() {
+		const listed = await listKeys();
+		const keys = listed
+			? []
+			: [DISCOVERY_CACHE_KEY, REDDIT_TIER_KEY, FRONT_PAGE_CACHE_KEY, "HNewhere:item_actions", ...Object.values(OLD_STORAGE)];
+
+		for (const key of listed || []) {
+			if (isCacheKey(key)) {
+				keys.push(key);
+			} else if (
+				(key.startsWith(BRIDGE_PAYLOAD_PREFIX) || key.startsWith(BRIDGE_RESULT_PREFIX)) &&
+				(await load(key, undefined)) === null
+			) {
+				keys.push(key);
+			}
+		}
+
+		if (keys.length) {
+			await forgetMany(keys);
+		}
+	}
+
 	function scheduleStorageSweep() {
 		window.setTimeout(() => {
 			const run = () => sweepStorage().catch(console.error);
@@ -16526,7 +16561,8 @@ header > .settings-panel {
 	margin-top:10px;
 }
 
-.source-picker-save {
+.source-picker-save,
+#settings-cache-clear {
 	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	padding:5px 10px;
 	border-radius:4px;
@@ -16536,7 +16572,14 @@ header > .settings-panel {
 	color:white;
 }
 
-.source-picker-save:disabled {
+#settings-cache-clear {
+	border-color:var(--button-border);
+	background:var(--button-bg);
+	color:var(--button-text);
+}
+
+.source-picker-save:disabled,
+#settings-cache-clear[aria-disabled="true"] {
 	opacity:.6;
 	cursor:default;
 }
@@ -18166,6 +18209,12 @@ All stored locally.
 </div>
 
 <div class="settings-group">
+<div class="sources-subhead">Cached discussions</div>
+<div class="sources-subhint">Discussions and Front Pages saved so they load faster. Clearing the cache fetches them again on your next visit, and doesn't affect your notes, Collection or settings.</div>
+<button id="settings-cache-clear" type="button">Clear cache</button>
+</div>
+
+<div class="settings-group">
 <button id="settings-manage-sources" class="settings-link-button" type="button" data-pane="sources" data-pane-name="Sources">Sources<span class="settings-link-chevron">&rsaquo;</span></button>
 <button id="settings-manage-shortcuts" class="settings-link-button" type="button" data-pane="shortcuts" data-pane-name="Shortcuts">Shortcuts<span class="settings-link-chevron">&rsaquo;</span></button>
 </div>
@@ -18509,6 +18558,7 @@ ${frontPageChooserHTML()}
 			if (open) {
 				setHideMenuOpen(false);
 				refreshNotesCount?.().catch(console.error);
+				settingsPanel.dispatchEvent(new Event("general-shown"));
 				refreshManageLists().catch(console.error);
 			}
 
@@ -18610,6 +18660,32 @@ ${frontPageChooserHTML()}
 		};
 
 		refreshNotesCount().catch(console.error);
+
+		const cacheClear = shadow.querySelector("#settings-cache-clear");
+
+		const resetCacheClear = () => {
+			if (cacheClear) {
+				cacheClear.textContent = "Clear cache";
+				cacheClear.removeAttribute("aria-disabled");
+			}
+		};
+
+		settingsPanel.addEventListener("general-shown", resetCacheClear);
+
+		if (cacheClear) {
+			cacheClear.onclick = async (event) => {
+				event.preventDefault();
+				event.stopPropagation();
+
+				if (cacheClear.getAttribute("aria-disabled") === "true") {
+					return;
+				}
+
+				cacheClear.setAttribute("aria-disabled", "true");
+				await clearCache();
+				cacheClear.textContent = "Cache cleared";
+			};
+		}
 
 		if (notesExport) {
 			notesExport.onclick = (event) => {
@@ -33819,6 +33895,10 @@ ${settingsModalHTML()}
 			}
 
 			content.scrollTop = 0;
+
+			if (tab.dataset.settingsSection === "general") {
+				panel.dispatchEvent(new Event("general-shown"));
+			}
 
 			const place = target && shadow.querySelector(target);
 
