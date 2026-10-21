@@ -2650,15 +2650,19 @@
 	const itemActionRequests = new Map();
 
 	async function getItem(id) {
-		if (itemCache.has(id)) {
-			return itemCache.get(id);
+		const key = String(id);
+
+		if (itemCache.has(key)) {
+			return itemCache.get(key);
 		}
 
 		const item = await request(
 			"https://hacker-news.firebaseio.com/v0/item/" + id + ".json",
 		);
 
-		itemCache.set(id, item);
+		if (item) {
+			itemCache.set(key, item);
+		}
 
 		return item;
 	}
