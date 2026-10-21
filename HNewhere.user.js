@@ -18240,8 +18240,8 @@ All stored locally.
 </div>
 
 <div class="settings-group">
-<div class="sources-subhead">Cached discussions</div>
-<div class="sources-subhint">Discussions and Front Pages saved so they load faster. Clearing the cache fetches them again on your next visit, and doesn't affect your notes, Collection or settings.</div>
+<div class="sources-subhead">Cached data</div>
+<div class="sources-subhint">Clear temporary data used to find discussions and load Front Pages. Backchannel fetches fresh results when needed, without affecting your Notes, Collection, or settings.</div>
 <button id="settings-cache-clear" type="button">Clear cache</button>
 </div>
 
