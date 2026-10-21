@@ -9539,6 +9539,19 @@ html[data-backchannel-installed] .chin {
 		return hash.toString();
 	}
 
+	function bindVoteStage(payload, staged) {
+		if (
+			staged?.kind !== "vote" ||
+			staged.storyID !== payload.storyID ||
+			staged.item !== payload.item ||
+			staged.action !== payload.action
+		) {
+			return null;
+		}
+
+		return { ...payload, origin: staged.origin, voteURL: staged.voteURL };
+	}
+
 	// #endregion hnewhere-test-export
 
 	async function postBridgeResult(source, payload, result) {
@@ -9880,11 +9893,18 @@ html[data-backchannel-installed] .chin {
 		const staged = action.stagesDraft
 			? await readBridgePayload(payload.nonce)
 			: null;
+		const bound = action.bindStaged
+			? action.bindStaged(payload, staged)
+			: payload;
+
+		if (!bound) {
+			return false;
+		}
 
 		await finishWriteAction(
 			action,
-			payload,
-			await runWriteAction(action, { payload, staged, root }),
+			bound,
+			await runWriteAction(action, { payload: bound, staged, root }),
 		);
 
 		return true;
@@ -9926,6 +9946,14 @@ html[data-backchannel-installed] .chin {
 	}
 
 	async function finishWriteAction(action, payload, result) {
+		if (
+			action.bindStaged &&
+			result !== BRIDGE_AWAITING_SIGN_IN &&
+			result !== BRIDGE_AWAITING_READER
+		) {
+			await clearBridgePayload(payload.nonce);
+		}
+
 		if (result === BRIDGE_NAVIGATED) {
 			return;
 		}
@@ -9980,15 +10008,19 @@ html[data-backchannel-installed] .chin {
 		const staged = action.stagesDraft
 			? await readBridgePayload(stored.payload.nonce)
 			: null;
-		const result = await runWriteAction(action, {
-			payload: stored.payload,
-			staged,
-			root,
-		});
+		const payload = action.bindStaged
+			? action.bindStaged(stored.payload, staged)
+			: stored.payload;
+
+		if (!payload) {
+			return false;
+		}
+
+		const result = await runWriteAction(action, { payload, staged, root });
 
 		if (resumeShouldWait(result)) {
 			showSignInNote(action);
-			await postWriteResult(action, stored.payload, {
+			await postWriteResult(action, payload, {
 				ok: false,
 				reason: "awaiting-sign-in",
 				interim: true,
@@ -9997,7 +10029,7 @@ html[data-backchannel-installed] .chin {
 		}
 
 		clearBridgeReload(RESUME_BRIDGE_STORAGE_KEY);
-		await finishWriteAction(action, stored.payload, result);
+		await finishWriteAction(action, payload, result);
 		return true;
 	}
 
@@ -10803,6 +10835,7 @@ html[data-backchannel-installed] .chin {
 				return;
 			}
 
+			clearBridgePayload(data.nonce).catch(() => {});
 			settleItemAction(data.nonce, data);
 	}
 
@@ -10847,12 +10880,28 @@ html[data-backchannel-installed] .chin {
 			nonce,
 		});
 		const popup = window.open(
-			url,
+			"about:blank",
 			"hnewhere_vote_bridge_" + nonce,
 			"width=420,height=320,resizable=yes,scrollbars=yes",
 		);
 
-		return new Promise((resolve) => {
+		return (async () => {
+			try {
+				await stageBridgePayload(nonce, {
+					kind: "vote",
+					storyID: String(storyID),
+					item: String(itemId),
+					action,
+					voteURL: voteURL || null,
+					origin: location.origin,
+				});
+				await indexBridgePayload(nonce);
+			} catch (error) {
+				console.error("HNewhere: could not stage vote", error);
+				popup?.close();
+				return { ok: false, reason: "bridge-failed" };
+			}
+
 			if (!popup) {
 				itemActionRequests.set(nonce, {
 					resolve: () => {},
@@ -10865,24 +10914,31 @@ html[data-backchannel-installed] .chin {
 					onInterim,
 					stopWatching: watchBridgeResult(nonce, deliverItemAction),
 				});
-				resolve({ ok: false, reason: "popup-blocked", url });
-				return;
+				return { ok: false, reason: "popup-blocked", url };
 			}
 
-			const timeoutId = window.setTimeout(
-				() => settleItemAction(nonce, { ok: false, reason: "timeout" }),
-				12000,
-			);
+			return new Promise((resolve) => {
+				const timeoutId = window.setTimeout(
+					() => settleItemAction(nonce, { ok: false, reason: "timeout" }),
+					12000,
+				);
 
-			itemActionRequests.set(nonce, {
-				resolve,
-				timeoutId,
-				popup,
-				origin: bridge.origin,
-				stopWatching: watchBridgeResult(nonce, deliverItemAction),
-				onInterim,
+				itemActionRequests.set(nonce, {
+					resolve,
+					timeoutId,
+					popup,
+					origin: bridge.origin,
+					stopWatching: watchBridgeResult(nonce, deliverItemAction),
+					onInterim,
+				});
+
+				try {
+					popup.location = url;
+				} catch (error) {
+					console.error("HNewhere: could not navigate vote popup", error);
+				}
 			});
-		});
+		})();
 	}
 
 	function sayVote(container, itemId, message, action = null) {
@@ -24464,7 +24520,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		};
 	}
 
-	function actHNItemAction({ payload, root }) {
+	async function actHNItemAction({ payload, root }) {
 		const before = currentVoteInfoFor(root, payload.item);
 
 		const anchor = root.getElementById(payload.action + "_" + payload.item);
@@ -24491,6 +24547,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			return { ok: false, reason: "storage-unavailable", voteInfo: before };
 		}
 
+		await clearBridgePayload(payload.nonce);
 		location.href = target.href;
 		return BRIDGE_NAVIGATED;
 	}
@@ -24758,6 +24815,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				messageSource: ITEM_ACTION_BRIDGE_MESSAGE_SOURCE,
 				noun: "vote",
 				fields: ["item", "action", "voteURL"],
+				stagesDraft: true,
+				bindStaged: bindVoteStage,
 				accepts: (payload) =>
 					Boolean(payload.storyID && payload.item) &&
 					VOTE_ACTIONS.includes(payload.action),
@@ -25011,6 +25070,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				messageSource: ITEM_ACTION_BRIDGE_MESSAGE_SOURCE,
 				noun: "vote",
 				fields: ["item", "action", "voteURL"],
+				stagesDraft: true,
+				bindStaged: bindVoteStage,
 				accepts: (payload) =>
 					Boolean(payload.storyID && payload.item) &&
 					VOTE_ACTIONS.includes(payload.action),
