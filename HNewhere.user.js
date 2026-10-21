@@ -527,6 +527,7 @@
 	let opening = false;
 	let openingRun = null;
 	let sidebarGeneration = 0;
+	let discussionRenderRun = 0;
 	let renderedComments = [];
 	const sidebarSourceKeys = new Set();
 	const liveDiscussions = new Map();
@@ -23198,6 +23199,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 	}
 
 	async function renderDiscussions(stories, ui, { arrival = true } = {}) {
+		const run = ++discussionRenderRun;
 		const docked = dockedComposeBox(ui.shadow);
 		const kept = docked && stories.some((story) => story.key === docked._hnewhereStoryKey) ? docked : null;
 
@@ -23255,7 +23257,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			),
 		);
 
-		if (generation !== sidebarGeneration) {
+		if (generation !== sidebarGeneration || run !== discussionRenderRun) {
 			return;
 		}
 
@@ -23344,7 +23346,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		await learnOpenPage().catch(console.error);
 		await loadOpenCollectedDocument();
 
-		if (generation !== sidebarGeneration) {
+		if (generation !== sidebarGeneration || run !== discussionRenderRun) {
 			return;
 		}
 
@@ -23362,7 +23364,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 				const thread = notesThread(notesDiscussion);
 
 				for (const key of thread.rootKeys) {
-					if (generation !== sidebarGeneration) {
+					if (generation !== sidebarGeneration || run !== discussionRenderRun) {
 						return;
 					}
 
@@ -23417,7 +23419,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 		const batchSize = 5;
 
 		for (let i = 0; i < entries.length; i += batchSize) {
-			if (generation !== sidebarGeneration) {
+			if (generation !== sidebarGeneration || run !== discussionRenderRun) {
 				return;
 			}
 
@@ -23430,7 +23432,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			);
 
 			for (const entry of batch) {
-				if (generation !== sidebarGeneration) {
+				if (generation !== sidebarGeneration || run !== discussionRenderRun) {
 					return;
 				}
 
@@ -23492,7 +23494,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 				continue;
 			}
 
-			if (generation !== sidebarGeneration) {
+			if (generation !== sidebarGeneration || run !== discussionRenderRun) {
 				return;
 			}
 
@@ -23504,7 +23506,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			hydrateDisplayAges(story.id);
 		}
 
-		if (generation === sidebarGeneration) {
+		if (generation === sidebarGeneration && run === discussionRenderRun) {
 			clearSidebarStage(ui);
 		}
 	}
