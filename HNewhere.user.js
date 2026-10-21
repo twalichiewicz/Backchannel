@@ -289,7 +289,7 @@
 	const VOTE_MEMORY_TTL = 90 * 24 * 60 * 60 * 1000;
 
 	// #region hnewhere-test-export
-	const BUTTON_SIZE_MIN = 24;
+	const BUTTON_SIZE_MIN = 4;
 	const BUTTON_SIZE_MAX = 64;
 	const BUTTON_SIZE_STEP = 4;
 	const BUTTON_SIZE_DEFAULT = 44;
@@ -350,6 +350,25 @@
 
 	function buttonFontSizeFor(size) {
 		return Math.min(18, Math.max(9, Math.round(size * 0.3)));
+	}
+
+	const BUTTON_FIT_MARGIN = 2;
+
+	function buttonFitSize(halfW, halfH, radiusPercent, margin = BUTTON_FIT_MARGIN) {
+		const reach = Math.max(halfW, halfH) + margin;
+
+		for (let size = Math.ceil(reach * 2); size < 512; size += 1) {
+			const radius = (radiusPercent / 100) * size;
+			const straight = size / 2 - radius;
+			const dx = Math.max(0, halfW - straight);
+			const dy = Math.max(0, halfH - straight);
+
+			if ((dx === 0 && dy === 0) || Math.hypot(dx, dy) <= radius - margin) {
+				return size;
+			}
+		}
+
+		return 512;
 	}
 
 	let themePreference = "auto";
@@ -8719,6 +8738,122 @@ html[data-backchannel-installed] .chin {
 		}
 	}
 
+	const BUTTON_LABEL_STYLE = {
+		display: "block",
+		position: "static",
+		margin: "0",
+		padding: "0",
+		border: "0",
+		background: "none",
+		boxShadow: "none",
+		width: "auto",
+		height: "auto",
+		minWidth: "0",
+		maxWidth: "none",
+		minHeight: "0",
+		maxHeight: "none",
+		float: "none",
+		lineHeight: "1",
+		letterSpacing: "normal",
+		wordSpacing: "normal",
+		textTransform: "none",
+		textIndent: "0",
+		textDecoration: "none",
+		textAlign: "center",
+		whiteSpace: "nowrap",
+		boxSizing: "border-box",
+		color: "inherit",
+		fontFamily: "inherit",
+		fontSize: "inherit",
+		fontStyle: "inherit",
+		fontWeight: "inherit",
+		pointerEvents: "none",
+		transformOrigin: "50% 50%",
+	};
+
+	const buttonInkCache = new Map();
+	let buttonInkContext = null;
+
+	function buttonLabelFit(text, radius = buttonRadiusPreference) {
+		if (!text) {
+			return 0;
+		}
+
+		let ink = buttonInkCache.get(text);
+
+		if (!ink) {
+			buttonInkContext ??= document.createElement("canvas").getContext("2d");
+			buttonInkContext.font = "bold 9px Verdana, sans-serif";
+			buttonInkContext.textAlign = "center";
+			buttonInkContext.textBaseline = "middle";
+
+			const m = buttonInkContext.measureText(text);
+
+			ink = {
+				halfW: Math.max(m.actualBoundingBoxLeft, m.actualBoundingBoxRight),
+				halfH: Math.max(m.actualBoundingBoxAscent, m.actualBoundingBoxDescent),
+			};
+			buttonInkCache.set(text, ink);
+		}
+
+		return buttonFitSize(ink.halfW, ink.halfH, radius);
+	}
+
+	function buttonGrowOrigin(button) {
+		const doc = document.documentElement;
+		const right =
+			button.offsetLeft + button.offsetWidth / 2 > (doc.clientWidth || window.innerWidth) / 2;
+		const bottom =
+			button.offsetTop + button.offsetHeight / 2 > (doc.clientHeight || window.innerHeight) / 2;
+
+		return `${right ? "100%" : "0"} ${bottom ? "100%" : "0"}`;
+	}
+
+	function syncButtonGrowth(button) {
+		const label = button._label;
+
+		if (!label) {
+			return;
+		}
+
+		const size = buttonSizePreference;
+		const fit = buttonLabelFit(buttonMarkPreference);
+		const grown = Boolean(button._hovered || button._focused);
+
+		if (fit <= size) {
+			pinButtonStyle(button, {
+				transformOrigin: "50% 50%",
+				transform: grown ? "scale(1.06)" : null,
+			});
+			pinButtonStyle(label, { visibility: "visible", transform: null });
+			return;
+		}
+
+		pinButtonStyle(label, {
+			visibility: grown ? "visible" : "hidden",
+			transform: grown ? `scale(${size / fit})` : null,
+		});
+
+		if (grown) {
+			pinButtonStyle(button, {
+				transformOrigin: buttonGrowOrigin(button),
+				transform: `scale(${fit / size})`,
+			});
+		} else {
+			pinButtonStyle(button, { transform: null });
+		}
+	}
+
+	function setButtonLabel(button, text) {
+		const label = document.createElement("span");
+
+		label.textContent = text;
+		pinButtonStyle(label, BUTTON_LABEL_STYLE);
+		button._label = label;
+		button.replaceChildren(label);
+		syncButtonGrowth(button);
+	}
+
 	const BUTTON_STYLE_RESET = {
 		margin: "0",
 		border: "0",
@@ -8743,13 +8878,13 @@ html[data-backchannel-installed] .chin {
 	function applyButtonAppearance(button) {
 		const size = buttonSizePreference;
 
-		button.textContent = buttonMarkPreference;
 		pinButtonStyle(button, {
 			width: `${size}px`,
 			height: `${size}px`,
 			fontSize: `${buttonFontSizeFor(size)}px`,
 			borderRadius: `${buttonRadiusPreference}%`,
 		});
+		setButtonLabel(button, buttonMarkPreference);
 	}
 
 	async function refreshButtonAppearance() {
@@ -8819,7 +8954,7 @@ html[data-backchannel-installed] .chin {
 		let button = document.getElementById(id);
 
 		if (button) {
-			button.textContent = buttonMarkPreference;
+			setButtonLabel(button, buttonMarkPreference);
 			return button;
 		}
 
@@ -8827,14 +8962,14 @@ html[data-backchannel-installed] .chin {
 
 		if (button) {
 			button.id = id;
-			button.textContent = buttonMarkPreference;
+			setButtonLabel(button, buttonMarkPreference);
 			setFloatingButtonVariant(button, variant);
 			return button;
 		}
 
 		button = document.createElement("button");
 		button.id = id;
-		button.textContent = buttonMarkPreference;
+		setButtonLabel(button, buttonMarkPreference);
 
 		pinButtonStyle(button, {
 			...BUTTON_STYLE_RESET,
@@ -8865,12 +9000,18 @@ html[data-backchannel-installed] .chin {
 
 		setFloatingButtonVariant(button, variant);
 
-		button.addEventListener("mouseenter", () => {
-			pinButtonStyle(button, { transform: "scale(1.06)" });
-		});
-		button.addEventListener("mouseleave", () => {
-			pinButtonStyle(button, { transform: null });
-		});
+		const setGrown = (key, on) => {
+			button[key] = on;
+			syncButtonGrowth(button);
+		};
+
+		button.addEventListener("mouseenter", () => setGrown("_hovered", true));
+		button.addEventListener("mouseleave", () => setGrown("_hovered", false));
+		button.addEventListener("focus", () =>
+			setGrown("_focused", button.matches(":focus-visible")),
+		);
+		button.addEventListener("blur", () => setGrown("_focused", false));
+		button.addEventListener("pointerup", () => syncButtonGrowth(button));
 
 		const updateButtonStyle = () => {
 			applyButtonMobileStyle(button);
@@ -10874,10 +11015,8 @@ html[data-backchannel-installed] .chin {
 			startX = event.clientX;
 			startY = event.clientY;
 
-			const rect = button.getBoundingClientRect();
-
-			startLeft = rect.left;
-			startTop = rect.top;
+			startLeft = button.offsetLeft;
+			startTop = button.offsetTop;
 
 			button.setPointerCapture(event.pointerId);
 		});
@@ -13293,11 +13432,11 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 	}
 
 	function pulseFloatingButtonFeedback(button, text) {
-		button.textContent = text;
+		setButtonLabel(button, text);
 		pinButtonStyle(button, { fontSize: "11px", color: "white" });
 
 		window.setTimeout(() => {
-			button.textContent = buttonMarkPreference;
+			setButtonLabel(button, buttonMarkPreference);
 			applyButtonMobileStyle(button);
 		}, 900);
 	}
@@ -17143,8 +17282,25 @@ button.shortcut-key {
 	white-space:nowrap;
 	cursor:grab;
 	touch-action:none;
-	transition:background .2s ease, box-shadow .2s ease, width .15s ease, height .15s ease, border-radius .15s ease;
+	transition:background .2s ease, box-shadow .2s ease, width .15s ease, height .15s ease, border-radius .15s ease, transform .15s ease;
 	z-index:3;
+}
+
+.toggle-preview.is-small .toggle-preview-mark {
+	visibility:hidden;
+}
+
+.toggle-preview.is-small:hover,
+.toggle-preview.is-small:focus-within {
+	transform:scale(var(--grow));
+	transform-origin:var(--grow-origin);
+	z-index:6;
+}
+
+.toggle-preview.is-small:hover .toggle-preview-mark,
+.toggle-preview.is-small:focus-within .toggle-preview-mark {
+	visibility:visible;
+	transform:scale(var(--ungrow));
 }
 
 .toggle-preview.is-dragging {
@@ -17188,6 +17344,11 @@ button.shortcut-key {
 	height:10px;
 	border-radius:50%;
 	cursor:crosshair;
+}
+
+.toggle-selection.is-compact .toggle-handle-radius {
+	top:-6px;
+	right:-6px;
 }
 
 .toggle-tags {
@@ -17893,15 +18054,26 @@ ${frontPageChooserHTML()}
 				previewMark.textContent = normalizeButtonMark(settings.buttonMark);
 			}
 
+			const fit = buttonLabelFit(normalizeButtonMark(settings.buttonMark), radius);
+			const growRight = width - previewSpot.right - size / 2 > width / 2;
+			const growBottom = previewSpot.top + size / 2 > height / 2;
+
+			preview.classList.toggle("is-small", fit > size);
+			preview.style.setProperty("--grow", String(fit / size));
+			preview.style.setProperty("--ungrow", String(size / fit));
+			preview.style.setProperty("--grow-origin", `${growRight ? "100%" : "0"} ${growBottom ? "100%" : "0"}`);
+
 			previewSelection.style.right = `${previewSpot.right - pad}px`;
 			previewSelection.style.top = `${previewSpot.top - pad}px`;
 			previewSelection.style.width = `${box}px`;
 			previewSelection.style.height = `${box}px`;
 
 			const inset = Math.min(5 + (radius / 100) * size * 0.5, size / 2 - 2);
+			const compact = size < 20;
 
-			radiusHandle.style.left = `${pad + inset - 6.5}px`;
-			radiusHandle.style.bottom = `${pad + inset - 6.5}px`;
+			previewSelection.classList.toggle("is-compact", compact);
+			radiusHandle.style.left = compact ? "" : `${pad + inset - 6.5}px`;
+			radiusHandle.style.bottom = compact ? "" : `${pad + inset - 6.5}px`;
 			sizeHandle.setAttribute("aria-valuenow", String(size));
 			radiusHandle.setAttribute("aria-valuenow", String(radius));
 
@@ -18434,7 +18606,12 @@ ${frontPageChooserHTML()}
 			}));
 
 			dragHandle(radiusHandle, (dx, dy, start) => ({
-				radius: normalizeButtonRadius(start.radius + ((dx - dy) / start.size) * 100),
+				radius: normalizeButtonRadius(
+					start.radius +
+						(previewSelection.classList.contains("is-compact") ? -1 : 1) *
+							((dx - dy) / Math.max(start.size, 24)) *
+							100,
+				),
 			}));
 
 			sizeHandle.addEventListener("keydown", (event) => {
