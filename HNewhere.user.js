@@ -4719,7 +4719,7 @@ ${
 	const REDDIT_TIER_TTL = 10 * 60 * 1000;
 	const REDDIT_RATE_FLOOR = 10;
 
-	let redditRateRemaining = Infinity;
+	let redditRateResumeAt = 0;
 
 	async function redditTier() {
 		const stored = await load(REDDIT_TIER_KEY, null);
@@ -4739,14 +4739,17 @@ ${
 		}
 
 		if (tier === "loid") {
-			if (redditRateRemaining < REDDIT_RATE_FLOOR) {
+			if (Date.now() < redditRateResumeAt) {
 				return null;
 			}
 
 			const result = await requestWithMeta("https://www.reddit.com" + path);
 
 			if (result.rateLimit) {
-				redditRateRemaining = result.rateLimit.remaining;
+				redditRateResumeAt =
+					result.rateLimit.remaining < REDDIT_RATE_FLOOR
+						? Date.now() + (result.rateLimit.resetSeconds || 600) * 1000
+						: 0;
 			}
 
 			if (result.ok) {
