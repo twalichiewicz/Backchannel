@@ -36127,7 +36127,9 @@ ${frontPageChooserHTML()}
 			return;
 		}
 
-		state.open = { url, key, row: entry };
+		const opened = { url, key, row: entry };
+
+		state.open = opened;
 		markCollectedArrival(url)
 			.then((marked) => {
 				if (marked) {
@@ -36167,10 +36169,18 @@ ${frontPageChooserHTML()}
 		const keys = rowDiscussionKeys(entry);
 		const previousSeen = keys.length ? await markManySeen(keys) : {};
 
+		if (state.open !== opened) {
+			return;
+		}
+
 		state.openSeen = previousSeen;
 
 		if (keys.length) {
 			await refreshAppSeen();
+
+			if (state.open !== opened) {
+				return;
+			}
 		}
 
 		await openAppDiscussion(entry, { focus, previousSeen });
