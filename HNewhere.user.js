@@ -380,6 +380,12 @@
 		return 512;
 	}
 
+	function buttonGrowNudge(size, fit, radiusPercent) {
+		const radius = (Math.min(radiusPercent, 50) / 100) * fit;
+
+		return Math.max(0, Math.ceil(radius - size / 2 - (radius - 1) / Math.SQRT2));
+	}
+
 	let themePreference = "auto";
 	let buttonRadiusPreference = BUTTON_RADIUS_DEFAULT;
 	let buttonSizePreference = BUTTON_SIZE_DEFAULT;
@@ -8809,6 +8815,7 @@ html[data-backchannel-installed] .chin {
 
 	const BUTTON_LABEL_STYLE = {
 		display: "block",
+		flex: "none",
 		position: "static",
 		margin: "0",
 		padding: "0",
@@ -8869,12 +8876,6 @@ html[data-backchannel-installed] .chin {
 		return buttonFitSize(ink.halfW, ink.halfH, radius);
 	}
 
-	function buttonGrowOrigin(button) {
-		const { corner } = buttonCornerPlacement(button);
-
-		return `${corner.endsWith("right") ? "100%" : "0"} ${corner.startsWith("bottom") ? "100%" : "0"}`;
-	}
-
 	function syncButtonGrowth(button) {
 		const label = button._label;
 
@@ -8889,6 +8890,9 @@ html[data-backchannel-installed] .chin {
 			Number.parseFloat(button.style.fontSize) || 9,
 		);
 		const grown = Boolean(button._hovered || button._focused);
+		const box = `${grown && fit > size ? fit : size}px`;
+
+		pinButtonStyle(button, { width: box, height: box });
 
 		if (!fit) {
 			pinButtonStyle(button, {
@@ -8908,19 +8912,21 @@ html[data-backchannel-installed] .chin {
 			return;
 		}
 
-		pinButtonStyle(label, {
-			visibility: grown ? "visible" : "hidden",
-			transform: grown ? `scale(${size / fit})` : null,
-		});
+		pinButtonStyle(label, { visibility: grown ? "visible" : "hidden", transform: null });
 
-		if (grown) {
-			pinButtonStyle(button, {
-				transformOrigin: buttonGrowOrigin(button),
-				transform: `scale(${fit / size})`,
-			});
-		} else {
+		if (!grown) {
 			pinButtonStyle(button, { transform: null });
+			return;
 		}
+
+		const nudge = buttonGrowNudge(size, fit, buttonRadiusPreference);
+		const { corner } = buttonCornerPlacement(button);
+
+		pinButtonStyle(button, {
+			transform: nudge
+				? `translate(${corner.endsWith("right") ? nudge : -nudge}px, ${corner.startsWith("bottom") ? nudge : -nudge}px)`
+				: null,
+		});
 	}
 
 	function setButtonLabel(button, text) {
@@ -9064,7 +9070,7 @@ html[data-backchannel-installed] .chin {
 			display: "flex",
 			alignItems: "center",
 			justifyContent: "center",
-			transition: "background .2s ease, box-shadow .2s ease, transform .15s ease",
+			transition: "background .2s ease, box-shadow .2s ease, width .15s ease, height .15s ease, transform .15s ease",
 			overflow: "hidden",
 			isolation: "isolate",
 		});
@@ -9082,8 +9088,29 @@ html[data-backchannel-installed] .chin {
 			syncButtonGrowth(button);
 		};
 
+		const leaveWhenOutside = (event) => {
+			const box = button.getBoundingClientRect();
+
+			if (
+				event.clientX >= box.left &&
+				event.clientX <= box.right &&
+				event.clientY >= box.top &&
+				event.clientY <= box.bottom
+			) {
+				return false;
+			}
+
+			window.removeEventListener("pointermove", leaveWhenOutside, true);
+			setGrown("_hovered", false);
+			return true;
+		};
+
 		button.addEventListener("mouseenter", () => setGrown("_hovered", true));
-		button.addEventListener("mouseleave", () => setGrown("_hovered", false));
+		button.addEventListener("mouseleave", (event) => {
+			if (!leaveWhenOutside(event)) {
+				window.addEventListener("pointermove", leaveWhenOutside, true);
+			}
+		});
 		button.addEventListener("focus", () =>
 			setGrown("_focused", button.matches(":focus-visible")),
 		);
@@ -17603,7 +17630,7 @@ button.shortcut-key {
 	white-space:nowrap;
 	cursor:grab;
 	touch-action:none;
-	transition:background .2s ease, box-shadow .2s ease, width .15s ease, height .15s ease, border-radius .15s ease, transform .15s ease;
+	transition:background .2s ease, box-shadow .2s ease, width .15s ease, height .15s ease, margin .15s ease, border-radius .15s ease, transform .15s ease;
 	z-index:3;
 }
 
@@ -17612,18 +17639,22 @@ button.shortcut-key {
 }
 
 .toggle-preview.is-small:hover,
-.toggle-preview.is-small:focus-within,
+.toggle-preview.is-small:focus-within {
+	width:var(--grown) !important;
+	height:var(--grown) !important;
+	margin:var(--grow-margin);
+	z-index:6;
+}
+
 .toggle-preview.is-empty:hover,
 .toggle-preview.is-empty:focus-within {
 	transform:scale(var(--grow));
-	transform-origin:var(--grow-origin);
 	z-index:6;
 }
 
 .toggle-preview.is-small:hover .toggle-preview-mark,
 .toggle-preview.is-small:focus-within .toggle-preview-mark {
 	visibility:visible;
-	transform:scale(var(--ungrow));
 }
 
 .toggle-preview.is-dragging {
@@ -18419,11 +18450,13 @@ ${frontPageChooserHTML()}
 			preview.classList.toggle("is-small", fit > size);
 			preview.classList.toggle("is-empty", !markText);
 			markSwitch.setAttribute("aria-pressed", String(Boolean(markText)));
-			preview.style.setProperty("--grow", String(markText ? fit / size : (size + 4) / size));
-			preview.style.setProperty("--ungrow", String(fit ? size / fit : 1));
+			preview.style.setProperty("--grow", String((size + 4) / size));
+			const nudge = buttonGrowNudge(size, fit, radius);
+
+			preview.style.setProperty("--grown", `${fit}px`);
 			preview.style.setProperty(
-				"--grow-origin",
-				markText ? `${growRight ? "100%" : "0"} ${growBottom ? "100%" : "0"}` : "50% 50%",
+				"--grow-margin",
+				`${growBottom ? size - fit + nudge : -nudge}px ${growRight ? -nudge : size - fit + nudge}px 0 0`,
 			);
 
 			previewSelection.style.right = `${previewSpot.right - pad}px`;
