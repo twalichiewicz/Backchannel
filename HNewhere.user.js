@@ -13123,8 +13123,12 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		await paintCollectionTag(context.ui, context.stories, context.seenTimes);
 	}
 
-	async function renderCollectionView(ui, list) {
+	async function renderCollectionView(ui, list, isCurrent = () => true) {
 		const documents = await loadCollectionDocuments();
+
+		if (!isCurrent()) {
+			return;
+		}
 
 		list.replaceChildren();
 
@@ -13575,8 +13579,13 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		return body;
 	}
 
-	async function renderQueueView(ui, list) {
+	async function renderQueueView(ui, list, isCurrent = () => true) {
 		const entries = sortQueue(await loadQueue());
+
+		if (!isCurrent()) {
+			return;
+		}
+
 		const reload = () => renderQueueView(ui, list);
 		let rank = 0;
 
@@ -35888,9 +35897,9 @@ ${frontPageChooserHTML()}
 		}
 
 		if (view === "queue") {
-			await renderQueueView(ui, list);
+			await renderQueueView(ui, list, () => request === state.listSeq);
 		} else if (view === "collection") {
-			await renderCollectionView(ui, list);
+			await renderCollectionView(ui, list, () => request === state.listSeq);
 		} else if (state.noSources) {
 			state.rows = [];
 			state.rowsByURL = new Map();
