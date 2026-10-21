@@ -311,12 +311,11 @@
 	const BUTTON_MARK_MAX = 2;
 
 	function normalizeButtonMark(value) {
-		const text = String(value ?? "")
-			.trim()
-			.slice(0, BUTTON_MARK_MAX)
-			.toUpperCase();
+		if (value === undefined || value === null) {
+			return BUTTON_MARK_DEFAULT;
+		}
 
-		return text || BUTTON_MARK_DEFAULT;
+		return String(value).trim().slice(0, BUTTON_MARK_MAX).toUpperCase();
 	}
 
 	function normalizeButtonSize(value) {
@@ -8774,16 +8773,17 @@ html[data-backchannel-installed] .chin {
 	const buttonInkCache = new Map();
 	let buttonInkContext = null;
 
-	function buttonLabelFit(text, radius = buttonRadiusPreference) {
+	function buttonLabelFit(text, radius = buttonRadiusPreference, fontSize = 9) {
 		if (!text) {
 			return 0;
 		}
 
-		let ink = buttonInkCache.get(text);
+		const key = `${fontSize}|${text}`;
+		let ink = buttonInkCache.get(key);
 
 		if (!ink) {
 			buttonInkContext ??= document.createElement("canvas").getContext("2d");
-			buttonInkContext.font = "bold 9px Verdana, sans-serif";
+			buttonInkContext.font = `bold ${fontSize}px Verdana, sans-serif`;
 			buttonInkContext.textAlign = "center";
 			buttonInkContext.textBaseline = "middle";
 
@@ -8793,7 +8793,7 @@ html[data-backchannel-installed] .chin {
 				halfW: Math.max(m.actualBoundingBoxLeft, m.actualBoundingBoxRight),
 				halfH: Math.max(m.actualBoundingBoxAscent, m.actualBoundingBoxDescent),
 			};
-			buttonInkCache.set(text, ink);
+			buttonInkCache.set(key, ink);
 		}
 
 		return buttonFitSize(ink.halfW, ink.halfH, radius);
@@ -8817,8 +8817,21 @@ html[data-backchannel-installed] .chin {
 		}
 
 		const size = buttonSizePreference;
-		const fit = buttonLabelFit(buttonMarkPreference);
+		const fit = buttonLabelFit(
+			label.textContent,
+			buttonRadiusPreference,
+			Number.parseFloat(button.style.fontSize) || 9,
+		);
 		const grown = Boolean(button._hovered || button._focused);
+
+		if (!fit) {
+			pinButtonStyle(button, {
+				transformOrigin: "50% 50%",
+				transform: grown ? `scale(${(size + 4) / size})` : null,
+			});
+			pinButtonStyle(label, { visibility: "visible", transform: null });
+			return;
+		}
 
 		if (fit <= size) {
 			pinButtonStyle(button, {
@@ -13432,8 +13445,8 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 	}
 
 	function pulseFloatingButtonFeedback(button, text) {
-		setButtonLabel(button, text);
 		pinButtonStyle(button, { fontSize: "11px", color: "white" });
+		setButtonLabel(button, text);
 
 		window.setTimeout(() => {
 			setButtonLabel(button, buttonMarkPreference);
@@ -17291,7 +17304,9 @@ button.shortcut-key {
 }
 
 .toggle-preview.is-small:hover,
-.toggle-preview.is-small:focus-within {
+.toggle-preview.is-small:focus-within,
+.toggle-preview.is-empty:hover,
+.toggle-preview.is-empty:focus-within {
 	transform:scale(var(--grow));
 	transform-origin:var(--grow-origin);
 	z-index:6;
@@ -17395,6 +17410,33 @@ button.shortcut-key {
 .toggle-tag input:focus {
 	outline:none;
 	background:rgba(255,255,255,.24);
+}
+
+.toggle-tag-switch {
+	position:relative;
+	box-sizing:border-box;
+	justify-content:center;
+	width:18px;
+	padding:0;
+	border:0;
+	font-family:inherit;
+	line-height:1;
+	cursor:pointer;
+}
+
+.toggle-tag-switch .toggle-tag-slash {
+	position:absolute;
+	inset:0;
+	margin:0;
+}
+
+.toggle-tag-switch[aria-pressed="true"] .toggle-tag-slash {
+	display:none;
+}
+
+.toggle-tag-switch:focus-visible {
+	outline:2px solid var(--toggle-select);
+	outline-offset:2px;
 }
 
 .toggle-preview:focus-visible,
@@ -17850,7 +17892,7 @@ All stored locally.
 <div class="toggle-page-copy" aria-hidden="true"><div class="toggle-page-head"></div><div class="toggle-page-line" style="width:96%"></div><div class="toggle-page-line" style="width:88%"></div><div class="toggle-page-line" style="width:93%"></div><div class="toggle-page-line" style="width:72%"></div><div class="toggle-page-line" style="width:90%"></div><div class="toggle-page-line" style="width:84%"></div><div class="toggle-page-line" style="width:91%"></div><div class="toggle-page-line" style="width:78%"></div><div class="toggle-page-line" style="width:89%"></div><div class="toggle-page-line" style="width:82%"></div><div class="toggle-page-line" style="width:94%"></div><div class="toggle-page-line" style="width:70%"></div></div>
 <div id="toggle-preview" class="toggle-preview" tabindex="0" role="group" aria-label="Sidebar toggle preview. Drag it, or use the arrow keys, to see it elsewhere on a page."><span id="toggle-preview-mark" class="toggle-preview-mark" contenteditable="plaintext-only" spellcheck="false" role="textbox" aria-label="Toggle label, one or two characters" title="Type one or two characters">BC</span></div>
 <div class="toggle-selection"><span id="toggle-radius-handle" class="toggle-handle toggle-handle-radius" role="slider" tabindex="0" aria-label="Corner radius" aria-valuemin="0" aria-valuemax="${BUTTON_RADIUS_MAX}"></span><span id="toggle-size-handle" class="toggle-handle toggle-handle-size" role="slider" tabindex="0" aria-label="Toggle size" aria-valuemin="${BUTTON_SIZE_MIN}" aria-valuemax="${BUTTON_SIZE_MAX}"></span></div>
-<div class="toggle-tags"><label class="toggle-tag"><input id="button-size-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Toggle size in pixels" value="44"><span>px</span></label><label class="toggle-tag"><svg viewBox="0 0 10 10" width="9" height="9" aria-hidden="true" focusable="false"><path d="M1.5 8.5V5.5a4 4 0 0 1 4-4h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><input id="button-radius-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Corner radius in percent" value="50"><span>%</span></label></div>
+<div class="toggle-tags"><label class="toggle-tag"><input id="button-size-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Toggle size in pixels" value="44"><span>px</span></label><label class="toggle-tag"><svg viewBox="0 0 10 10" width="9" height="9" aria-hidden="true" focusable="false"><path d="M1.5 8.5V5.5a4 4 0 0 1 4-4h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><input id="button-radius-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Corner radius in percent" value="50"><span>%</span></label><button type="button" id="button-mark-toggle" class="toggle-tag toggle-tag-switch" tabindex="0" aria-pressed="true" aria-label="Show text on the toggle" title="Show text on the toggle"><span>Aa</span><svg class="toggle-tag-slash" viewBox="0 0 18 18" width="18" height="18" aria-hidden="true" focusable="false" fill="none" stroke-linecap="round"><path d="M3.5 14.5 14.5 3.5" stroke="var(--toggle-select)" stroke-width="4"/><path d="M3.5 14.5 14.5 3.5" stroke="currentColor" stroke-width="1.4"/></svg></button></div>
 </div>
 </div>
 </div>
@@ -17944,6 +17986,7 @@ ${frontPageChooserHTML()}
 		const radiusHandle = shadow.querySelector("#toggle-radius-handle");
 		const sizeInput = shadow.querySelector("#button-size-input");
 		const radiusInput = shadow.querySelector("#button-radius-input");
+		const markSwitch = shadow.querySelector("#button-mark-toggle");
 		const colorInput = shadow.querySelector("#button-color-input");
 		const anySwatch = shadow.querySelector(".toggle-swatch-any");
 		const swatches = [...settingsPanel.querySelectorAll(".toggle-swatch[data-accent]")];
@@ -18054,14 +18097,20 @@ ${frontPageChooserHTML()}
 				previewMark.textContent = normalizeButtonMark(settings.buttonMark);
 			}
 
-			const fit = buttonLabelFit(normalizeButtonMark(settings.buttonMark), radius);
+			const markText = normalizeButtonMark(settings.buttonMark);
+			const fit = buttonLabelFit(markText, radius, buttonFontSizeFor(size));
 			const growRight = width - previewSpot.right - size / 2 > width / 2;
 			const growBottom = previewSpot.top + size / 2 > height / 2;
 
 			preview.classList.toggle("is-small", fit > size);
-			preview.style.setProperty("--grow", String(fit / size));
-			preview.style.setProperty("--ungrow", String(size / fit));
-			preview.style.setProperty("--grow-origin", `${growRight ? "100%" : "0"} ${growBottom ? "100%" : "0"}`);
+			preview.classList.toggle("is-empty", !markText);
+			markSwitch.setAttribute("aria-pressed", String(Boolean(markText)));
+			preview.style.setProperty("--grow", String(markText ? fit / size : (size + 4) / size));
+			preview.style.setProperty("--ungrow", String(fit ? size / fit : 1));
+			preview.style.setProperty(
+				"--grow-origin",
+				markText ? `${growRight ? "100%" : "0"} ${growBottom ? "100%" : "0"}` : "50% 50%",
+			);
 
 			previewSelection.style.right = `${previewSpot.right - pad}px`;
 			previewSelection.style.top = `${previewSpot.top - pad}px`;
@@ -18467,6 +18516,26 @@ ${frontPageChooserHTML()}
 				}
 			});
 
+			previewMark.addEventListener("input", () => {
+				markSwitch.setAttribute("aria-pressed", String(Boolean(previewMark.textContent.trim())));
+			});
+
+			markSwitch.addEventListener("click", () => {
+				saveDesigner({
+					buttonMark: normalizeButtonMark(designerSettings.buttonMark) ? "" : BUTTON_MARK_DEFAULT,
+				}).catch(console.error);
+			});
+
+			markSwitch.addEventListener("keydown", (event) => {
+				if (event.key !== "Tab" && event.key !== "Escape") {
+					event.stopPropagation();
+				}
+
+				if (event.key === "Backspace") {
+					event.preventDefault();
+				}
+			});
+
 			previewMark.addEventListener("blur", () => {
 				commitMark().catch(console.error);
 			});
@@ -18492,7 +18561,7 @@ ${frontPageChooserHTML()}
 					right: previewSpot.right,
 					top: previewSpot.top,
 					moved: false,
-					onMark: event.target === previewMark,
+					onMark: event.target === previewMark || !previewMark.textContent,
 				};
 				preview.setPointerCapture(event.pointerId);
 			});
