@@ -26662,6 +26662,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		}
 
 		reader.scale = next;
+		reader.generation += 1;
 		reader.viewer.style.setProperty("--scale-factor", String(next));
 		reader.viewer.style.setProperty("--total-scale-factor", String(next));
 		reader.drawn.clear();
@@ -26767,12 +26768,15 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			return;
 		}
 
+		const generation = reader.generation;
+		const stale = () => ownPdfReader !== reader || reader.generation !== generation;
+
 		reader.drawn.add(number);
 
 		const box = reader.pages[number - 1];
 		const page = await reader.app.pdfDocument.getPage(number);
 
-		if (ownPdfReader !== reader || !box) {
+		if (stale() || !box) {
 			return;
 		}
 
@@ -26792,7 +26796,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 		await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
 
-		if (ownPdfReader !== reader) {
+		if (stale()) {
 			return;
 		}
 
@@ -26806,7 +26810,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			viewport,
 		}).render();
 
-		if (ownPdfReader !== reader) {
+		if (stale()) {
 			return;
 		}
 
@@ -26961,6 +26965,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			scale,
 			fitScale: scale,
 			drawn: new Set(),
+			generation: 0,
 			observer: null,
 			stopZoom: null,
 		};
