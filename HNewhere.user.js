@@ -39382,7 +39382,7 @@ ${frontPageChooserHTML()}
 		return title;
 	}
 
-	function readerHeadingTitle(doc) {
+	function readerPickHeading(doc) {
 		const headings = [...doc.querySelectorAll("h1")];
 		const named = readerKey(doc.title);
 		const fits = (heading) => {
@@ -39391,7 +39391,11 @@ ${frontPageChooserHTML()}
 			return Boolean(key) && named.includes(key);
 		};
 
-		return (fits(headings[0]) ? headings[0] : headings.find(fits) || headings[0])?.textContent;
+		return { headings, chosen: fits(headings[0]) ? headings[0] : headings.find(fits) || headings[0] };
+	}
+
+	function readerHeadingTitle(doc) {
+		return readerPickHeading(doc).chosen?.textContent;
 	}
 
 	function readerTitle(doc, url) {
@@ -39791,11 +39795,19 @@ ${frontPageChooserHTML()}
 		);
 	}
 
+	const READER_CREDIT_LINE = /(?:^|\s[|\/]\s|\s)(?:Getty Images|Reuters|AP|AFP|Bloomberg|EPA|Shutterstock|Unsplash|Alamy)$/;
+
 	function readerIsCaption(block, altKeys) {
 		const text = readerSquash(block.textContent);
+		const key = readerKey(text);
+		const before = block.previousElementSibling;
 
 		return (
-			altKeys.has(readerKey(text)) ||
+			altKeys.has(key) ||
+			(text.length <= 400 && [...altKeys].some((alt) => key.startsWith(alt))) ||
+			(text.length <= 80 &&
+				READER_CREDIT_LINE.test(text) &&
+				Boolean(before && !readerSquash(before.textContent) && before.querySelector("img"))) ||
 			(text.length <= 160 && /^(?:image|photo|illustration|credit|source|courtesy|graphic)s?\s*:/i.test(text))
 		);
 	}
@@ -39822,6 +39834,7 @@ ${frontPageChooserHTML()}
 				!roles.get(paragraph)?.has("author") &&
 				!roles.get(paragraph)?.has("furniture") &&
 				!readerSubtitleCandidate(paragraph, roles, declared, altKeys) &&
+				!readerIsAuthorBio(paragraph.textContent, declared) &&
 				!readerIsCaption(paragraph, altKeys),
 		);
 
@@ -39830,8 +39843,52 @@ ${frontPageChooserHTML()}
 
 	const READER_HEADER_LINE = /^(?:reviewed|edited|fact[- ]?checked|updated|last updated|produced|translated)\b/i;
 
+	const READER_BYLINE = /^(?:by\s+|(?:posted|published|written)\b.{0,80}?\bby\s+)(\S.*)$/i;
+
+	const READER_NAME_BREAKS = /\s(?:in|on|at)\s|[,|\u2022\u00b7\u2014\u2013]/i;
+
+	const READER_DATE_WORDS = /^(?:(?:posted|published|updated|last|written|on|at|by)(?:\s+|$))+$/i;
+
+	function readerBylineName(text) {
+		const line = readerSquash(text);
+		const found = line.length <= 120 ? line.match(READER_BYLINE) : null;
+
+		if (!found) {
+			return "";
+		}
+
+		let rest = found[1];
+		const cuts = [rest.search(READER_NAME_BREAKS), rest.search(READER_DATE_GLUED)].filter((index) => index >= 0);
+
+		if (cuts.length) {
+			rest = rest.slice(0, Math.min(...cuts));
+		}
+
+		const name = readerSquash(rest).replace(/[.:;]+$/, "");
+		const words = name.split(" ");
+
+		return words.length >= 2 && words.length <= 5 && /^\p{Lu}/u.test(name) && !READER_DATE_WORDS.test(name) ? name : "";
+	}
+
+	function readerIsAuthorBio(text, declared) {
+		const line = readerSquash(text).toLowerCase();
+
+		return (
+			line.length <= 500 &&
+			declared.authors.some((name) => {
+				const own = readerSquash(name).toLowerCase();
+
+				return own.includes(" ") && line.startsWith(own) && /^.{0,40}?\s(?:is|was|writes|covers|has)\s/.test(line.slice(own.length));
+			})
+		);
+	}
+
 	function readerIsDateLine(text) {
 		const line = readerSquash(text);
+
+		if (/^estimated\s+\d+\s*min(?:ute)?s?$/i.test(line)) {
+			return true;
+		}
 
 		if (/\bmin(?:ute)?s?\s+read\b/i.test(line) && line.length <= 60) {
 			const rest = line.replace(READER_DATE, "").replace(/\d+\s*min(?:ute)?s?\s+read/i, "").replace(/[•·|–—-]/g, "");
@@ -39870,16 +39927,27 @@ ${frontPageChooserHTML()}
 
 	function readerMarkCaptions(content) {
 		const altKeys = readerAltKeys(content);
+		const seen = new Set();
 
-		for (const paragraph of content.querySelectorAll("p")) {
-			if (readerIsCaption(paragraph, altKeys)) {
+		for (const paragraph of [...content.querySelectorAll("p")]) {
+			if (!readerIsCaption(paragraph, altKeys)) {
+				continue;
+			}
+
+			const key = readerKey(paragraph.textContent);
+
+			if (seen.has(key)) {
+				readerRemoveBlock(content, paragraph);
+			} else {
+				seen.add(key);
 				paragraph.setAttribute("data-reader", "caption");
 			}
 		}
 	}
 
-	function readerTakeLead(content, roles, declared, first, dated) {
-		const taken = { dek: "", metaLines: [] };
+	function readerTakeLead(content, roles, declared, first, lead) {
+		const taken = { dek: "", metaLines: [], author: "", published: "" };
+		let dated = Boolean(declared.published || lead.date);
 
 		if (!first) {
 			return taken;
@@ -39900,12 +39968,33 @@ ${frontPageChooserHTML()}
 
 			const text = readerSquash(block.textContent);
 
+			const name = readerBylineName(text);
+			const own = declared.authors.concat(lead.author || taken.author || []).map((other) => readerKey(other));
+
 			if (roles.get(block)?.has("kicker") && text.length <= 40) {
 				readerRemoveBlock(content, block);
-			} else if (dated && text.length <= 100 && readerIsDateLine(text)) {
+			} else if (name && (!own.length || own.includes(readerKey(name)))) {
+				if (!own.length) {
+					taken.author = name;
+				}
+
+				if (!dated && READER_DATE.test(text)) {
+					taken.published = text.match(READER_DATE)[0];
+					dated = true;
+				}
+
 				readerRemoveBlock(content, block);
 			} else if (text.length <= 120 && READER_HEADER_LINE.test(text)) {
 				taken.metaLines.push(text.replace(/\s+[\/|]\s+/g, " \u00b7 "));
+				readerRemoveBlock(content, block);
+			} else if (readerIsAuthorBio(text, declared)) {
+				readerRemoveBlock(content, block);
+			} else if (text.length <= 100 && readerIsDateLine(text) && (dated || READER_DATE.test(text))) {
+				if (!dated) {
+					taken.published = text.match(READER_DATE)[0];
+					dated = true;
+				}
+
 				readerRemoveBlock(content, block);
 			} else if (!taken.dek && readerSubtitleCandidate(block, roles, declared, altKeys)) {
 				taken.dek = text;
@@ -39916,7 +40005,11 @@ ${frontPageChooserHTML()}
 		return taken;
 	}
 
-	const READER_PHRASES = /^(?:most popular|most read|related(?: stories| articles| posts| reading)?|read (?:later|more|next)|up next|next article|previous article|more stories|more news|latest(?: news| stories)?|top stories|trending(?: now)?|popular (?:now|today)|editor'?s picks|keep reading|what to read next|also in .{2,40}|more (?:from|in|on) .{2,40}|you (?:might|may) also like|recommended(?: for you)?|tell others:?|share(?: this(?: article| post| story)?)?:?|topics:?|tags:?|filed under:?|advertiser content.*|sponsored(?: content)?|advertisement|image credits?:.*|photo credits?:.*|license this (?:photo|image)|\d+ of \d+\s*\|?\s*(?:license this (?:photo|image))?|follow topics and authors.*|choose .{2,40} as (?:your|a) preferred source.*|add us as a preferred source.*|see more .{2,30} in google.*)$/i;
+	const READER_PHRASES = /^(?:most popular|most read|related(?: stories| articles| posts| reading)?|read (?:later|more|next)|up next|next article|previous article|more stories|more news|latest(?: news| stories)?|top stories|trending(?: now)?|popular (?:now|today)|editor'?s picks|keep reading|what to read next|also in .{2,40}|more (?:from|in|on) .{2,40}|you (?:might|may) also like|recommended(?: for you)?|tell others:?|share(?: this(?: article| post| story)?)?:?|topics:?|tags:?|filed under:?|(?:topics|tags|themes|categories|filed under):\s.+|listen to this (?:article|story)|-?\d{1,2}:\d{2}(?::\d{2})?|advertiser content.*|sponsored(?: content)?|advertisement|image credits?:.*|photo credits?:.*|license this (?:photo|image)|\d+ of \d+\s*\|?\s*(?:license this (?:photo|image))?|follow topics and authors.*|choose .{2,40} as (?:your|a) preferred source.*|add us as a preferred source.*|see more .{2,30} in google.*)$/i;
+
+	const READER_LEAD_PHRASES = /^back to .{2,30}$/i;
+
+	const READER_COMMISSION = /\b(?:may|might|could) earn (?:a |an )?(?:small |affiliate )?commission/i;
 
 	const READER_SECTION_LABELS = /^(?:most popular|most read|related(?: stories| articles| posts| reading)?|read (?:more|next)|up next|next article|previous article|also in .{2,40}|more (?:from|in|on) .{2,40}|more stories|more news|latest(?: news| stories)?|top stories|trending(?: now)?|popular (?:now|today)|editor'?s picks|keep reading|what to read next|you (?:might|may) also like|recommended(?: for you)?)$/i;
 
@@ -39953,6 +40046,8 @@ ${frontPageChooserHTML()}
 				(roles.get(block)?.has("furniture") && line.length < 400) ||
 				(tail && roles.get(block)?.has("furnitureAfter") && line.length < 400 && (line.length <= 80 || readerLinkShare(block) >= 0.5)) ||
 				((lead || tail) && line.length <= 200 && READER_PHRASES.test(line)) ||
+				(lead && line.length <= 200 && READER_LEAD_PHRASES.test(line)) ||
+				((lead || tail) && line.length <= 250 && READER_COMMISSION.test(line)) ||
 				(line.length <= 40 && READER_SECTION_LABELS.test(line))
 			) {
 				marked.add(block);
@@ -40225,16 +40320,18 @@ ${frontPageChooserHTML()}
 	function readerTakeFirstLabel(content, roles) {
 		const leaf = (element) => !element.querySelector(`${READER_BLOCK_SELECTOR}, figure`);
 		const first = [...content.querySelectorAll(`${READER_BLOCK_SELECTOR}, figure`)].find(
-			(element) => leaf(element) && (readerSquash(element.textContent) || element.querySelector("img")),
+			(element) => leaf(element) && readerSquash(element.textContent),
 		);
 
-		if (!first || !/^(?:P|LI)$/.test(first.nodeName) || roles.get(first)?.size) {
+		if (!first || roles.get(first)?.size) {
 			return;
 		}
 
 		const text = readerSquash(first.textContent);
+		const label = /^(?:P|LI)$/.test(first.nodeName) && text.length <= 20 && text.split(" ").length <= 2 && !/[.!?:,]/.test(text);
+		const crumbs = text.length <= 80 && text.split(/\s+[>\u203a\u00bb]\s+/).length >= 2;
 
-		if (text && text.length <= 20 && text.split(" ").length <= 2 && !/[.!?:,]/.test(text)) {
+		if (/^https?:\/\/\S+$/.test(text) || crumbs || label) {
 			readerRemoveBlock(content, first);
 		}
 	}
@@ -40341,8 +40438,11 @@ ${frontPageChooserHTML()}
 				const plain = lines.find((line) => !READER_DATE_GLUED.test(line) && line.length <= 80);
 				const glued = dated.match(READER_DATE_GLUED);
 
+				const named = lines.map(readerBylineName).find(Boolean);
+				const guess = readerSquash(plain ?? (glued ? dated.slice(0, glued.index) : "")).replace(/^by\s+/i, "");
+
 				taken.date = glued?.[0] || "";
-				taken.author = readerSquash(plain ?? (glued ? dated.slice(0, glued.index) : "")).replace(/^by\s+/i, "");
+				taken.author = named || (READER_DATE_WORDS.test(guess) ? "" : guess);
 			}
 
 			let parent = element.parentElement;
@@ -40386,6 +40486,11 @@ ${frontPageChooserHTML()}
 		markReaderRoles(doc);
 
 		const title = readerTitle(doc, url).replace(READER_MARK_PATTERN, "");
+		const picked = readerPickHeading(doc);
+		const early =
+			picked.chosen !== picked.headings[0] && readerKey(picked.chosen?.textContent) === readerKey(title)
+				? readerKey(picked.headings[0].textContent)
+				: "";
 		const root = readerRoot(doc);
 
 		if (!root) {
@@ -40405,7 +40510,7 @@ ${frontPageChooserHTML()}
 		for (const heading of [...content.querySelectorAll("h1, h2")].slice(0, 3)) {
 			if (
 				(!firstProse || firstProse.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_PRECEDING) &&
-				readerRepeatsTitle(heading.textContent, title)
+				(readerRepeatsTitle(heading.textContent, title) || (early && heading.nodeName === "H1" && readerKey(heading.textContent) === early))
 			) {
 				heading.remove();
 			}
@@ -40417,14 +40522,15 @@ ${frontPageChooserHTML()}
 		const boundary = readerBoundary(content, roles, declared);
 		const first = boundary.first;
 		const lead = readerTakeLeadAuthors(content, roles, first);
-		const header = readerTakeLead(content, roles, declared, first, Boolean(declared.published || lead.date));
+		const header = readerTakeLead(content, roles, declared, first, lead);
 
 		readerTakeFurniture(content, roles, boundary);
 		readerTakeAuthorCards(content, roles, declared, boundary.last);
 		readerDropDuplicateImages(content, roles);
 		readerTakeFirstLabel(content, roles);
 
-		const authors = declared.authors.length ? declared.authors : lead.author ? [lead.author] : [];
+		const fallback = lead.author || header.author;
+		const authors = declared.authors.length ? declared.authors : fallback ? [fallback] : [];
 		const body = (content.textContent || "").replace(/\s+/g, " ").trim();
 
 		return {
@@ -40434,7 +40540,7 @@ ${frontPageChooserHTML()}
 			content,
 			chars: body.length,
 			authors,
-			published: declared.published || lead.date,
+			published: declared.published || lead.date || header.published,
 			modified: declared.modified,
 			dek: header.dek,
 			metaLines: header.metaLines,
