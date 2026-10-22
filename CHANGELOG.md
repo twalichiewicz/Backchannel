@@ -8,6 +8,137 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.17.4] — 2026-10-22
+
+### Security
+
+- **A link can no longer submit a story to Hacker News as you.** Submitting
+  from Backchannel opens Hacker News's submit form in a popup, which fills in
+  your title and address and sends it. The popup sent the form whether or not
+  Backchannel had opened it, so a link to that form carrying the popup's
+  marker, followed while you were signed in to Hacker News, sent it under the
+  title the link chose. The popup now sends only a submission Backchannel
+  stored for it just before opening it. This affected every version from
+  1.5.3 through 1.6.17.3.
+
+- **Every popup needs a request Backchannel stored for it.** The reply popups
+  on Hacker News and Reddit, and Reddit's submit popup, posted nothing for a
+  link carrying their marker, but they still answered it: Reddit's submit
+  form showed Backchannel's note that your submission was filled in, over a
+  form the link had filled, and each popup kept a small stored value that was
+  never removed. Each now does nothing unless Backchannel stored a matching
+  request for it, and that check is made before any popup starts, so one
+  added later cannot act on a link alone.
+
+## [1.6.17.3] — 2026-10-21
+
+### Fixed
+
+- **Posting a comment keeps the reader and the page's other discussions.**
+  After a comment went through, the Sidebar was rebuilt around the one Hacker
+  News story it was posted to. In the reader that replaced the whole reader
+  with a floating panel, and on a page with several discussions the others
+  disappeared. Posting now refreshes the discussions already shown, as Sync
+  does.
+
+- **A thread's comment count stays right when the sort changes while it
+  loads.** The earlier drawing and the new one both carried on, and the
+  header counted both: a thread of 120 comments said 240. Only the latest
+  drawing carries on now.
+
+- **Reddit comes back after its rate limit resets.** When Reddit said fewer
+  than ten requests were left, Backchannel stopped asking it for the rest of
+  the page's life, so a reader left open lost Reddit until it was reloaded.
+  It now waits until the reset time Reddit gives, or ten minutes when it
+  gives none, then asks again.
+
+- **A Hacker News story, comment or set of vote arrows that failed to load
+  once is fetched again.** One timeout kept it missing until the page was
+  reloaded.
+
+- **The reader shows the story and the list you picked last.** Picking a
+  second story while the first was still opening could fill its discussion
+  with the first one's comments, and switching from Queue or Collection to
+  another list while the first was loading could leave the first on screen.
+  An open that a newer one overtakes now stops before it draws anything.
+
+- **Zooming a PDF keeps its text and its focused quote.** Two quick zoom
+  steps could give a page a second copy of its selectable text, and zooming
+  while a quote was focused cleared the focus, because the quotes were looked
+  for before the zoomed pages had any text. A draw that a zoom overtakes now
+  stops, and the focus is restored once the nearby pages are drawn.
+
+### Security
+
+- **A link can no longer vote as you.** Voting from Backchannel opens a popup
+  on Hacker News or old.reddit.com that presses the arrow. The popup took the
+  vote from its own address, so a link carrying the popup's marker, followed
+  while you were signed in, cast the vote the link named, up, down or unvote,
+  on the story or comment it named. A vote is now cast only when Backchannel
+  stored it just before opening the popup, and opening the same address again
+  after the vote does nothing. This affected Hacker News from 1.5.1 and
+  Reddit from 1.6.7, through 1.6.17.2.
+
+## [1.6.17.2] — 2026-10-21
+
+### Added
+
+- **Each discussion links to its own thread from the discussions menu.** With
+  more than one discussion there was no link to any thread until one was
+  picked. Each row's comment count now sits in a line under its name, and
+  that line links to the thread; the row itself still picks. Bluesky,
+  Mastodon and Notepad have no thread page, so theirs stay plain text. A lone
+  discussion's title, already a link, now has the dotted underline the
+  Sidebar's other links use.
+
+- **A comment collapses from its thread line or its header**, as on Reddit: a
+  click anywhere in its column outside the vote arrows, or on blank space in
+  its header. Links and controls, modifier clicks, drags and double-clicks
+  are left alone. Every thread now draws its lines, including threads where
+  nothing can vote.
+
+- **The Sidebar toggle can be as small as 4px.** When its label no longer
+  fits, the label hides, and hovering or focusing the toggle grows it toward
+  the middle of the page, just enough to show the label. An **Aa** switch
+  beside the toggle's size in Settings › Appearance turns the label off; a
+  toggle without one grows by 4px on hover.
+
+- **Settings › General has Clear cache**, which removes the temporary data
+  used to find discussions and load Front Pages. Backchannel fetches fresh
+  results when it needs them; notes, the Collection and settings are kept.
+
+### Fixed
+
+- **The Sidebar toggle stays in the corner you drop it in.** A dragged toggle
+  saved its position in pixels from the top left, so on a bigger window or
+  display one placed at the right or bottom edge sat away from it, and since
+  1.4.8 any resize of the window moved it to the top. It now keeps the corner
+  nearest where it was dropped and its distance from that corner's edges. A
+  position saved by an earlier version is converted once.
+
+- **Stored data no longer grows without limit.** Clearing a stored value
+  wrote an empty value over it, so every vote, post and finished draft left
+  one behind for good, and from 1.4.7 to 1.6.15.1 each page you looked up
+  kept a Hacker News lookup of its own that nothing removed. Backchannel now
+  asks your userscript manager for three more permissions so it can delete
+  values instead, and once a day it removes what older versions left behind
+  and Front Pages unused for a week. A discussion's last visit is forgotten
+  after 90 days, Sidebar widths and open states are kept for the 200 most
+  recent sites, and a cached Hacker News search keeps only the fields
+  Backchannel reads, about a quarter of the size.
+
+### Security
+
+- **Links from a source's answer are only ever web addresses.** A
+  discussion's link took the address its source gave, some of which a remote
+  server sets, such as a Lemmy post's ActivityPub id, and Mastodon's trending
+  links on the Front Page were checked only for having an address. A Front
+  Pages row with a `javascript:` address drew like any other: a plain click
+  did nothing, but in WebKit, Safari's engine, a ⌘-, Ctrl-, Shift-, Alt- or
+  middle-click ran it on backchnnl.app. A discussion now links only to an
+  http or https address, and a trending link that is neither is left out.
+  1.6.17.1 drew both.
+
 ## [1.6.17.1] — 2026-10-19
 
 ### Added

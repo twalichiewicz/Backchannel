@@ -8,8 +8,8 @@ fix ships as a new version that existing installs pick up automatically.
 
 | Version    | Supported |
 | ---------- | --------- |
-| 1.6.17.1   | Yes       |
-| < 1.6.17.1 | No        |
+| 1.6.17.4   | Yes       |
+| < 1.6.17.4 | No        |
 
 Your installed version is shown beside the word Settings, at the top of
 Settings.
@@ -65,7 +65,7 @@ Worth stating plainly, because the permissions are broad by necessity:
 
   | Host | When | What it is told |
   | --- | --- | --- |
-  | `old.reddit.com` | only when you press vote or reply | the comment you are acting on, in a popup window you can see. Nothing at page load |
+  | `old.reddit.com` | only when you press vote, reply or submit | the post or comment you are acting on, or the page you submit, in a popup window you can see. Nothing at page load |
   | `cdn.jsdelivr.net` | when your manager fetches the script's declared resources, and again from the page itself if it did not | nothing about you -- it is a file download of a fixed, versioned URL |
   | the page you open in the reader on backchnnl.app | only when that page gives no answer from inside its frame | nothing but the request itself: one `GET` without cookies, to read whether it may be framed, whether it is a picture and, if it may not be framed, its text |
   | the site of each article in the reader's list on backchnnl.app | when the list shows the article, since 1.6.15 | nothing but a request for its icon, `/favicon.ico`, sent without a referrer |
@@ -128,18 +128,22 @@ Worth stating plainly, because the permissions are broad by necessity:
   the page can take your color before the script runs and, since 1.6.17.1,
   show the reader's frame instead of the promotion page while it loads. If the
   reader has not appeared within four seconds, the page deletes that entry
-  itself. Nothing is sent anywhere except the hosts above.
+  itself. Since 1.6.17.2 the script is also granted `GM.deleteValue`,
+  `GM.deleteValues` and `GM.listValues`, which reach only its own stored
+  values. It deletes a value rather than leave an empty one behind, and once
+  a day it lists its values and deletes what it no longer reads: what older
+  versions left behind, Front Pages unused for a week, and when you last
+  visited a discussion, after 90 days. That pass reads only the values it
+  needs to decide, and never deletes your Collection, queue, notes or
+  settings. Nothing is sent anywhere except the hosts above.
 - **It keeps what Hacker News answered about the last pages you looked up**, so
   a page reopened within the hour is not asked about again. Since 1.6.15.2 that
   is one stored value holding thirty pages at most, by address. A page is used
   for an hour and dropped the next time a lookup is saved, so the value can
   still name a page for longer than that if you look nothing up in between.
   Before 1.6.15.2 every page had a stored value of its own, named
-  `HNewhere:hn_cache:` followed by its address, and none was removed. Those are
-  still in your userscript manager's storage: the script is granted no way to
-  list or delete stored values, so it cannot remove them. Clearing the script's
-  stored data in the manager removes them, and your settings and notes with
-  them.
+  `HNewhere:hn_cache:` followed by its address, and none was removed. Since
+  1.6.17.2 the daily pass above deletes them.
 - **The notepad stays on the machine you wrote it on.** Notes live in your
   userscript manager's storage, keyed by page address or, on a PDF, by the
   document's fingerprint. Nothing is uploaded and no source is told they exist.
@@ -160,11 +164,20 @@ Worth stating plainly, because the permissions are broad by necessity:
   that list until 1.6.7; they are read like any other page now, and a PDF on an
   excluded host stays excluded.
 - **Credentials never leave the site they belong to.** Everything that writes --
-  voting, replying, and submitting on Hacker News; voting and replying on Reddit
-  -- happens in a popup window on that site's own domain, using the session your
-  browser already has there. The script never handles either password and never
+  voting, replying, and submitting on Hacker News and on Reddit -- happens in a
+  popup window on that site's own domain, using the session your browser
+  already has there. The script never handles either password and never
   posts a session cookie anywhere. Those two are the only sources with write
   access; the rest are read-only.
+- **A popup acts only on a request the script stored for it.** Before it
+  opens a popup to vote, reply or submit, the script stores what you asked
+  for under a one-time code and puts the code in the popup's address. The
+  popup acts only when it finds a stored request of the same kind under that
+  code, and casts, posts or fills in what was stored, not what the address
+  says. A link to Hacker News or Reddit carrying a code of its own finds
+  nothing and does nothing. A request is used once, and one not used within
+  ten minutes is ignored. Since 1.6.17.3 for votes, and since 1.6.17.4 for
+  replies and submissions.
 - **Comment HTML is sanitized** before being inserted, through an allowlist of
   tags and attributes -- applied to every source. Reddit's rendered markdown
   arrives HTML-escaped and is unescaped only to be handed to the same sanitizer.
@@ -223,9 +236,10 @@ with its address as `<page>`.
 | Hacker News | `GET hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=url&hitsPerPage=20&query=<page>` | `<page>` | No, and no identifier of any kind |
 | Hacker News | `GET hacker-news.firebaseio.com/v0/item/<id>` | story and comment ids it already has | No |
 | Hacker News | `GET news.ycombinator.com/item?id=<id>` | a thread id, to read scores and flags | Yes, if you are signed in there |
+| Hacker News (vote, reply, submit) | popup window on `news.ycombinator.com` | the one story or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
 | Reddit | `GET www.reddit.com/search.json?type=link&limit=25&q=<page>` | `<page>` | Yes when signed in. `reddit_session` is `SameSite=None`, so the browser attaches it cross-site. Signed out it carries `loid`, a device id that lasts over a year |
 | Reddit (fallback) | `GET arctic-shift.photon-reddit.com<path>` | the same lookup, against an archive mirror | No identifier, no session |
-| Reddit (vote, reply) | popup window on `old.reddit.com` | the one comment you acted on, only when you press | Yes, in a window you can see, using the session already in your browser |
+| Reddit (vote, reply, submit) | popup window on `old.reddit.com` | the one post or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
 | Bluesky | `GET constellation.microcosm.blue/links/all?target=<page>` | `<page>`, plus a `User-Agent` naming Backchannel and its version | No |
 | Bluesky | `GET constellation.microcosm.blue/xrpc/blue.microcosm.links.getBacklinks?subject=<page>&source=...&limit=100` | `<page>` | No |
 | Bluesky | `GET public.api.bsky.app/xrpc/app.bsky.feed.getPosts` and `...getPostThread` | post ids Constellation named, never `<page>` | No. Signed in, the cookie jar for `bsky.app` is empty -- it authenticates from local storage, which the browser never attaches |
