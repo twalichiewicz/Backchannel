@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.17.3
+// @version      1.6.17.4
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -9560,6 +9560,22 @@ html[data-backchannel-installed] .chin {
 		return { ...payload, origin: staged.origin, voteURL: staged.voteURL };
 	}
 
+	function bindSubmitStage(payload, staged) {
+		if (staged?.kind !== "submit") {
+			return null;
+		}
+
+		return { ...payload, origin: staged.origin };
+	}
+
+	function bindCommentStage(payload, staged) {
+		if (staged?.kind !== "comment" || staged.storyID !== payload.storyID) {
+			return null;
+		}
+
+		return { ...payload, origin: staged.origin };
+	}
+
 	// #endregion hnewhere-test-export
 
 	async function postBridgeResult(source, payload, result) {
@@ -9903,7 +9919,7 @@ html[data-backchannel-installed] .chin {
 			: null;
 		const bound = action.bindStaged
 			? action.bindStaged(payload, staged)
-			: payload;
+			: null;
 
 		if (!bound) {
 			return false;
@@ -10018,7 +10034,7 @@ html[data-backchannel-installed] .chin {
 			: null;
 		const payload = action.bindStaged
 			? action.bindStaged(stored.payload, staged)
-			: stored.payload;
+			: null;
 
 		if (!payload) {
 			return false;
@@ -24872,6 +24888,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
 				noun: "submission",
 				stagesDraft: true,
+				bindStaged: bindSubmitStage,
 				url: ({ url, title }) => submitURL(url, title),
 				act: actHNSubmit,
 				report: reportHNSubmit,
@@ -24882,6 +24899,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				noun: "comment",
 				stagesDraft: true,
 				requiresDraft: true,
+				bindStaged: bindCommentStage,
 				url: ({ storyID, parentId }) =>
 					parentId ? replyURL({ id: parentId }, storyID) : commentURL(storyID),
 				act: actHNComment,
@@ -25126,6 +25144,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				noun: "comment",
 				stagesDraft: true,
 				requiresDraft: true,
+				bindStaged: bindCommentStage,
 				url: ({ storyID, parentId }) => redditPermalink(storyID, parentId),
 				act: actRedditReply,
 			},
@@ -25134,6 +25153,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
 				noun: "submission",
 				stagesDraft: true,
+				bindStaged: bindSubmitStage,
 				url: ({ url, title, extra }) => redditSubmitURL(url, title, extra),
 				act: actRedditSubmit,
 				report: reportRedditSubmit,
