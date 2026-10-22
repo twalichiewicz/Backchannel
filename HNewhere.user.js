@@ -37162,6 +37162,14 @@ ${frontPageChooserHTML()}
 		}, 400);
 	}
 
+	function storedString(value) {
+		return typeof value === "string" ? value.slice(0, 300) : "";
+	}
+
+	function storedStrings(value) {
+		return Array.isArray(value) ? value.slice(0, 20).map(storedString).filter(Boolean) : [];
+	}
+
 	function readerFromStored(stored, url) {
 		const doc = new DOMParser().parseFromString("", "text/html");
 		const content = doc.createElement("div");
@@ -37175,6 +37183,12 @@ ${frontPageChooserHTML()}
 			site: hostLabel(url),
 			content,
 			chars: (content.textContent || "").replace(/\s+/g, " ").trim().length,
+			authors: storedStrings(stored?.authors),
+			published: storedString(stored?.published),
+			modified: storedString(stored?.modified),
+			dek: storedString(stored?.dek),
+			metaLines: storedStrings(stored?.metaLines),
+			avatar: /^https?:\/\//i.test(storedString(stored?.avatar)) ? storedString(stored.avatar) : "",
 		};
 	}
 
@@ -37241,6 +37255,12 @@ ${frontPageChooserHTML()}
 				byline: reader.byline,
 				html: reader.content.innerHTML,
 				chars: reader.chars,
+				authors: reader.authors,
+				published: reader.published,
+				modified: reader.modified,
+				dek: reader.dek,
+				metaLines: reader.metaLines,
+				avatar: reader.avatar,
 			},
 		});
 		window.close();
@@ -38487,7 +38507,31 @@ ${frontPageChooserHTML()}
 		});
 	}
 
+	const READER_OWN_MARKERS = new Set(
+		"P caption|IMG author|ASIDE author-card|IMG author-photo|DIV author-name|DIV author-role|P author-bio|A author-more".split("|").map((pair) => pair.trim()),
+	);
+
 	function readerElementPlan(element, base) {
+		const tag = element.nodeName.toUpperCase();
+		const marker = element.getAttribute("data-reader") || "";
+		const marked = READER_OWN_MARKERS.has(`${tag} ${marker}`);
+
+		if ((tag === "ASIDE" || tag === "DIV") && marked) {
+			return element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true"
+				? { drop: true }
+				: { attributes: [["data-reader", marker]] };
+		}
+
+		const plan = readerBasePlan(element, base);
+
+		if (marked && plan.attributes) {
+			plan.attributes.push(["data-reader", marker]);
+		}
+
+		return plan;
+	}
+
+	function readerBasePlan(element, base) {
 		const tag = element.nodeName.toUpperCase();
 
 		if (
@@ -38530,10 +38574,6 @@ ${frontPageChooserHTML()}
 
 			if (alt) {
 				attributes.push(["alt", alt]);
-			}
-
-			if (element.getAttribute("data-reader") === "author") {
-				attributes.push(["data-reader", "author"]);
 			}
 
 			return { attributes };
