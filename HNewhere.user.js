@@ -9919,7 +9919,7 @@ html[data-backchannel-installed] .chin {
 			: null;
 		const bound = action.bindStaged
 			? action.bindStaged(payload, staged)
-			: payload;
+			: null;
 
 		if (!bound) {
 			return false;
@@ -10034,7 +10034,7 @@ html[data-backchannel-installed] .chin {
 			: null;
 		const payload = action.bindStaged
 			? action.bindStaged(stored.payload, staged)
-			: stored.payload;
+			: null;
 
 		if (!payload) {
 			return false;
