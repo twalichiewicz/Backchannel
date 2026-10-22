@@ -37375,11 +37375,11 @@ ${frontPageChooserHTML()}
 			return text.slice(0, 40);
 		}
 
-		const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(text);
-		const parsed = new Date(text);
+		const calendar = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+		const parsed = calendar ? new Date(Date.UTC(+calendar[1], +calendar[2] - 1, +calendar[3])) : new Date(text);
 
 		if (text && !Number.isNaN(parsed.getTime())) {
-			return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", ...(dateOnly ? { timeZone: "UTC" } : {}) });
+			return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", ...(calendar ? { timeZone: "UTC" } : {}) });
 		}
 
 		return text.slice(0, 40);
@@ -37398,9 +37398,11 @@ ${frontPageChooserHTML()}
 			return "";
 		}
 
-		return published.toDateString() === modified.toDateString()
+		const day = (value, date) => String(value).match(/^\d{4}-\d{2}-\d{2}/)?.[0] || date.toDateString();
+
+		return day(reader.published, published) === day(reader.modified, modified)
 			? `Updated ${modified.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
-			: `Updated ${modified.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+			: `Updated ${readerDateText(reader.modified)}`;
 	}
 
 	function readerIconImage(image) {
@@ -39628,6 +39630,8 @@ ${frontPageChooserHTML()}
 		return readerWordSet(readerOwnNames(element));
 	}
 
+	const READER_ARTICLE_TYPE = /(?:Article|BlogPosting|Posting|Report|Review)$/;
+
 	function readerDeclared(doc) {
 		const declared = { authors: [], published: "", modified: "", descriptions: [] };
 		const addName = (name) => {
@@ -39647,6 +39651,7 @@ ${frontPageChooserHTML()}
 				.trim();
 
 			if (
+				declared.authors.length < 10 &&
 				value.length >= 3 &&
 				value.length <= 60 &&
 				!/^https?:/i.test(value) &&
@@ -39655,34 +39660,41 @@ ${frontPageChooserHTML()}
 				declared.authors.push(value);
 			}
 		};
-		const walk = (value) => {
-			if (Array.isArray(value)) {
-				value.forEach(walk);
-				return;
+		const nodesOf = (value) =>
+			[value].flat().flatMap((node) => (node && typeof node === "object" ? [node, ...nodesOf(node["@graph"] || [])] : []));
+		const typed = (node, pattern) => [node?.["@type"]].flat().some((type) => pattern.test(String(type)));
+		const isArticle = (node) => typed(node, READER_ARTICLE_TYPE);
+		const read = (node) => {
+			for (const key of ["author", "creator"]) {
+				[node[key]].flat().forEach(addName);
 			}
 
-			if (!value || typeof value !== "object") {
-				return;
+			if (!declared.published && typeof node.datePublished === "string") {
+				declared.published = node.datePublished.trim();
 			}
 
-			for (const [key, inner] of Object.entries(value)) {
-				if (key === "author" || key === "creator") {
-					[inner].flat().forEach(addName);
-				} else if (key === "datePublished" && !declared.published && typeof inner === "string") {
-					declared.published = inner.trim();
-				} else if (key === "dateModified" && !declared.modified && typeof inner === "string") {
-					declared.modified = inner.trim();
-				} else {
-					walk(inner);
-				}
+			if (!declared.modified && typeof node.dateModified === "string") {
+				declared.modified = node.dateModified.trim();
 			}
 		};
+		const nodes = [];
 
 		for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
 			try {
-				walk(JSON.parse(script.textContent));
+				nodes.push(...nodesOf(JSON.parse(script.textContent)));
 			} catch {}
 		}
+
+		const articles = new Set(
+			nodes.flatMap((node) => [node, ...nodesOf([node.mainEntity, node.mainEntityOfPage])].filter((inner) => isArticle(inner))),
+		);
+		const pages = nodes.filter((node) => typed(node, /^WebPage$/));
+
+		(articles.size ? [...articles] : pages.length ? pages : nodes).forEach(read);
+		pages.forEach((node) => {
+			declared.published ||= typeof node.datePublished === "string" ? node.datePublished.trim() : "";
+			declared.modified ||= typeof node.dateModified === "string" ? node.dateModified.trim() : "";
+		});
 
 		const meta = (selector) => (doc.querySelector(selector)?.getAttribute("content") || "").trim();
 
@@ -39887,6 +39899,23 @@ ${frontPageChooserHTML()}
 
 	const READER_DATE_WORDS = /^(?:(?:posted|published|updated|last|written|on|at|by)(?:\s+|$))+$/i;
 
+	const READER_DATE_FILLER = new RegExp(
+		"\\b(?:posted|published|updated|last|on|at|(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?)\\b|\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:am|pm)?|[•·|–—,:-]",
+		"gi",
+	);
+
+	const READER_TIME_ZONES = /\b(?:UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|BST|CET|CEST|IST|JST|AEST|AEDT)\b/g;
+
+	const READER_NAME_PARTICLES = new Set("van von de da del di la le bin al ibn".split(" "));
+
+	function readerNameSpan(rest) {
+		const cuts = [rest.search(READER_NAME_BREAKS), rest.search(READER_DATE_GLUED), rest.search(/\s(?:posted|published|updated)\b/i)].filter(
+			(index) => index >= 0,
+		);
+
+		return cuts.length ? rest.slice(0, Math.min(...cuts)) : rest;
+	}
+
 	function readerBylineName(text) {
 		const line = readerSquash(text);
 		const found = line.length <= 120 ? line.match(READER_BYLINE) : null;
@@ -39895,17 +39924,17 @@ ${frontPageChooserHTML()}
 			return "";
 		}
 
-		let rest = found[1];
-		const cuts = [rest.search(READER_NAME_BREAKS), rest.search(READER_DATE_GLUED)].filter((index) => index >= 0);
-
-		if (cuts.length) {
-			rest = rest.slice(0, Math.min(...cuts));
-		}
-
+		const rest = readerNameSpan(found[1]);
 		const name = readerSquash(rest).replace(/[.:;]+$/, "");
 		const words = name.split(" ");
+		const person = !/[!?]|\p{Ll}[.!?](?:\s|$)/u.test(rest) && words.every((word) => READER_NAME_PARTICLES.has(word) || /^\p{Lu}[\p{L}\p{M}'\u2019.-]*$/u.test(word));
 
-		return words.length >= 2 && words.length <= 5 && /^\p{Lu}/u.test(name) && !READER_DATE_WORDS.test(name) ? name : "";
+		return words.length >= 2 &&
+			words.length <= 5 &&
+			person &&
+			!READER_DATE_WORDS.test(name)
+			? name
+			: "";
 	}
 
 	function readerIsAuthorBio(text, declared) {
@@ -39942,10 +39971,8 @@ ${frontPageChooserHTML()}
 
 		const rest = line
 			.replace(new RegExp(READER_DATE.source, "gi"), "")
-			.replace(
-				/\b(?:posted|published|updated|last|on|at|mon|tue|wed|thu|fri|sat|sun)\w*\b|\d{1,2}:\d{2}\s*(?:am|pm)?|\b[a-z]{1,2}[sd]t\b|\butc\b|\bgmt\b|[•·|–—,:-]/gi,
-				"",
-			);
+			.replace(READER_TIME_ZONES, "")
+			.replace(READER_DATE_FILLER, "");
 
 		return readerSquash(rest).length <= 3;
 	}
@@ -40015,13 +40042,18 @@ ${frontPageChooserHTML()}
 		);
 
 		for (const block of blocks) {
-			if (!content.contains(block) || roles.get(block)?.has("author") || block.getAttribute("data-reader") === "caption") {
+			if (
+				!content.contains(block) ||
+				roles.get(block)?.has("author") ||
+				block.getAttribute("data-reader") === "caption" ||
+				block.closest("figure, figcaption")
+			) {
 				continue;
 			}
 
 			const text = readerSquash(block.textContent);
 
-			const name = readerBylineName(text);
+			const name = /^H[1-6]$/.test(block.nodeName) ? "" : readerBylineName(text);
 			const own = declared.authors.concat(lead.author || taken.author || []).map((other) => readerKey(other));
 
 			if (roles.get(block)?.has("kicker") && text.length <= 40) {
@@ -40111,7 +40143,7 @@ ${frontPageChooserHTML()}
 			if (strong || label(line)) {
 				marked.add(block);
 
-				if (!strong && first && last && !lead && !tail) {
+				if (first && last && !lead && !tail && (/^H[1-6]$/.test(block.nodeName) || label(line))) {
 					conditional.add(block);
 				}
 			}
@@ -40560,7 +40592,8 @@ ${frontPageChooserHTML()}
 				const glued = dated.match(READER_DATE_GLUED);
 
 				const named = lines.map(readerBylineName).find(Boolean);
-				const guess = readerSquash(plain ?? (glued ? dated.slice(0, glued.index) : "")).replace(/^by\s+/i, "");
+				const span = readerNameSpan(readerSquash(plain ?? (glued ? dated.slice(0, glued.index) : "")).replace(/^by\s+/i, ""));
+				const guess = /[!?]|\p{Ll}[.!?](?:\s|$)/u.test(span) ? "" : readerSquash(span).replace(/[.:;]+$/, "");
 
 				taken.date = glued?.[0] || "";
 				taken.author = named || (READER_DATE_WORDS.test(guess) ? "" : guess);
