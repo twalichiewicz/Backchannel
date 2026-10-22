@@ -61,7 +61,7 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Hypothes.is | `api.hypothes.is` | the URL of each page you visit, to find public annotations on it. No account, signed in or out |
   | *no source enabled* | none | nothing -- the script performs no lookup at all. Kind of weird to use it this way, but no judgements. |
 
-  Nine sit outside that table because they are not lookups:
+  Ten sit outside that table because they are not lookups:
 
   | Host | When | What it is told |
   | --- | --- | --- |
@@ -74,6 +74,7 @@ Worth stating plainly, because the permissions are broad by necessity:
   | wherever a page in your Collection says its picture and icon are | when the Collection shows its card, in the reader or in the Sidebar, since 1.6.17 | nothing but the requests for the images, sent without a referrer |
   | wherever an image in a comment is hosted | only with *Show images in comments* on, and it is off until you turn it on | nothing but the request for the image, over https and without a referrer |
   | the page you ask the reader to scrape | only when you press *Scrape link content* | what any visit tells it: the page opens in a tab of your own browser, signed in if you are |
+  | `api.github.com` | once a day while *Check for new versions automatically* is on, and when you press *Check for updates*, since 1.6.18 | nothing but the request itself: one `GET` without cookies for Backchannel's list of releases |
 
 - **It checks the pages in your Collection for new discussion.** Since 1.6.17
   every page you save is watched until you choose *Unwatch* in its card's
@@ -114,16 +115,20 @@ Worth stating plainly, because the permissions are broad by necessity:
   the script is allowed but does not exercise. Since 1.6.14 it also lists `*`,
   for the reader's one fetch of a page that will not answer from its frame.
   Tampermonkey may ask before the first such request to a host outside the
-  named list.
+  named list. Since 1.6.18 it also names `api.github.com`, for the check for a
+  new version.
 - **It stores data locally** through `GM.getValue` / `GM.setValue` -- settings,
   per-site Sidebar widths, the zoom level of the last forty sites you visited,
   button position, collapsed threads, seen-comment timestamps, remembered votes
   and your Collection, with each saved page's picture, colors and icon, your
-  reading queue, the sites you have hidden, and anything you write in the
-  notepad. An article you ask the reader to scrape passes through
-  the same storage on its way from its tab: the reader removes it once it is
-  shown, and if the reader has gone by then it stays until the next scrape
-  replaces it. On backchnnl.app it also keeps your theme and the reader's two
+  reading queue, the sites you have hidden, the page color and font you pick
+  for read-outs (since 1.6.18), when Backchannel last checked for a new version
+  and the notes of any newer ones (since 1.6.18), and anything you write in the
+  notepad. An
+  article you ask the reader to scrape passes through the same storage on its
+  way from its tab: the reader removes it once it is shown, and if the reader
+  has gone by then it stays until the next scrape replaces it. On
+  backchnnl.app it also keeps your theme and the reader's two
   page colors in that site's own local storage, under `backchannel:chrome`, so
   the page can take your color before the script runs and, since 1.6.17.1,
   show the reader's frame instead of the promotion page while it loads. If the
@@ -274,6 +279,7 @@ with its address as `<page>`.
 | Collection, not a source | `GET <a saved page's picture>` and `GET <its icon>`, as images, when the Collection shows its card | nothing but the request itself, with no referrer | The same: whatever cookies your browser sends with an image on another site's page |
 | Images in comments, not a source | `GET <the image>`, for each https image in the comments shown, only with *Show images in comments* on | nothing but the request itself, with no referrer | The same: whatever cookies your browser sends with an image on another site's page |
 | Scrape link content, not a source | a tab on `<the page you asked for>`, only when you press the button | what any visit to that page carries | Yes. It is your browser opening the page, with the session you have there |
+| Update check, not a source | `GET api.github.com/repos/twalichiewicz/Backchannel/releases?per_page=30`, once a day while *Check for new versions automatically* is on, and when you press *Check for updates* | nothing but the request itself | No, it is sent without cookies |
 | pdf.js, not a source | `GET cdn.jsdelivr.net/npm/pdfjs-dist@<version>/legacy/build/pdf.min.mjs` and `pdf.worker.min.mjs` | nothing about you, two fixed files at a pinned version | No |
 | no source enabled | none | nothing, no lookup is performed at all | -- |
 

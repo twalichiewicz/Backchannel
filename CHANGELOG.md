@@ -8,6 +8,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.18] — 2026-10-22
+
+### Added
+
+- **A read-out looks like a page.** When a site will not open in the reader's
+  frame, the reader shows its article instead, and that article sat straight
+  on the pane's color in plain type. It now fills the pane with a page color,
+  in a narrower column, under a header: the site, the title, the subtitle, and
+  a line with the author, the date and the read time, with the author's photo
+  when the page gives one.
+
+- **The Aa menu chooses a read-out's theme and font family.** Auto follows
+  the reader's appearance, Paper in light and Night in dark; Paper, White,
+  Sepia, Gray and Night stay as chosen. The fonts are Charter, New York,
+  Georgia and System; the first three are offered only when your device has
+  them. The choice applies at once and is kept. Framed pages keep their own
+  look. The menu, now headed Style (its button's tip reads Style settings), is
+  set like Settings › Appearance: the chosen theme is named under its swatch,
+  the chosen font is checked on the left, and the size control is now called
+  Font size. On a phone, a read-out has the Aa button at the top of its stack,
+  and Font size applies to its text there. In the stack, the Aa's letters are
+  as bold as the icons under them.
+
+- **Backchannel tells you when a new version is out.** Once a day it asks
+  GitHub for its list of releases. While yours is older, a dot sits on the
+  Sidebar toggle and on the settings button, and in a window wider than a
+  phone, a tip says so the first time the Sidebar or the reader opens after a
+  release. Settings › General › Updates shows the notes of every version you
+  don't have, with Update and Check for updates. Update opens the newest
+  script, which Tampermonkey, Violentmonkey and Greasemonkey offer to install;
+  in Safari it opens the release page, since the Userscripts extension updates
+  from its own menu. Turn off *Check for new versions automatically* to stop
+  the daily check.
+
+### Fixed
+
+- **A read-out keeps the article and drops the page around it.** Related and
+  "More Stories" lists, tag and topic rows, share, ad, newsletter and
+  subscribe blocks, comment counts and icons, affiliate notices, "Back to"
+  links, breadcrumbs, photo licensing lines, audio time codes, kickers and
+  repeated pictures no longer show as article text. Inside the article, a
+  section under a heading such as "Related" goes only when it is mostly links.
+
+- **Bylines move into the header.** Author lines, lists of authors, oversized
+  profile photos, "Published", "Updated" and "Reviewed by" lines and date lines
+  above the article no longer sit in its text. The header names each author
+  once and shows the date, read from what the page says about its article.
+
+- **An author box after the article reads as one card**: the photo beside the
+  name, the job title in small type under it, then the bio. A box the page
+  prints twice shows once.
+
+- **Captions are set as captions**, in small type under their picture,
+  credit lines included. A caption the page repeats shows once, and a video
+  shows its still image.
+
+- **Paragraphs come out the way the page shows them.** Text loose in a
+  wrapper no longer runs into the block after it, a date no longer runs into
+  the words beside it, and a page whose first heading is the site's name is
+  titled with its article's heading.
+
+- **A read-out no longer loses its article to a class name.** A box that
+  holds most of the article stays even when its class names a paywall, a
+  sidebar or a share bar, and layout classes such as
+  `toc-visible:md:grid-cols-10` no longer count as names, so pages built
+  that way read in full.
+
+- **More of a page's pictures and credits come through.** Photos marked up
+  as AMP images show, a photo at the top with a short credit is no longer
+  taken for a label, and a placeholder is passed over for the real image. A
+  caption that shares a box with its photo stays a caption, a line under a
+  photo that ends in its credit reads as the caption, and a credit such as
+  "(Image: Getty Images)" stays on one line.
+
+- **A byline that links to the writer's page puts the writer in the
+  header**, even when the page names no author anywhere else.
+
+- **What a page lets screen readers skip is left out**, such as a newsletter
+  sign-up with its "skip past" link, and a headline that repeats the title
+  with a word or two changed shows once.
+
+- **Forums and pages without an article box read in full.** The reader now
+  picks the part of a page to read by scoring the usual article containers,
+  as the [Defuddle](https://github.com/kepano/defuddle) library does, and
+  reads the whole page when none of them stands out, so service pages and
+  threads built from many sections no longer come through as one fragment.
+  Discourse forums, which send their threads inside a `noscript` block, read
+  too, and a read-out that comes up very short is read again without removing
+  boxes for their class names.
+
+- **Author blurbs, sign-in walls, recommendation cards and subject lists are
+  left out**, using Defuddle's lists of the names pages give them, so an
+  article such as Nature's reads on its own. The header's photo, date and
+  byline, an author box after the article, a link inside a sentence, and text
+  without links further down the article stay. An author line a page keeps in
+  its footer now reaches the header.
+
+- **A link's unread marker in the lists sits at the top right** of its
+  thumbnail, like every other badge in the reader. It was at the top left.
+
 ## [1.6.17.4] — 2026-10-22
 
 ### Security
