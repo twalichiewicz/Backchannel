@@ -38528,6 +38528,71 @@ ${frontPageChooserHTML()}
 		return { attributes: [] };
 	}
 
+	function readerWrapLooseInline(content, doc) {
+		let run = [];
+
+		const flush = (before) => {
+			if (!run.length) {
+				return;
+			}
+
+			const loose = run;
+
+			run = [];
+
+			if (!loose.some((node) => node.nodeType === Node.ELEMENT_NODE || node.nodeValue.trim())) {
+				return;
+			}
+
+			const paragraph = doc.createElement("p");
+
+			loose[0].before(paragraph);
+			paragraph.append(...loose);
+		};
+
+		for (const child of [...content.childNodes]) {
+			const loose =
+				child.nodeType === Node.TEXT_NODE ||
+				(child.nodeType === Node.ELEMENT_NODE && !READER_BLOCK_TAGS.has(child.nodeName.toUpperCase()));
+
+			if (loose) {
+				run.push(child);
+			} else {
+				flush();
+			}
+		}
+
+		flush();
+	}
+
+	function readerPrepareSource(doc) {
+		for (const marked of doc.querySelectorAll("[data-reader]")) {
+			marked.removeAttribute("data-reader");
+		}
+
+		for (const video of doc.querySelectorAll("video[poster]")) {
+			const poster = (video.getAttribute("poster") || "").trim();
+
+			if (poster) {
+				const image = doc.createElement("img");
+
+				image.setAttribute("src", poster);
+				image.setAttribute("alt", "");
+				video.replaceWith(image);
+			}
+		}
+
+		for (const element of doc.querySelectorAll("span, i, b, em, strong, div")) {
+			if (
+				element.isConnected &&
+				!(element.textContent || "").trim() &&
+				!element.querySelector("img, picture, svg, video, iframe, canvas, br, hr, input")
+			) {
+				element.replaceWith(doc.createTextNode(" "));
+			}
+		}
+	}
+
 	function cleanReaderTree(node, base, inert) {
 		for (const child of [...node.childNodes]) {
 			if (child.nodeType === Node.COMMENT_NODE) {
@@ -38547,15 +38612,18 @@ ${frontPageChooserHTML()}
 			}
 
 			if (plan.unwrap || plan.paragraph) {
-				const holder = plan.paragraph
-					? inert.createElement("p")
-					: inert.createDocumentFragment();
+				const holder = inert.createDocumentFragment();
 
 				while (child.firstChild) {
 					holder.appendChild(child.firstChild);
 				}
 
 				cleanReaderTree(holder, base, inert);
+
+				if (plan.paragraph) {
+					readerWrapLooseInline(holder, inert);
+				}
+
 				child.replaceWith(holder);
 				continue;
 			}
@@ -38661,11 +38729,23 @@ ${frontPageChooserHTML()}
 		return title;
 	}
 
+	function readerHeadingTitle(doc) {
+		const headings = [...doc.querySelectorAll("h1")];
+		const named = readerKey(doc.title);
+		const fits = (heading) => {
+			const key = readerKey(heading?.textContent);
+
+			return Boolean(key) && named.includes(key);
+		};
+
+		return (fits(headings[0]) ? headings[0] : headings.find(fits) || headings[0])?.textContent;
+	}
+
 	function readerTitle(doc, url) {
 		for (const candidate of [
 			doc.querySelector('meta[property="og:title"]')?.getAttribute("content"),
 			doc.querySelector('meta[name="twitter:title"]')?.getAttribute("content"),
-			doc.querySelector("h1")?.textContent,
+			readerHeadingTitle(doc),
 			doc.title,
 		]) {
 			const title = String(candidate || "").trim().replace(/\s+/g, " ");
@@ -38875,6 +38955,8 @@ ${frontPageChooserHTML()}
 			junk.remove();
 		}
 
+		readerPrepareSource(doc);
+
 		const title = readerTitle(doc, url);
 		const root = readerRoot(doc);
 
@@ -38889,6 +38971,13 @@ ${frontPageChooserHTML()}
 
 		content.append(...root.childNodes);
 		cleanReaderTree(content, url, doc);
+		readerWrapLooseInline(content, doc);
+
+		for (const figure of [...content.querySelectorAll("figure")]) {
+			if (figure.querySelector("figcaption") && !figure.querySelector("img, pre, table")) {
+				figure.remove();
+			}
+		}
 
 		const firstProse = tidyReaderContent(content);
 
