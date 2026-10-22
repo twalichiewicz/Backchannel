@@ -8365,6 +8365,7 @@ button {
 
 		if (host.hasAttribute("data-hnewhere-app")) {
 			document.documentElement.toggleAttribute("data-backchannel-dark", dark);
+			paintReaderLook(host);
 		}
 
 		const properties = {
@@ -30663,6 +30664,17 @@ ${APP_ICON_CSS}
 		overflow:visible;
 	}
 
+	#app-article:has(#app-article-body[data-mode="reader"]) > .app-pane-head::before {
+		content:"";
+		position:absolute;
+		top:0;
+		right:0;
+		left:0;
+		height:52px;
+		background:linear-gradient(var(--reader-page) 55%, transparent);
+		pointer-events:none;
+	}
+
 	.app-pane-middle {
 		position:absolute;
 		top:5.5px;
@@ -31134,7 +31146,7 @@ ${SETTINGS_MODAL_CSS}
 	inset:0;
 	overflow:auto;
 	overscroll-behavior:contain;
-	background:var(--article-bg);
+	background:var(--reader-page, var(--article-bg));
 }
 
 .app-article-image {
@@ -32814,43 +32826,97 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	display:block;
 	position:relative;
 	box-sizing:border-box;
-	max-width:44em;
+	max-width:34em;
 	margin:0 auto;
-	padding:28px 28px 72px;
-	color:var(--text);
-	font:16px/1.62 Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+	padding:60px 28px 96px;
+	color:var(--reader-ink);
+	font:16px/1.62 var(--reader-face);
 	font-size:calc(16px * var(--app-zoom, 1));
 	overflow-wrap:break-word;
 	-webkit-text-size-adjust:100%;
 }
 
-.bc-reader-head {
-	margin:0 0 24px;
+.bc-reader[data-face="system"] {
+	line-height:1.55;
 }
 
-.bc-reader-site,
-.bc-reader-byline {
-	color:var(--meta);
-	font:11px/1.5 Verdana, Geneva, sans-serif;
+.bc-reader-head {
+	margin:0 0 26px;
+	padding:0 0 18px;
+	border-bottom:1px solid var(--reader-rule);
+}
+
+.bc-reader-site {
+	color:var(--reader-meta);
+	font:500 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	letter-spacing:.02em;
 }
 
 .bc-reader-title {
-	margin:6px 0 4px;
-	color:var(--text);
-	font:700 30px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	margin:6px 0 0;
+	color:var(--reader-ink);
+	font:700 1.95em/1.16 var(--reader-face);
+	letter-spacing:-.012em;
 }
 
-.bc-reader-body h1,
-.bc-reader-body h2,
-.bc-reader-body h3,
-.bc-reader-body h4 {
-	margin:1.6em 0 .5em;
+.bc-reader-dek {
+	margin:.45em 0 0;
+	color:color-mix(in srgb, var(--reader-ink) 72%, var(--reader-page));
+	font-size:1.12em;
+	line-height:1.42;
+}
+
+.bc-reader-byline {
+	margin:16px 0 0;
+	color:var(--reader-meta);
+	font:13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.bc-reader-byline img {
+	width:26px;
+	height:26px;
+	margin:0 8px 0 0;
+	border-radius:50%;
+	object-fit:cover;
+	vertical-align:middle;
+}
+
+.bc-reader-byline b {
+	color:var(--reader-ink);
+	font-weight:600;
+}
+
+.bc-reader-meta {
+	margin:4px 0 0;
+	color:var(--reader-meta);
+	font:12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.bc-reader-body > :first-child {
+	margin-top:0;
+}
+
+.bc-reader-body p {
+	margin:0 0 1.05em;
+}
+
+.bc-reader-body :is(h1, h2, h3, h4, h5, h6) {
+	margin:1.7em 0 .5em;
+	font-family:var(--reader-face);
 	line-height:1.25;
-	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	letter-spacing:-.005em;
 }
 
-.bc-reader a {
-	color:var(--link);
+.bc-reader-body :is(h1, h2) {
+	font-size:1.32em;
+}
+
+.bc-reader-body h3 {
+	font-size:1.14em;
+}
+
+.bc-reader-body :is(h4, h5, h6) {
+	font-size:1em;
 }
 
 .bc-reader-body :is(h1, h2, h3, h4, h5, h6) a {
@@ -32858,64 +32924,219 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	text-decoration:none;
 }
 
-.bc-reader img {
+.bc-reader-body a {
+	color:inherit;
+	text-decoration:underline;
+	text-decoration-color:color-mix(in srgb, var(--reader-link) 55%, transparent);
+	text-decoration-thickness:1px;
+	text-underline-offset:.18em;
+}
+
+.bc-reader-body a:hover {
+	color:var(--reader-link);
+	text-decoration-color:var(--reader-link);
+}
+
+.bc-reader-body :is(ul, ol) {
+	margin:0 0 1.05em;
+	padding-left:1.35em;
+}
+
+.bc-reader-body li {
+	margin:.3em 0;
+}
+
+.bc-reader-body li > p {
+	margin:0;
+}
+
+.bc-reader-body li::marker {
+	color:var(--reader-meta);
+}
+
+.bc-reader-body img {
 	display:block;
 	max-width:100%;
 	height:auto;
-	margin:1em auto;
+	margin:1.4em auto;
+	border-radius:3px;
 }
 
-.bc-reader figure {
-	margin:1.5em 0;
+.bc-reader-body img.is-inline {
+	display:inline-block;
+	margin:0 2px;
+	vertical-align:middle;
+	border-radius:0;
 }
 
-.bc-reader figcaption {
-	color:var(--meta);
-	font-size:14px;
+.bc-reader-body figure {
+	margin:1.6em 0;
+}
+
+.bc-reader-body figure img {
+	margin:0 auto;
+}
+
+.bc-reader-body figcaption,
+.bc-reader-body p[data-reader="caption"] {
+	color:var(--reader-meta);
+	font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	text-align:center;
 }
 
-.bc-reader blockquote {
-	margin:1.2em 0;
-	padding-left:1em;
-	border-left:3px solid var(--border);
-	color:var(--quote-text);
+.bc-reader-body figcaption {
+	margin-top:.6em;
 }
 
-.bc-reader pre {
-	overflow:auto;
+.bc-reader-body p[data-reader="caption"] {
+	margin:-.6em 0 1.4em;
+}
+
+.bc-reader-body blockquote {
+	margin:1.3em 0;
+	padding:0 0 0 1em;
+	border-left:3px solid var(--reader-rule);
+	color:color-mix(in srgb, var(--reader-ink) 80%, var(--reader-page));
+}
+
+.bc-reader-body pre {
+	margin:1.3em 0;
 	padding:12px 14px;
+	overflow:auto;
 	border-radius:6px;
-	background:var(--code-bg);
-	font-size:14px;
-	line-height:1.45;
+	background:var(--reader-code);
+	font:13.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.bc-reader code,
-.bc-reader kbd,
-.bc-reader samp {
+.bc-reader-body :not(pre) > code {
+	padding:.08em .3em;
+	border-radius:3px;
+	background:var(--reader-code);
+	font:.84em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.bc-reader-body :is(kbd, samp) {
 	font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 	font-size:.86em;
 }
 
-.bc-reader table {
+.bc-reader-body table {
 	display:block;
 	max-width:100%;
+	margin:1.3em 0;
 	overflow-x:auto;
 	border-collapse:collapse;
-	font-size:15px;
+	font:14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-.bc-reader th,
-.bc-reader td {
-	padding:4px 8px;
-	border:1px solid var(--border-soft);
+.bc-reader-body :is(th, td) {
+	padding:6px 10px;
+	border-bottom:1px solid var(--reader-rule);
+	text-align:left;
+	vertical-align:top;
 }
 
-.bc-reader hr {
-	margin:2em 0;
+.bc-reader-body th {
+	font-weight:600;
+}
+
+.bc-reader-body hr {
+	width:64px;
+	margin:2.2em auto;
 	border:0;
-	border-top:1px solid var(--border);
+	border-top:1px solid var(--reader-rule);
+}
+
+.bc-reader-body :is(sup, sub) {
+	line-height:0;
+}
+
+.bc-reader-body mark {
+	background:var(--reader-mark);
+	color:inherit;
+}
+
+.bc-reader-body img[data-reader="author"] {
+	display:inline-block;
+	width:24px;
+	height:24px;
+	margin:0 6px 0 0;
+	border-radius:50%;
+	object-fit:cover;
+	vertical-align:middle;
+}
+
+.bc-reader-body aside[data-reader="author-card"] {
+	display:grid;
+	grid-template-columns:48px 1fr;
+	column-gap:14px;
+	align-items:start;
+	margin:2.4em 0 0;
+	padding:20px 0 0;
+	border-top:1px solid var(--reader-rule);
+	color:var(--reader-ink);
+	font:14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.bc-reader-body aside[data-reader="author-card"] > :not(img) {
+	grid-column:2;
+}
+
+.bc-reader-body aside[data-reader="author-card"]:not(:has(> img)) {
+	grid-template-columns:1fr;
+}
+
+.bc-reader-body aside[data-reader="author-card"]:not(:has(> img)) > * {
+	grid-column:1;
+}
+
+.bc-reader-body img[data-reader="author-photo"] {
+	display:block;
+	grid-column:1;
+	grid-row:1 / span 20;
+	width:48px;
+	height:48px;
+	margin:2px 0 0;
+	border-radius:50%;
+	object-fit:cover;
+}
+
+.bc-reader-body [data-reader="author-name"] {
+	font-size:15px;
+	font-weight:600;
+	line-height:1.3;
+}
+
+.bc-reader-body [data-reader="author-role"] {
+	margin-top:1px;
+	color:var(--reader-meta);
+	font-size:13px;
+	line-height:1.35;
+}
+
+.bc-reader-body p[data-reader="author-bio"] {
+	margin:8px 0 0;
+	color:color-mix(in srgb, var(--reader-ink) 82%, var(--reader-page));
+}
+
+.bc-reader-body a[data-reader="author-more"] {
+	display:inline-block;
+	justify-self:start;
+	margin-top:8px;
+	color:var(--reader-meta);
+	font-size:13px;
+}
+
+.bc-reader-body::after {
+	content:"";
+	display:block;
+	clear:both;
+}
+
+@media (max-width: 700px) {
+	.bc-reader {
+		padding-top:24px;
+	}
 }
 `;
 
@@ -36902,6 +37123,90 @@ ${frontPageChooserHTML()}
 		return appState?.ui.shadow.querySelector(".app-reader-scroll") || null;
 	}
 
+	const READER_PAGES = {
+		paper: { page: "#f6f6ef", ink: "#1f1f1c", meta: "#77776f", rule: "#dcdcd2", link: "#1d5e37", code: "#ecece2", mark: "rgba(242, 207, 91, .45)" },
+		white: { page: "#ffffff", ink: "#1b1b1b", meta: "#6e6e6e", rule: "#e4e4e4", link: "#1d5e37", code: "#f3f3f1", mark: "rgba(242, 207, 91, .45)" },
+		sepia: { page: "#f4ecd8", ink: "#3b2e1e", meta: "#8a7558", rule: "#e0d3b4", link: "#7b4a12", code: "#ebe0c6", mark: "rgba(242, 207, 91, .45)" },
+		gray: { page: "#4a4a4c", ink: "#e8e8e8", meta: "#b4b4b4", rule: "#616164", link: "#a8d5b8", code: "#3c3c3e", mark: "rgba(242, 207, 91, .3)" },
+		night: { page: "#121212", ink: "#d8d8d8", meta: "#8e8e8e", rule: "#2c2c2c", link: "#8fc9a5", code: "#1e1e1e", mark: "rgba(242, 207, 91, .25)" },
+	};
+
+	const READER_FONTS = {
+		charter: 'Charter, "Bitstream Charter", "Sitka Text", Cambria, serif',
+		newyork: 'ui-serif, "New York", "Iowan Old Style", Georgia, serif',
+		georgia: "Georgia, serif",
+		system: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+	};
+
+	function paintReaderLook(host = sidebar) {
+		if (!host) {
+			return;
+		}
+
+		const choice = "auto";
+		const face = "charter";
+		const name = choice in READER_PAGES ? choice : host.classList.contains(DARK_CLASS) ? "night" : "paper";
+		const look = READER_PAGES[name];
+
+		for (const token of Object.keys(look)) {
+			host.style.setProperty(`--reader-${token}`, look[token]);
+		}
+
+		host.style.setProperty("--reader-face", READER_FONTS[face] || READER_FONTS.charter);
+		appReaderElement()?.setAttribute("data-face", face);
+	}
+
+	function readerDateText(value) {
+		const text = String(value || "").trim();
+
+		if (/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(text)) {
+			return text.slice(0, 40);
+		}
+
+		const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(text);
+		const parsed = new Date(text);
+
+		if (text && !Number.isNaN(parsed.getTime())) {
+			return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", ...(dateOnly ? { timeZone: "UTC" } : {}) });
+		}
+
+		return text.slice(0, 40);
+	}
+
+	function readerUpdatedText(reader) {
+		const published = new Date(reader.published);
+		const modified = new Date(reader.modified);
+
+		if (
+			Number.isNaN(published.getTime()) ||
+			Number.isNaN(modified.getTime()) ||
+			modified.getTime() - published.getTime() < 3600000 ||
+			(reader.metaLines || []).some((line) => /updated/i.test(line))
+		) {
+			return "";
+		}
+
+		return published.toDateString() === modified.toDateString()
+			? `Updated ${modified.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
+			: `Updated ${modified.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+	}
+
+	function readerIconImage(image) {
+		let name = "";
+
+		try {
+			const url = new URL(image.currentSrc || image.src);
+			const inner = url.searchParams.get("url");
+			const path = inner ? decodeURIComponent(inner).split(/[?#]/)[0] : url.pathname;
+
+			name = decodeURIComponent(path.split("/").filter(Boolean).pop() || "");
+		} catch {
+			return false;
+		}
+
+		return /icon/i.test(name) && image.naturalWidth <= 128;
+	}
+
 	function ensureReaderStyles() {
 		if (document.getElementById("backchannel-reader-style")) {
 			return;
@@ -36959,12 +37264,57 @@ ${frontPageChooserHTML()}
 		title.textContent = reader.title;
 		head.append(site, title);
 
-		if (reader.byline) {
-			const byline = document.createElement("div");
+		const authors = (reader.authors || []).length ? reader.authors : reader.byline ? [reader.byline] : [];
+		const words = (body.textContent || "").split(/\s+/).filter(Boolean).length;
+		const parts = [];
+		const byline = document.createElement("div");
+		const avatar = authors.length ? readerURL(reader.avatar)?.href : "";
 
-			byline.className = "bc-reader-byline";
-			byline.textContent = reader.byline;
-			head.append(byline);
+		byline.className = "bc-reader-byline";
+
+		if (avatar) {
+			const photo = document.createElement("img");
+
+			photo.alt = "";
+			photo.referrerPolicy = "no-referrer";
+			photo.src = avatar;
+			byline.append(photo);
+		}
+
+		if (authors.length) {
+			const names = document.createElement("b");
+
+			names.textContent = authors.join(", ");
+			parts.push(names);
+		}
+
+		if (readerDateText(reader.published)) {
+			parts.push(readerDateText(reader.published));
+		}
+
+		parts.push(`${Math.max(1, Math.round(words / 230))} min read`);
+		parts.forEach((part, index) => {
+			byline.append(index ? " · " : "", part);
+		});
+
+		if (reader.dek) {
+			const dek = document.createElement("p");
+
+			dek.className = "bc-reader-dek";
+			dek.textContent = reader.dek;
+			head.append(dek);
+		}
+
+		head.append(byline);
+
+		const meta = [...(reader.metaLines || []), readerUpdatedText(reader)].filter(Boolean).join(" · ");
+
+		if (meta) {
+			const line = document.createElement("div");
+
+			line.className = "bc-reader-meta";
+			line.textContent = meta;
+			head.append(line);
 		}
 
 		body.className = "bc-reader-body";
@@ -36972,8 +37322,14 @@ ${frontPageChooserHTML()}
 		for (const image of body.querySelectorAll("img")) {
 			image.addEventListener("error", () => dropReaderImage(image, body));
 			image.addEventListener("load", () => {
-				if (image.naturalWidth <= 48 && image.naturalHeight <= 48) {
+				if (image.hasAttribute("data-reader")) {
+					return;
+				}
+
+				if ((image.naturalWidth <= 48 && image.naturalHeight <= 48) || readerIconImage(image)) {
 					dropReaderImage(image, body);
+				} else if (image.naturalHeight <= 40 && image.naturalWidth <= 240) {
+					image.classList.add("is-inline");
 				}
 			});
 		}
@@ -36999,6 +37355,7 @@ ${frontPageChooserHTML()}
 
 		appReaderElement()?.remove();
 		sidebar.appendChild(element);
+		paintReaderLook();
 
 		const scroller = document.createElement("div");
 
@@ -37188,7 +37545,7 @@ ${frontPageChooserHTML()}
 			modified: storedString(stored?.modified),
 			dek: storedString(stored?.dek),
 			metaLines: storedStrings(stored?.metaLines),
-			avatar: /^https?:\/\//i.test(storedString(stored?.avatar)) ? storedString(stored.avatar) : "",
+			avatar: readerURL(storedString(stored?.avatar))?.href || "",
 		};
 	}
 
