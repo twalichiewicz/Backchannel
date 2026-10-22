@@ -39448,6 +39448,171 @@ ${frontPageChooserHTML()}
 		}
 	}
 
+	function readerTakeAuthorCards(content, roles, declared, last) {
+		if (!last || !declared.authors.length) {
+			return;
+		}
+
+		const text = (element) => readerSquash(element.textContent);
+		const lowNames = declared.authors.map((name) => name.toLowerCase());
+		const names = (element) => lowNames.some((name) => text(element).toLowerCase().includes(name));
+		const leaves = [...content.querySelectorAll(`${READER_BLOCK_SELECTOR}, img, a`)].filter((element) => {
+			if (element !== last && !(last.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+				return false;
+			}
+
+			if (element.nodeName === "IMG") {
+				return true;
+			}
+
+			if (element.nodeName === "A") {
+				return !element.closest(READER_BLOCK_SELECTOR) && Boolean(text(element));
+			}
+
+			return !element.querySelector(READER_BLOCK_SELECTOR) && Boolean(text(element));
+		});
+		const marked = (element) => {
+			for (let up = element; up && up !== content; up = up.parentElement) {
+				if (roles.get(up)?.has("author") || up.getAttribute("data-reader") === "author") {
+					return true;
+				}
+			}
+
+			return element.nodeName !== "IMG" && text(element).length <= 80 && names(element);
+		};
+		const linkOnly = (element) =>
+			element.nodeName === "A" ||
+			(Boolean(element.querySelector("a")) &&
+				text(element) === readerSquash([...element.querySelectorAll("a")].map((link) => link.textContent).join(" ")));
+		const sentence = (element) => /[.!?”"]$/.test(text(element));
+		const seenBios = new Set();
+		let at = 0;
+
+		while (at < leaves.length) {
+			if (!marked(leaves[at])) {
+				at += 1;
+				continue;
+			}
+
+			const region = [leaves[at]];
+			let next = at + 1;
+
+			while (next < leaves.length) {
+				const element = leaves[next];
+				const between = text(element).length <= 40 && !sentence(element) && leaves[next + 1] && marked(leaves[next + 1]);
+
+				if (!(marked(element) || between || (linkOnly(element) && text(element).length <= 60))) {
+					break;
+				}
+
+				region.push(element);
+				next += 1;
+			}
+
+			at = next;
+
+			const all = region.map(text).join(" ").toLowerCase();
+			const name = declared.authors.find((each) => all.includes(each.toLowerCase()));
+			const photo = region.find((element) => element.nodeName === "IMG" && element.getAttribute("src"));
+			const bio = region
+				.filter((element) => element.nodeName !== "IMG" && !linkOnly(element) && (text(element).length > 60 || sentence(element)))
+				.filter((element, index, list) => list.findIndex((other) => text(other) === text(element)) === index);
+
+			if (!name || (!photo && !bio.length)) {
+				continue;
+			}
+
+			const bioKey = bio.map(text).join(" ").toLowerCase();
+			const remove = () => {
+				for (const element of region) {
+					if (content.contains(element)) {
+						readerRemoveBlock(content, element);
+					}
+				}
+			};
+
+			if (bioKey && seenBios.has(bioKey)) {
+				remove();
+				continue;
+			}
+
+			seenBios.add(bioKey);
+
+			const lowName = name.toLowerCase();
+			const nameBlock = region.find(
+				(element) => element.nodeName !== "IMG" && !bio.includes(element) && text(element).toLowerCase().includes(lowName),
+			);
+			let role = "";
+
+			if (nameBlock) {
+				const line = text(nameBlock).replace(/^by\s+/i, "");
+				const index = line.toLowerCase().indexOf(lowName);
+				const rest = readerSquash(line.slice(0, index) + " " + line.slice(index + name.length)).replace(/^[,|–—-]\s*/, "");
+
+				if (index >= 0 && rest.length <= 60) {
+					role = rest;
+				}
+			}
+
+			if (!role) {
+				const line = region.find(
+					(element) =>
+						element !== nameBlock &&
+						element.nodeName !== "IMG" &&
+						!bio.includes(element) &&
+						!linkOnly(element) &&
+						text(element).length <= 60 &&
+						!text(element).toLowerCase().includes(lowName),
+				);
+
+				if (line) {
+					role = text(line);
+				}
+			}
+
+			const more = region.find((element) => linkOnly(element) && element !== nameBlock && !/^\d+ comments?$/i.test(text(element)));
+			const moreLink = more && (more.nodeName === "A" ? more : more.querySelector("a"));
+			const card = content.ownerDocument.createElement("aside");
+			const add = (tag, kind, value) => {
+				const element = content.ownerDocument.createElement(tag);
+
+				element.setAttribute("data-reader", kind);
+				card.append(element);
+
+				if (value !== undefined) {
+					element.textContent = value;
+				}
+
+				return element;
+			};
+
+			card.setAttribute("data-reader", "author-card");
+
+			if (photo) {
+				add("img", "author-photo").setAttribute("src", photo.getAttribute("src"));
+			}
+
+			add("div", "author-name", name);
+
+			if (role) {
+				add("div", "author-role", role);
+			}
+
+			for (const paragraph of bio) {
+				add("p", "author-bio").append(...[...paragraph.childNodes].map((node) => node.cloneNode(true)));
+			}
+
+			if (moreLink?.getAttribute("href")) {
+				add("a", "author-more", text(more)).setAttribute("href", moreLink.getAttribute("href"));
+			}
+
+			const first = region[0];
+
+			(first.nodeName === "IMG" ? first.closest("p, figure") || first : first).before(card);
+			remove();
+		}
+	}
+
 	function readerTakeFirstLabel(content, roles) {
 		const leaf = (element) => !element.querySelector(`${READER_BLOCK_SELECTOR}, figure`);
 		const first = [...content.querySelectorAll(`${READER_BLOCK_SELECTOR}, figure`)].find(
@@ -39646,6 +39811,7 @@ ${frontPageChooserHTML()}
 		const header = readerTakeLead(content, roles, declared, first, Boolean(declared.published || lead.date));
 
 		readerTakeFurniture(content, roles, boundary);
+		readerTakeAuthorCards(content, roles, declared, boundary.last);
 		readerDropDuplicateImages(content, roles);
 		readerTakeFirstLabel(content, roles);
 
