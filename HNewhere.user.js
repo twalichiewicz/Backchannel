@@ -211,6 +211,8 @@
 		appSplit: "HNewhere:app_split",
 		appPanes: "HNewhere:app_panes",
 		appZoom: "HNewhere:app_zoom",
+		readerPage: "HNewhere:reader_page",
+		readerFont: "HNewhere:reader_font",
 		readOut: "HNewhere:read_out",
 		shortcuts: "HNewhere:shortcuts",
 	};
@@ -16135,7 +16137,8 @@ header > .settings-panel {
 	background:var(--accent);
 }
 
-.settings-option input[type="checkbox"]:checked::after {
+.settings-option input[type="checkbox"]:checked::after,
+.app-view-menu .reader-font-check::after {
 	content:"";
 	width:7px;
 	height:3.5px;
@@ -30634,8 +30637,89 @@ ${APP_ICON_CSS}
 	align-items:center;
 }
 
-.app-view-menu .settings-head {
-	margin-bottom:6px;
+.app-view-menu .appearance-row-text {
+	margin-bottom:8px;
+}
+
+.app-view-menu .appearance-row-hint {
+	width:0;
+	min-width:100%;
+}
+
+.app-view-menu .settings-field[hidden] {
+	display:none;
+}
+
+.app-view-menu .reader-swatches {
+	display:flex;
+	gap:6px;
+}
+
+.app-view-menu .reader-swatch {
+	flex:0 0 auto;
+	width:30px;
+	height:30px;
+	padding:0;
+	border:1px solid rgba(128,128,128,.4);
+	border-radius:50%;
+	cursor:pointer;
+}
+
+.app-view-menu .reader-swatch-letters {
+	font:600 11px/1 Charter, Georgia, serif;
+}
+
+.app-view-menu .reader-swatch .toggle-swatch-name {
+	top:36px;
+}
+
+.app-view-menu .reader-swatch[aria-pressed="true"] {
+	box-shadow:0 0 0 2px var(--surface), 0 0 0 4px var(--accent, #237140);
+}
+
+.app-view-menu .reader-fonts {
+	display:flex;
+	flex-direction:column;
+	gap:1px;
+}
+
+.app-view-menu .reader-font {
+	display:flex;
+	align-items:center;
+	gap:8px;
+	padding:4px 6px;
+	border:0;
+	border-radius:5px;
+	background:none;
+	color:inherit;
+	font-size:14px;
+	text-align:left;
+	cursor:pointer;
+}
+
+.app-view-menu .reader-font:hover {
+	background:rgba(128,128,128,.16);
+}
+
+.app-view-menu .reader-font-check {
+	flex:0 0 auto;
+	display:inline-grid;
+	place-content:center;
+	width:15px;
+	height:15px;
+	visibility:hidden;
+}
+
+.app-view-menu .reader-font-check::after {
+	border-color:var(--accent);
+}
+
+.app-view-menu .reader-font[aria-pressed="true"] .reader-font-check {
+	visibility:visible;
+}
+
+.app-view-menu .reader-font[hidden] {
+	display:none;
 }
 
 .app-pane-toggle {
@@ -33316,14 +33400,15 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <section id="app-onboarding" class="app-onboarding" aria-label="Welcome" hidden></section>
 <div id="app-settings-arrow" class="app-settings-arrow" hidden></div>
 <div id="app-view-arrow" class="app-drop-arrow" aria-hidden="true" hidden></div>
-<div id="app-view-menu" class="app-view-menu" role="dialog" aria-label="Text settings" hidden>
-<div class="settings-head"><span class="settings-crumb-root">Text</span></div>
+<div id="app-view-menu" class="app-view-menu" role="dialog" aria-label="Style settings" hidden>
+<div class="app-settings-heading">Style</div>
+${readerMenuHTML()}
 <div class="settings-field">
-<div class="settings-field-label">Text size</div>
+<div class="appearance-row-text"><div class="appearance-row-label">Font size</div></div>
 <div class="stepper">
 <button id="app-zoom-out" type="button" class="stepper-button" aria-label="Smaller text">&#8722;</button>
 <span class="stepper-value">
-<input id="app-zoom-level" class="stepper-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Text size in percent" value="100">
+<input id="app-zoom-level" class="stepper-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Font size in percent" value="100">
 <span class="stepper-unit">%</span>
 </span>
 <button id="app-zoom-in" type="button" class="stepper-button" aria-label="Bigger text">+</button>
@@ -33345,7 +33430,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 </nav>
 <button id="app-bar-back" class="app-stack-button" type="button" aria-label="Back to the articles" data-glyph="down" hidden>${APP_ICON('<path d="M2.2 5.1a1 1 0 0 1 1.4-.1L8 9l4.4-4a1 1 0 0 1 1.3 1.5l-5 4.6a1 1 0 0 1-1.4 0l-5-4.6a1 1 0 0 1-.1-1.4z"/>')}</button>
 <div id="app-row-menu" class="dropdown app-row-menu" role="menu" aria-label="This article" hidden></div>
-<div id="app-bar" class="app-bar" hidden><button id="app-bar-view" class="app-stack-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-glyph"><span class="app-view-big">A</span><span class="app-view-small">a</span></span></button><button id="app-bar-open" class="app-stack-button" type="button" aria-label="Open the original page" hidden>${APP_ICON('<path d="M9 2h5v5h-1.7V4.9L7.7 9.5 6.5 8.3l4.6-4.6H9z"/><path d="M3.5 4H7v1.7H4.7v5.6h5.6V9H12v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-pressed="false" aria-label="Save" hidden>${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-like" class="app-stack-button" type="button" aria-pressed="false" aria-label="Like" hidden>${APP_ICON('<path d="M2 7.2h2.6V14H2.5a.5.5 0 0 1-.5-.5z"/><path d="M5.8 14V6.7l2.5-4.4a1.2 1.2 0 0 1 2.2.9L10 6h3a1.4 1.4 0 0 1 1.37 1.7l-1 4.7A2 2 0 0 1 11.4 14z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
+<div id="app-bar" class="app-bar" hidden><button id="app-bar-view" class="app-stack-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Style settings" title="Style settings" hidden><span class="app-view-glyph"><span class="app-view-big">A</span><span class="app-view-small">a</span></span></button><button id="app-bar-open" class="app-stack-button" type="button" aria-label="Open the original page" hidden>${APP_ICON('<path d="M9 2h5v5h-1.7V4.9L7.7 9.5 6.5 8.3l4.6-4.6H9z"/><path d="M3.5 4H7v1.7H4.7v5.6h5.6V9H12v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-pressed="false" aria-label="Save" hidden>${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-like" class="app-stack-button" type="button" aria-pressed="false" aria-label="Like" hidden>${APP_ICON('<path d="M2 7.2h2.6V14H2.5a.5.5 0 0 1-.5-.5z"/><path d="M5.8 14V6.7l2.5-4.4a1.2 1.2 0 0 1 2.2.9L10 6h3a1.4 1.4 0 0 1 1.37 1.7l-1 4.7A2 2 0 0 1 11.4 14z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
 <section id="app-list" aria-label="Articles">
 <div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="app-head-icon" type="button" aria-label="Mark all as read" title="Mark all as read">${APP_MARK_READ_ICON}</button><button id="app-list-sync" class="app-head-icon" type="button" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button></span></div>
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
@@ -33359,7 +33444,7 @@ ${settingsModalHTML()}
 <div class="toast-layer">${TOAST_HTML}</div>
 <div id="app-reading">
 <section id="app-article" aria-label="Article">
-<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="${escapeHTML(appShortcutTip("front-pages"))}">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="${escapeHTML(appShortcutTip("discussion"))}" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
+<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="${escapeHTML(appShortcutTip("front-pages"))}">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Style settings" title="Style settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="${escapeHTML(appShortcutTip("discussion"))}" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
 <div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick an article to read it here, with what people said about it beside it.</div></div>
 <div id="app-next" class="app-next" hidden><span class="app-next-label">Read next</span><button id="app-next-link" class="app-next-link" type="button"><span class="app-next-title"></span><span class="app-next-meta"></span></button></div>
 </section>
@@ -33678,6 +33763,20 @@ ${settingsModalHTML()}
 		paintAppZoom();
 
 		viewToggle.onclick = () => setAppViewMenuOpen(viewMenu.hidden);
+		viewMenu.addEventListener("click", (event) => {
+			const button = event.target.closest?.("[data-reader-page], [data-reader-font]");
+
+			if (button) {
+				chooseReaderLook(button.dataset.readerPage ? "page" : "font", button.dataset.readerPage || button.dataset.readerFont);
+			}
+		});
+		Promise.all([load(STORAGE.readerPage, "auto"), load(STORAGE.readerFont, "charter")])
+			.then(([page, font]) => {
+				readerLook = { page: Object.hasOwn(READER_PAGE_NAMES, page) ? page : "auto", font: Object.hasOwn(READER_FONT_NAMES, font) ? font : "charter" };
+				paintReaderLook();
+				paintReaderMenu();
+			})
+			.catch(console.error);
 		viewMenu.addEventListener("keydown", (event) => {
 			if (event.key === "Escape") {
 				setAppViewMenuOpen(false);
@@ -36700,7 +36799,7 @@ ${frontPageChooserHTML()}
 		}
 
 		if (show) {
-			placeAppViewMenu();
+			paintReaderMenu();
 		}
 	}
 
@@ -36821,6 +36920,7 @@ ${frontPageChooserHTML()}
 
 		state.article = article;
 		pane.dataset.mode = "wait";
+		paintReaderMenu();
 
 		if (http) {
 			runAppArticleProbe(article).catch(console.error);
@@ -37071,6 +37171,7 @@ ${frontPageChooserHTML()}
 
 		article.mode = mode;
 		pane.dataset.mode = mode;
+		paintReaderMenu();
 		clearTimeout(article.capTimer);
 
 		if (mode === "frame-agent" || mode === "frame") {
@@ -37138,14 +37239,125 @@ ${frontPageChooserHTML()}
 		system: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
 	};
 
-	function paintReaderLook(host = sidebar) {
+	const READER_PAGE_NAMES = { auto: "Auto", paper: "Paper", white: "White", sepia: "Sepia", gray: "Gray", night: "Night" };
+
+	const READER_FONT_NAMES = { charter: "Charter", newyork: "New York", georgia: "Georgia", system: "System" };
+
+	const READER_FONT_PROBES = {
+		charter: ["Charter", "Bitstream Charter"],
+		newyork: ["New York", "ui-serif"],
+		georgia: ["Georgia"],
+	};
+
+	let readerLook = { page: "auto", font: "charter" };
+
+	function readerMenuHTML() {
+		const swatch = (id) => {
+			const look = READER_PAGES[id] || READER_PAGES.paper;
+			const fill = id === "auto" ? `linear-gradient(90deg, ${READER_PAGES.paper.page} 50%, ${READER_PAGES.night.page} 50%)` : look.page;
+			const label =
+				id === "auto"
+					? `<span class="reader-swatch-a" style="color:${READER_PAGES.paper.ink}">A</span><span class="reader-swatch-a" style="color:${READER_PAGES.night.ink}">a</span>`
+					: "Aa";
+
+			return `<button type="button" class="reader-swatch toggle-swatch" data-reader-page="${id}" aria-label="${READER_PAGE_NAMES[id]}" title="${READER_PAGE_NAMES[id]}" aria-pressed="false" style="background:${fill};color:${look.ink}"><span class="reader-swatch-letters">${label}</span><span class="toggle-swatch-name" aria-hidden="true">${READER_PAGE_NAMES[id]}</span></button>`;
+		};
+		const row = (id) => `<button type="button" class="reader-font" data-reader-font="${id}" aria-pressed="false" style="font-family:${escapeHTML(READER_FONTS[id])}"><span class="reader-font-check" aria-hidden="true"></span><span>${READER_FONT_NAMES[id]}</span></button>`;
+
+		return `<div id="app-view-page-field" class="settings-field" hidden>
+<div class="appearance-row-text"><div class="appearance-row-label">Theme</div><div class="appearance-row-hint">Customize the look of your reading experience.</div></div>
+<div id="app-view-page" class="reader-swatches toggle-colors">${Object.keys(READER_PAGE_NAMES).map(swatch).join("")}</div>
+</div>
+<div id="app-view-font-field" class="settings-field" hidden>
+<div class="appearance-row-text"><div class="appearance-row-label">Font family</div></div>
+<div id="app-view-font" class="reader-fonts">${Object.keys(READER_FONT_NAMES).map(row).join("")}</div>
+</div>`;
+	}
+
+	function readerFontInstalled(id) {
+		const names = READER_FONT_PROBES[id];
+
+		if (!names) {
+			return true;
+		}
+
+		const context = document.createElement("canvas").getContext("2d");
+
+		if (!context) {
+			return true;
+		}
+
+		const sample = "mmmmmmmmmmlliWQ@#$ 0123456789";
+		const width = (family) => {
+			context.font = `72px ${family}`;
+
+			return context.measureText(sample).width;
+		};
+		const serif = width("serif");
+		const mono = width("monospace");
+
+		const face = (name) => (name.startsWith("ui-") ? name : `"${name}"`);
+
+		return names.some((name) => width(`${face(name)}, serif`) !== serif || width(`${face(name)}, monospace`) !== mono);
+	}
+
+	function paintReaderMenu() {
+		const shadow = appState?.ui.shadow;
+
+		if (!shadow) {
+			return;
+		}
+
+		const reader = shadow.querySelector("#app-article-body")?.dataset.mode === "reader";
+
+		for (const field of shadow.querySelectorAll("#app-view-page-field, #app-view-font-field")) {
+			field.hidden = !reader;
+		}
+
+		for (const button of shadow.querySelectorAll("#app-view-page [data-reader-page]")) {
+			button.setAttribute("aria-pressed", String(button.dataset.readerPage === readerLook.page));
+		}
+
+		let shown = 0;
+
+		for (const button of shadow.querySelectorAll("#app-view-font [data-reader-font]")) {
+			const installed = readerFontInstalled(button.dataset.readerFont);
+
+			button.hidden = !installed;
+			button.setAttribute("aria-pressed", String(installed && button.dataset.readerFont === readerLook.font));
+			shown += installed ? 1 : 0;
+		}
+
+		if (!shown) {
+			shadow.querySelector("#app-view-font-field").hidden = true;
+		}
+
+		placeAppViewMenu();
+	}
+
+	function chooseReaderLook(kind, value) {
+		if (kind === "page" && Object.hasOwn(READER_PAGE_NAMES, value)) {
+			readerLook.page = value;
+			save(STORAGE.readerPage, value).catch(console.error);
+		} else if (kind === "font" && Object.hasOwn(READER_FONT_NAMES, value)) {
+			readerLook.font = value;
+			save(STORAGE.readerFont, value).catch(console.error);
+		} else {
+			return;
+		}
+
+		paintReaderLook();
+		paintReaderMenu();
+	}
+
+	function paintReaderLook(host = sidebar, choices = readerLook) {
 		if (!host) {
 			return;
 		}
 
-		const choice = "auto";
-		const face = "charter";
-		const name = choice in READER_PAGES ? choice : host.classList.contains(DARK_CLASS) ? "night" : "paper";
+		const choice = choices.page;
+		const face = Object.hasOwn(READER_FONTS, choices.font) ? choices.font : "charter";
+		const name = Object.hasOwn(READER_PAGES, choice) ? choice : host.classList.contains(DARK_CLASS) ? "night" : "paper";
 		const look = READER_PAGES[name];
 
 		for (const token of Object.keys(look)) {
