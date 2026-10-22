@@ -38608,6 +38608,24 @@ ${frontPageChooserHTML()}
 			}
 		}
 
+		for (const figure of doc.querySelectorAll("figure")) {
+			const caption = figure.querySelector("figcaption");
+
+			if (!caption || !figure.querySelector("video, iframe, embed, object")) {
+				continue;
+			}
+
+			const rest = figure.cloneNode(true);
+
+			for (const part of rest.querySelectorAll("figcaption, video, iframe, embed, object")) {
+				part.remove();
+			}
+
+			if (!(rest.textContent || "").trim() && !rest.querySelector("img, picture, svg, canvas, pre, table, audio, math, blockquote")) {
+				caption.remove();
+			}
+		}
+
 		for (const element of doc.querySelectorAll("span, i, b, em, strong, div")) {
 			if (
 				element.isConnected &&
@@ -39289,6 +39307,147 @@ ${frontPageChooserHTML()}
 		return taken;
 	}
 
+	const READER_PHRASES = /^(?:most popular|most read|related(?: stories| articles| posts| reading)?|read (?:later|more|next)|up next|next article|previous article|more stories|more news|latest(?: news| stories)?|top stories|trending(?: now)?|popular (?:now|today)|editor'?s picks|keep reading|what to read next|also in .{2,40}|more (?:from|in|on) .{2,40}|you (?:might|may) also like|recommended(?: for you)?|tell others:?|share(?: this(?: article| post| story)?)?:?|topics:?|tags:?|filed under:?|advertiser content.*|sponsored(?: content)?|advertisement|image credits?:.*|photo credits?:.*|license this (?:photo|image)|\d+ of \d+\s*\|?\s*(?:license this (?:photo|image))?|follow topics and authors.*|choose .{2,40} as (?:your|a) preferred source.*|add us as a preferred source.*|see more .{2,30} in google.*)$/i;
+
+	const READER_SECTION_LABELS = /^(?:most popular|most read|related(?: stories| articles| posts| reading)?|read (?:more|next)|up next|next article|previous article|also in .{2,40}|more (?:from|in|on) .{2,40}|more stories|more news|latest(?: news| stories)?|top stories|trending(?: now)?|popular (?:now|today)|editor'?s picks|keep reading|what to read next|you (?:might|may) also like|recommended(?: for you)?)$/i;
+
+	const READER_CONTROL_ALTS = /^(?:comments?|share|print|email|e-mail|facebook|twitter|x|linkedin|reddit|whatsapp|copy link|bookmark|save)$/i;
+
+	function readerTakeFurniture(content, roles, boundary) {
+		const { first, last } = boundary;
+		const marked = new Set();
+		const text = (element) => readerSquash(element.textContent);
+		const isAuthor = (element) => {
+			for (let up = element; up && up !== content; up = up.parentElement) {
+				if (roles.get(up)?.has("author")) {
+					return true;
+				}
+			}
+
+			return false;
+		};
+		const hasRole = (element) => Boolean(element.getAttribute("data-reader") === "caption" || roles.get(element)?.size);
+		const blocks = [...content.querySelectorAll(READER_BLOCK_SELECTOR)].filter(
+			(block) => !block.querySelector(READER_BLOCK_SELECTOR) && text(block),
+		);
+
+		for (const block of blocks) {
+			if (isAuthor(block)) {
+				continue;
+			}
+
+			const line = text(block);
+			const lead = Boolean(first && first.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_PRECEDING);
+			const tail = Boolean(last && last.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+			if (
+				(roles.get(block)?.has("furniture") && line.length < 400) ||
+				(tail && roles.get(block)?.has("furnitureAfter") && line.length < 400 && (line.length <= 80 || readerLinkShare(block) >= 0.5)) ||
+				((lead || tail) && line.length <= 200 && READER_PHRASES.test(line)) ||
+				(line.length <= 40 && READER_SECTION_LABELS.test(line))
+			) {
+				marked.add(block);
+			}
+		}
+
+		for (const link of content.querySelectorAll("a")) {
+			if (!link.closest(READER_BLOCK_SELECTOR) && roles.get(link)?.has("furniture") && !isAuthor(link)) {
+				marked.add(link);
+			}
+		}
+
+		const nodes = [...content.querySelectorAll(`${READER_BLOCK_SELECTOR}, a, img, figure`)].filter(
+			(element) => element.nodeName !== "A" || !element.closest(READER_BLOCK_SELECTOR),
+		);
+		let inSection = false;
+
+		for (const element of nodes) {
+			const line = text(element);
+			const heading = /^H[1-6]$/.test(element.nodeName);
+
+			if (marked.has(element) && (heading || (line.length <= 40 && READER_SECTION_LABELS.test(line)))) {
+				inSection = true;
+				continue;
+			}
+
+			if (heading || (element.nodeName === "P" && line.length >= 140 && !hasRole(element) && !isAuthor(element))) {
+				inSection = false;
+				continue;
+			}
+
+			if (!inSection || marked.has(element) || [...marked].some((other) => other.contains(element))) {
+				continue;
+			}
+
+			const author = isAuthor(element);
+
+			if ((!author && hasRole(element)) || (author && line.length > 80)) {
+				continue;
+			}
+
+			if (author) {
+				for (let up = element; up && up !== content; up = up.parentElement) {
+					roles.get(up)?.delete("author");
+				}
+			}
+
+			marked.add(element);
+		}
+
+		for (const element of marked) {
+			if (content.contains(element)) {
+				readerRemoveBlock(content, element);
+			}
+		}
+
+		for (const image of [...content.querySelectorAll("img")]) {
+			if (READER_CONTROL_ALTS.test(readerSquash(image.getAttribute("alt")))) {
+				readerRemoveBlock(content, image);
+			}
+		}
+	}
+
+	function readerImageKey(src) {
+		try {
+			const url = new URL(src);
+
+			return (url.searchParams.get("url") || url.origin + url.pathname).replace(/-\d{2,4}x\d{2,4}(?=\.\w+$)/, "");
+		} catch {
+			return String(src || "");
+		}
+	}
+
+	function readerDropDuplicateImages(content, roles) {
+		const exempt = (image) => {
+			for (let up = image; up && up !== content; up = up.parentElement) {
+				if (roles.get(up)?.has("author") || up.getAttribute("data-reader") === "author") {
+					return true;
+				}
+			}
+
+			return false;
+		};
+		const seen = new Map();
+
+		for (const image of [...content.querySelectorAll("img")]) {
+			if (exempt(image) || !image.getAttribute("src")) {
+				continue;
+			}
+
+			const key = readerImageKey(image.getAttribute("src"));
+			const earlier = seen.get(key);
+
+			if (earlier && earlier === image.previousElementSibling) {
+				readerRemoveBlock(content, earlier);
+				seen.set(key, image);
+			} else if (earlier) {
+				readerRemoveBlock(content, image);
+			} else {
+				seen.set(key, image);
+			}
+		}
+	}
+
 	function readerTakeFirstLabel(content, roles) {
 		const leaf = (element) => !element.querySelector(`${READER_BLOCK_SELECTOR}, figure`);
 		const first = [...content.querySelectorAll(`${READER_BLOCK_SELECTOR}, figure`)].find(
@@ -39467,12 +39626,6 @@ ${frontPageChooserHTML()}
 
 		const roles = readerTakeMarks(content);
 
-		for (const figure of [...content.querySelectorAll("figure")]) {
-			if (figure.querySelector("figcaption") && !figure.querySelector("img, pre, table")) {
-				figure.remove();
-			}
-		}
-
 		const firstProse = tidyReaderContent(content);
 
 		for (const heading of [...content.querySelectorAll("h1, h2")].slice(0, 3)) {
@@ -39487,10 +39640,13 @@ ${frontPageChooserHTML()}
 		readerMarkCaptions(content);
 		readerMarkAuthors(content, roles, declared);
 
-		const first = readerBoundary(content, roles, declared).first;
+		const boundary = readerBoundary(content, roles, declared);
+		const first = boundary.first;
 		const lead = readerTakeLeadAuthors(content, roles, first);
 		const header = readerTakeLead(content, roles, declared, first, Boolean(declared.published || lead.date));
 
+		readerTakeFurniture(content, roles, boundary);
+		readerDropDuplicateImages(content, roles);
 		readerTakeFirstLabel(content, roles);
 
 		const authors = declared.authors.length ? declared.authors : lead.author ? [lead.author] : [];
