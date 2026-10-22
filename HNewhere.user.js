@@ -38994,17 +38994,18 @@ ${frontPageChooserHTML()}
 		),
 	);
 
-	const READER_MARKS = { furniture: "\uE010", furnitureAfter: "\uE011", kicker: "\uE012", subtitle: "\uE013", author: "\uE014" };
+	const READER_MARKS = { furniture: "\uE010", furnitureAfter: "\uE011", kicker: "\uE012", subtitle: "\uE013", author: "\uE014", card: "\uE015" };
 
-	const READER_MARK_PATTERN = /[\uE010-\uE014]/g;
+	const READER_MARK_PATTERN = /[\uE010-\uE015]/g;
 
 	const READER_ROLE_WORDS = {
 		furniture: new Set(
-			"related popular trending recommended recirc recirculation tag tags topics share sharing social follow newsletter subscribe promo ad ads advert advertisement native sponsor sponsored cta ctas preferred comments reuse affiliate disclaimer disclosure terms player footer engagement utility prevnext pagination breadcrumb breadcrumbs menu nav".split(
+			"related popular trending recommended recirc recirculation tag tags topics share sharing social follow newsletter subscribe promo ad ads advert advertisement native sponsor sponsored cta ctas preferred comments reuse affiliate disclaimer terms player footer engagement utility prevnext pagination breadcrumb breadcrumbs menu nav".split(
 				" ",
 			),
 		),
-		furnitureAfter: new Set("category categories card cards more".split(" ")),
+		furnitureAfter: new Set("category categories more".split(" ")),
+		card: new Set("card cards".split(" ")),
 		kicker: new Set("kicker eyebrow deck category categories anno overline label rubric".split(" ")),
 		subtitle: new Set("subtitle standfirst subhead subheadline dek summary excerpt intro description lede".split(" ")),
 	};
@@ -39614,6 +39615,7 @@ ${frontPageChooserHTML()}
 	function readerClassWords(element) {
 		return new Set(
 			readerOwnNames(element)
+				.replace(/follow[-_]?up/gi, "followup")
 				.split(/[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])/)
 				.filter(Boolean)
 				.map((word) => word.toLowerCase()),
@@ -39710,7 +39712,10 @@ ${frontPageChooserHTML()}
 			}
 
 			for (const [role, set] of Object.entries(READER_ROLE_WORDS)) {
-				if ([...words].some((word) => set.has(word))) {
+				if (
+					[...words].some((word) => set.has(word)) &&
+					!((role === "furnitureAfter" || role === "card") && element.closest("figure, figcaption"))
+				) {
 					roles += READER_MARKS[role];
 				}
 			}
@@ -39927,21 +39932,24 @@ ${frontPageChooserHTML()}
 
 	function readerMarkCaptions(content) {
 		const altKeys = readerAltKeys(content);
-		const seen = new Set();
+		const blocks = [...content.querySelectorAll(`${READER_BLOCK_SELECTOR}, figure`)].filter(
+			(block) => !block.querySelector(READER_BLOCK_SELECTOR),
+		);
+		let recent = [];
 
-		for (const paragraph of [...content.querySelectorAll("p")]) {
-			if (!readerIsCaption(paragraph, altKeys)) {
-				continue;
+		for (const block of blocks) {
+			const key = readerKey(block.textContent);
+
+			if (block.nodeName === "P" && readerIsCaption(block, altKeys)) {
+				if (recent.includes(key)) {
+					readerRemoveBlock(content, block);
+					continue;
+				}
+
+				block.setAttribute("data-reader", "caption");
 			}
 
-			const key = readerKey(paragraph.textContent);
-
-			if (seen.has(key)) {
-				readerRemoveBlock(content, paragraph);
-			} else {
-				seen.add(key);
-				paragraph.setAttribute("data-reader", "caption");
-			}
+			recent = [...recent, key].slice(-3);
 		}
 	}
 
@@ -40029,6 +40037,8 @@ ${frontPageChooserHTML()}
 			return false;
 		};
 		const hasRole = (element) => Boolean(element.getAttribute("data-reader") === "caption" || roles.get(element)?.size);
+		const label = (line) => line.length <= 40 && !/[.!?]$/.test(line) && READER_SECTION_LABELS.test(line);
+		const conditional = new Set();
 		const blocks = [...content.querySelectorAll(READER_BLOCK_SELECTOR)].filter(
 			(block) => !block.querySelector(READER_BLOCK_SELECTOR) && text(block),
 		);
@@ -40042,15 +40052,23 @@ ${frontPageChooserHTML()}
 			const lead = Boolean(first && first.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_PRECEDING);
 			const tail = Boolean(last && last.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING);
 
-			if (
+			const strong =
 				(roles.get(block)?.has("furniture") && line.length < 400) ||
-				(tail && roles.get(block)?.has("furnitureAfter") && line.length < 400 && (line.length <= 80 || readerLinkShare(block) >= 0.5)) ||
+				(tail &&
+					!block.closest("figure, figcaption") &&
+					line.length < 400 &&
+					((roles.get(block)?.has("furnitureAfter") && (line.length <= 80 || readerLinkShare(block) >= 0.5)) ||
+						(roles.get(block)?.has("card") && readerLinkShare(block) >= 0.5))) ||
 				((lead || tail) && line.length <= 200 && READER_PHRASES.test(line)) ||
 				(lead && line.length <= 200 && READER_LEAD_PHRASES.test(line)) ||
-				((lead || tail) && line.length <= 250 && READER_COMMISSION.test(line)) ||
-				(line.length <= 40 && READER_SECTION_LABELS.test(line))
-			) {
+				((lead || tail) && line.length <= 250 && READER_COMMISSION.test(line));
+
+			if (strong || label(line)) {
 				marked.add(block);
+
+				if (!strong && first && last && !lead && !tail) {
+					conditional.add(block);
+				}
 			}
 		}
 
@@ -40063,18 +40081,45 @@ ${frontPageChooserHTML()}
 		const nodes = [...content.querySelectorAll(`${READER_BLOCK_SELECTOR}, a, img, figure`)].filter(
 			(element) => element.nodeName !== "A" || !element.closest(READER_BLOCK_SELECTOR),
 		);
+		const closes = (element) =>
+			/^H[1-6]$/.test(element.nodeName) ||
+			(element.nodeName === "P" && text(element).length >= 140 && !hasRole(element) && !isAuthor(element));
+		const linkRun = (from) => {
+			let total = 0;
+			let linked = 0;
+
+			for (let at = from + 1; at < nodes.length && !closes(nodes[at]); at += 1) {
+				const element = nodes[at];
+
+				if (element.nodeName === "A") {
+					total += readerTextLength(element);
+					linked += readerTextLength(element);
+				} else if (element.matches(READER_BLOCK_SELECTOR) && !element.querySelector(READER_BLOCK_SELECTOR)) {
+					const length = readerTextLength(element);
+
+					total += length;
+					linked += length * readerLinkShare(element);
+				}
+			}
+
+			return total ? linked / total : 0;
+		};
 		let inSection = false;
 
-		for (const element of nodes) {
+		for (const [at, element] of nodes.entries()) {
 			const line = text(element);
 			const heading = /^H[1-6]$/.test(element.nodeName);
 
-			if (marked.has(element) && (heading || (line.length <= 40 && READER_SECTION_LABELS.test(line)))) {
+			if (conditional.has(element) && linkRun(at) < 0.5) {
+				marked.delete(element);
+			}
+
+			if (marked.has(element) && (heading || label(line))) {
 				inSection = true;
 				continue;
 			}
 
-			if (heading || (element.nodeName === "P" && line.length >= 140 && !hasRole(element) && !isAuthor(element))) {
+			if (closes(element)) {
 				inSection = false;
 				continue;
 			}
@@ -40111,11 +40156,18 @@ ${frontPageChooserHTML()}
 		}
 	}
 
+	const READER_SIZE_PARAMS = new Set("w h width height resize quality q fit crop strip auto fm format dpr s size".split(" "));
+
 	function readerImageKey(src) {
 		try {
 			const url = new URL(src);
+			const rest = [...url.searchParams]
+				.filter(([name]) => !READER_SIZE_PARAMS.has(name.toLowerCase()))
+				.map(([name, value]) => `${name}=${value}`)
+				.join("&");
+			const key = url.searchParams.get("url") || url.origin + url.pathname + (rest ? `?${rest}` : "");
 
-			return (url.searchParams.get("url") || url.origin + url.pathname).replace(/-\d{2,4}x\d{2,4}(?=\.\w+$)/, "");
+			return key.replace(/-\d{2,4}x\d{2,4}(?=\.\w+(?:[?#]|$))/, "");
 		} catch {
 			return String(src || "");
 		}
@@ -40131,6 +40183,15 @@ ${frontPageChooserHTML()}
 
 			return false;
 		};
+		const adjacent = (earlier, image) => {
+			let node = image.previousSibling;
+
+			while (node && (node.nodeType === Node.COMMENT_NODE || (node.nodeType === Node.TEXT_NODE && !node.nodeValue.trim()))) {
+				node = node.previousSibling;
+			}
+
+			return node === earlier;
+		};
 		const seen = new Map();
 
 		for (const image of [...content.querySelectorAll("img")]) {
@@ -40141,7 +40202,7 @@ ${frontPageChooserHTML()}
 			const key = readerImageKey(image.getAttribute("src"));
 			const earlier = seen.get(key);
 
-			if (earlier && earlier === image.previousElementSibling) {
+			if (earlier && adjacent(earlier, image)) {
 				readerRemoveBlock(content, earlier);
 				seen.set(key, image);
 			} else if (earlier) {
@@ -40182,7 +40243,7 @@ ${frontPageChooserHTML()}
 				}
 			}
 
-			return element.nodeName !== "IMG" && text(element).length <= 80 && names(element);
+			return element.nodeName !== "IMG" && !element.closest("figure, figcaption") && text(element).length <= 80 && names(element);
 		};
 		const linkOnly = (element) =>
 			element.nodeName === "A" ||
@@ -40328,7 +40389,7 @@ ${frontPageChooserHTML()}
 		}
 
 		const text = readerSquash(first.textContent);
-		const label = /^(?:P|LI)$/.test(first.nodeName) && text.length <= 20 && text.split(" ").length <= 2 && !/[.!?:,]/.test(text);
+		const label = first.nodeName === "P" && text.length <= 20 && text.split(" ").length <= 2 && !/[.!?:,]/.test(text);
 		const crumbs = text.length <= 80 && text.split(/\s+[>\u203a\u00bb]\s+/).length >= 2;
 
 		if (/^https?:\/\/\S+$/.test(text) || crumbs || label) {
@@ -40362,20 +40423,26 @@ ${frontPageChooserHTML()}
 			const images = [...block.querySelectorAll("img")];
 
 			if (text) {
-				if (text.length <= 80 && !/^H[1-6]$/.test(block.nodeName) && !READER_HEADER_LINE.test(text) && named(text)) {
+				if (
+					text.length <= 80 &&
+					!/^H[1-6]$/.test(block.nodeName) &&
+					!READER_HEADER_LINE.test(text) &&
+					!block.closest("figure, figcaption") &&
+					named(text)
+				) {
 					mark(block);
 				}
 			} else if (
 				images.length &&
 				(images.every((image) => image.getAttribute("data-reader") === "author") ||
-					images.every((image) => named(readerSquash(image.getAttribute("alt")).toLowerCase())))
+					(!block.closest("figure") && images.every((image) => named(readerSquash(image.getAttribute("alt")).toLowerCase()))))
 			) {
 				mark(block);
 			}
 		}
 
 		for (const image of content.querySelectorAll("img")) {
-			if (named(readerSquash(image.getAttribute("alt")).toLowerCase())) {
+			if (!image.closest("figure") && named(readerSquash(image.getAttribute("alt")).toLowerCase())) {
 				image.setAttribute("data-reader", "author");
 			}
 
