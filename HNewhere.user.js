@@ -26624,6 +26624,26 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		return host;
 	}
 
+	function pdfReaderRedrawing() {
+		const reader = ownPdfReader;
+
+		if (!reader) {
+			return false;
+		}
+
+		const view = reader.host.getBoundingClientRect();
+
+		return reader.pages.some((box) => {
+			const rect = box.getBoundingClientRect();
+
+			return (
+				rect.bottom > view.top - 400 &&
+				rect.top < view.bottom + 400 &&
+				!box.querySelector(".endOfContent")
+			);
+		});
+	}
+
 	async function drawPdfReaderVisiblePages() {
 		const reader = ownPdfReader;
 
@@ -29510,8 +29530,9 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 		const articleIndex = buildArticleTextIndex();
 		const groups = buildAnnotationGroups(renderedComments, articleIndex);
+		const redrawing = pdfReaderRedrawing();
 
-		if (!groups.length) {
+		if (!groups.length && !redrawing) {
 			clearCommentFilter({ animate: false });
 		}
 
@@ -29530,17 +29551,17 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			});
 		});
 
-		if (activeCommentFilter?.type === "quote") {
+		if (!redrawing && activeCommentFilter?.type === "quote") {
 			applyCommentFilter(activeCommentFilter.key, {
 				scroll: false,
 				animate: false,
 			});
-		} else if (activeCommentFilter?.type === "comment") {
+		} else if (!redrawing && activeCommentFilter?.type === "comment") {
 			applyCommentFocus(activeCommentFilter.id, {
 				scroll: false,
 				animate: false,
 			});
-		} else if (activeCommentFilter?.type === "discussion") {
+		} else if (!redrawing && activeCommentFilter?.type === "discussion") {
 			applyDiscussionFilter(activeCommentFilter.key, {
 				scroll: false,
 				animate: false,
