@@ -9560,6 +9560,14 @@ html[data-backchannel-installed] .chin {
 		return { ...payload, origin: staged.origin, voteURL: staged.voteURL };
 	}
 
+	function bindSubmitStage(payload, staged) {
+		if (staged?.kind !== "submit") {
+			return null;
+		}
+
+		return { ...payload, origin: staged.origin };
+	}
+
 	// #endregion hnewhere-test-export
 
 	async function postBridgeResult(source, payload, result) {
@@ -24872,6 +24880,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
 				noun: "submission",
 				stagesDraft: true,
+				bindStaged: bindSubmitStage,
 				url: ({ url, title }) => submitURL(url, title),
 				act: actHNSubmit,
 				report: reportHNSubmit,
