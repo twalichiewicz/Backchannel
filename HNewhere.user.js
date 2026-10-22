@@ -38405,9 +38405,9 @@ ${frontPageChooserHTML()}
 		),
 	);
 
-	const READER_MARKS = { furniture: "", furnitureAfter: "", kicker: "", subtitle: "", author: "" };
+	const READER_MARKS = { furniture: "\uE010", furnitureAfter: "\uE011", kicker: "\uE012", subtitle: "\uE013", author: "\uE014" };
 
-	const READER_MARK_PATTERN = /[-]/g;
+	const READER_MARK_PATTERN = /[\uE010-\uE014]/g;
 
 	const READER_ROLE_WORDS = {
 		furniture: new Set(
@@ -39201,6 +39201,111 @@ ${frontPageChooserHTML()}
 		return { first: prose[0] || null, last: prose[prose.length - 1] || null };
 	}
 
+	const READER_HEADER_LINE = /^(?:reviewed|edited|fact[- ]?checked|updated|last updated|produced|translated)\b/i;
+
+	function readerIsDateLine(text) {
+		const line = readerSquash(text);
+
+		if (/\bmin(?:ute)?s?\s+read\b/i.test(line) && line.length <= 60) {
+			const rest = line.replace(READER_DATE, "").replace(/\d+\s*min(?:ute)?s?\s+read/i, "").replace(/[•·|–—-]/g, "");
+
+			if (readerSquash(rest).length <= 3) {
+				return true;
+			}
+		}
+
+		if (line.length > 100 || !READER_DATE.test(line)) {
+			return false;
+		}
+
+		const rest = line
+			.replace(new RegExp(READER_DATE.source, "gi"), "")
+			.replace(
+				/\b(?:posted|published|updated|last|on|at|mon|tue|wed|thu|fri|sat|sun)\w*\b|\d{1,2}:\d{2}\s*(?:am|pm)?|\b[a-z]{1,2}[sd]t\b|\butc\b|\bgmt\b|[•·|–—,:-]/gi,
+				"",
+			);
+
+		return readerSquash(rest).length <= 3;
+	}
+
+	function readerRemoveBlock(content, element) {
+		let parent = element.parentElement;
+
+		element.remove();
+
+		while (parent && parent !== content && !parent.textContent.trim() && !parent.querySelector("img, pre, table, hr")) {
+			const up = parent.parentElement;
+
+			parent.remove();
+			parent = up;
+		}
+	}
+
+	function readerMarkCaptions(content) {
+		const altKeys = readerAltKeys(content);
+
+		for (const paragraph of content.querySelectorAll("p")) {
+			if (readerIsCaption(paragraph, altKeys)) {
+				paragraph.setAttribute("data-reader", "caption");
+			}
+		}
+	}
+
+	function readerTakeLead(content, roles, declared, first, dated) {
+		const taken = { dek: "", metaLines: [] };
+
+		if (!first) {
+			return taken;
+		}
+
+		const altKeys = readerAltKeys(content);
+		const blocks = [...content.querySelectorAll(READER_BLOCK_SELECTOR)].filter(
+			(block) =>
+				!block.querySelector(READER_BLOCK_SELECTOR) &&
+				!block.contains(first) &&
+				first.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_PRECEDING,
+		);
+
+		for (const block of blocks) {
+			if (!content.contains(block) || roles.get(block)?.has("author") || block.getAttribute("data-reader") === "caption") {
+				continue;
+			}
+
+			const text = readerSquash(block.textContent);
+
+			if (roles.get(block)?.has("kicker") && text.length <= 40) {
+				readerRemoveBlock(content, block);
+			} else if (dated && text.length <= 100 && readerIsDateLine(text)) {
+				readerRemoveBlock(content, block);
+			} else if (text.length <= 120 && READER_HEADER_LINE.test(text)) {
+				taken.metaLines.push(text.replace(/\s+[\/|]\s+/g, " \u00b7 "));
+				readerRemoveBlock(content, block);
+			} else if (!taken.dek && readerSubtitleCandidate(block, roles, declared, altKeys)) {
+				taken.dek = text;
+				readerRemoveBlock(content, block);
+			}
+		}
+
+		return taken;
+	}
+
+	function readerTakeFirstLabel(content, roles) {
+		const leaf = (element) => !element.querySelector(`${READER_BLOCK_SELECTOR}, figure`);
+		const first = [...content.querySelectorAll(`${READER_BLOCK_SELECTOR}, figure`)].find(
+			(element) => leaf(element) && (readerSquash(element.textContent) || element.querySelector("img")),
+		);
+
+		if (!first || !/^(?:P|LI)$/.test(first.nodeName) || roles.get(first)?.size) {
+			return;
+		}
+
+		const text = readerSquash(first.textContent);
+
+		if (text && text.length <= 20 && text.split(" ").length <= 2 && !/[.!?:,]/.test(text)) {
+			readerRemoveBlock(content, first);
+		}
+	}
+
 	function readerMarkAuthors(content, roles, declared) {
 		const names = declared.authors.map(
 			(name) =>
@@ -39227,7 +39332,7 @@ ${frontPageChooserHTML()}
 			const images = [...block.querySelectorAll("img")];
 
 			if (text) {
-				if (text.length <= 80 && !/^H[1-6]$/.test(block.nodeName) && named(text)) {
+				if (text.length <= 80 && !/^H[1-6]$/.test(block.nodeName) && !READER_HEADER_LINE.test(text) && named(text)) {
 					mark(block);
 				}
 			} else if (
@@ -39379,9 +39484,15 @@ ${frontPageChooserHTML()}
 			}
 		}
 
+		readerMarkCaptions(content);
 		readerMarkAuthors(content, roles, declared);
 
-		const lead = readerTakeLeadAuthors(content, roles, readerBoundary(content, roles, declared).first);
+		const first = readerBoundary(content, roles, declared).first;
+		const lead = readerTakeLeadAuthors(content, roles, first);
+		const header = readerTakeLead(content, roles, declared, first, Boolean(declared.published || lead.date));
+
+		readerTakeFirstLabel(content, roles);
+
 		const authors = declared.authors.length ? declared.authors : lead.author ? [lead.author] : [];
 		const body = (content.textContent || "").replace(/\s+/g, " ").trim();
 
@@ -39394,8 +39505,8 @@ ${frontPageChooserHTML()}
 			authors,
 			published: declared.published || lead.date,
 			modified: declared.modified,
-			dek: "",
-			metaLines: [],
+			dek: header.dek,
+			metaLines: header.metaLines,
 			avatar: authors.length ? lead.avatar : "",
 		};
 	}
