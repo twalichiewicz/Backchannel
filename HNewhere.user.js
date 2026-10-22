@@ -9568,6 +9568,14 @@ html[data-backchannel-installed] .chin {
 		return { ...payload, origin: staged.origin };
 	}
 
+	function bindCommentStage(payload, staged) {
+		if (staged?.kind !== "comment" || staged.storyID !== payload.storyID) {
+			return null;
+		}
+
+		return { ...payload, origin: staged.origin };
+	}
+
 	// #endregion hnewhere-test-export
 
 	async function postBridgeResult(source, payload, result) {
@@ -24891,6 +24899,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				noun: "comment",
 				stagesDraft: true,
 				requiresDraft: true,
+				bindStaged: bindCommentStage,
 				url: ({ storyID, parentId }) =>
 					parentId ? replyURL({ id: parentId }, storyID) : commentURL(storyID),
 				act: actHNComment,
@@ -25135,6 +25144,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				noun: "comment",
 				stagesDraft: true,
 				requiresDraft: true,
+				bindStaged: bindCommentStage,
 				url: ({ storyID, parentId }) => redditPermalink(storyID, parentId),
 				act: actRedditReply,
 			},
@@ -25143,6 +25153,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
 				noun: "submission",
 				stagesDraft: true,
+				bindStaged: bindSubmitStage,
 				url: ({ url, title, extra }) => redditSubmitURL(url, title, extra),
 				act: actRedditSubmit,
 				report: reportRedditSubmit,
