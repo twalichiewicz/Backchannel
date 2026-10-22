@@ -39010,6 +39010,8 @@ ${frontPageChooserHTML()}
 		subtitle: new Set("subtitle standfirst subhead subheadline dek summary excerpt intro description lede".split(" ")),
 	};
 
+	const READER_AROUND_WEB = /around-?the-?web|from-?your-?site/i;
+
 	const READER_AUTHOR_NAMES = /author|byline|contributor|writer|(?:^|[\s_-])bio(?:$|[\s_-])|avatar/i;
 
 	const READER_BLOCK_SELECTOR = "p, li, h1, h2, h3, h4, h5, h6, figcaption, blockquote, dt, dd";
@@ -39167,7 +39169,7 @@ ${frontPageChooserHTML()}
 	function readerWrapLooseInline(content, doc) {
 		let run = [];
 
-		const flush = (before) => {
+		const flush = () => {
 			if (!run.length) {
 				return;
 			}
@@ -39584,7 +39586,7 @@ ${frontPageChooserHTML()}
 			let removed = false;
 
 			for (const element of [...content.querySelectorAll("p, h1, h2, h3, h4, h5, h6, li, ul, ol, dl, blockquote, figure, figcaption")]) {
-				if (!element.textContent.trim() && !element.querySelector("img, pre, table, hr")) {
+				if (readerIsBlank(element)) {
 					element.remove();
 					removed = true;
 				}
@@ -39612,14 +39614,18 @@ ${frontPageChooserHTML()}
 		return `${element.getAttribute("class") || ""} ${id}`;
 	}
 
-	function readerClassWords(element) {
+	function readerWordSet(names) {
 		return new Set(
-			readerOwnNames(element)
+			names
 				.replace(/follow[-_]?up/gi, "followup")
 				.split(/[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])/)
 				.filter(Boolean)
 				.map((word) => word.toLowerCase()),
 		);
+	}
+
+	function readerClassWords(element) {
+		return readerWordSet(readerOwnNames(element));
 	}
 
 	function readerDeclared(doc) {
@@ -39699,15 +39705,42 @@ ${frontPageChooserHTML()}
 		return declared;
 	}
 
+	function readerSquashedLength(element, stop) {
+		const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+		let text = "";
+
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+			text += node.nodeValue;
+
+			if (text.length > 4000) {
+				const partial = readerSquash(text).length;
+
+				return partial >= stop ? partial : readerSquash(element.textContent).length;
+			}
+		}
+
+		return readerSquash(text).length;
+	}
+
 	function markReaderRoles(doc) {
 		const bodyLength = readerSquash(doc.body?.textContent).length;
 
 		for (const element of doc.body?.querySelectorAll("*") || []) {
-			const names = readerOwnNames(element);
-			const words = readerClassWords(element);
+			let names = `${element.getAttribute("class") || ""} ${element.id}`;
+			let words = readerWordSet(names);
 			let roles = "";
 
-			if (/around-?the-?web|from-?your-?site/i.test(names)) {
+			if (
+				element.id &&
+				(READER_AROUND_WEB.test(names) ||
+					READER_AUTHOR_NAMES.test(names) ||
+					Object.values(READER_ROLE_WORDS).some((set) => [...words].some((word) => set.has(word))))
+			) {
+				names = readerOwnNames(element);
+				words = readerWordSet(names);
+			}
+
+			if (READER_AROUND_WEB.test(names)) {
 				roles += READER_MARKS.furniture;
 			}
 
@@ -39729,9 +39762,7 @@ ${frontPageChooserHTML()}
 				roles += READER_MARKS.author;
 			}
 
-			const length = roles ? readerSquash(element.textContent).length : 0;
-
-			if (!roles || length > 1500 || length >= bodyLength * 0.4) {
+			if (!roles || readerSquashedLength(element, Math.min(1501, bodyLength * 0.4)) >= Math.min(1501, bodyLength * 0.4)) {
 				continue;
 			}
 
@@ -39745,7 +39776,9 @@ ${frontPageChooserHTML()}
 
 			for (let node = walker.nextNode(); node; node = walker.nextNode()) {
 				if (node.nodeValue.trim()) {
-					node.nodeValue = roles + node.nodeValue;
+					const start = node.nodeValue.slice(0, 8);
+
+					node.nodeValue = [...roles].filter((mark) => !start.includes(mark)).join("") + node.nodeValue;
 				}
 			}
 		}
@@ -39917,12 +39950,24 @@ ${frontPageChooserHTML()}
 		return readerSquash(rest).length <= 3;
 	}
 
+	function readerIsBlank(element) {
+		const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+			if (node.nodeType === Node.TEXT_NODE ? node.nodeValue.trim() : /^(?:IMG|PRE|TABLE|HR)$/.test(node.nodeName)) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
 	function readerRemoveBlock(content, element) {
 		let parent = element.parentElement;
 
 		element.remove();
 
-		while (parent && parent !== content && !parent.textContent.trim() && !parent.querySelector("img, pre, table, hr")) {
+		while (parent && parent !== content && readerIsBlank(parent)) {
 			const up = parent.parentElement;
 
 			parent.remove();
@@ -40104,6 +40149,15 @@ ${frontPageChooserHTML()}
 
 			return total ? linked / total : 0;
 		};
+		const inside = (element) => {
+			for (let up = element.parentElement; up; up = up.parentElement) {
+				if (marked.has(up)) {
+					return true;
+				}
+			}
+
+			return false;
+		};
 		let inSection = false;
 
 		for (const [at, element] of nodes.entries()) {
@@ -40124,7 +40178,7 @@ ${frontPageChooserHTML()}
 				continue;
 			}
 
-			if (!inSection || marked.has(element) || [...marked].some((other) => other.contains(element))) {
+			if (!inSection || marked.has(element) || inside(element)) {
 				continue;
 			}
 
@@ -40512,21 +40566,7 @@ ${frontPageChooserHTML()}
 				taken.author = named || (READER_DATE_WORDS.test(guess) ? "" : guess);
 			}
 
-			let parent = element.parentElement;
-
-			element.remove();
-
-			while (
-				parent &&
-				parent !== content &&
-				!parent.textContent.trim() &&
-				!parent.querySelector("img, pre, table, hr")
-			) {
-				const up = parent.parentElement;
-
-				parent.remove();
-				parent = up;
-			}
+			readerRemoveBlock(content, element);
 		}
 
 		return taken;
