@@ -38405,6 +38405,28 @@ ${frontPageChooserHTML()}
 		),
 	);
 
+	const READER_MARKS = { furniture: "", furnitureAfter: "", kicker: "", subtitle: "", author: "" };
+
+	const READER_MARK_PATTERN = /[-]/g;
+
+	const READER_ROLE_WORDS = {
+		furniture: new Set(
+			"related popular trending recommended recirc recirculation tag tags topics share sharing social follow newsletter subscribe promo ad ads advert advertisement native sponsor sponsored cta ctas preferred comments reuse affiliate disclaimer disclosure terms player footer engagement utility prevnext pagination breadcrumb breadcrumbs menu nav".split(
+				" ",
+			),
+		),
+		furnitureAfter: new Set("category categories card cards more".split(" ")),
+		kicker: new Set("kicker eyebrow deck category categories anno overline label rubric".split(" ")),
+		subtitle: new Set("subtitle standfirst subhead subheadline dek summary excerpt intro description lede".split(" ")),
+	};
+
+	const READER_AUTHOR_NAMES = /author|byline|contributor|writer|(?:^|[\s_-])bio(?:$|[\s_-])|avatar/i;
+
+	const READER_BLOCK_SELECTOR = "p, li, h1, h2, h3, h4, h5, h6, figcaption, blockquote, dt, dd";
+
+	const READER_DATE = /\b(?:\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?,?\s+\d{4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})\b/i;
+	const READER_DATE_GLUED = new RegExp(READER_DATE.source.replace(/^\\b/, ""), "i");
+
 	function readerURL(value, base) {
 		try {
 			const url = new URL(String(value || "").trim(), base);
@@ -38508,6 +38530,10 @@ ${frontPageChooserHTML()}
 
 			if (alt) {
 				attributes.push(["alt", alt]);
+			}
+
+			if (element.getAttribute("data-reader") === "author") {
+				attributes.push(["data-reader", "author"]);
 			}
 
 			return { attributes };
@@ -38940,6 +38966,367 @@ ${frontPageChooserHTML()}
 		return prose[0] || null;
 	}
 
+	function readerSquash(text) {
+		return String(text || "")
+			.replace(READER_MARK_PATTERN, "")
+			.replace(/\s+/g, " ")
+			.trim();
+	}
+
+	function readerOwnNames(element) {
+		const id =
+			element.id && readerKey(element.textContent).startsWith(readerKey(element.id)) ? "" : element.id || "";
+
+		return `${element.getAttribute("class") || ""} ${id}`;
+	}
+
+	function readerClassWords(element) {
+		return new Set(
+			readerOwnNames(element)
+				.split(/[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])/)
+				.filter(Boolean)
+				.map((word) => word.toLowerCase()),
+		);
+	}
+
+	function readerDeclared(doc) {
+		const declared = { authors: [], published: "", modified: "", descriptions: [] };
+		const addName = (name) => {
+			const text = readerSquash(typeof name === "string" ? name : name?.name);
+			const parts = text.split(/\s*[,;]\s*|\s+and\s+/i).map((part) => part.trim());
+
+			if (parts.length > 1 && parts.every((part) => part.split(/\s+/).length >= 2)) {
+				parts.forEach(addOne);
+				return;
+			}
+
+			addOne(text);
+		};
+		const addOne = (text) => {
+			const value = text
+				.replace(/^["'\u201C\u2018\u201E]+|["'\u201D\u2019]+$/g, "")
+				.trim();
+
+			if (
+				value.length >= 3 &&
+				value.length <= 60 &&
+				!/^https?:/i.test(value) &&
+				!declared.authors.some((known) => known.toLowerCase() === value.toLowerCase())
+			) {
+				declared.authors.push(value);
+			}
+		};
+		const walk = (value) => {
+			if (Array.isArray(value)) {
+				value.forEach(walk);
+				return;
+			}
+
+			if (!value || typeof value !== "object") {
+				return;
+			}
+
+			for (const [key, inner] of Object.entries(value)) {
+				if (key === "author" || key === "creator") {
+					[inner].flat().forEach(addName);
+				} else if (key === "datePublished" && !declared.published && typeof inner === "string") {
+					declared.published = inner.trim();
+				} else if (key === "dateModified" && !declared.modified && typeof inner === "string") {
+					declared.modified = inner.trim();
+				} else {
+					walk(inner);
+				}
+			}
+		};
+
+		for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
+			try {
+				walk(JSON.parse(script.textContent));
+			} catch {}
+		}
+
+		const meta = (selector) => (doc.querySelector(selector)?.getAttribute("content") || "").trim();
+
+		addName(meta('meta[name="author"]'));
+		declared.published ||= meta('meta[property="article:published_time"]');
+		declared.modified ||= meta('meta[property="article:modified_time"]');
+
+		for (const selector of [
+			'meta[property="og:description"]',
+			'meta[name="twitter:description"]',
+			'meta[name="description"]',
+		]) {
+			const key = readerKey(meta(selector));
+
+			if (key.length >= 20 && !declared.descriptions.includes(key)) {
+				declared.descriptions.push(key);
+			}
+		}
+
+		return declared;
+	}
+
+	function markReaderRoles(doc) {
+		const bodyLength = readerSquash(doc.body?.textContent).length;
+
+		for (const element of doc.body?.querySelectorAll("*") || []) {
+			const names = readerOwnNames(element);
+			const words = readerClassWords(element);
+			let roles = "";
+
+			if (/around-?the-?web|from-?your-?site/i.test(names)) {
+				roles += READER_MARKS.furniture;
+			}
+
+			for (const [role, set] of Object.entries(READER_ROLE_WORDS)) {
+				if ([...words].some((word) => set.has(word))) {
+					roles += READER_MARKS[role];
+				}
+			}
+
+			const author =
+				READER_AUTHOR_NAMES.test(names) ||
+				element.getAttribute("itemprop") === "author" ||
+				element.matches('a[rel~="author"], .h-card, .p-author');
+
+			if (author) {
+				roles += READER_MARKS.author;
+			}
+
+			const length = roles ? readerSquash(element.textContent).length : 0;
+
+			if (!roles || length > 1500 || length >= bodyLength * 0.4) {
+				continue;
+			}
+
+			if (author) {
+				for (const image of element.nodeName === "IMG" ? [element] : element.querySelectorAll("img")) {
+					image.setAttribute("data-reader", "author");
+				}
+			}
+
+			const walker = doc.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+
+			for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+				if (node.nodeValue.trim()) {
+					node.nodeValue = roles + node.nodeValue;
+				}
+			}
+		}
+	}
+
+	function readerTakeMarks(content) {
+		const roles = new Map();
+		const roleOf = new Map(Object.entries(READER_MARKS).map(([role, mark]) => [mark, role]));
+
+		for (const element of content.querySelectorAll(`${READER_BLOCK_SELECTOR}, a`)) {
+			if (element.nodeName === "A" && element.closest(READER_BLOCK_SELECTOR)) {
+				continue;
+			}
+
+			const walker = content.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+			const share = new Map();
+			let total = 0;
+
+			for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+				const length = node.nodeValue.replace(READER_MARK_PATTERN, "").trim().length;
+
+				total += length;
+
+				for (const mark of new Set(node.nodeValue.match(READER_MARK_PATTERN) || [])) {
+					share.set(mark, (share.get(mark) || 0) + length);
+				}
+			}
+
+			const found = [...share].filter(([, length]) => total && length / total >= 0.6).map(([mark]) => roleOf.get(mark));
+
+			if (found.length) {
+				roles.set(element, new Set(found));
+			}
+		}
+
+		const walker = content.ownerDocument.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+			if (READER_MARK_PATTERN.test(node.nodeValue)) {
+				node.nodeValue = node.nodeValue.replace(READER_MARK_PATTERN, "");
+			}
+
+			READER_MARK_PATTERN.lastIndex = 0;
+		}
+
+		return roles;
+	}
+
+	function readerAltKeys(root) {
+		return new Set(
+			[...root.querySelectorAll("img")].map((image) => readerKey(image.getAttribute("alt"))).filter((key) => key.length >= 20),
+		);
+	}
+
+	function readerIsCaption(block, altKeys) {
+		const text = readerSquash(block.textContent);
+
+		return (
+			altKeys.has(readerKey(text)) ||
+			(text.length <= 160 && /^(?:image|photo|illustration|credit|source|courtesy|graphic)s?\s*:/i.test(text))
+		);
+	}
+
+	function readerSubtitleCandidate(block, roles, declared, altKeys = readerAltKeys(block.getRootNode())) {
+		if (block.nodeName === "FIGCAPTION" || block.closest("figure") || readerIsCaption(block, altKeys)) {
+			return false;
+		}
+
+		const text = readerSquash(block.textContent);
+		const key = readerKey(text);
+		const described =
+			key.length >= 20 && declared.descriptions.some((d) => d === key || d.includes(key) || key.includes(d));
+
+		return (described && text.length <= 140) || (Boolean(roles.get(block)?.has("subtitle")) && text.length <= 160);
+	}
+
+	function readerBoundary(content, roles, declared) {
+		const altKeys = readerAltKeys(content);
+		const prose = [...content.querySelectorAll("p")].filter(
+			(paragraph) =>
+				!paragraph.querySelector(READER_BLOCK_SELECTOR) &&
+				readerSquash(paragraph.textContent).length >= 140 &&
+				!roles.get(paragraph)?.has("author") &&
+				!roles.get(paragraph)?.has("furniture") &&
+				!readerSubtitleCandidate(paragraph, roles, declared, altKeys) &&
+				!readerIsCaption(paragraph, altKeys),
+		);
+
+		return { first: prose[0] || null, last: prose[prose.length - 1] || null };
+	}
+
+	function readerMarkAuthors(content, roles, declared) {
+		const names = declared.authors.map(
+			(name) =>
+				new RegExp(`(?<![\\p{L}\\p{N}])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "iu"),
+		);
+		const named = (text) => Boolean(text) && names.some((name) => name.test(text));
+		const mark = (element) => roles.set(element, (roles.get(element) || new Set()).add("author"));
+		const inside = (element) => {
+			for (let up = element.parentElement; up && up !== content; up = up.parentElement) {
+				if (roles.get(up)?.has("author")) {
+					return true;
+				}
+			}
+
+			return false;
+		};
+
+		for (const block of content.querySelectorAll(`${READER_BLOCK_SELECTOR}, figure`)) {
+			if (block.querySelector("p, li, blockquote, figure") || roles.get(block)?.has("author")) {
+				continue;
+			}
+
+			const text = readerSquash(block.textContent).toLowerCase();
+			const images = [...block.querySelectorAll("img")];
+
+			if (text) {
+				if (text.length <= 80 && !/^H[1-6]$/.test(block.nodeName) && named(text)) {
+					mark(block);
+				}
+			} else if (
+				images.length &&
+				(images.every((image) => image.getAttribute("data-reader") === "author") ||
+					images.every((image) => named(readerSquash(image.getAttribute("alt")).toLowerCase())))
+			) {
+				mark(block);
+			}
+		}
+
+		for (const image of content.querySelectorAll("img")) {
+			if (named(readerSquash(image.getAttribute("alt")).toLowerCase())) {
+				image.setAttribute("data-reader", "author");
+			}
+
+			if (image.getAttribute("data-reader") === "author" && !inside(image)) {
+				mark(image);
+			}
+		}
+
+		for (const list of content.querySelectorAll("ul, ol")) {
+			const items = [...list.children].filter((item) => item.nodeName === "LI");
+
+			if (
+				items.some((item) => roles.get(item)?.has("author")) &&
+				items.every((item) => readerSquash(item.textContent).length <= 60)
+			) {
+				items.forEach(mark);
+			}
+		}
+	}
+
+	function readerTakeLeadAuthors(content, roles, first) {
+		const taken = { avatar: "", author: "", date: "" };
+
+		if (!first) {
+			return taken;
+		}
+
+		const lead = [...roles]
+			.filter(
+				([element, set]) =>
+					set.has("author") &&
+					content.contains(element) &&
+					!element.contains(first) &&
+					first.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_PRECEDING,
+			)
+			.map(([element]) => element)
+			.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+		let lines = null;
+
+		for (const element of lead) {
+			if (!content.contains(element)) {
+				continue;
+			}
+
+			const image = element.nodeName === "IMG" ? element : element.querySelector("img");
+
+			if (!taken.avatar && image) {
+				taken.avatar = image.getAttribute("src") || "";
+			}
+
+			if (!lines && element.nodeName !== "IMG" && readerSquash(element.textContent)) {
+				const copy = element.cloneNode(true);
+
+				for (const lineBreak of copy.querySelectorAll("br")) {
+					lineBreak.replaceWith("\n");
+				}
+
+				lines = copy.textContent.split("\n").map(readerSquash).filter(Boolean);
+				const dated = lines.find((line) => READER_DATE_GLUED.test(line)) || "";
+				const plain = lines.find((line) => !READER_DATE_GLUED.test(line) && line.length <= 80);
+				const glued = dated.match(READER_DATE_GLUED);
+
+				taken.date = glued?.[0] || "";
+				taken.author = readerSquash(plain ?? (glued ? dated.slice(0, glued.index) : "")).replace(/^by\s+/i, "");
+			}
+
+			let parent = element.parentElement;
+
+			element.remove();
+
+			while (
+				parent &&
+				parent !== content &&
+				!parent.textContent.trim() &&
+				!parent.querySelector("img, pre, table, hr")
+			) {
+				const up = parent.parentElement;
+
+				parent.remove();
+				parent = up;
+			}
+		}
+
+		return taken;
+	}
+
 	function extractReaderArticle(html, url) {
 		const text = String(html || "");
 
@@ -38951,27 +39338,29 @@ ${frontPageChooserHTML()}
 	}
 
 	function readerFromDocument(doc, url) {
+		const declared = readerDeclared(doc);
+
 		for (const junk of doc.querySelectorAll("script, style, noscript, template")) {
 			junk.remove();
 		}
 
 		readerPrepareSource(doc);
+		markReaderRoles(doc);
 
-		const title = readerTitle(doc, url);
+		const title = readerTitle(doc, url).replace(READER_MARK_PATTERN, "");
 		const root = readerRoot(doc);
 
 		if (!root) {
 			return null;
 		}
 
-		let byline = String(
-			doc.querySelector('meta[name="author"]')?.getAttribute("content") || "",
-		).trim();
 		const content = doc.createElement("div");
 
 		content.append(...root.childNodes);
 		cleanReaderTree(content, url, doc);
 		readerWrapLooseInline(content, doc);
+
+		const roles = readerTakeMarks(content);
 
 		for (const figure of [...content.querySelectorAll("figure")]) {
 			if (figure.querySelector("figcaption") && !figure.querySelector("img, pre, table")) {
@@ -38990,18 +39379,24 @@ ${frontPageChooserHTML()}
 			}
 		}
 
-		const body = (content.textContent || "").replace(/\s+/g, " ").trim();
+		readerMarkAuthors(content, roles, declared);
 
-		if (byline && body.slice(0, 600).toLowerCase().includes(byline.toLowerCase())) {
-			byline = "";
-		}
+		const lead = readerTakeLeadAuthors(content, roles, readerBoundary(content, roles, declared).first);
+		const authors = declared.authors.length ? declared.authors : lead.author ? [lead.author] : [];
+		const body = (content.textContent || "").replace(/\s+/g, " ").trim();
 
 		return {
 			title,
-			byline,
+			byline: authors.join(", "),
 			site: hostLabel(url),
 			content,
 			chars: body.length,
+			authors,
+			published: declared.published || lead.date,
+			modified: declared.modified,
+			dek: "",
+			metaLines: [],
+			avatar: authors.length ? lead.avatar : "",
 		};
 	}
 
