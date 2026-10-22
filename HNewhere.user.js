@@ -26674,9 +26674,9 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		}
 
 		reader.host.scrollTop = held * reader.viewer.scrollHeight;
-		reader.bus.dispatch("scalechanging", { scale: next, source: reader.app });
-
 		await drawPdfReaderVisiblePages();
+
+		reader.bus.dispatch("scalechanging", { scale: next, source: reader.app });
 	}
 
 	function reportPdfReaderFailure(error) {
