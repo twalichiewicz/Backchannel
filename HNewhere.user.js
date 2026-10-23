@@ -40857,17 +40857,19 @@ ${frontPageChooserHTML()}
 
 	const READER_CREDIT_LINE = /(?:^|\s[|\/]\s|\s)(?:Getty Images|Reuters|AP|AFP|Bloomberg|EPA|Shutterstock|Unsplash|Alamy)$/;
 
+	const READER_PHOTO_CREDIT = /\b(?:photo(?:graph)?|image|illustration|picture)s?\s+(?:by|courtesy(?:\s+of)?)\s+\S[^.!?]{0,100}$/i;
+
 	function readerIsCaption(block, altKeys) {
 		const text = readerSquash(block.textContent);
 		const key = readerKey(text);
 		const before = block.previousElementSibling;
+		const underImage = Boolean(before && !readerSquash(before.textContent) && before.querySelector("img"));
 
 		return (
 			altKeys.has(key) ||
 			(text.length <= 400 && [...altKeys].some((alt) => key.startsWith(alt))) ||
-			(text.length <= 80 &&
-				READER_CREDIT_LINE.test(text) &&
-				Boolean(before && !readerSquash(before.textContent) && before.querySelector("img"))) ||
+			(text.length <= 80 && READER_CREDIT_LINE.test(text) && underImage) ||
+			(text.length <= 400 && READER_PHOTO_CREDIT.test(text) && underImage) ||
 			(text.length <= 160 && /^(?:image|photo|illustration|credit|source|courtesy|graphic)s?\s*:/i.test(text))
 		);
 	}
