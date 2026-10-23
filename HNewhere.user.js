@@ -40002,7 +40002,7 @@ ${frontPageChooserHTML()}
 		];
 
 		for (const candidate of candidates) {
-			if (!candidate || /^data:/i.test(candidate.trim())) {
+			if (!candidate || /^data:/i.test(candidate.trim()) || /placeholder[^/]*$/i.test(candidate.split(/[?#]/)[0])) {
 				continue;
 			}
 
@@ -41429,7 +41429,7 @@ ${frontPageChooserHTML()}
 			(element) => leaf(element) && readerSquash(element.textContent),
 		);
 
-		if (!first || roles.get(first)?.size) {
+		if (!first || roles.get(first)?.size || first.querySelector("img")) {
 			return;
 		}
 
