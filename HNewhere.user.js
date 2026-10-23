@@ -2679,7 +2679,7 @@
 	}
 
 	function newerReleases(list, installed) {
-		if (!Array.isArray(list) || !installed) {
+		if (!Array.isArray(list) || !releaseVersion(installed)) {
 			return [];
 		}
 
@@ -2708,11 +2708,15 @@
 	}
 
 	function releaseNotesHTML(releases) {
-		const text = (value) => markdownInline(escapeHTML(value));
+		const text = (value) =>
+			markdownInline(escapeHTML(value))
+				.replace(/<img src="[^"]*" alt="([^"]*)">/g, (m, alt) => alt || "image")
+				.replace(/<a href=/g, '<a target="_blank" rel="noopener noreferrer" href=');
 		let html = "";
 
 		for (const release of releases) {
 			const indents = [];
+			html += "<section>";
 			const closeLists = () => {
 				while (indents.length) {
 					indents.pop();
@@ -2760,6 +2764,7 @@
 			}
 
 			closeLists();
+			html += "</section>";
 		}
 
 		return html;
@@ -2805,6 +2810,7 @@
 		return {
 			releases: newerReleases(value.releases, SCRIPT_VERSION),
 			checkedAt: Number.isFinite(value.checkedAt) ? value.checkedAt : 0,
+			attemptedAt: Number.isFinite(value.attemptedAt) ? value.attemptedAt : 0,
 			tipShown: typeof value.tipShown === "string" ? value.tipShown : "",
 		};
 	}
@@ -2828,7 +2834,7 @@
 			if (!manual) {
 				const raw = await load(STORAGE.updateCheck, null);
 
-				await save(STORAGE.updateCheck, { ...(raw && typeof raw === "object" ? raw : {}), checkedAt: Date.now() });
+				await save(STORAGE.updateCheck, { ...(raw && typeof raw === "object" ? raw : {}), attemptedAt: Date.now() });
 			}
 
 			const json = await requestReleases();
@@ -2840,7 +2846,11 @@
 			const current = await updateState();
 			const releases = newerReleases(json, SCRIPT_VERSION);
 
-			await save(STORAGE.updateCheck, { checkedAt: Date.now(), releases, tipShown: current.tipShown });
+			await save(STORAGE.updateCheck, {
+				checkedAt: Date.now(),
+				releases,
+				tipShown: manual && releases.length ? releases[0].version : current.tipShown,
+			});
 			notifyUpdate();
 
 			return { ok: true, releases };
@@ -2864,7 +2874,7 @@
 				if (settings.updateCheck !== false) {
 					const state = await updateState();
 
-					if (Date.now() - state.checkedAt >= UPDATE_CHECK_INTERVAL) {
+					if (Date.now() - Math.max(state.checkedAt, state.attemptedAt) >= UPDATE_CHECK_INTERVAL) {
 						await checkForUpdates();
 					}
 				}
@@ -2957,6 +2967,7 @@
 			updateDotWatching = true;
 			new MutationObserver(queueUpdateDot).observe(document.body || document.documentElement, { childList: true });
 			window.addEventListener("resize", queueUpdateDot);
+			new ResizeObserver(queueUpdateDot).observe(document.documentElement);
 		}
 
 		placeUpdateDot();
@@ -2981,12 +2992,24 @@
 		paintUpdateDots((await updateState()).releases);
 	}
 
+	function showUpdateTips() {
+		for (const gear of updateGears) {
+			if (!gear.isConnected) {
+				updateGears.delete(gear);
+				continue;
+			}
+
+			maybeShowUpdateTip(gear).catch(console.error);
+		}
+	}
+
 	function watchUpdateDots() {
 		if (updateListeners.has(refreshUpdateDots)) {
 			return;
 		}
 
 		updateListeners.add(refreshUpdateDots);
+		updateListeners.add(showUpdateTips);
 		document.addEventListener("visibilitychange", () => {
 			if (document.visibilityState === "visible") {
 				refreshUpdateDots().catch(console.error);
@@ -2994,8 +3017,24 @@
 		});
 	}
 
-	async function maybeShowUpdateTip(gear, placement) {
+	async function settleUpdateAnimations(gear) {
 		const root = gear.getRootNode();
+		const running = document
+			.getAnimations()
+			.filter((animation) => {
+				const target = animation.effect?.target;
+
+				return target && (root.contains?.(target) || root.host === target) && animation.effect.getComputedTiming().iterations !== Infinity;
+			})
+			.map((animation) => animation.finished.catch(() => {}));
+
+		await Promise.race([Promise.all(running), new Promise((resolve) => window.setTimeout(resolve, 600))]);
+		await new Promise((resolve) => window.requestAnimationFrame(resolve));
+	}
+
+	async function maybeShowUpdateTip(gear) {
+		const root = gear.getRootNode();
+		const placement = gear.closest("#app-rail") ? "right" : "below";
 
 		if (updateTipBusy || !gear.getClientRects().length || appIsPhone() || gear.getAttribute("aria-expanded") === "true" || root.querySelector?.(".update-tip")) {
 			return;
@@ -3008,6 +3047,12 @@
 			const newest = releases[0]?.version;
 
 			if (!newest || tipShown === newest || !gear.isConnected) {
+				return;
+			}
+
+			await settleUpdateAnimations(gear);
+
+			if (!gear.isConnected || !gear.getClientRects().length || gear.getAttribute("aria-expanded") === "true" || root.querySelector?.(".update-tip")) {
 				return;
 			}
 
@@ -3061,22 +3106,203 @@
 	}
 
 	function watchUpdateGear(gear) {
-		const placement = gear.closest("#app-rail") ? "right" : "below";
 
 		updateGears.add(gear);
 		watchUpdateDots();
 
 		const show = async () => {
 			await refreshUpdateDots();
-			await maybeShowUpdateTip(gear, placement);
+			await maybeShowUpdateTip(gear);
 		};
 
-		updateListeners.add(() => {
-			if (gear.isConnected) {
-				maybeShowUpdateTip(gear, placement).catch(console.error);
-			}
-		});
 		show().catch(console.error);
+	}
+
+	function openUpdateTarget(event, link) {
+		if (link.dataset.url) {
+			event.preventDefault();
+			window.open(link.dataset.url, "_blank", "noopener,noreferrer");
+		}
+	}
+
+	function paintUpdateSettings(root, state) {
+		if (!SCRIPT_VERSION) {
+			return;
+		}
+
+		const releases = Array.isArray(state?.releases) ? state.releases : [];
+		const found = releases.length > 0;
+		const handler = (() => {
+			try {
+				return GM?.info?.scriptHandler || "";
+			} catch {
+				return "";
+			}
+		})();
+		const target = updateTarget(handler, releases);
+		const credit = root.querySelector(".settings-credits-version");
+
+		if (credit) {
+			credit.textContent = found ? `Update to ${releases[0].version}` : `Backchannel v${SCRIPT_VERSION}`;
+			credit.classList.toggle("is-update", found);
+			credit.setAttribute("href", found ? target.url : REPO_URL);
+
+			if (found) {
+				credit.dataset.url = target.url;
+			} else {
+				delete credit.dataset.url;
+			}
+
+			credit.onclick = (event) => openUpdateTarget(event, credit);
+		}
+
+		const group = root.querySelector(".settings-updates");
+
+		if (!group || group.dataset.checking) {
+			return;
+		}
+
+		const install = group.querySelector("#settings-update-install");
+		const notes = group.querySelector("#settings-update-notes");
+		const key = releases.map((release) => release.version).join(",");
+
+		install.setAttribute("href", target.url);
+		install.dataset.url = target.url;
+		install.onclick = (event) => openUpdateTarget(event, install);
+		install.onkeydown = (event) => {
+			if (event.key === " ") {
+				event.preventDefault();
+			}
+		};
+		install.onkeyup = (event) => {
+			if (event.key === " ") {
+				install.click();
+			}
+		};
+		install.classList.toggle("is-shown", found);
+		install.tabIndex = found ? 0 : -1;
+		install.setAttribute("aria-hidden", found ? "false" : "true");
+		group.querySelector("#settings-update-safari").hidden = !(found && target.userscripts);
+
+		if (group.dataset.notes !== key) {
+			group.dataset.notes = key;
+
+			if (found) {
+				notes.innerHTML = releaseNotesHTML(releases);
+				notes.scrollTop = 0;
+			}
+		}
+
+		notes.classList.toggle("is-open", found);
+
+		if (found) {
+			notes.tabIndex = 0;
+		} else {
+			notes.removeAttribute("tabindex");
+		}
+	}
+
+	const updateSettingsGroups = new Map();
+
+	async function refreshUpdateSettings() {
+		const state = await updateState();
+
+		for (const [group, shadow] of updateSettingsGroups) {
+			if (group.isConnected) {
+				paintUpdateSettings(shadow, state);
+			}
+		}
+	}
+
+	function wireSettingsUpdates(shadow, panel) {
+		const group = shadow.querySelector(".settings-updates");
+		const button = group?.querySelector("#settings-update-check");
+		const label = button?.querySelector(".settings-update-label");
+
+		if (!button || !label) {
+			return;
+		}
+
+		const IDLE = "Check for updates";
+		const CHECKING = '<svg class="settings-update-spinner" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.6"/></svg><span class="settings-update-glimmer">Checking…</span>';
+		const LATEST = '<svg class="settings-update-tick" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.2 6.4 4.8 9 9.8 3.4"/></svg>You’re on the latest version';
+		const FAILED = "Couldn’t reach GitHub";
+		const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+		const widthOf = (html) => {
+			const probe = button.cloneNode(true);
+
+			probe.style.cssText = "position:absolute;visibility:hidden;width:auto;transition:none";
+			probe.querySelector(".settings-update-label").innerHTML = html;
+			button.parentNode.append(probe);
+
+			const width = probe.offsetWidth;
+
+			probe.remove();
+			return width;
+		};
+
+		const show = async (html) => {
+			button.style.width = `${button.offsetWidth}px`;
+			label.style.opacity = "0";
+			await wait(120);
+			label.innerHTML = html;
+			button.style.width = `${widthOf(html)}px`;
+			label.style.opacity = "1";
+		};
+
+		const refresh = async () => {
+			paintUpdateSettings(shadow, await updateState());
+		};
+
+		for (const each of updateSettingsGroups.keys()) {
+			if (!each.isConnected) {
+				updateSettingsGroups.delete(each);
+			}
+		}
+
+		updateSettingsGroups.set(group, shadow);
+		updateListeners.add(refreshUpdateSettings);
+		panel.addEventListener("general-shown", () => refresh().catch(console.error));
+		refresh().catch(console.error);
+
+		button.onclick = async (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+
+			if (button.getAttribute("aria-disabled") === "true") {
+				return;
+			}
+
+			button.setAttribute("aria-disabled", "true");
+			group.dataset.checking = "true";
+
+			try {
+				await show(CHECKING);
+
+				const [result] = await Promise.all([checkForUpdates({ manual: true }), wait(900)]);
+
+				if (!result.ok) {
+					await show(FAILED);
+					await wait(2000);
+				} else if (!result.releases.length) {
+					await show(LATEST);
+					await wait(2000);
+				}
+
+				await show(IDLE);
+				await wait(260);
+			} catch (error) {
+				console.error(error);
+				label.textContent = IDLE;
+			} finally {
+				button.style.width = "";
+				label.style.opacity = "";
+				button.removeAttribute("aria-disabled");
+				delete group.dataset.checking;
+				refresh().catch(console.error);
+			}
+		};
 	}
 
 	const itemCache = new Map();
@@ -5007,6 +5233,7 @@ ${
 		"pdfReader",
 		"notepad",
 		"commentImages",
+		"updateCheck",
 	]);
 
 	function pdfViewerRefusesExtensions() {
@@ -14277,6 +14504,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		const wasHidden = sidebar.style.display === "none";
 
 		sidebar.style.display = "";
+		showUpdateTips();
 		await saveSidebarState("open");
 
 		const restoreButton = document.getElementById("hn-restore-button");
@@ -17129,7 +17357,9 @@ header > .settings-panel {
 }
 
 .source-picker-save,
-#settings-cache-clear {
+#settings-update-install,
+#settings-cache-clear,
+#settings-update-check {
 	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	padding:5px 10px;
 	border-radius:4px;
@@ -17139,7 +17369,8 @@ header > .settings-panel {
 	color:white;
 }
 
-#settings-cache-clear {
+#settings-cache-clear,
+#settings-update-check {
 	border-color:var(--button-border);
 	background:var(--button-bg);
 	color:var(--button-text);
@@ -17149,6 +17380,194 @@ header > .settings-panel {
 #settings-cache-clear[aria-disabled="true"] {
 	opacity:.6;
 	cursor:default;
+}
+
+.settings-update-row {
+	display:flex;
+	align-items:center;
+	gap:10px;
+	margin-top:10px;
+}
+
+#settings-update-install,
+#settings-update-check {
+	box-sizing:border-box;
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	height:26px;
+	overflow:hidden;
+	white-space:nowrap;
+	text-decoration:none;
+}
+
+#settings-update-check {
+	transition:width .24s cubic-bezier(.3,.7,.3,1);
+}
+
+#settings-update-check[aria-disabled="true"] {
+	cursor:default;
+}
+
+.settings-update-label {
+	display:inline-flex;
+	align-items:center;
+	gap:6px;
+	transition:opacity .12s;
+}
+
+.settings-update-spinner {
+	width:11px;
+	height:11px;
+	animation:settings-update-spin .8s linear infinite;
+}
+
+.settings-update-spinner circle {
+	fill:none;
+	stroke:var(--meta);
+	stroke-width:1.6;
+	stroke-dasharray:22 10;
+	stroke-linecap:round;
+}
+
+@keyframes settings-update-spin {
+	to {
+		transform:rotate(360deg);
+	}
+}
+
+.settings-update-glimmer {
+	background:linear-gradient(90deg, var(--button-text) 0%, var(--button-text) 35%, color-mix(in srgb, var(--button-text) 25%, var(--button-bg)) 50%, var(--button-text) 65%, var(--button-text) 100%);
+	background-size:250% 100%;
+	-webkit-background-clip:text;
+	background-clip:text;
+	color:transparent;
+	animation:settings-update-glimmer 1.3s linear infinite;
+}
+
+@keyframes settings-update-glimmer {
+	from {
+		background-position:100% 0;
+	}
+	to {
+		background-position:-150% 0;
+	}
+}
+
+.settings-update-tick {
+	width:11px;
+	height:11px;
+}
+
+.settings-update-tick path {
+	fill:none;
+	stroke:var(--accent);
+	stroke-width:2;
+	stroke-linecap:round;
+	stroke-linejoin:round;
+}
+
+#settings-update-install {
+	max-width:0;
+	padding-left:0;
+	padding-right:0;
+	border-width:0;
+	margin-right:-10px;
+	opacity:0;
+	visibility:hidden;
+	transition:max-width .24s cubic-bezier(.3,.7,.3,1), padding .24s cubic-bezier(.3,.7,.3,1), opacity .2s, margin-right .24s, visibility 0s linear .24s;
+}
+
+#settings-update-install.is-shown {
+	max-width:120px;
+	padding-left:10px;
+	padding-right:10px;
+	border-width:1px;
+	margin-right:0;
+	opacity:1;
+	visibility:visible;
+	transition:max-width .24s cubic-bezier(.3,.7,.3,1), padding .24s cubic-bezier(.3,.7,.3,1), opacity .2s, margin-right .24s, visibility 0s;
+}
+
+#settings-update-safari {
+	margin-top:8px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
+}
+
+.settings-update-notes {
+	box-sizing:border-box;
+	max-height:0;
+	overflow:auto;
+	margin-top:0;
+	padding:0 12px;
+	border:1px solid transparent;
+	border-radius:6px;
+	background:var(--field-bg);
+	color:var(--field-text);
+	font-size:12px;
+	line-height:1.4;
+	visibility:hidden;
+	transition:max-height .3s ease, margin-top .3s ease, padding .3s ease, border-color .3s ease, visibility 0s linear .3s;
+}
+
+.settings-update-notes.is-open {
+	max-height:200px;
+	margin-top:10px;
+	padding:10px 12px;
+	border-color:var(--field-border);
+	visibility:visible;
+	transition:max-height .3s ease, margin-top .3s ease, padding .3s ease, border-color .3s ease, visibility 0s;
+}
+
+.settings-update-notes h4 {
+	margin:0 0 4px;
+	font-size:13px;
+	font-weight:600;
+}
+
+.settings-update-notes h5 {
+	margin:8px 0 2px;
+	color:var(--meta);
+	font-size:11px;
+	font-weight:600;
+}
+
+.settings-update-notes p {
+	margin:0 0 4px;
+}
+
+.settings-update-notes ul {
+	margin:0 0 4px;
+	padding-left:16px;
+}
+
+.settings-update-notes ul ul {
+	margin:0;
+}
+
+.settings-update-notes section + section {
+	margin-top:12px;
+	padding-top:10px;
+	border-top:1px solid var(--surface-divider);
+}
+
+.settings-credits a.is-update {
+	padding:4px 12px;
+	border-radius:999px;
+	background:var(--accent);
+	color:white;
+	font-size:12px;
+	font-weight:600;
+	text-decoration:none;
+}
+
+@media (hover: hover) {
+	.settings-credits a.is-update:hover {
+		color:white;
+		filter:brightness(1.08);
+	}
 }
 
 .settings-option-hint {
@@ -17724,6 +18143,10 @@ button.shortcut-key {
 
 .sources-subhint {
 	margin:2px 0 10px;
+}
+
+.sources-subhead + .settings-option {
+	margin-top:10px;
 }
 
 .sources-grid {
@@ -18637,6 +19060,27 @@ ${settings ? settingsPanelHTML() : ""}
 `;
 	}
 
+	function settingsUpdatesHTML() {
+		if (!SCRIPT_VERSION) {
+			return "";
+		}
+
+		return `<div class="settings-group settings-updates">
+<div class="sources-subhead">Updates</div>
+<label class="settings-option">
+<input id="setting-update-check" data-setting="updateCheck" type="checkbox">
+<span>Check for new versions automatically</span>
+</label>
+<div class="settings-option-hint">Once a day, Backchannel will check if there are any available updates.</div>
+<div class="settings-update-row">
+<a id="settings-update-install" href="${escapeHTML(UPDATE_SCRIPT_URL)}" target="_blank" rel="noopener noreferrer" role="button" tabindex="-1" aria-hidden="true">Update</a>
+<button id="settings-update-check" type="button"><span class="settings-update-label">Check for updates</span></button>
+</div>
+<div id="settings-update-safari" hidden>Update from the Userscripts menu in Safari’s toolbar.</div>
+<div id="settings-update-notes" class="settings-update-notes" role="region" aria-label="Release notes"></div>
+</div>`;
+	}
+
 	function settingsPanelHTML() {
 		return `
 <div id="settings-panel" class="settings-panel hidden">
@@ -18785,6 +19229,8 @@ All stored locally.
 <button id="settings-cache-clear" type="button">Clear cache</button>
 </div>
 
+${settingsUpdatesHTML()}
+
 <div class="settings-group">
 <button id="settings-manage-sources" class="settings-link-button" type="button" data-pane="sources" data-pane-name="Sources">Sources<span class="settings-link-chevron">&rsaquo;</span></button>
 <button id="settings-manage-shortcuts" class="settings-link-button" type="button" data-pane="shortcuts" data-pane-name="Shortcuts">Shortcuts<span class="settings-link-chevron">&rsaquo;</span></button>
@@ -18821,7 +19267,7 @@ ${frontPageChooserHTML()}
 </div>
 
 <div class="settings-credits">
-<a href="${escapeHTML(REPO_URL)}" target="_blank" rel="noopener noreferrer">Backchannel${SCRIPT_VERSION ? " v" + escapeHTML(SCRIPT_VERSION) : ""}</a>
+<a class="settings-credits-version" href="${escapeHTML(REPO_URL)}" target="_blank" rel="noopener noreferrer">Backchannel${SCRIPT_VERSION ? " v" + escapeHTML(SCRIPT_VERSION) : ""}</a>
 <a href="${escapeHTML(REPO_URL)}/issues" target="_blank" rel="noopener noreferrer">Report an issue</a>
 </div>
 </div>
@@ -18857,6 +19303,7 @@ ${frontPageChooserHTML()}
 			),
 			keepSidebarSize: shadow.querySelector("#setting-keep-sidebar-size"),
 			commentImages: shadow.querySelector("#setting-comment-images"),
+			updateCheck: shadow.querySelector("#setting-update-check"),
 		};
 
 		const settingsRadios = {
@@ -19235,6 +19682,8 @@ ${frontPageChooserHTML()}
 		};
 
 		refreshNotesCount().catch(console.error);
+
+		wireSettingsUpdates(shadow, settingsPanel);
 
 		const cacheClear = shadow.querySelector("#settings-cache-clear");
 
@@ -32815,6 +33264,11 @@ header .item-action-link {
 		top:-1px;
 		right:auto;
 		left:calc(50% + 8px);
+	}
+
+	#app-rail .update-dot {
+		left:calc(50% + 5.1px);
+		top:6.9px;
 	}
 
 	.rail-button.is-current .rail-icon {
