@@ -39943,7 +39943,7 @@ ${frontPageChooserHTML()}
 	);
 
 	const READER_BLOCK_TAGS = new Set(
-		"P H1 H2 H3 H4 H5 H6 FIGURE UL OL DL BLOCKQUOTE PRE TABLE HR DIV SECTION ARTICLE MAIN HEADER CENTER ADDRESS DETAILS HGROUP".split(
+		"P H1 H2 H3 H4 H5 H6 FIGURE FIGCAPTION UL OL DL BLOCKQUOTE PRE TABLE HR DIV SECTION ARTICLE MAIN HEADER CENTER ADDRESS DETAILS HGROUP".split(
 			" ",
 		),
 	);
@@ -40160,6 +40160,18 @@ ${frontPageChooserHTML()}
 	function readerPrepareSource(doc) {
 		for (const marked of doc.querySelectorAll("[data-reader]")) {
 			marked.removeAttribute("data-reader");
+		}
+
+		for (const amp of doc.querySelectorAll("amp-img, amp-anim")) {
+			const image = doc.createElement("img");
+
+			for (const name of ["src", "srcset", "alt"]) {
+				if (amp.hasAttribute(name)) {
+					image.setAttribute(name, amp.getAttribute(name));
+				}
+			}
+
+			amp.replaceWith(image);
 		}
 
 		for (const video of doc.querySelectorAll("video[poster]")) {
