@@ -40415,7 +40415,7 @@ ${frontPageChooserHTML()}
 				READER_CHROME_ROLES.has(String(element.getAttribute("role") || "").toLowerCase()) ||
 				READER_CHROME_NAMES.test(names);
 
-			if (chrome && !(READER_CONTENT_NAMES.test(names) && readerTextLength(element) >= total * 0.3)) {
+			if (chrome && readerTextLength(element) < total * (READER_CONTENT_NAMES.test(names) ? 0.3 : 0.5)) {
 				element.remove();
 			}
 		}
