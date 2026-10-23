@@ -41857,7 +41857,7 @@ ${frontPageChooserHTML()}
 	function readerFromDocument(doc, url) {
 		const declared = readerDeclared(doc);
 
-		for (const junk of doc.querySelectorAll("script, style, noscript, template")) {
+		for (const junk of doc.querySelectorAll("script, style, template")) {
 			junk.remove();
 		}
 
