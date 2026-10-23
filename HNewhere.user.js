@@ -40397,7 +40397,7 @@ ${frontPageChooserHTML()}
 				continue;
 			}
 
-			const names = `${element.getAttribute("class") || ""} ${element.id || ""}`;
+			const names = `${readerClassNames(element)} ${element.id || ""}`;
 
 			if (
 				READER_UNSEEN_NAMES.test(names) ||
@@ -40561,11 +40561,18 @@ ${frontPageChooserHTML()}
 			.trim();
 	}
 
+	function readerClassNames(element) {
+		return (element.getAttribute("class") || "")
+			.split(/\s+/)
+			.filter((name) => !/[:[\]()@/]/.test(name))
+			.join(" ");
+	}
+
 	function readerOwnNames(element) {
 		const id =
 			element.id && readerKey(element.textContent).startsWith(readerKey(element.id)) ? "" : element.id || "";
 
-		return `${element.getAttribute("class") || ""} ${id}`;
+		return `${readerClassNames(element)} ${id}`;
 	}
 
 	function readerWordSet(names) {
@@ -40690,7 +40697,7 @@ ${frontPageChooserHTML()}
 		const bodyLength = readerSquash(doc.body?.textContent).length;
 
 		for (const element of doc.body?.querySelectorAll("*") || []) {
-			let names = `${element.getAttribute("class") || ""} ${element.id}`;
+			let names = `${readerClassNames(element)} ${element.id}`;
 			let words = readerWordSet(names);
 			let roles = "";
 
