@@ -62,6 +62,7 @@
 // @connect      mastodon.social
 // @connect      www.tootfinder.ch
 // @connect      api.hypothes.is
+// @connect      api.github.com
 // @connect      *
 // @run-at       document-end
 // ==/UserScript==
@@ -215,6 +216,7 @@
 		readerFont: "HNewhere:reader_font",
 		readOut: "HNewhere:read_out",
 		shortcuts: "HNewhere:shortcuts",
+		updateCheck: "HNewhere:update_check",
 	};
 
 	const COLLECTED_LEGACY_KEY = "HNewhere:watches";
@@ -438,6 +440,7 @@
 		newCommentsFirst: false,
 		keepSidebarSize: true,
 		commentImages: false,
+		updateCheck: true,
 	};
 
 	// #region hnewhere-test-export
@@ -2644,6 +2647,233 @@
 				},
 			});
 		});
+	}
+
+	const UPDATE_RELEASES_URL = "https://api.github.com/repos/twalichiewicz/Backchannel/releases?per_page=30";
+	const UPDATE_SCRIPT_URL = "https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js";
+	const UPDATE_RELEASES_PAGE = "https://github.com/twalichiewicz/Backchannel/releases";
+	const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
+	const UPDATE_CHECK_DELAY = 8000;
+	const UPDATE_REINSTALL_MANAGERS = ["Tampermonkey", "Violentmonkey", "Greasemonkey"];
+	const updateListeners = new Set();
+	let updateCheckScheduled = false;
+
+	function compareVersions(a, b) {
+		const left = String(a).split(".").map(Number);
+		const right = String(b).split(".").map(Number);
+
+		for (let i = 0; i < Math.max(left.length, right.length); i++) {
+			const x = left[i] || 0;
+			const y = right[i] || 0;
+
+			if (x !== y) {
+				return x > y ? 1 : -1;
+			}
+		}
+
+		return 0;
+	}
+
+	function releaseVersion(tag) {
+		return /^v?\d+(\.\d+)*$/.test(String(tag)) ? String(tag).replace(/^v/, "") : "";
+	}
+
+	function newerReleases(list, installed) {
+		if (!Array.isArray(list) || !installed) {
+			return [];
+		}
+
+		const found = [];
+
+		for (const entry of list) {
+			if (!entry || typeof entry !== "object" || entry.draft || entry.prerelease) {
+				continue;
+			}
+
+			const version = releaseVersion("tag_name" in entry ? entry.tag_name : entry.version);
+			const url = "html_url" in entry ? entry.html_url : entry.url;
+
+			if (!version || compareVersions(version, installed) <= 0) {
+				continue;
+			}
+
+			found.push({
+				version,
+				body: typeof entry.body === "string" ? entry.body : "",
+				url: typeof url === "string" ? url : "",
+			});
+		}
+
+		return found.sort((a, b) => compareVersions(b.version, a.version));
+	}
+
+	function releaseNotesHTML(releases) {
+		const text = (value) => markdownInline(escapeHTML(value));
+		let html = "";
+
+		for (const release of releases) {
+			const indents = [];
+			const closeLists = () => {
+				while (indents.length) {
+					indents.pop();
+					html += "</li></ul>";
+				}
+			};
+			const lines = String(release.body || "").split(/\r?\n/);
+
+			if (!/^#\s/.test(lines.find((line) => line.trim()) || "")) {
+				html += `<h4>${text("v" + release.version)}</h4>`;
+			}
+
+			for (const line of lines) {
+				const heading = /^(#+)\s+(.*)$/.exec(line);
+				const bullet = /^(\s*)[-*]\s+(.*)$/.exec(line);
+
+				if (bullet) {
+					const indent = bullet[1].length;
+
+					while (indents.length && indent < indents[indents.length - 1]) {
+						indents.pop();
+						html += "</li></ul>";
+					}
+
+					if (indents.length && indent === indents[indents.length - 1]) {
+						html += "</li>";
+					} else {
+						indents.push(indent);
+						html += "<ul>";
+					}
+
+					html += `<li>${text(bullet[2])}`;
+					continue;
+				}
+
+				closeLists();
+
+				if (heading) {
+					const tag = heading[1].length === 1 ? "h4" : "h5";
+
+					html += `<${tag}>${text(heading[2])}</${tag}>`;
+				} else if (line.trim()) {
+					html += `<p>${text(line.trim())}</p>`;
+				}
+			}
+
+			closeLists();
+		}
+
+		return html;
+	}
+
+	function updateTarget(handler, releases) {
+		if (UPDATE_REINSTALL_MANAGERS.includes(handler)) {
+			return { url: UPDATE_SCRIPT_URL, userscripts: false };
+		}
+
+		return { url: releases?.[0]?.url || UPDATE_RELEASES_PAGE, userscripts: handler === "Userscripts" };
+	}
+
+	function requestReleases() {
+		return new Promise((resolve) => {
+			try {
+				GM.xmlHttpRequest({
+					method: "GET",
+					url: UPDATE_RELEASES_URL,
+					timeout: 10000,
+					anonymous: true,
+					headers: { Accept: "application/vnd.github+json" },
+					onload: (response) => {
+						try {
+							resolve(JSON.parse(response.responseText));
+						} catch {
+							resolve(null);
+						}
+					},
+					onerror: () => resolve(null),
+					ontimeout: () => resolve(null),
+				});
+			} catch {
+				resolve(null);
+			}
+		});
+	}
+
+	async function updateState() {
+		const stored = await load(STORAGE.updateCheck, null);
+		const value = stored && typeof stored === "object" ? stored : {};
+
+		return {
+			releases: newerReleases(value.releases, SCRIPT_VERSION),
+			checkedAt: Number.isFinite(value.checkedAt) ? value.checkedAt : 0,
+			tipShown: typeof value.tipShown === "string" ? value.tipShown : "",
+		};
+	}
+
+	function notifyUpdate() {
+		for (const listener of updateListeners) {
+			try {
+				listener();
+			} catch (error) {
+				console.error(error);
+			}
+		}
+	}
+
+	async function checkForUpdates({ manual = false } = {}) {
+		try {
+			if (!SCRIPT_VERSION) {
+				return { ok: false, releases: [] };
+			}
+
+			if (!manual) {
+				const raw = await load(STORAGE.updateCheck, null);
+
+				await save(STORAGE.updateCheck, { ...(raw && typeof raw === "object" ? raw : {}), checkedAt: Date.now() });
+			}
+
+			const json = await requestReleases();
+
+			if (!Array.isArray(json)) {
+				return { ok: false, releases: (await updateState()).releases };
+			}
+
+			const current = await updateState();
+			const releases = newerReleases(json, SCRIPT_VERSION);
+
+			await save(STORAGE.updateCheck, { checkedAt: Date.now(), releases, tipShown: current.tipShown });
+			notifyUpdate();
+
+			return { ok: true, releases };
+		} catch (error) {
+			console.error(error);
+			return { ok: false, releases: [] };
+		}
+	}
+
+	function scheduleUpdateCheck() {
+		if (updateCheckScheduled) {
+			return;
+		}
+
+		updateCheckScheduled = true;
+
+		window.setTimeout(async () => {
+			try {
+				const settings = await loadSettings();
+
+				if (settings.updateCheck !== false) {
+					const state = await updateState();
+
+					if (Date.now() - state.checkedAt >= UPDATE_CHECK_INTERVAL) {
+						await checkForUpdates();
+					}
+				}
+			} catch (error) {
+				console.error(error);
+			}
+
+			notifyUpdate();
+		}, UPDATE_CHECK_DELAY);
 	}
 
 	const itemCache = new Map();
@@ -9130,6 +9360,8 @@ html[data-backchannel-installed] .chin {
 
 		applyButtonMobileStyle(button);
 		document.body.appendChild(button);
+
+		scheduleUpdateCheck();
 
 		return button;
 	}
@@ -24425,6 +24657,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	}
 
 	function openSidebar(stories, options = {}) {
+		scheduleUpdateCheck();
+
 		if (opening) {
 			return openingRun ?? Promise.resolve();
 		}
@@ -33480,6 +33714,8 @@ ${settingsModalHTML()}
 	}
 
 	async function runAppPass() {
+		scheduleUpdateCheck();
+
 		traceOrphanedComments().catch(console.error);
 
 		const shortcuts = readAppShortcuts();
