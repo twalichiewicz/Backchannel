@@ -32126,13 +32126,13 @@ ${SETTINGS_MODAL_CSS}
 #app-list-body .browse-row.is-unread .browse-thumb-wrap::after {
 	content:"";
 	position:absolute;
-	top:-2px;
-	left:-2px;
-	width:8px;
-	height:8px;
-	border-radius:4px;
+	top:-4px;
+	right:-2px;
+	width:9px;
+	height:9px;
+	border-radius:50%;
 	background:var(--accent);
-	box-shadow:0 0 0 2px var(--bg, #fff);
+	box-shadow:0 0 0 1.5px var(--bg, #fff);
 }
 
 #app-reading {
