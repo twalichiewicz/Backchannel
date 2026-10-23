@@ -2876,6 +2876,209 @@
 		}, UPDATE_CHECK_DELAY);
 	}
 
+	const UPDATE_BUTTON_IDS = ["hn-restore-button", "hn-collapse-button", "hn-submit-button", "hn-setup-button"];
+	const updateGears = new Set();
+	let updateReleases = [];
+	let updateDotWatching = false;
+	let updateDotTracked = null;
+	let updateDotFrame = 0;
+	let updateTipBusy = false;
+
+	function visibleUpdateButton() {
+		for (const id of UPDATE_BUTTON_IDS) {
+			const button = document.getElementById(id);
+
+			if (button && button.getClientRects().length) {
+				return button;
+			}
+		}
+
+		return null;
+	}
+
+	function placeUpdateDot() {
+		updateDotFrame = 0;
+
+		const button = updateReleases.length ? visibleUpdateButton() : null;
+		let dot = document.getElementById("hn-update-dot");
+
+		if (!button) {
+			dot?.remove();
+			return;
+		}
+
+		if (!dot) {
+			dot = document.createElement("span");
+			dot.id = "hn-update-dot";
+			dot.setAttribute("aria-hidden", "true");
+			pinButtonStyle(dot, {
+				...BUTTON_STYLE_RESET,
+				position: "fixed",
+				zIndex: "2147483647",
+				width: "11px",
+				height: "11px",
+				borderRadius: "50%",
+				background: "#fff",
+				pointerEvents: "none",
+			});
+		}
+
+		const box = button.getBoundingClientRect();
+
+		const ring = getComputedStyle(button).backgroundColor;
+
+		pinButtonStyle(dot, {
+			left: `${box.right - 11}px`,
+			top: `${box.top + 1}px`,
+			boxShadow: `0 0 0 2px ${ring && !/rgba\(.*,\s*0\)$/.test(ring) && ring !== "transparent" ? ring : "#237140"}`,
+		});
+
+		if (button.nextElementSibling !== dot) {
+			button.after(dot);
+		}
+
+		if (updateDotTracked !== button) {
+			updateDotTracked = button;
+			button.addEventListener("transitionend", queueUpdateDot);
+			new MutationObserver(queueUpdateDot).observe(button, { attributes: true, attributeFilter: ["style", "class"] });
+		}
+	}
+
+	function queueUpdateDot() {
+		if (!updateDotFrame) {
+			updateDotFrame = window.requestAnimationFrame(placeUpdateDot);
+		}
+	}
+
+	function paintUpdateDots(releases) {
+		updateReleases = Array.isArray(releases) ? releases : [];
+
+		if (updateReleases.length && !updateDotWatching) {
+			updateDotWatching = true;
+			new MutationObserver(queueUpdateDot).observe(document.body || document.documentElement, { childList: true });
+			window.addEventListener("resize", queueUpdateDot);
+		}
+
+		placeUpdateDot();
+
+		for (const gear of updateGears) {
+			if (!gear.isConnected) {
+				updateGears.delete(gear);
+				continue;
+			}
+
+			const dot = gear.querySelector(".update-dot");
+
+			if (updateReleases.length && !dot) {
+				gear.insertAdjacentHTML("beforeend", '<span class="update-dot" aria-hidden="true"></span>');
+			} else if (!updateReleases.length) {
+				dot?.remove();
+			}
+		}
+	}
+
+	async function refreshUpdateDots() {
+		paintUpdateDots((await updateState()).releases);
+	}
+
+	function watchUpdateDots() {
+		if (updateListeners.has(refreshUpdateDots)) {
+			return;
+		}
+
+		updateListeners.add(refreshUpdateDots);
+		document.addEventListener("visibilitychange", () => {
+			if (document.visibilityState === "visible") {
+				refreshUpdateDots().catch(console.error);
+			}
+		});
+	}
+
+	async function maybeShowUpdateTip(gear, placement) {
+		const root = gear.getRootNode();
+
+		if (updateTipBusy || !gear.getClientRects().length || appIsPhone() || gear.getAttribute("aria-expanded") === "true" || root.querySelector?.(".update-tip")) {
+			return;
+		}
+
+		updateTipBusy = true;
+
+		try {
+			const { releases, tipShown } = await updateState();
+			const newest = releases[0]?.version;
+
+			if (!newest || tipShown === newest || !gear.isConnected) {
+				return;
+			}
+
+			const raw = await load(STORAGE.updateCheck, null);
+
+			await save(STORAGE.updateCheck, { ...(raw && typeof raw === "object" ? raw : {}), tipShown: newest });
+
+			const tip = document.createElement("div");
+			const title = document.createElement("b");
+			const line = document.createElement("span");
+
+			tip.className = `app-tip update-tip${placement === "below" ? " is-below" : ""}`;
+			tip.setAttribute("role", "status");
+			title.textContent = "A new version of Backchannel is available";
+			line.textContent = `Version ${newest} · open Settings to update`;
+			tip.append(title, line);
+			root.append(tip);
+
+			const box = gear.getBoundingClientRect();
+
+			if (placement === "below") {
+				const middle = box.left + box.width / 2;
+				const left = Math.min(middle + 18 - tip.offsetWidth, window.innerWidth - 8 - tip.offsetWidth);
+
+				tip.style.top = `${Math.round(box.bottom + 8)}px`;
+				tip.style.left = `${Math.round(left)}px`;
+				tip.style.setProperty("--arrow", `${Math.round(left + tip.offsetWidth - middle - 4)}px`);
+			} else {
+				tip.style.left = `${Math.round(box.right + 10)}px`;
+				tip.style.top = `${Math.round(box.top + box.height / 2)}px`;
+			}
+
+			const close = () => {
+				tip.remove();
+				document.removeEventListener("pointerdown", close, true);
+				watch.disconnect();
+			};
+			const watch = new MutationObserver(() => {
+				if (gear.getAttribute("aria-expanded") === "true") {
+					close();
+				}
+			});
+
+			watch.observe(gear, { attributes: true, attributeFilter: ["aria-expanded"] });
+			document.addEventListener("pointerdown", close, true);
+		} catch (error) {
+			console.error(error);
+		} finally {
+			updateTipBusy = false;
+		}
+	}
+
+	function watchUpdateGear(gear) {
+		const placement = gear.closest("#app-rail") ? "right" : "below";
+
+		updateGears.add(gear);
+		watchUpdateDots();
+
+		const show = async () => {
+			await refreshUpdateDots();
+			await maybeShowUpdateTip(gear, placement);
+		};
+
+		updateListeners.add(() => {
+			if (gear.isConnected) {
+				maybeShowUpdateTip(gear, placement).catch(console.error);
+			}
+		});
+		show().catch(console.error);
+	}
+
 	const itemCache = new Map();
 	const voteLinkCache = new Map();
 	const displayAgeCache = new Map();
@@ -9275,6 +9478,8 @@ html[data-backchannel-installed] .chin {
 	}
 
 	function createFloatingHNButton(id, variant = "active") {
+		watchUpdateDots();
+		refreshUpdateDots().catch(console.error);
 		let button = document.getElementById(id);
 
 		if (button) {
@@ -11749,6 +11954,7 @@ html[data-backchannel-installed] .chin {
 		button._dragController?.cleanup?.();
 		button._cleanup?.();
 		button.remove();
+		queueUpdateDot();
 	}
 
 	function isBrowsing(ui) {
@@ -18629,6 +18835,8 @@ ${frontPageChooserHTML()}
 		if (!settingsPanel || !settingsToggle) {
 			return { setSettingsOpen: () => {} };
 		}
+
+		watchUpdateGear(settingsToggle);
 
 		const settingsInputs = {
 			sidebarEnabled: shadow.querySelector("#setting-sidebar-enabled"),
@@ -30211,7 +30419,93 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	}
 `;
 
-	const SIDEBAR_SETTINGS_MODAL_CSS = `${APP_ICON_CSS}${SETTINGS_MODAL_CSS}
+	const TIP_CSS = `
+.app-tip {
+	position:absolute;
+	z-index:70;
+	top:0;
+	left:0;
+	padding:5px 9px;
+	border-radius:6px;
+	background:var(--rail-fg, #f3f6f1);
+	color:#000;
+	font:400 11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	white-space:pre;
+	box-shadow:0 4px 14px rgba(0,0,0,.22);
+	pointer-events:none;
+	transform:translateY(-50%);
+}
+
+.app-tip::before {
+	content:"";
+	position:absolute;
+	top:50%;
+	left:-4px;
+	width:8px;
+	height:8px;
+	margin-top:-4px;
+	background:inherit;
+	transform:rotate(45deg);
+}
+
+.app-tip.is-flipped::before {
+	right:-4px;
+	left:auto;
+}
+
+.app-tip b {
+	display:block;
+	font-weight:600;
+	font-size:12px;
+}
+
+.app-tip span {
+	color:#5f6b5f;
+}
+
+.app-tip.update-tip {
+	position:fixed;
+	z-index:2147483647;
+	padding:7px 10px 8px;
+	line-height:1.35;
+}
+
+.app-tip.is-below {
+	transform:none;
+}
+
+.app-tip.is-below::before {
+	top:-4px;
+	right:var(--arrow, 12px);
+	left:auto;
+	margin-top:0;
+}
+
+#settings-toggle {
+	position:relative;
+}
+
+.update-dot {
+	position:absolute;
+	left:17.56px;
+	top:6.44px;
+	width:6px;
+	height:6px;
+	border-radius:50%;
+	background:#fff;
+	box-shadow:0 0 0 1.5px var(--rail-bg, var(--header-bg));
+	pointer-events:none;
+}
+
+#app-rail .update-dot {
+	left:19.373px;
+	top:5.627px;
+	width:7px;
+	height:7px;
+}
+`;
+
+	const SIDEBAR_SETTINGS_MODAL_CSS = `${APP_ICON_CSS}${SETTINGS_MODAL_CSS}${TIP_CSS}
 #app-settings-modal {
 	z-index:2147483647;
 	line-height:1.4;
@@ -30491,39 +30785,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	letter-spacing:.02em;
 }
 
-.app-tip {
-	position:absolute;
-	z-index:70;
-	top:0;
-	left:0;
-	padding:5px 9px;
-	border-radius:6px;
-	background:var(--rail-fg);
-	color:#000;
-	font:400 11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-	white-space:pre;
-	box-shadow:0 4px 14px rgba(0,0,0,.22);
-	pointer-events:none;
-	transform:translateY(-50%);
-}
-
-.app-tip::before {
-	content:"";
-	position:absolute;
-	top:50%;
-	left:-4px;
-	width:8px;
-	height:8px;
-	margin-top:-4px;
-	background:inherit;
-	transform:rotate(45deg);
-}
-
-.app-tip.is-flipped::before {
-	right:-4px;
-	left:auto;
-}
-
+${TIP_CSS}
 .rail-rule {
 	flex:0 0 auto;
 	width:20px;
