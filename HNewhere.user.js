@@ -40432,7 +40432,15 @@ ${frontPageChooserHTML()}
 
 		const [short, long] = a.length < b.length ? [a, b] : [b, a];
 
-		return short.length >= 10 && short.length >= long.length * 0.6 && long.includes(short);
+		if (short.length >= 10 && short.length >= long.length * 0.6 && long.includes(short)) {
+			return true;
+		}
+
+		const words = (value) => String(value || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+		const [fewer, more] = [words(text), words(title)].sort((x, y) => x.length - y.length);
+		const pool = new Set(more);
+
+		return fewer.length >= 5 && fewer.length >= more.length * 0.75 && fewer.filter((word) => pool.has(word)).length >= fewer.length * 0.9;
 	}
 
 	function dropReaderChrome(root) {
