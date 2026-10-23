@@ -31556,6 +31556,7 @@ ${APP_ICON_CSS}
 	position:fixed;
 	z-index:30;
 	width:auto;
+	overflow-y:auto;
 	box-sizing:border-box;
 	padding:10px 10px 12px;
 	border:1px solid var(--surface-border);
@@ -33865,7 +33866,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	padding:60px 28px 96px;
 	color:var(--reader-ink);
 	font:16px/1.62 var(--reader-face);
-	font-size:calc(16px * var(--app-zoom, 1));
+	font-size:calc(16px * var(--app-text-zoom, 1));
 	overflow-wrap:break-word;
 	-webkit-text-size-adjust:100%;
 }
@@ -34676,6 +34677,7 @@ ${settingsModalHTML()}
 			const zoom = APP_ZOOM_STEPS[zoomAt];
 
 			shadow.host.style.setProperty("--app-zoom", String(appIsPhone() ? 1 : zoom));
+			shadow.host.style.setProperty("--app-text-zoom", String(zoom));
 			zoomLevel.value = String(Math.round(zoom * 100));
 			zoomOut.disabled = zoomAt === 0;
 			zoomIn.disabled = zoomAt === APP_ZOOM_STEPS.length - 1;
@@ -34732,7 +34734,7 @@ ${settingsModalHTML()}
 		viewMenu.addEventListener("keydown", (event) => {
 			if (event.key === "Escape") {
 				setAppViewMenuOpen(false);
-				shadow.querySelector(appIsStacked() ? "#app-bar-view" : "#app-view-toggle").focus();
+				appViewMenuToggle(shadow).focus();
 			}
 		});
 		shadow.addEventListener("pointerdown", (event) => {
@@ -35987,6 +35989,10 @@ ${settingsModalHTML()}
 		return window.matchMedia("(max-width: 1335px)").matches && !appIsPhone();
 	}
 
+	function appViewMenuToggle(shadow) {
+		return shadow?.querySelector(appIsStacked() || appIsPhone() ? "#app-bar-view" : "#app-view-toggle");
+	}
+
 	function appLayout() {
 		return appIsPhone() ? "phone" : "wide";
 	}
@@ -36220,7 +36226,7 @@ ${settingsModalHTML()}
 		like.setAttribute("aria-pressed", vote?.getAttribute("aria-pressed") || "false");
 		like.setAttribute("aria-label", vote?.title || "Like");
 		shadow.querySelector("#app-bar-open").hidden = shadow.querySelector("#app-article-open").hidden;
-		shadow.querySelector("#app-bar-view").hidden = appIsPhone() || shadow.querySelector("#app-view-toggle").hidden;
+		shadow.querySelector("#app-bar-view").hidden = shadow.querySelector("#app-view-toggle").hidden || (appIsPhone() && shadow.querySelector("#app-article-body")?.dataset.mode !== "reader");
 
 		const bar = shadow.querySelector("#app-bar");
 
@@ -37734,13 +37740,13 @@ ${frontPageChooserHTML()}
 	function setAppViewMenuOpen(open) {
 		const shadow = appState?.ui.shadow;
 		const menu = shadow?.querySelector("#app-view-menu");
-		const toggle = shadow?.querySelector(appIsStacked() ? "#app-bar-view" : "#app-view-toggle");
+		const toggle = appViewMenuToggle(shadow);
 
 		if (!menu || !toggle) {
 			return;
 		}
 
-		const show = Boolean(open) && !toggle.hidden && !appIsPhone();
+		const show = Boolean(open) && !toggle.hidden;
 
 		menu.hidden = !show;
 		shadow.querySelector("#app-view-arrow")?.toggleAttribute("hidden", !show);
@@ -37758,18 +37764,24 @@ ${frontPageChooserHTML()}
 	function placeAppViewMenu() {
 		const shadow = appState?.ui.shadow;
 		const menu = shadow?.querySelector("#app-view-menu");
-		const toggle = shadow?.querySelector(appIsStacked() ? "#app-bar-view" : "#app-view-toggle");
+		const toggle = appViewMenuToggle(shadow);
 		const pane = shadow?.querySelector("#app-article");
 
 		if (!menu || menu.hidden || !toggle || !pane) {
 			return;
 		}
 
-		const above = appIsStacked();
+		menu.style.maxHeight = "";
 
 		const box = toggle.getBoundingClientRect();
 		const room = pane.getBoundingClientRect();
 		const width = menu.offsetWidth;
+		const fitsAbove = box.top - 9 - menu.offsetHeight >= 8;
+		const fitsBelow = box.bottom + 9 + menu.offsetHeight <= window.innerHeight - 8;
+		const above = toggle.id === "app-bar-view" && (fitsAbove || (!fitsBelow && box.top > window.innerHeight - box.bottom));
+
+		menu.style.maxHeight = `${Math.floor(above ? box.top - 17 : window.innerHeight - box.bottom - 17)}px`;
+
 		const left = Math.min(
 			Math.max(box.left + box.width / 2 - width / 2, room.left + 8),
 			room.right - width - 8,
@@ -38124,6 +38136,12 @@ ${frontPageChooserHTML()}
 		article.mode = mode;
 		pane.dataset.mode = mode;
 		paintReaderMenu();
+		paintAppBarActions();
+
+		if (mode !== "reader" && appIsPhone()) {
+			setAppViewMenuOpen(false);
+		}
+
 		clearTimeout(article.capTimer);
 
 		if (mode === "frame-agent" || mode === "frame") {
