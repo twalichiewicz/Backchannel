@@ -33174,6 +33174,7 @@ header .item-action-link {
 	}
 
 	#app-bar-view .app-view-glyph {
+		font-weight:600;
 		line-height:1;
 	}
 }
