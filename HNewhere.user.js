@@ -38748,13 +38748,15 @@ ${frontPageChooserHTML()}
 				return;
 			}
 
-			const copy = document.cloneNode(true);
+			const found = readerFromFresh(() => {
+				const copy = document.cloneNode(true);
 
-			for (const own of copy.querySelectorAll(`${OWN_SURFACE_SELECTOR},#hn-collapse-button,#hn-submit-button,#${BUTTON_PENDING_ID}`)) {
-				own.remove();
-			}
+				for (const own of copy.querySelectorAll(`${OWN_SURFACE_SELECTOR},#hn-collapse-button,#hn-submit-button,#${BUTTON_PENDING_ID}`)) {
+					own.remove();
+				}
 
-			const found = readerFromDocument(copy, location.href);
+				return copy;
+			}, location.href);
 			const chars = found?.chars || 0;
 
 			if (chars >= READER_MIN_CHARS && chars === last && document.readyState === "complete") {
@@ -40443,7 +40445,7 @@ ${frontPageChooserHTML()}
 		return fewer.length >= 5 && fewer.length >= more.length * 0.75 && fewer.filter((word) => pool.has(word)).length >= fewer.length * 0.9;
 	}
 
-	function dropReaderChrome(root) {
+	function dropReaderChrome(root, loose) {
 		const total = readerTextLength(root);
 
 		for (const element of [...root.querySelectorAll("*")]) {
@@ -40461,7 +40463,7 @@ ${frontPageChooserHTML()}
 				continue;
 			}
 
-			if (!READER_CHROME_TAGS.has(element.nodeName.toUpperCase()) || element.closest("pre, code")) {
+			if (loose || !READER_CHROME_TAGS.has(element.nodeName.toUpperCase()) || element.closest("pre, code")) {
 				continue;
 			}
 
@@ -40749,11 +40751,11 @@ ${frontPageChooserHTML()}
 		return best.element;
 	}
 
-	function readerRoot(doc) {
+	function readerRoot(doc, loose) {
 		const root = readerEntryRoot(doc);
 
 		if (root) {
-			dropReaderChrome(root);
+			dropReaderChrome(root, loose);
 		}
 
 		return root;
@@ -41851,10 +41853,22 @@ ${frontPageChooserHTML()}
 			return null;
 		}
 
-		return readerFromDocument(new DOMParser().parseFromString(text, "text/html"), url);
+		return readerFromFresh(() => new DOMParser().parseFromString(text, "text/html"), url);
 	}
 
-	function readerFromDocument(doc, url) {
+	function readerFromFresh(fresh, url) {
+		const first = readerFromDocument(fresh(), url);
+
+		if (first && first.chars >= 1200) {
+			return first;
+		}
+
+		const retry = readerFromDocument(fresh(), url, true);
+
+		return retry && (!first || retry.chars > first.chars * 2) ? retry : first;
+	}
+
+	function readerFromDocument(doc, url, loose) {
 		const declared = readerDeclared(doc);
 
 		for (const junk of doc.querySelectorAll("script, style, template")) {
@@ -41870,7 +41884,7 @@ ${frontPageChooserHTML()}
 			picked.chosen !== picked.headings[0] && readerKey(picked.chosen?.textContent) === readerKey(title)
 				? readerKey(picked.headings[0].textContent)
 				: "";
-		const root = readerRoot(doc);
+		const root = readerRoot(doc, loose);
 
 		if (!root) {
 			return null;
