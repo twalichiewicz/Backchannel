@@ -39968,6 +39968,8 @@ ${frontPageChooserHTML()}
 
 	const READER_AUTHOR_NAMES = /author|byline|contributor|writer|(?:^|[\s_-])bio(?:$|[\s_-])|avatar/i;
 
+	const READER_AUTHOR_PAGE = /\/(?:authors?|contributors?|writers?|columnists?|journalists?|reporters?|staff|people|profiles?)\/[^/]+\/?$/i;
+
 	const READER_BLOCK_SELECTOR = "p, li, h1, h2, h3, h4, h5, h6, figcaption, blockquote, dt, dd";
 
 	const READER_DATE = /\b(?:\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?,?\s+\d{4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})\b/i;
@@ -40771,7 +40773,8 @@ ${frontPageChooserHTML()}
 			const author =
 				READER_AUTHOR_NAMES.test(names) ||
 				element.getAttribute("itemprop") === "author" ||
-				element.matches('a[rel~="author"], .h-card, .p-author');
+				element.matches('a[rel~="author"], .h-card, .p-author') ||
+				(element.nodeName === "A" && READER_AUTHOR_PAGE.test((element.getAttribute("href") || "").split(/[?#]/)[0]));
 
 			if (author) {
 				roles += READER_MARKS.author;
@@ -40813,6 +40816,10 @@ ${frontPageChooserHTML()}
 			let total = 0;
 
 			for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+				if (node.parentElement?.closest("time")) {
+					continue;
+				}
+
 				const length = node.nodeValue.replace(READER_MARK_PATTERN, "").trim().length;
 
 				total += length;
