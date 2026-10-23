@@ -40475,69 +40475,288 @@ ${frontPageChooserHTML()}
 		}
 	}
 
-	function readerScoredRoot(doc) {
-		const scores = new Map();
-		const prose = new Map();
+	// Adapted from Defuddle 0.19.5, https://github.com/kepano/defuddle
+	// Copyright (c) 2025 Steph Ango (@kepano)
+	//
+	// Permission is hereby granted, free of charge, to any person obtaining a copy
+	// of this software and associated documentation files (the "Software"), to deal
+	// in the Software without restriction, including without limitation the rights
+	// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+	// copies of the Software, and to permit persons to whom the Software is
+	// furnished to do so, subject to the following conditions:
+	//
+	// The above copyright notice and this permission notice shall be included in all
+	// copies or substantial portions of the Software.
+	//
+	// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+	// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+	// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+	// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+	// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+	// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+	// SOFTWARE.
 
-		for (const block of doc.body.querySelectorAll("p, pre, blockquote, li")) {
-			const length = readerTextLength(block);
+	const READER_ENTRY_POINTS = [
+		"#post",
+		".post-content",
+		".post-body",
+		".article-content",
+		"#article-content",
+		".js-article-content",
+		".article_post",
+		".article-wrapper",
+		".entry-content",
+		".content-article",
+		".instapaper_body",
+		".post",
+		".markdown-body",
+		"article",
+		'[role="article"]',
+		"main",
+		'[role="main"]',
+		".article-body",
+		"#content",
+		"body",
+	];
 
-			if (length < 60 || block.closest("nav, aside, footer, form") || readerLinkShare(block) > 0.5) {
-				continue;
+	const READER_FOOTNOTE_REFERENCES = [
+		"sup.reference",
+		"cite.ltx_cite",
+		'sup[id^="fnr"]',
+		'span[id^="fnr"]',
+		'span[class*="footnote_ref"]',
+		'span[class*="footnote-ref"]',
+		"span.footnote-link",
+		"a.citation",
+		'a[id^="ref-link"]',
+		'a[href^="#fn"]',
+		'a[href^="#cite"]',
+		'a[href^="#reference"]',
+		'a[href^="#footnote"]',
+		'a[href^="#r"]',
+		'a[href^="#b"]',
+		'a[href*="cite_note"]',
+		'a[href*="cite_ref"]',
+		"a.footnote-anchor",
+		"span.footnote-hovercard-target a",
+		'a[role="doc-biblioref"]',
+		'a[id^="fnref"]',
+		'a[id^="ref-link"]',
+		"sup.footnoteref",
+		"sup.footnote-reference",
+		'sup[data-fn] > a[href^="#"]',
+		'sup[id^="ftnt_ref"] a[href^="#ftnt"]',
+		'span.easy-footnote > a[href^="#easy-footnote-bottom-"]',
+		'a.footnote[href^="#"]',
+		'a[data-type="noteref"]',
+	].join(",");
+
+	const READER_FOOTNOTE_LISTS = [
+		"div.footnote ol",
+		"div.footnotes ol",
+		'div[role="doc-endnotes"]',
+		'div[role="doc-footnotes"]',
+		"ol.footnotes-list",
+		"ol.footnotes",
+		"ol.references",
+		'ol[class*="article-references"]',
+		"section.footnotes ol",
+		'section[role="doc-endnotes"]',
+		'section[role="doc-footnotes"]',
+		'section[role="doc-bibliography"]',
+		"ul.footnotes-list",
+		"ul.ltx_biblist",
+		'div.footnote[data-component-name="FootnoteToDOM"]',
+		"div.footnotes-footer",
+		"div.footnote-definitions",
+		"div.footnote-definition",
+		"ol.wp-block-footnotes",
+		"ol.easy-footnotes-wrapper",
+		"div.footnotes-segment",
+		"#footnotes",
+	].join(",");
+
+	const READER_CONTENT_DATE = /\b(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,?\s+\d{4})\b/i;
+
+	const READER_CONTENT_AUTHOR = /\b(?:by|written by|author:)\s+[A-Za-z\s]+\b/i;
+
+	function readerWordCount(text) {
+		let words = 0;
+		let inWord = false;
+
+		for (let index = 0; index < text.length; index += 1) {
+			const code = text.charCodeAt(index);
+
+			if (
+				(code >= 0x3040 && code <= 0x30ff) ||
+				(code >= 0x3400 && code <= 0x4dbf) ||
+				(code >= 0x4e00 && code <= 0x9fff) ||
+				(code >= 0xf900 && code <= 0xfaff) ||
+				(code >= 0xac00 && code <= 0xd7af)
+			) {
+				words += 1;
+				inWord = false;
+			} else if (code <= 32) {
+				inWord = false;
+			} else if (!inWord) {
+				words += 1;
+				inWord = true;
 			}
+		}
 
-			let weight = 1;
-			let depth = 0;
+		return words;
+	}
 
-			for (let up = block.parentElement; up && up !== doc.documentElement; up = up.parentElement) {
-				prose.set(up, (prose.get(up) || 0) + length);
+	function readerContentScore(element) {
+		const text = element.textContent || "";
+		const words = readerWordCount(text);
+		const style = element.getAttribute("style") || "";
+		const names = (element.getAttribute("class") || "").toLowerCase();
+		let score = words + element.getElementsByTagName("p").length * 10 + text.split(",").length - 1;
 
-				if (depth < 4) {
-					scores.set(up, (scores.get(up) || 0) + (1 + Math.min(3, length / 100)) * weight);
-					weight *= 0.6;
-				}
+		score -= (element.getElementsByTagName("img").length / (words || 1)) * 3;
 
-				depth += 1;
+		if (style.includes("float: right") || style.includes("text-align: right") || element.getAttribute("align") === "right") {
+			score += 5;
+		}
+
+		if (READER_CONTENT_DATE.test(text)) {
+			score += 10;
+		}
+
+		if (READER_CONTENT_AUTHOR.test(text)) {
+			score += 10;
+		}
+
+		if (names.includes("content") || names.includes("article") || names.includes("post")) {
+			score += 15;
+		}
+
+		if (element.querySelector(READER_FOOTNOTE_REFERENCES)) {
+			score += 10;
+		}
+
+		if (element.querySelector(READER_FOOTNOTE_LISTS)) {
+			score += 10;
+		}
+
+		score -= element.getElementsByTagName("table").length * 5;
+
+		const table = element.nodeName === "TD" ? element.closest("table") : null;
+
+		if (table) {
+			const tableNames = (table.getAttribute("class") || "").toLowerCase();
+			const cells = [...table.getElementsByTagName("td")];
+			const index = cells.indexOf(element);
+
+			if (
+				(parseInt(table.getAttribute("width") || "0", 10) > 400 ||
+					table.getAttribute("align") === "center" ||
+					tableNames.includes("content") ||
+					tableNames.includes("article")) &&
+				index > 0 &&
+				index < cells.length - 1
+			) {
+				score += 10;
 			}
+		}
+
+		let linked = 0;
+
+		for (const link of element.getElementsByTagName("a")) {
+			linked += (link.textContent || "").length;
+		}
+
+		return score * (1 - Math.min(linked / (text.length || 1), 0.5));
+	}
+
+	function readerTableRoot(doc) {
+		const layout = [...doc.getElementsByTagName("table")].some((table) => {
+			const names = (table.getAttribute("class") || "").toLowerCase();
+
+			return (
+				parseInt(table.getAttribute("width") || "0", 10) > 400 ||
+				table.getAttribute("align") === "center" ||
+				names.includes("content") ||
+				names.includes("article") ||
+				[...table.getElementsByTagName("tr")].some((row) => {
+					const cells = [...row.children].filter((cell) => cell.nodeName === "TD");
+
+					return cells.length >= 2 && cells.some((cell) => cell.getAttribute("width"));
+				})
+			);
+		});
+
+		if (!layout) {
+			return null;
 		}
 
 		let best = null;
 		let top = 0;
 
-		for (const [element, score] of scores) {
+		for (const cell of doc.getElementsByTagName("td")) {
+			const score = readerContentScore(cell);
+
 			if (score > top) {
-				best = element;
+				best = cell;
 				top = score;
 			}
 		}
 
-		while (best && best !== doc.body && best.parentElement && (prose.get(best.parentElement) || 0) >= (prose.get(best) || 0) * 1.2) {
-			best = best.parentElement;
-		}
-
-		return best && readerTextLength(best) >= READER_MIN_CHARS ? best : null;
-	}
-
-	function readerRoot(doc) {
-		for (const [candidate, floor] of [
-			[doc.querySelector("main article"), 800],
-			[doc.querySelector("article"), 800],
-			[doc.querySelector("main"), READER_MIN_CHARS],
-			[doc.querySelector("[role='main']"), READER_MIN_CHARS],
-		]) {
-			if (candidate && readerTextLength(candidate) >= floor) {
-				dropReaderChrome(candidate);
-				return candidate;
-			}
-		}
-
-		if (!doc.body) {
+		if (!best || top <= 50) {
 			return null;
 		}
 
-		dropReaderChrome(doc.body);
+		return readerWordCount(best.textContent || "") * 2 < readerWordCount((doc.body || doc.documentElement).textContent || "") ? null : best;
+	}
 
-		return readerScoredRoot(doc) || doc.body;
+	function readerEntryRoot(doc) {
+		const candidates = [];
+
+		READER_ENTRY_POINTS.forEach((selector, index) => {
+			for (const element of doc.querySelectorAll(selector)) {
+				if (doc.body?.contains(element)) {
+					candidates.push({ element, index, score: (READER_ENTRY_POINTS.length - index) * 40 + readerContentScore(element) });
+				}
+			}
+		});
+
+		if (!candidates.length) {
+			return null;
+		}
+
+		candidates.sort((a, b) => b.score - a.score);
+
+		const top = candidates[0];
+
+		if (candidates.length === 1 && top.element === doc.body) {
+			return readerTableRoot(doc) || doc.body;
+		}
+
+		let best = top;
+
+		for (const child of candidates.slice(1)) {
+			if (
+				child.index < best.index &&
+				best.element.contains(child.element) &&
+				readerWordCount(child.element.textContent || "") > 50 &&
+				candidates.filter((other) => other.index === child.index && top.element.contains(other.element)).length <= 1
+			) {
+				best = child;
+			}
+		}
+
+		return best.element;
+	}
+
+	function readerRoot(doc) {
+		const root = readerEntryRoot(doc);
+
+		if (root) {
+			dropReaderChrome(root);
+		}
+
+		return root;
 	}
 
 	function tidyReaderContent(content) {
