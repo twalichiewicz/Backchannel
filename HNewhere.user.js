@@ -40178,6 +40178,34 @@ ${frontPageChooserHTML()}
 			wrapper.replaceWith(...wrapper.childNodes, " ");
 		}
 
+		const pageLength = readerSquash(doc.body?.textContent).length;
+
+		for (const link of doc.querySelectorAll('a[href^="#"]')) {
+			const target =
+				link.isConnected && /^skip\b/i.test(readerSquash(link.textContent))
+					? doc.getElementById(link.getAttribute("href").slice(1))
+					: null;
+
+			if (!target || target.contains(link) || !(link.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+				continue;
+			}
+
+			const skipped = doc.createRange();
+
+			skipped.setStartBefore(link);
+			skipped.setEndBefore(target);
+
+			if (readerSquash(skipped.toString()).length > pageLength * 0.2) {
+				continue;
+			}
+
+			skipped.deleteContents();
+
+			if (readerSquash(target.textContent).length <= 80 && !target.querySelector("img, p, li")) {
+				target.remove();
+			}
+		}
+
 		for (const video of doc.querySelectorAll("video[poster]")) {
 			const poster = (video.getAttribute("poster") || "").trim();
 
