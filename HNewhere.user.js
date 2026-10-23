@@ -40174,6 +40174,10 @@ ${frontPageChooserHTML()}
 			amp.replaceWith(image);
 		}
 
+		for (const wrapper of [...doc.querySelectorAll("span > div")].reverse()) {
+			wrapper.replaceWith(...wrapper.childNodes, " ");
+		}
+
 		for (const video of doc.querySelectorAll("video[poster]")) {
 			const poster = (video.getAttribute("poster") || "").trim();
 
