@@ -8,16 +8,10 @@ docs/
 # Agent working notes and scratch state. Internal process, same rule as docs/.
 CLAUDE.md
 .claude/
+.superpowers/
 
 # Playwright MCP run artifacts
 .playwright-mcp/
-
-# Loose probe output written at the repo root while measuring a source.
-# Named rather than globbed: tracking a new file stays a deliberate decision.
-/lt.json
-/lt2.json
-/xc.html
-/xc.xml
 
 # Screenshots captured at the repo root while verifying changes by hand.
 # Scoped to the root so images committed under a folder still work.
