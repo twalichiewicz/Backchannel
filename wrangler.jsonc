@@ -1,7 +1,10 @@
 {
 	"name": "backchannel",
+	"main": "worker.js",
 	"compatibility_date": "2026-09-11",
 	"assets": {
-		"directory": "./site"
+		"directory": "./site",
+		"binding": "ASSETS",
+		"run_worker_first": ["/"]
 	}
 }
