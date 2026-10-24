@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.17.4
+// @version      1.6.18
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -62,6 +62,7 @@
 // @connect      mastodon.social
 // @connect      www.tootfinder.ch
 // @connect      api.hypothes.is
+// @connect      api.github.com
 // @connect      *
 // @run-at       document-end
 // ==/UserScript==
@@ -211,8 +212,11 @@
 		appSplit: "HNewhere:app_split",
 		appPanes: "HNewhere:app_panes",
 		appZoom: "HNewhere:app_zoom",
+		readerPage: "HNewhere:reader_page",
+		readerFont: "HNewhere:reader_font",
 		readOut: "HNewhere:read_out",
 		shortcuts: "HNewhere:shortcuts",
+		updateCheck: "HNewhere:update_check",
 	};
 
 	const COLLECTED_LEGACY_KEY = "HNewhere:watches";
@@ -436,6 +440,7 @@
 		newCommentsFirst: false,
 		keepSidebarSize: true,
 		commentImages: false,
+		updateCheck: true,
 	};
 
 	// #region hnewhere-test-export
@@ -2644,6 +2649,662 @@
 		});
 	}
 
+	const UPDATE_RELEASES_URL = "https://api.github.com/repos/twalichiewicz/Backchannel/releases?per_page=30";
+	const UPDATE_SCRIPT_URL = "https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js";
+	const UPDATE_RELEASES_PAGE = "https://github.com/twalichiewicz/Backchannel/releases";
+	const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
+	const UPDATE_CHECK_DELAY = 8000;
+	const UPDATE_REINSTALL_MANAGERS = ["Tampermonkey", "Violentmonkey", "Greasemonkey"];
+	const updateListeners = new Set();
+	let updateCheckScheduled = false;
+
+	function compareVersions(a, b) {
+		const left = String(a).split(".").map(Number);
+		const right = String(b).split(".").map(Number);
+
+		for (let i = 0; i < Math.max(left.length, right.length); i++) {
+			const x = left[i] || 0;
+			const y = right[i] || 0;
+
+			if (x !== y) {
+				return x > y ? 1 : -1;
+			}
+		}
+
+		return 0;
+	}
+
+	function releaseVersion(tag) {
+		return /^v?\d+(\.\d+)*$/.test(String(tag)) ? String(tag).replace(/^v/, "") : "";
+	}
+
+	function newerReleases(list, installed) {
+		if (!Array.isArray(list) || !releaseVersion(installed)) {
+			return [];
+		}
+
+		const found = [];
+
+		for (const entry of list) {
+			if (!entry || typeof entry !== "object" || entry.draft || entry.prerelease) {
+				continue;
+			}
+
+			const version = releaseVersion("tag_name" in entry ? entry.tag_name : entry.version);
+			const url = "html_url" in entry ? entry.html_url : entry.url;
+
+			if (!version || compareVersions(version, installed) <= 0) {
+				continue;
+			}
+
+			found.push({
+				version,
+				body: typeof entry.body === "string" ? entry.body : "",
+				url: typeof url === "string" ? url : "",
+			});
+		}
+
+		return found.sort((a, b) => compareVersions(b.version, a.version));
+	}
+
+	function releaseNotesHTML(releases) {
+		const text = (value) =>
+			markdownInline(escapeHTML(value))
+				.replace(/<img src="[^"]*" alt="([^"]*)">/g, (m, alt) => alt || "image")
+				.replace(/<a href=/g, '<a target="_blank" rel="noopener noreferrer" href=');
+		let html = "";
+
+		for (const release of releases) {
+			const indents = [];
+			html += "<section>";
+			const closeLists = () => {
+				while (indents.length) {
+					indents.pop();
+					html += "</li></ul>";
+				}
+			};
+			const lines = String(release.body || "").split(/\r?\n/);
+
+			if (!/^#\s/.test(lines.find((line) => line.trim()) || "")) {
+				html += `<h4>${text("v" + release.version)}</h4>`;
+			}
+
+			for (const line of lines) {
+				const heading = /^(#+)\s+(.*)$/.exec(line);
+				const bullet = /^(\s*)[-*]\s+(.*)$/.exec(line);
+
+				if (bullet) {
+					const indent = bullet[1].length;
+
+					while (indents.length && indent < indents[indents.length - 1]) {
+						indents.pop();
+						html += "</li></ul>";
+					}
+
+					if (indents.length && indent === indents[indents.length - 1]) {
+						html += "</li>";
+					} else {
+						indents.push(indent);
+						html += "<ul>";
+					}
+
+					html += `<li>${text(bullet[2])}`;
+					continue;
+				}
+
+				closeLists();
+
+				if (heading) {
+					const tag = heading[1].length === 1 ? "h4" : "h5";
+
+					html += `<${tag}>${text(heading[2])}</${tag}>`;
+				} else if (line.trim()) {
+					html += `<p>${text(line.trim())}</p>`;
+				}
+			}
+
+			closeLists();
+			html += "</section>";
+		}
+
+		return html;
+	}
+
+	function updateTarget(handler, releases) {
+		if (UPDATE_REINSTALL_MANAGERS.includes(handler)) {
+			return { url: UPDATE_SCRIPT_URL, userscripts: false };
+		}
+
+		return { url: releases?.[0]?.url || UPDATE_RELEASES_PAGE, userscripts: handler === "Userscripts" };
+	}
+
+	function requestReleases() {
+		return new Promise((resolve) => {
+			try {
+				GM.xmlHttpRequest({
+					method: "GET",
+					url: UPDATE_RELEASES_URL,
+					timeout: 10000,
+					anonymous: true,
+					headers: { Accept: "application/vnd.github+json" },
+					onload: (response) => {
+						try {
+							resolve(JSON.parse(response.responseText));
+						} catch {
+							resolve(null);
+						}
+					},
+					onerror: () => resolve(null),
+					ontimeout: () => resolve(null),
+				});
+			} catch {
+				resolve(null);
+			}
+		});
+	}
+
+	async function updateState() {
+		const stored = await load(STORAGE.updateCheck, null);
+		const value = stored && typeof stored === "object" ? stored : {};
+
+		return {
+			releases: newerReleases(value.releases, SCRIPT_VERSION),
+			checkedAt: Number.isFinite(value.checkedAt) ? value.checkedAt : 0,
+			attemptedAt: Number.isFinite(value.attemptedAt) ? value.attemptedAt : 0,
+			tipShown: typeof value.tipShown === "string" ? value.tipShown : "",
+		};
+	}
+
+	function notifyUpdate() {
+		for (const listener of updateListeners) {
+			try {
+				listener();
+			} catch (error) {
+				console.error(error);
+			}
+		}
+	}
+
+	async function checkForUpdates({ manual = false } = {}) {
+		try {
+			if (!SCRIPT_VERSION) {
+				return { ok: false, releases: [] };
+			}
+
+			if (!manual) {
+				const raw = await load(STORAGE.updateCheck, null);
+
+				await save(STORAGE.updateCheck, { ...(raw && typeof raw === "object" ? raw : {}), attemptedAt: Date.now() });
+			}
+
+			const json = await requestReleases();
+
+			if (!Array.isArray(json)) {
+				return { ok: false, releases: (await updateState()).releases };
+			}
+
+			const current = await updateState();
+			const releases = newerReleases(json, SCRIPT_VERSION);
+
+			await save(STORAGE.updateCheck, {
+				checkedAt: Date.now(),
+				releases,
+				tipShown: manual && releases.length ? releases[0].version : current.tipShown,
+			});
+			notifyUpdate();
+
+			return { ok: true, releases };
+		} catch (error) {
+			console.error(error);
+			return { ok: false, releases: [] };
+		}
+	}
+
+	function scheduleUpdateCheck() {
+		if (updateCheckScheduled) {
+			return;
+		}
+
+		updateCheckScheduled = true;
+
+		window.setTimeout(async () => {
+			try {
+				const settings = await loadSettings();
+
+				if (settings.updateCheck !== false) {
+					const state = await updateState();
+
+					if (Date.now() - Math.max(state.checkedAt, state.attemptedAt) >= UPDATE_CHECK_INTERVAL) {
+						await checkForUpdates();
+					}
+				}
+			} catch (error) {
+				console.error(error);
+			}
+
+			notifyUpdate();
+		}, UPDATE_CHECK_DELAY);
+	}
+
+	const UPDATE_BUTTON_IDS = ["hn-restore-button", "hn-collapse-button", "hn-submit-button", "hn-setup-button"];
+	const updateGears = new Set();
+	let updateReleases = [];
+	let updateDotWatching = false;
+	let updateDotTracked = null;
+	let updateDotFrame = 0;
+	let updateTipBusy = false;
+
+	function visibleUpdateButton() {
+		for (const id of UPDATE_BUTTON_IDS) {
+			const button = document.getElementById(id);
+
+			if (button && button.getClientRects().length) {
+				return button;
+			}
+		}
+
+		return null;
+	}
+
+	function placeUpdateDot() {
+		updateDotFrame = 0;
+
+		const button = updateReleases.length ? visibleUpdateButton() : null;
+		let dot = document.getElementById("hn-update-dot");
+
+		if (!button) {
+			dot?.remove();
+			return;
+		}
+
+		if (!dot) {
+			dot = document.createElement("span");
+			dot.id = "hn-update-dot";
+			dot.setAttribute("aria-hidden", "true");
+			pinButtonStyle(dot, {
+				...BUTTON_STYLE_RESET,
+				position: "fixed",
+				zIndex: "2147483647",
+				width: "11px",
+				height: "11px",
+				borderRadius: "50%",
+				background: "#fff",
+				pointerEvents: "none",
+			});
+		}
+
+		const box = button.getBoundingClientRect();
+
+		const ring = getComputedStyle(button).backgroundColor;
+
+		pinButtonStyle(dot, {
+			left: `${box.right - 11}px`,
+			top: `${box.top + 1}px`,
+			boxShadow: `0 0 0 2px ${ring && !/rgba\(.*,\s*0\)$/.test(ring) && ring !== "transparent" ? ring : "#237140"}`,
+		});
+
+		if (button.nextElementSibling !== dot) {
+			button.after(dot);
+		}
+
+		if (updateDotTracked !== button) {
+			updateDotTracked = button;
+			button.addEventListener("transitionend", queueUpdateDot);
+			new MutationObserver(queueUpdateDot).observe(button, { attributes: true, attributeFilter: ["style", "class"] });
+		}
+	}
+
+	function queueUpdateDot() {
+		if (!updateDotFrame) {
+			updateDotFrame = window.requestAnimationFrame(placeUpdateDot);
+		}
+	}
+
+	function paintUpdateDots(releases) {
+		updateReleases = Array.isArray(releases) ? releases : [];
+
+		if (updateReleases.length && !updateDotWatching) {
+			updateDotWatching = true;
+			new MutationObserver(queueUpdateDot).observe(document.body || document.documentElement, { childList: true });
+			window.addEventListener("resize", queueUpdateDot);
+			new ResizeObserver(queueUpdateDot).observe(document.documentElement);
+		}
+
+		placeUpdateDot();
+
+		for (const gear of updateGears) {
+			if (!gear.isConnected) {
+				updateGears.delete(gear);
+				continue;
+			}
+
+			const dot = gear.querySelector(".update-dot");
+
+			if (updateReleases.length && !dot) {
+				gear.insertAdjacentHTML("beforeend", '<span class="update-dot" aria-hidden="true"></span>');
+			} else if (!updateReleases.length) {
+				dot?.remove();
+			}
+		}
+	}
+
+	async function refreshUpdateDots() {
+		paintUpdateDots((await updateState()).releases);
+	}
+
+	function showUpdateTips() {
+		for (const gear of updateGears) {
+			if (!gear.isConnected) {
+				updateGears.delete(gear);
+				continue;
+			}
+
+			maybeShowUpdateTip(gear).catch(console.error);
+		}
+	}
+
+	function watchUpdateDots() {
+		if (updateListeners.has(refreshUpdateDots)) {
+			return;
+		}
+
+		updateListeners.add(refreshUpdateDots);
+		updateListeners.add(showUpdateTips);
+		document.addEventListener("visibilitychange", () => {
+			if (document.visibilityState === "visible") {
+				refreshUpdateDots().catch(console.error);
+			}
+		});
+	}
+
+	async function settleUpdateAnimations(gear) {
+		const root = gear.getRootNode();
+		const running = document
+			.getAnimations()
+			.filter((animation) => {
+				const target = animation.effect?.target;
+
+				return target && (root.contains?.(target) || root.host === target) && animation.effect.getComputedTiming().iterations !== Infinity;
+			})
+			.map((animation) => animation.finished.catch(() => {}));
+
+		await Promise.race([Promise.all(running), new Promise((resolve) => window.setTimeout(resolve, 600))]);
+		await new Promise((resolve) => window.requestAnimationFrame(resolve));
+	}
+
+	async function maybeShowUpdateTip(gear) {
+		const root = gear.getRootNode();
+		const placement = gear.closest("#app-rail") ? "right" : "below";
+
+		if (updateTipBusy || !gear.getClientRects().length || appIsPhone() || gear.getAttribute("aria-expanded") === "true" || root.querySelector?.(".update-tip")) {
+			return;
+		}
+
+		updateTipBusy = true;
+
+		try {
+			const { releases, tipShown } = await updateState();
+			const newest = releases[0]?.version;
+
+			if (!newest || tipShown === newest || !gear.isConnected) {
+				return;
+			}
+
+			await settleUpdateAnimations(gear);
+
+			if (!gear.isConnected || !gear.getClientRects().length || gear.getAttribute("aria-expanded") === "true" || root.querySelector?.(".update-tip")) {
+				return;
+			}
+
+			const raw = await load(STORAGE.updateCheck, null);
+
+			await save(STORAGE.updateCheck, { ...(raw && typeof raw === "object" ? raw : {}), tipShown: newest });
+
+			const tip = document.createElement("div");
+			const title = document.createElement("b");
+			const line = document.createElement("span");
+
+			tip.className = `app-tip update-tip${placement === "below" ? " is-below" : ""}`;
+			tip.setAttribute("role", "status");
+			title.textContent = "A new version of Backchannel is available";
+			line.textContent = `Version ${newest} · open Settings to update`;
+			tip.append(title, line);
+			root.append(tip);
+
+			const box = gear.getBoundingClientRect();
+
+			if (placement === "below") {
+				const middle = box.left + box.width / 2;
+				const left = Math.min(middle + 18 - tip.offsetWidth, window.innerWidth - 8 - tip.offsetWidth);
+
+				tip.style.top = `${Math.round(box.bottom + 8)}px`;
+				tip.style.left = `${Math.round(left)}px`;
+				tip.style.setProperty("--arrow", `${Math.round(left + tip.offsetWidth - middle - 4)}px`);
+			} else {
+				tip.style.left = `${Math.round(box.right + 10)}px`;
+				tip.style.top = `${Math.round(box.top + box.height / 2)}px`;
+			}
+
+			const close = () => {
+				tip.remove();
+				document.removeEventListener("pointerdown", close, true);
+				watch.disconnect();
+			};
+			const watch = new MutationObserver(() => {
+				if (gear.getAttribute("aria-expanded") === "true") {
+					close();
+				}
+			});
+
+			watch.observe(gear, { attributes: true, attributeFilter: ["aria-expanded"] });
+			document.addEventListener("pointerdown", close, true);
+		} catch (error) {
+			console.error(error);
+		} finally {
+			updateTipBusy = false;
+		}
+	}
+
+	function watchUpdateGear(gear) {
+
+		updateGears.add(gear);
+		watchUpdateDots();
+
+		const show = async () => {
+			await refreshUpdateDots();
+			await maybeShowUpdateTip(gear);
+		};
+
+		show().catch(console.error);
+	}
+
+	function openUpdateTarget(event, link) {
+		if (link.dataset.url) {
+			event.preventDefault();
+			window.open(link.dataset.url, "_blank", "noopener,noreferrer");
+		}
+	}
+
+	function paintUpdateSettings(root, state) {
+		if (!SCRIPT_VERSION) {
+			return;
+		}
+
+		const releases = Array.isArray(state?.releases) ? state.releases : [];
+		const found = releases.length > 0;
+		const handler = (() => {
+			try {
+				return GM?.info?.scriptHandler || "";
+			} catch {
+				return "";
+			}
+		})();
+		const target = updateTarget(handler, releases);
+		const credit = root.querySelector(".settings-credits-version");
+
+		if (credit) {
+			credit.textContent = found ? `Update to ${releases[0].version}` : `Backchannel v${SCRIPT_VERSION}`;
+			credit.classList.toggle("is-update", found);
+			credit.setAttribute("href", found ? target.url : REPO_URL);
+
+			if (found) {
+				credit.dataset.url = target.url;
+			} else {
+				delete credit.dataset.url;
+			}
+
+			credit.onclick = (event) => openUpdateTarget(event, credit);
+		}
+
+		const group = root.querySelector(".settings-updates");
+
+		if (!group || group.dataset.checking) {
+			return;
+		}
+
+		const install = group.querySelector("#settings-update-install");
+		const notes = group.querySelector("#settings-update-notes");
+		const key = releases.map((release) => release.version).join(",");
+
+		install.setAttribute("href", target.url);
+		install.dataset.url = target.url;
+		install.onclick = (event) => openUpdateTarget(event, install);
+		install.onkeydown = (event) => {
+			if (event.key === " ") {
+				event.preventDefault();
+			}
+		};
+		install.onkeyup = (event) => {
+			if (event.key === " ") {
+				install.click();
+			}
+		};
+		install.classList.toggle("is-shown", found);
+		install.tabIndex = found ? 0 : -1;
+		install.setAttribute("aria-hidden", found ? "false" : "true");
+		group.querySelector("#settings-update-safari").hidden = !(found && target.userscripts);
+
+		if (group.dataset.notes !== key) {
+			group.dataset.notes = key;
+
+			if (found) {
+				notes.innerHTML = releaseNotesHTML(releases);
+				notes.scrollTop = 0;
+			}
+		}
+
+		notes.classList.toggle("is-open", found);
+
+		if (found) {
+			notes.tabIndex = 0;
+		} else {
+			notes.removeAttribute("tabindex");
+		}
+	}
+
+	const updateSettingsGroups = new Map();
+
+	async function refreshUpdateSettings() {
+		const state = await updateState();
+
+		for (const [group, shadow] of updateSettingsGroups) {
+			if (group.isConnected) {
+				paintUpdateSettings(shadow, state);
+			}
+		}
+	}
+
+	function wireSettingsUpdates(shadow, panel) {
+		const group = shadow.querySelector(".settings-updates");
+		const button = group?.querySelector("#settings-update-check");
+		const label = button?.querySelector(".settings-update-label");
+
+		if (!button || !label) {
+			return;
+		}
+
+		const IDLE = "Check for updates";
+		const CHECKING = '<svg class="settings-update-spinner" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.6"/></svg><span class="settings-update-glimmer">Checking…</span>';
+		const LATEST = '<svg class="settings-update-tick" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.2 6.4 4.8 9 9.8 3.4"/></svg>You’re on the latest version';
+		const FAILED = "Couldn’t reach GitHub";
+		const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
+		const widthOf = (html) => {
+			const probe = button.cloneNode(true);
+
+			probe.style.cssText = "position:absolute;visibility:hidden;width:auto;transition:none";
+			probe.querySelector(".settings-update-label").innerHTML = html;
+			button.parentNode.append(probe);
+
+			const width = probe.offsetWidth;
+
+			probe.remove();
+			return width;
+		};
+
+		const show = async (html) => {
+			button.style.width = `${button.offsetWidth}px`;
+			label.style.opacity = "0";
+			await wait(120);
+			label.innerHTML = html;
+			button.style.width = `${widthOf(html)}px`;
+			label.style.opacity = "1";
+		};
+
+		const refresh = async () => {
+			paintUpdateSettings(shadow, await updateState());
+		};
+
+		for (const each of updateSettingsGroups.keys()) {
+			if (!each.isConnected) {
+				updateSettingsGroups.delete(each);
+			}
+		}
+
+		updateSettingsGroups.set(group, shadow);
+		updateListeners.add(refreshUpdateSettings);
+		panel.addEventListener("general-shown", () => refresh().catch(console.error));
+		refresh().catch(console.error);
+
+		button.onclick = async (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+
+			if (button.getAttribute("aria-disabled") === "true") {
+				return;
+			}
+
+			button.setAttribute("aria-disabled", "true");
+			group.dataset.checking = "true";
+
+			try {
+				await show(CHECKING);
+
+				const [result] = await Promise.all([checkForUpdates({ manual: true }), wait(900)]);
+
+				if (!result.ok) {
+					await show(FAILED);
+					await wait(2000);
+				} else if (!result.releases.length) {
+					await show(LATEST);
+					await wait(2000);
+				}
+
+				await show(IDLE);
+				await wait(260);
+			} catch (error) {
+				console.error(error);
+				label.textContent = IDLE;
+			} finally {
+				button.style.width = "";
+				label.style.opacity = "";
+				button.removeAttribute("aria-disabled");
+				delete group.dataset.checking;
+				refresh().catch(console.error);
+			}
+		};
+	}
+
 	const itemCache = new Map();
 	const voteLinkCache = new Map();
 	const displayAgeCache = new Map();
@@ -4572,6 +5233,7 @@ ${
 		"pdfReader",
 		"notepad",
 		"commentImages",
+		"updateCheck",
 	]);
 
 	function pdfViewerRefusesExtensions() {
@@ -8365,6 +9027,7 @@ button {
 
 		if (host.hasAttribute("data-hnewhere-app")) {
 			document.documentElement.toggleAttribute("data-backchannel-dark", dark);
+			paintReaderLook(host);
 		}
 
 		const properties = {
@@ -9042,6 +9705,8 @@ html[data-backchannel-installed] .chin {
 	}
 
 	function createFloatingHNButton(id, variant = "active") {
+		watchUpdateDots();
+		refreshUpdateDots().catch(console.error);
 		let button = document.getElementById(id);
 
 		if (button) {
@@ -9127,6 +9792,8 @@ html[data-backchannel-installed] .chin {
 
 		applyButtonMobileStyle(button);
 		document.body.appendChild(button);
+
+		scheduleUpdateCheck();
 
 		return button;
 	}
@@ -11514,6 +12181,7 @@ html[data-backchannel-installed] .chin {
 		button._dragController?.cleanup?.();
 		button._cleanup?.();
 		button.remove();
+		queueUpdateDot();
 	}
 
 	function isBrowsing(ui) {
@@ -13836,6 +14504,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		const wasHidden = sidebar.style.display === "none";
 
 		sidebar.style.display = "";
+		showUpdateTips();
 		await saveSidebarState("open");
 
 		const restoreButton = document.getElementById("hn-restore-button");
@@ -16134,7 +16803,8 @@ header > .settings-panel {
 	background:var(--accent);
 }
 
-.settings-option input[type="checkbox"]:checked::after {
+.settings-option input[type="checkbox"]:checked::after,
+.app-view-menu .reader-font-check::after {
 	content:"";
 	width:7px;
 	height:3.5px;
@@ -16687,7 +17357,9 @@ header > .settings-panel {
 }
 
 .source-picker-save,
-#settings-cache-clear {
+#settings-update-install,
+#settings-cache-clear,
+#settings-update-check {
 	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	padding:5px 10px;
 	border-radius:4px;
@@ -16697,7 +17369,8 @@ header > .settings-panel {
 	color:white;
 }
 
-#settings-cache-clear {
+#settings-cache-clear,
+#settings-update-check {
 	border-color:var(--button-border);
 	background:var(--button-bg);
 	color:var(--button-text);
@@ -16707,6 +17380,194 @@ header > .settings-panel {
 #settings-cache-clear[aria-disabled="true"] {
 	opacity:.6;
 	cursor:default;
+}
+
+.settings-update-row {
+	display:flex;
+	align-items:center;
+	gap:10px;
+	margin-top:10px;
+}
+
+#settings-update-install,
+#settings-update-check {
+	box-sizing:border-box;
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	height:26px;
+	overflow:hidden;
+	white-space:nowrap;
+	text-decoration:none;
+}
+
+#settings-update-check {
+	transition:width .24s cubic-bezier(.3,.7,.3,1);
+}
+
+#settings-update-check[aria-disabled="true"] {
+	cursor:default;
+}
+
+.settings-update-label {
+	display:inline-flex;
+	align-items:center;
+	gap:6px;
+	transition:opacity .12s;
+}
+
+.settings-update-spinner {
+	width:11px;
+	height:11px;
+	animation:settings-update-spin .8s linear infinite;
+}
+
+.settings-update-spinner circle {
+	fill:none;
+	stroke:var(--meta);
+	stroke-width:1.6;
+	stroke-dasharray:22 10;
+	stroke-linecap:round;
+}
+
+@keyframes settings-update-spin {
+	to {
+		transform:rotate(360deg);
+	}
+}
+
+.settings-update-glimmer {
+	background:linear-gradient(90deg, var(--button-text) 0%, var(--button-text) 35%, color-mix(in srgb, var(--button-text) 25%, var(--button-bg)) 50%, var(--button-text) 65%, var(--button-text) 100%);
+	background-size:250% 100%;
+	-webkit-background-clip:text;
+	background-clip:text;
+	color:transparent;
+	animation:settings-update-glimmer 1.3s linear infinite;
+}
+
+@keyframes settings-update-glimmer {
+	from {
+		background-position:100% 0;
+	}
+	to {
+		background-position:-150% 0;
+	}
+}
+
+.settings-update-tick {
+	width:11px;
+	height:11px;
+}
+
+.settings-update-tick path {
+	fill:none;
+	stroke:var(--accent);
+	stroke-width:2;
+	stroke-linecap:round;
+	stroke-linejoin:round;
+}
+
+#settings-update-install {
+	max-width:0;
+	padding-left:0;
+	padding-right:0;
+	border-width:0;
+	margin-right:-10px;
+	opacity:0;
+	visibility:hidden;
+	transition:max-width .24s cubic-bezier(.3,.7,.3,1), padding .24s cubic-bezier(.3,.7,.3,1), opacity .2s, margin-right .24s, visibility 0s linear .24s;
+}
+
+#settings-update-install.is-shown {
+	max-width:120px;
+	padding-left:10px;
+	padding-right:10px;
+	border-width:1px;
+	margin-right:0;
+	opacity:1;
+	visibility:visible;
+	transition:max-width .24s cubic-bezier(.3,.7,.3,1), padding .24s cubic-bezier(.3,.7,.3,1), opacity .2s, margin-right .24s, visibility 0s;
+}
+
+#settings-update-safari {
+	margin-top:8px;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.35;
+}
+
+.settings-update-notes {
+	box-sizing:border-box;
+	max-height:0;
+	overflow:auto;
+	margin-top:0;
+	padding:0 12px;
+	border:1px solid transparent;
+	border-radius:6px;
+	background:var(--field-bg);
+	color:var(--field-text);
+	font-size:12px;
+	line-height:1.4;
+	visibility:hidden;
+	transition:max-height .3s ease, margin-top .3s ease, padding .3s ease, border-color .3s ease, visibility 0s linear .3s;
+}
+
+.settings-update-notes.is-open {
+	max-height:200px;
+	margin-top:10px;
+	padding:10px 12px;
+	border-color:var(--field-border);
+	visibility:visible;
+	transition:max-height .3s ease, margin-top .3s ease, padding .3s ease, border-color .3s ease, visibility 0s;
+}
+
+.settings-update-notes h4 {
+	margin:0 0 4px;
+	font-size:13px;
+	font-weight:600;
+}
+
+.settings-update-notes h5 {
+	margin:8px 0 2px;
+	color:var(--meta);
+	font-size:11px;
+	font-weight:600;
+}
+
+.settings-update-notes p {
+	margin:0 0 4px;
+}
+
+.settings-update-notes ul {
+	margin:0 0 4px;
+	padding-left:16px;
+}
+
+.settings-update-notes ul ul {
+	margin:0;
+}
+
+.settings-update-notes section + section {
+	margin-top:12px;
+	padding-top:10px;
+	border-top:1px solid var(--surface-divider);
+}
+
+.settings-credits a.is-update {
+	padding:4px 12px;
+	border-radius:999px;
+	background:var(--accent);
+	color:white;
+	font-size:12px;
+	font-weight:600;
+	text-decoration:none;
+}
+
+@media (hover: hover) {
+	.settings-credits a.is-update:hover {
+		color:white;
+		filter:brightness(1.08);
+	}
 }
 
 .settings-option-hint {
@@ -17282,6 +18143,10 @@ button.shortcut-key {
 
 .sources-subhint {
 	margin:2px 0 10px;
+}
+
+.sources-subhead + .settings-option {
+	margin-top:10px;
 }
 
 .sources-grid {
@@ -18195,6 +19060,27 @@ ${settings ? settingsPanelHTML() : ""}
 `;
 	}
 
+	function settingsUpdatesHTML() {
+		if (!SCRIPT_VERSION) {
+			return "";
+		}
+
+		return `<div class="settings-group settings-updates">
+<div class="sources-subhead">Updates</div>
+<label class="settings-option">
+<input id="setting-update-check" data-setting="updateCheck" type="checkbox">
+<span>Check for new versions automatically</span>
+</label>
+<div class="settings-option-hint">Once a day, Backchannel will check if there are any available updates.</div>
+<div class="settings-update-row">
+<a id="settings-update-install" href="${escapeHTML(UPDATE_SCRIPT_URL)}" target="_blank" rel="noopener noreferrer" role="button" tabindex="-1" aria-hidden="true">Update</a>
+<button id="settings-update-check" type="button"><span class="settings-update-label">Check for updates</span></button>
+</div>
+<div id="settings-update-safari" hidden>Update from the Userscripts menu in Safari’s toolbar.</div>
+<div id="settings-update-notes" class="settings-update-notes" role="region" aria-label="Release notes"></div>
+</div>`;
+	}
+
 	function settingsPanelHTML() {
 		return `
 <div id="settings-panel" class="settings-panel hidden">
@@ -18343,6 +19229,8 @@ All stored locally.
 <button id="settings-cache-clear" type="button">Clear cache</button>
 </div>
 
+${settingsUpdatesHTML()}
+
 <div class="settings-group">
 <button id="settings-manage-sources" class="settings-link-button" type="button" data-pane="sources" data-pane-name="Sources">Sources<span class="settings-link-chevron">&rsaquo;</span></button>
 <button id="settings-manage-shortcuts" class="settings-link-button" type="button" data-pane="shortcuts" data-pane-name="Shortcuts">Shortcuts<span class="settings-link-chevron">&rsaquo;</span></button>
@@ -18379,7 +19267,7 @@ ${frontPageChooserHTML()}
 </div>
 
 <div class="settings-credits">
-<a href="${escapeHTML(REPO_URL)}" target="_blank" rel="noopener noreferrer">Backchannel${SCRIPT_VERSION ? " v" + escapeHTML(SCRIPT_VERSION) : ""}</a>
+<a class="settings-credits-version" href="${escapeHTML(REPO_URL)}" target="_blank" rel="noopener noreferrer">Backchannel${SCRIPT_VERSION ? " v" + escapeHTML(SCRIPT_VERSION) : ""}</a>
 <a href="${escapeHTML(REPO_URL)}/issues" target="_blank" rel="noopener noreferrer">Report an issue</a>
 </div>
 </div>
@@ -18393,6 +19281,8 @@ ${frontPageChooserHTML()}
 		if (!settingsPanel || !settingsToggle) {
 			return { setSettingsOpen: () => {} };
 		}
+
+		watchUpdateGear(settingsToggle);
 
 		const settingsInputs = {
 			sidebarEnabled: shadow.querySelector("#setting-sidebar-enabled"),
@@ -18413,6 +19303,7 @@ ${frontPageChooserHTML()}
 			),
 			keepSidebarSize: shadow.querySelector("#setting-keep-sidebar-size"),
 			commentImages: shadow.querySelector("#setting-comment-images"),
+			updateCheck: shadow.querySelector("#setting-update-check"),
 		};
 
 		const settingsRadios = {
@@ -18791,6 +19682,8 @@ ${frontPageChooserHTML()}
 		};
 
 		refreshNotesCount().catch(console.error);
+
+		wireSettingsUpdates(shadow, settingsPanel);
 
 		const cacheClear = shadow.querySelector("#settings-cache-clear");
 
@@ -24421,6 +25314,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	}
 
 	function openSidebar(stories, options = {}) {
+		scheduleUpdateCheck();
+
 		if (opening) {
 			return openingRun ?? Promise.resolve();
 		}
@@ -29973,7 +30868,93 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	}
 `;
 
-	const SIDEBAR_SETTINGS_MODAL_CSS = `${APP_ICON_CSS}${SETTINGS_MODAL_CSS}
+	const TIP_CSS = `
+.app-tip {
+	position:absolute;
+	z-index:70;
+	top:0;
+	left:0;
+	padding:5px 9px;
+	border-radius:6px;
+	background:var(--rail-fg, #f3f6f1);
+	color:#000;
+	font:400 11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	white-space:pre;
+	box-shadow:0 4px 14px rgba(0,0,0,.22);
+	pointer-events:none;
+	transform:translateY(-50%);
+}
+
+.app-tip::before {
+	content:"";
+	position:absolute;
+	top:50%;
+	left:-4px;
+	width:8px;
+	height:8px;
+	margin-top:-4px;
+	background:inherit;
+	transform:rotate(45deg);
+}
+
+.app-tip.is-flipped::before {
+	right:-4px;
+	left:auto;
+}
+
+.app-tip b {
+	display:block;
+	font-weight:600;
+	font-size:12px;
+}
+
+.app-tip span {
+	color:#5f6b5f;
+}
+
+.app-tip.update-tip {
+	position:fixed;
+	z-index:2147483647;
+	padding:7px 10px 8px;
+	line-height:1.35;
+}
+
+.app-tip.is-below {
+	transform:none;
+}
+
+.app-tip.is-below::before {
+	top:-4px;
+	right:var(--arrow, 12px);
+	left:auto;
+	margin-top:0;
+}
+
+#settings-toggle {
+	position:relative;
+}
+
+.update-dot {
+	position:absolute;
+	left:17.56px;
+	top:6.44px;
+	width:6px;
+	height:6px;
+	border-radius:50%;
+	background:#fff;
+	box-shadow:0 0 0 1.5px var(--rail-bg, var(--header-bg));
+	pointer-events:none;
+}
+
+#app-rail .update-dot {
+	left:19.373px;
+	top:5.627px;
+	width:7px;
+	height:7px;
+}
+`;
+
+	const SIDEBAR_SETTINGS_MODAL_CSS = `${APP_ICON_CSS}${SETTINGS_MODAL_CSS}${TIP_CSS}
 #app-settings-modal {
 	z-index:2147483647;
 	line-height:1.4;
@@ -30253,39 +31234,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	letter-spacing:.02em;
 }
 
-.app-tip {
-	position:absolute;
-	z-index:70;
-	top:0;
-	left:0;
-	padding:5px 9px;
-	border-radius:6px;
-	background:var(--rail-fg);
-	color:#000;
-	font:400 11px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-	white-space:pre;
-	box-shadow:0 4px 14px rgba(0,0,0,.22);
-	pointer-events:none;
-	transform:translateY(-50%);
-}
-
-.app-tip::before {
-	content:"";
-	position:absolute;
-	top:50%;
-	left:-4px;
-	width:8px;
-	height:8px;
-	margin-top:-4px;
-	background:inherit;
-	transform:rotate(45deg);
-}
-
-.app-tip.is-flipped::before {
-	right:-4px;
-	left:auto;
-}
-
+${TIP_CSS}
 .rail-rule {
 	flex:0 0 auto;
 	width:20px;
@@ -30607,6 +31556,7 @@ ${APP_ICON_CSS}
 	position:fixed;
 	z-index:30;
 	width:auto;
+	overflow-y:auto;
 	box-sizing:border-box;
 	padding:10px 10px 12px;
 	border:1px solid var(--surface-border);
@@ -30633,8 +31583,89 @@ ${APP_ICON_CSS}
 	align-items:center;
 }
 
-.app-view-menu .settings-head {
-	margin-bottom:6px;
+.app-view-menu .appearance-row-text {
+	margin-bottom:8px;
+}
+
+.app-view-menu .appearance-row-hint {
+	width:0;
+	min-width:100%;
+}
+
+.app-view-menu .settings-field[hidden] {
+	display:none;
+}
+
+.app-view-menu .reader-swatches {
+	display:flex;
+	gap:6px;
+}
+
+.app-view-menu .reader-swatch {
+	flex:0 0 auto;
+	width:30px;
+	height:30px;
+	padding:0;
+	border:1px solid rgba(128,128,128,.4);
+	border-radius:50%;
+	cursor:pointer;
+}
+
+.app-view-menu .reader-swatch-letters {
+	font:600 11px/1 Charter, Georgia, serif;
+}
+
+.app-view-menu .reader-swatch .toggle-swatch-name {
+	top:36px;
+}
+
+.app-view-menu .reader-swatch[aria-pressed="true"] {
+	box-shadow:0 0 0 2px var(--surface), 0 0 0 4px var(--accent, #237140);
+}
+
+.app-view-menu .reader-fonts {
+	display:flex;
+	flex-direction:column;
+	gap:1px;
+}
+
+.app-view-menu .reader-font {
+	display:flex;
+	align-items:center;
+	gap:8px;
+	padding:4px 6px;
+	border:0;
+	border-radius:5px;
+	background:none;
+	color:inherit;
+	font-size:14px;
+	text-align:left;
+	cursor:pointer;
+}
+
+.app-view-menu .reader-font:hover {
+	background:rgba(128,128,128,.16);
+}
+
+.app-view-menu .reader-font-check {
+	flex:0 0 auto;
+	display:inline-grid;
+	place-content:center;
+	width:15px;
+	height:15px;
+	visibility:hidden;
+}
+
+.app-view-menu .reader-font-check::after {
+	border-color:var(--accent);
+}
+
+.app-view-menu .reader-font[aria-pressed="true"] .reader-font-check {
+	visibility:visible;
+}
+
+.app-view-menu .reader-font[hidden] {
+	display:none;
 }
 
 .app-pane-toggle {
@@ -30661,6 +31692,17 @@ ${APP_ICON_CSS}
 		padding:0;
 		border:0;
 		overflow:visible;
+	}
+
+	#app-article:has(#app-article-body[data-mode="reader"]) > .app-pane-head::before {
+		content:"";
+		position:absolute;
+		top:0;
+		right:0;
+		left:0;
+		height:52px;
+		background:linear-gradient(var(--reader-page) 55%, transparent);
+		pointer-events:none;
 	}
 
 	.app-pane-middle {
@@ -31084,13 +32126,13 @@ ${SETTINGS_MODAL_CSS}
 #app-list-body .browse-row.is-unread .browse-thumb-wrap::after {
 	content:"";
 	position:absolute;
-	top:-2px;
-	left:-2px;
-	width:8px;
-	height:8px;
-	border-radius:4px;
+	top:-4px;
+	right:-2px;
+	width:9px;
+	height:9px;
+	border-radius:50%;
 	background:var(--accent);
-	box-shadow:0 0 0 2px var(--bg, #fff);
+	box-shadow:0 0 0 1.5px var(--bg, #fff);
 }
 
 #app-reading {
@@ -31134,7 +32176,7 @@ ${SETTINGS_MODAL_CSS}
 	inset:0;
 	overflow:auto;
 	overscroll-behavior:contain;
-	background:var(--article-bg);
+	background:var(--reader-page, var(--article-bg));
 }
 
 .app-article-image {
@@ -32132,6 +33174,7 @@ header .item-action-link {
 	}
 
 	#app-bar-view .app-view-glyph {
+		font-weight:600;
 		line-height:1;
 	}
 }
@@ -32223,6 +33266,11 @@ header .item-action-link {
 		top:-1px;
 		right:auto;
 		left:calc(50% + 8px);
+	}
+
+	#app-rail .update-dot {
+		left:calc(50% + 5.1px);
+		top:6.9px;
 	}
 
 	.rail-button.is-current .rail-icon {
@@ -32814,43 +33862,97 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	display:block;
 	position:relative;
 	box-sizing:border-box;
-	max-width:44em;
+	max-width:34em;
 	margin:0 auto;
-	padding:28px 28px 72px;
-	color:var(--text);
-	font:16px/1.62 Charter, "Iowan Old Style", "Palatino Linotype", Georgia, serif;
-	font-size:calc(16px * var(--app-zoom, 1));
+	padding:60px 28px 96px;
+	color:var(--reader-ink);
+	font:16px/1.62 var(--reader-face);
+	font-size:calc(16px * var(--app-text-zoom, 1));
 	overflow-wrap:break-word;
 	-webkit-text-size-adjust:100%;
 }
 
-.bc-reader-head {
-	margin:0 0 24px;
+.bc-reader[data-face="system"] {
+	line-height:1.55;
 }
 
-.bc-reader-site,
-.bc-reader-byline {
-	color:var(--meta);
-	font:11px/1.5 Verdana, Geneva, sans-serif;
+.bc-reader-head {
+	margin:0 0 26px;
+	padding:0 0 18px;
+	border-bottom:1px solid var(--reader-rule);
+}
+
+.bc-reader-site {
+	color:var(--reader-meta);
+	font:500 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	letter-spacing:.02em;
 }
 
 .bc-reader-title {
-	margin:6px 0 4px;
-	color:var(--text);
-	font:700 30px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	margin:6px 0 0;
+	color:var(--reader-ink);
+	font:700 1.95em/1.16 var(--reader-face);
+	letter-spacing:-.012em;
 }
 
-.bc-reader-body h1,
-.bc-reader-body h2,
-.bc-reader-body h3,
-.bc-reader-body h4 {
-	margin:1.6em 0 .5em;
+.bc-reader-dek {
+	margin:.45em 0 0;
+	color:color-mix(in srgb, var(--reader-ink) 72%, var(--reader-page));
+	font-size:1.12em;
+	line-height:1.42;
+}
+
+.bc-reader-byline {
+	margin:16px 0 0;
+	color:var(--reader-meta);
+	font:13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.bc-reader-byline img {
+	width:26px;
+	height:26px;
+	margin:0 8px 0 0;
+	border-radius:50%;
+	object-fit:cover;
+	vertical-align:middle;
+}
+
+.bc-reader-byline b {
+	color:var(--reader-ink);
+	font-weight:600;
+}
+
+.bc-reader-meta {
+	margin:4px 0 0;
+	color:var(--reader-meta);
+	font:12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.bc-reader-body > :first-child {
+	margin-top:0;
+}
+
+.bc-reader-body p {
+	margin:0 0 1.05em;
+}
+
+.bc-reader-body :is(h1, h2, h3, h4, h5, h6) {
+	margin:1.7em 0 .5em;
+	font-family:var(--reader-face);
 	line-height:1.25;
-	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	letter-spacing:-.005em;
 }
 
-.bc-reader a {
-	color:var(--link);
+.bc-reader-body :is(h1, h2) {
+	font-size:1.32em;
+}
+
+.bc-reader-body h3 {
+	font-size:1.14em;
+}
+
+.bc-reader-body :is(h4, h5, h6) {
+	font-size:1em;
 }
 
 .bc-reader-body :is(h1, h2, h3, h4, h5, h6) a {
@@ -32858,64 +33960,219 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	text-decoration:none;
 }
 
-.bc-reader img {
+.bc-reader-body a {
+	color:inherit;
+	text-decoration:underline;
+	text-decoration-color:color-mix(in srgb, var(--reader-link) 55%, transparent);
+	text-decoration-thickness:1px;
+	text-underline-offset:.18em;
+}
+
+.bc-reader-body a:hover {
+	color:var(--reader-link);
+	text-decoration-color:var(--reader-link);
+}
+
+.bc-reader-body :is(ul, ol) {
+	margin:0 0 1.05em;
+	padding-left:1.35em;
+}
+
+.bc-reader-body li {
+	margin:.3em 0;
+}
+
+.bc-reader-body li > p {
+	margin:0;
+}
+
+.bc-reader-body li::marker {
+	color:var(--reader-meta);
+}
+
+.bc-reader-body img {
 	display:block;
 	max-width:100%;
 	height:auto;
-	margin:1em auto;
+	margin:1.4em auto;
+	border-radius:3px;
 }
 
-.bc-reader figure {
-	margin:1.5em 0;
+.bc-reader-body img.is-inline {
+	display:inline-block;
+	margin:0 2px;
+	vertical-align:middle;
+	border-radius:0;
 }
 
-.bc-reader figcaption {
-	color:var(--meta);
-	font-size:14px;
+.bc-reader-body figure {
+	margin:1.6em 0;
+}
+
+.bc-reader-body figure img {
+	margin:0 auto;
+}
+
+.bc-reader-body figcaption,
+.bc-reader-body p[data-reader="caption"] {
+	color:var(--reader-meta);
+	font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	text-align:center;
 }
 
-.bc-reader blockquote {
-	margin:1.2em 0;
-	padding-left:1em;
-	border-left:3px solid var(--border);
-	color:var(--quote-text);
+.bc-reader-body figcaption {
+	margin-top:.6em;
 }
 
-.bc-reader pre {
-	overflow:auto;
+.bc-reader-body p[data-reader="caption"] {
+	margin:-.6em 0 1.4em;
+}
+
+.bc-reader-body blockquote {
+	margin:1.3em 0;
+	padding:0 0 0 1em;
+	border-left:3px solid var(--reader-rule);
+	color:color-mix(in srgb, var(--reader-ink) 80%, var(--reader-page));
+}
+
+.bc-reader-body pre {
+	margin:1.3em 0;
 	padding:12px 14px;
+	overflow:auto;
 	border-radius:6px;
-	background:var(--code-bg);
-	font-size:14px;
-	line-height:1.45;
+	background:var(--reader-code);
+	font:13.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-.bc-reader code,
-.bc-reader kbd,
-.bc-reader samp {
+.bc-reader-body :not(pre) > code {
+	padding:.08em .3em;
+	border-radius:3px;
+	background:var(--reader-code);
+	font:.84em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.bc-reader-body :is(kbd, samp) {
 	font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 	font-size:.86em;
 }
 
-.bc-reader table {
+.bc-reader-body table {
 	display:block;
 	max-width:100%;
+	margin:1.3em 0;
 	overflow-x:auto;
 	border-collapse:collapse;
-	font-size:15px;
+	font:14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-.bc-reader th,
-.bc-reader td {
-	padding:4px 8px;
-	border:1px solid var(--border-soft);
+.bc-reader-body :is(th, td) {
+	padding:6px 10px;
+	border-bottom:1px solid var(--reader-rule);
+	text-align:left;
+	vertical-align:top;
 }
 
-.bc-reader hr {
-	margin:2em 0;
+.bc-reader-body th {
+	font-weight:600;
+}
+
+.bc-reader-body hr {
+	width:64px;
+	margin:2.2em auto;
 	border:0;
-	border-top:1px solid var(--border);
+	border-top:1px solid var(--reader-rule);
+}
+
+.bc-reader-body :is(sup, sub) {
+	line-height:0;
+}
+
+.bc-reader-body mark {
+	background:var(--reader-mark);
+	color:inherit;
+}
+
+.bc-reader-body img[data-reader="author"] {
+	display:inline-block;
+	width:24px;
+	height:24px;
+	margin:0 6px 0 0;
+	border-radius:50%;
+	object-fit:cover;
+	vertical-align:middle;
+}
+
+.bc-reader-body aside[data-reader="author-card"] {
+	display:grid;
+	grid-template-columns:48px 1fr;
+	column-gap:14px;
+	align-items:start;
+	margin:2.4em 0 0;
+	padding:20px 0 0;
+	border-top:1px solid var(--reader-rule);
+	color:var(--reader-ink);
+	font:14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.bc-reader-body aside[data-reader="author-card"] > :not(img) {
+	grid-column:2;
+}
+
+.bc-reader-body aside[data-reader="author-card"]:not(:has(> img)) {
+	grid-template-columns:1fr;
+}
+
+.bc-reader-body aside[data-reader="author-card"]:not(:has(> img)) > * {
+	grid-column:1;
+}
+
+.bc-reader-body img[data-reader="author-photo"] {
+	display:block;
+	grid-column:1;
+	grid-row:1 / span 20;
+	width:48px;
+	height:48px;
+	margin:2px 0 0;
+	border-radius:50%;
+	object-fit:cover;
+}
+
+.bc-reader-body [data-reader="author-name"] {
+	font-size:15px;
+	font-weight:600;
+	line-height:1.3;
+}
+
+.bc-reader-body [data-reader="author-role"] {
+	margin-top:1px;
+	color:var(--reader-meta);
+	font-size:13px;
+	line-height:1.35;
+}
+
+.bc-reader-body p[data-reader="author-bio"] {
+	margin:8px 0 0;
+	color:color-mix(in srgb, var(--reader-ink) 82%, var(--reader-page));
+}
+
+.bc-reader-body a[data-reader="author-more"] {
+	display:inline-block;
+	justify-self:start;
+	margin-top:8px;
+	color:var(--reader-meta);
+	font-size:13px;
+}
+
+.bc-reader-body::after {
+	content:"";
+	display:block;
+	clear:both;
+}
+
+@media (max-width: 700px) {
+	.bc-reader {
+		padding-top:24px;
+	}
 }
 `;
 
@@ -33095,14 +34352,15 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <section id="app-onboarding" class="app-onboarding" aria-label="Welcome" hidden></section>
 <div id="app-settings-arrow" class="app-settings-arrow" hidden></div>
 <div id="app-view-arrow" class="app-drop-arrow" aria-hidden="true" hidden></div>
-<div id="app-view-menu" class="app-view-menu" role="dialog" aria-label="Text settings" hidden>
-<div class="settings-head"><span class="settings-crumb-root">Text</span></div>
+<div id="app-view-menu" class="app-view-menu" role="dialog" aria-label="Style settings" hidden>
+<div class="app-settings-heading">Style</div>
+${readerMenuHTML()}
 <div class="settings-field">
-<div class="settings-field-label">Text size</div>
+<div class="appearance-row-text"><div class="appearance-row-label">Font size</div></div>
 <div class="stepper">
 <button id="app-zoom-out" type="button" class="stepper-button" aria-label="Smaller text">&#8722;</button>
 <span class="stepper-value">
-<input id="app-zoom-level" class="stepper-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Text size in percent" value="100">
+<input id="app-zoom-level" class="stepper-input" type="text" inputmode="numeric" autocomplete="off" spellcheck="false" aria-label="Font size in percent" value="100">
 <span class="stepper-unit">%</span>
 </span>
 <button id="app-zoom-in" type="button" class="stepper-button" aria-label="Bigger text">+</button>
@@ -33124,7 +34382,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 </nav>
 <button id="app-bar-back" class="app-stack-button" type="button" aria-label="Back to the articles" data-glyph="down" hidden>${APP_ICON('<path d="M2.2 5.1a1 1 0 0 1 1.4-.1L8 9l4.4-4a1 1 0 0 1 1.3 1.5l-5 4.6a1 1 0 0 1-1.4 0l-5-4.6a1 1 0 0 1-.1-1.4z"/>')}</button>
 <div id="app-row-menu" class="dropdown app-row-menu" role="menu" aria-label="This article" hidden></div>
-<div id="app-bar" class="app-bar" hidden><button id="app-bar-view" class="app-stack-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-glyph"><span class="app-view-big">A</span><span class="app-view-small">a</span></span></button><button id="app-bar-open" class="app-stack-button" type="button" aria-label="Open the original page" hidden>${APP_ICON('<path d="M9 2h5v5h-1.7V4.9L7.7 9.5 6.5 8.3l4.6-4.6H9z"/><path d="M3.5 4H7v1.7H4.7v5.6h5.6V9H12v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-pressed="false" aria-label="Save" hidden>${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-like" class="app-stack-button" type="button" aria-pressed="false" aria-label="Like" hidden>${APP_ICON('<path d="M2 7.2h2.6V14H2.5a.5.5 0 0 1-.5-.5z"/><path d="M5.8 14V6.7l2.5-4.4a1.2 1.2 0 0 1 2.2.9L10 6h3a1.4 1.4 0 0 1 1.37 1.7l-1 4.7A2 2 0 0 1 11.4 14z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
+<div id="app-bar" class="app-bar" hidden><button id="app-bar-view" class="app-stack-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Style settings" title="Style settings" hidden><span class="app-view-glyph"><span class="app-view-big">A</span><span class="app-view-small">a</span></span></button><button id="app-bar-open" class="app-stack-button" type="button" aria-label="Open the original page" hidden>${APP_ICON('<path d="M9 2h5v5h-1.7V4.9L7.7 9.5 6.5 8.3l4.6-4.6H9z"/><path d="M3.5 4H7v1.7H4.7v5.6h5.6V9H12v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-pressed="false" aria-label="Save" hidden>${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-like" class="app-stack-button" type="button" aria-pressed="false" aria-label="Like" hidden>${APP_ICON('<path d="M2 7.2h2.6V14H2.5a.5.5 0 0 1-.5-.5z"/><path d="M5.8 14V6.7l2.5-4.4a1.2 1.2 0 0 1 2.2.9L10 6h3a1.4 1.4 0 0 1 1.37 1.7l-1 4.7A2 2 0 0 1 11.4 14z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
 <section id="app-list" aria-label="Articles">
 <div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="app-head-icon" type="button" aria-label="Mark all as read" title="Mark all as read">${APP_MARK_READ_ICON}</button><button id="app-list-sync" class="app-head-icon" type="button" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button></span></div>
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
@@ -33138,7 +34396,7 @@ ${settingsModalHTML()}
 <div class="toast-layer">${TOAST_HTML}</div>
 <div id="app-reading">
 <section id="app-article" aria-label="Article">
-<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="${escapeHTML(appShortcutTip("front-pages"))}">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Text settings" title="Text settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="${escapeHTML(appShortcutTip("discussion"))}" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
+<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="${escapeHTML(appShortcutTip("front-pages"))}">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Style settings" title="Style settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="${escapeHTML(appShortcutTip("discussion"))}" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
 <div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick an article to read it here, with what people said about it beside it.</div></div>
 <div id="app-next" class="app-next" hidden><span class="app-next-label">Read next</span><button id="app-next-link" class="app-next-link" type="button"><span class="app-next-title"></span><span class="app-next-meta"></span></button></div>
 </section>
@@ -33174,6 +34432,8 @@ ${settingsModalHTML()}
 	}
 
 	async function runAppPass() {
+		scheduleUpdateCheck();
+
 		traceOrphanedComments().catch(console.error);
 
 		const shortcuts = readAppShortcuts();
@@ -33418,6 +34678,7 @@ ${settingsModalHTML()}
 			const zoom = APP_ZOOM_STEPS[zoomAt];
 
 			shadow.host.style.setProperty("--app-zoom", String(appIsPhone() ? 1 : zoom));
+			shadow.host.style.setProperty("--app-text-zoom", String(zoom));
 			zoomLevel.value = String(Math.round(zoom * 100));
 			zoomOut.disabled = zoomAt === 0;
 			zoomIn.disabled = zoomAt === APP_ZOOM_STEPS.length - 1;
@@ -33457,10 +34718,24 @@ ${settingsModalHTML()}
 		paintAppZoom();
 
 		viewToggle.onclick = () => setAppViewMenuOpen(viewMenu.hidden);
+		viewMenu.addEventListener("click", (event) => {
+			const button = event.target.closest?.("[data-reader-page], [data-reader-font]");
+
+			if (button) {
+				chooseReaderLook(button.dataset.readerPage ? "page" : "font", button.dataset.readerPage || button.dataset.readerFont);
+			}
+		});
+		Promise.all([load(STORAGE.readerPage, "auto"), load(STORAGE.readerFont, "charter")])
+			.then(([page, font]) => {
+				readerLook = { page: Object.hasOwn(READER_PAGE_NAMES, page) ? page : "auto", font: Object.hasOwn(READER_FONT_NAMES, font) ? font : "charter" };
+				paintReaderLook();
+				paintReaderMenu();
+			})
+			.catch(console.error);
 		viewMenu.addEventListener("keydown", (event) => {
 			if (event.key === "Escape") {
 				setAppViewMenuOpen(false);
-				shadow.querySelector(appIsStacked() ? "#app-bar-view" : "#app-view-toggle").focus();
+				appViewMenuToggle(shadow).focus();
 			}
 		});
 		shadow.addEventListener("pointerdown", (event) => {
@@ -34715,6 +35990,10 @@ ${settingsModalHTML()}
 		return window.matchMedia("(max-width: 1335px)").matches && !appIsPhone();
 	}
 
+	function appViewMenuToggle(shadow) {
+		return shadow?.querySelector(appIsStacked() || appIsPhone() ? "#app-bar-view" : "#app-view-toggle");
+	}
+
 	function appLayout() {
 		return appIsPhone() ? "phone" : "wide";
 	}
@@ -34948,7 +36227,7 @@ ${settingsModalHTML()}
 		like.setAttribute("aria-pressed", vote?.getAttribute("aria-pressed") || "false");
 		like.setAttribute("aria-label", vote?.title || "Like");
 		shadow.querySelector("#app-bar-open").hidden = shadow.querySelector("#app-article-open").hidden;
-		shadow.querySelector("#app-bar-view").hidden = appIsPhone() || shadow.querySelector("#app-view-toggle").hidden;
+		shadow.querySelector("#app-bar-view").hidden = shadow.querySelector("#app-view-toggle").hidden || (appIsPhone() && shadow.querySelector("#app-article-body")?.dataset.mode !== "reader");
 
 		const bar = shadow.querySelector("#app-bar");
 
@@ -36462,13 +37741,13 @@ ${frontPageChooserHTML()}
 	function setAppViewMenuOpen(open) {
 		const shadow = appState?.ui.shadow;
 		const menu = shadow?.querySelector("#app-view-menu");
-		const toggle = shadow?.querySelector(appIsStacked() ? "#app-bar-view" : "#app-view-toggle");
+		const toggle = appViewMenuToggle(shadow);
 
 		if (!menu || !toggle) {
 			return;
 		}
 
-		const show = Boolean(open) && !toggle.hidden && !appIsPhone();
+		const show = Boolean(open) && !toggle.hidden;
 
 		menu.hidden = !show;
 		shadow.querySelector("#app-view-arrow")?.toggleAttribute("hidden", !show);
@@ -36479,25 +37758,31 @@ ${frontPageChooserHTML()}
 		}
 
 		if (show) {
-			placeAppViewMenu();
+			paintReaderMenu();
 		}
 	}
 
 	function placeAppViewMenu() {
 		const shadow = appState?.ui.shadow;
 		const menu = shadow?.querySelector("#app-view-menu");
-		const toggle = shadow?.querySelector(appIsStacked() ? "#app-bar-view" : "#app-view-toggle");
+		const toggle = appViewMenuToggle(shadow);
 		const pane = shadow?.querySelector("#app-article");
 
 		if (!menu || menu.hidden || !toggle || !pane) {
 			return;
 		}
 
-		const above = appIsStacked();
+		menu.style.maxHeight = "";
 
 		const box = toggle.getBoundingClientRect();
 		const room = pane.getBoundingClientRect();
 		const width = menu.offsetWidth;
+		const fitsAbove = box.top - 9 - menu.offsetHeight >= 8;
+		const fitsBelow = box.bottom + 9 + menu.offsetHeight <= window.innerHeight - 8;
+		const above = toggle.id === "app-bar-view" && (fitsAbove || (!fitsBelow && box.top > window.innerHeight - box.bottom));
+
+		menu.style.maxHeight = `${Math.floor(above ? box.top - 17 : window.innerHeight - box.bottom - 17)}px`;
+
 		const left = Math.min(
 			Math.max(box.left + box.width / 2 - width / 2, room.left + 8),
 			room.right - width - 8,
@@ -36600,6 +37885,7 @@ ${frontPageChooserHTML()}
 
 		state.article = article;
 		pane.dataset.mode = "wait";
+		paintReaderMenu();
 
 		if (http) {
 			runAppArticleProbe(article).catch(console.error);
@@ -36850,6 +38136,13 @@ ${frontPageChooserHTML()}
 
 		article.mode = mode;
 		pane.dataset.mode = mode;
+		paintReaderMenu();
+		paintAppBarActions();
+
+		if (mode !== "reader" && appIsPhone()) {
+			setAppViewMenuOpen(false);
+		}
+
 		clearTimeout(article.capTimer);
 
 		if (mode === "frame-agent" || mode === "frame") {
@@ -36900,6 +38193,203 @@ ${frontPageChooserHTML()}
 
 	function appReaderScroller() {
 		return appState?.ui.shadow.querySelector(".app-reader-scroll") || null;
+	}
+
+	const READER_PAGES = {
+		paper: { page: "#f6f6ef", ink: "#1f1f1c", meta: "#77776f", rule: "#dcdcd2", link: "#1d5e37", code: "#ecece2", mark: "rgba(242, 207, 91, .45)" },
+		white: { page: "#ffffff", ink: "#1b1b1b", meta: "#6e6e6e", rule: "#e4e4e4", link: "#1d5e37", code: "#f3f3f1", mark: "rgba(242, 207, 91, .45)" },
+		sepia: { page: "#f4ecd8", ink: "#3b2e1e", meta: "#8a7558", rule: "#e0d3b4", link: "#7b4a12", code: "#ebe0c6", mark: "rgba(242, 207, 91, .45)" },
+		gray: { page: "#4a4a4c", ink: "#e8e8e8", meta: "#b4b4b4", rule: "#616164", link: "#a8d5b8", code: "#3c3c3e", mark: "rgba(242, 207, 91, .3)" },
+		night: { page: "#121212", ink: "#d8d8d8", meta: "#8e8e8e", rule: "#2c2c2c", link: "#8fc9a5", code: "#1e1e1e", mark: "rgba(242, 207, 91, .25)" },
+	};
+
+	const READER_FONTS = {
+		charter: 'Charter, "Bitstream Charter", "Sitka Text", Cambria, serif',
+		newyork: 'ui-serif, "New York", "Iowan Old Style", Georgia, serif',
+		georgia: "Georgia, serif",
+		system: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+	};
+
+	const READER_PAGE_NAMES = { auto: "Auto", paper: "Paper", white: "White", sepia: "Sepia", gray: "Gray", night: "Night" };
+
+	const READER_FONT_NAMES = { charter: "Charter", newyork: "New York", georgia: "Georgia", system: "System" };
+
+	const READER_FONT_PROBES = {
+		charter: ["Charter", "Bitstream Charter"],
+		newyork: ["New York", "ui-serif"],
+		georgia: ["Georgia"],
+	};
+
+	let readerLook = { page: "auto", font: "charter" };
+
+	function readerMenuHTML() {
+		const swatch = (id) => {
+			const look = READER_PAGES[id] || READER_PAGES.paper;
+			const fill = id === "auto" ? `linear-gradient(90deg, ${READER_PAGES.paper.page} 50%, ${READER_PAGES.night.page} 50%)` : look.page;
+			const label =
+				id === "auto"
+					? `<span class="reader-swatch-a" style="color:${READER_PAGES.paper.ink}">A</span><span class="reader-swatch-a" style="color:${READER_PAGES.night.ink}">a</span>`
+					: "Aa";
+
+			return `<button type="button" class="reader-swatch toggle-swatch" data-reader-page="${id}" aria-label="${READER_PAGE_NAMES[id]}" title="${READER_PAGE_NAMES[id]}" aria-pressed="false" style="background:${fill};color:${look.ink}"><span class="reader-swatch-letters">${label}</span><span class="toggle-swatch-name" aria-hidden="true">${READER_PAGE_NAMES[id]}</span></button>`;
+		};
+		const row = (id) => `<button type="button" class="reader-font" data-reader-font="${id}" aria-pressed="false" style="font-family:${escapeHTML(READER_FONTS[id])}"><span class="reader-font-check" aria-hidden="true"></span><span>${READER_FONT_NAMES[id]}</span></button>`;
+
+		return `<div id="app-view-page-field" class="settings-field" hidden>
+<div class="appearance-row-text"><div class="appearance-row-label">Theme</div><div class="appearance-row-hint">Customize the look of your reading experience.</div></div>
+<div id="app-view-page" class="reader-swatches toggle-colors">${Object.keys(READER_PAGE_NAMES).map(swatch).join("")}</div>
+</div>
+<div id="app-view-font-field" class="settings-field" hidden>
+<div class="appearance-row-text"><div class="appearance-row-label">Font family</div></div>
+<div id="app-view-font" class="reader-fonts">${Object.keys(READER_FONT_NAMES).map(row).join("")}</div>
+</div>`;
+	}
+
+	function readerFontInstalled(id) {
+		const names = READER_FONT_PROBES[id];
+
+		if (!names) {
+			return true;
+		}
+
+		const context = document.createElement("canvas").getContext("2d");
+
+		if (!context) {
+			return true;
+		}
+
+		const sample = "mmmmmmmmmmlliWQ@#$ 0123456789";
+		const width = (family) => {
+			context.font = `72px ${family}`;
+
+			return context.measureText(sample).width;
+		};
+		const serif = width("serif");
+		const mono = width("monospace");
+
+		const face = (name) => (name.startsWith("ui-") ? name : `"${name}"`);
+
+		return names.some((name) => width(`${face(name)}, serif`) !== serif || width(`${face(name)}, monospace`) !== mono);
+	}
+
+	function paintReaderMenu() {
+		const shadow = appState?.ui.shadow;
+
+		if (!shadow) {
+			return;
+		}
+
+		const reader = shadow.querySelector("#app-article-body")?.dataset.mode === "reader";
+
+		for (const field of shadow.querySelectorAll("#app-view-page-field, #app-view-font-field")) {
+			field.hidden = !reader;
+		}
+
+		for (const button of shadow.querySelectorAll("#app-view-page [data-reader-page]")) {
+			button.setAttribute("aria-pressed", String(button.dataset.readerPage === readerLook.page));
+		}
+
+		let shown = 0;
+
+		for (const button of shadow.querySelectorAll("#app-view-font [data-reader-font]")) {
+			const installed = readerFontInstalled(button.dataset.readerFont);
+
+			button.hidden = !installed;
+			button.setAttribute("aria-pressed", String(installed && button.dataset.readerFont === readerLook.font));
+			shown += installed ? 1 : 0;
+		}
+
+		if (!shown) {
+			shadow.querySelector("#app-view-font-field").hidden = true;
+		}
+
+		placeAppViewMenu();
+	}
+
+	function chooseReaderLook(kind, value) {
+		if (kind === "page" && Object.hasOwn(READER_PAGE_NAMES, value)) {
+			readerLook.page = value;
+			save(STORAGE.readerPage, value).catch(console.error);
+		} else if (kind === "font" && Object.hasOwn(READER_FONT_NAMES, value)) {
+			readerLook.font = value;
+			save(STORAGE.readerFont, value).catch(console.error);
+		} else {
+			return;
+		}
+
+		paintReaderLook();
+		paintReaderMenu();
+	}
+
+	function paintReaderLook(host = sidebar, choices = readerLook) {
+		if (!host) {
+			return;
+		}
+
+		const choice = choices.page;
+		const face = Object.hasOwn(READER_FONTS, choices.font) ? choices.font : "charter";
+		const name = Object.hasOwn(READER_PAGES, choice) ? choice : host.classList.contains(DARK_CLASS) ? "night" : "paper";
+		const look = READER_PAGES[name];
+
+		for (const token of Object.keys(look)) {
+			host.style.setProperty(`--reader-${token}`, look[token]);
+		}
+
+		host.style.setProperty("--reader-face", READER_FONTS[face] || READER_FONTS.charter);
+		appReaderElement()?.setAttribute("data-face", face);
+	}
+
+	function readerDateText(value) {
+		const text = String(value || "").trim();
+
+		if (/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b/.test(text)) {
+			return text.slice(0, 40);
+		}
+
+		const calendar = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+		const parsed = calendar ? new Date(Date.UTC(+calendar[1], +calendar[2] - 1, +calendar[3])) : new Date(text);
+
+		if (text && !Number.isNaN(parsed.getTime())) {
+			return parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", ...(calendar ? { timeZone: "UTC" } : {}) });
+		}
+
+		return text.slice(0, 40);
+	}
+
+	function readerUpdatedText(reader) {
+		const published = new Date(reader.published);
+		const modified = new Date(reader.modified);
+
+		if (
+			Number.isNaN(published.getTime()) ||
+			Number.isNaN(modified.getTime()) ||
+			modified.getTime() - published.getTime() < 3600000 ||
+			(reader.metaLines || []).some((line) => /updated/i.test(line))
+		) {
+			return "";
+		}
+
+		const day = (value, date) => String(value).match(/^\d{4}-\d{2}-\d{2}/)?.[0] || date.toDateString();
+
+		return day(reader.published, published) === day(reader.modified, modified)
+			? `Updated ${modified.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`
+			: `Updated ${readerDateText(reader.modified)}`;
+	}
+
+	function readerIconImage(image) {
+		let name = "";
+
+		try {
+			const url = new URL(image.currentSrc || image.src);
+			const inner = url.searchParams.get("url");
+			const path = inner ? decodeURIComponent(inner).split(/[?#]/)[0] : url.pathname;
+
+			name = decodeURIComponent(path.split("/").filter(Boolean).pop() || "");
+		} catch {
+			return false;
+		}
+
+		return /icon/i.test(name) && image.naturalWidth <= 128;
 	}
 
 	function ensureReaderStyles() {
@@ -36959,12 +38449,57 @@ ${frontPageChooserHTML()}
 		title.textContent = reader.title;
 		head.append(site, title);
 
-		if (reader.byline) {
-			const byline = document.createElement("div");
+		const authors = (reader.authors || []).length ? reader.authors : reader.byline ? [reader.byline] : [];
+		const words = (body.textContent || "").split(/\s+/).filter(Boolean).length;
+		const parts = [];
+		const byline = document.createElement("div");
+		const avatar = authors.length ? readerURL(reader.avatar)?.href : "";
 
-			byline.className = "bc-reader-byline";
-			byline.textContent = reader.byline;
-			head.append(byline);
+		byline.className = "bc-reader-byline";
+
+		if (avatar) {
+			const photo = document.createElement("img");
+
+			photo.alt = "";
+			photo.referrerPolicy = "no-referrer";
+			photo.src = avatar;
+			byline.append(photo);
+		}
+
+		if (authors.length) {
+			const names = document.createElement("b");
+
+			names.textContent = authors.join(", ");
+			parts.push(names);
+		}
+
+		if (readerDateText(reader.published)) {
+			parts.push(readerDateText(reader.published));
+		}
+
+		parts.push(`${Math.max(1, Math.round(words / 230))} min read`);
+		parts.forEach((part, index) => {
+			byline.append(index ? " · " : "", part);
+		});
+
+		if (reader.dek) {
+			const dek = document.createElement("p");
+
+			dek.className = "bc-reader-dek";
+			dek.textContent = reader.dek;
+			head.append(dek);
+		}
+
+		head.append(byline);
+
+		const meta = [...(reader.metaLines || []), readerUpdatedText(reader)].filter(Boolean).join(" · ");
+
+		if (meta) {
+			const line = document.createElement("div");
+
+			line.className = "bc-reader-meta";
+			line.textContent = meta;
+			head.append(line);
 		}
 
 		body.className = "bc-reader-body";
@@ -36972,8 +38507,14 @@ ${frontPageChooserHTML()}
 		for (const image of body.querySelectorAll("img")) {
 			image.addEventListener("error", () => dropReaderImage(image, body));
 			image.addEventListener("load", () => {
-				if (image.naturalWidth <= 48 && image.naturalHeight <= 48) {
+				if (image.hasAttribute("data-reader")) {
+					return;
+				}
+
+				if ((image.naturalWidth <= 48 && image.naturalHeight <= 48) || readerIconImage(image)) {
 					dropReaderImage(image, body);
+				} else if (image.naturalHeight <= 40 && image.naturalWidth <= 240) {
+					image.classList.add("is-inline");
 				}
 			});
 		}
@@ -36999,6 +38540,7 @@ ${frontPageChooserHTML()}
 
 		appReaderElement()?.remove();
 		sidebar.appendChild(element);
+		paintReaderLook();
 
 		const scroller = document.createElement("div");
 
@@ -37162,6 +38704,14 @@ ${frontPageChooserHTML()}
 		}, 400);
 	}
 
+	function storedString(value) {
+		return typeof value === "string" ? value.slice(0, 300) : "";
+	}
+
+	function storedStrings(value) {
+		return Array.isArray(value) ? value.slice(0, 20).map(storedString).filter(Boolean) : [];
+	}
+
 	function readerFromStored(stored, url) {
 		const doc = new DOMParser().parseFromString("", "text/html");
 		const content = doc.createElement("div");
@@ -37175,6 +38725,12 @@ ${frontPageChooserHTML()}
 			site: hostLabel(url),
 			content,
 			chars: (content.textContent || "").replace(/\s+/g, " ").trim().length,
+			authors: storedStrings(stored?.authors),
+			published: storedString(stored?.published),
+			modified: storedString(stored?.modified),
+			dek: storedString(stored?.dek),
+			metaLines: storedStrings(stored?.metaLines),
+			avatar: readerURL(storedString(stored?.avatar))?.href || "",
 		};
 	}
 
@@ -37211,13 +38767,15 @@ ${frontPageChooserHTML()}
 				return;
 			}
 
-			const copy = document.cloneNode(true);
+			const found = readerFromFresh(() => {
+				const copy = document.cloneNode(true);
 
-			for (const own of copy.querySelectorAll(`${OWN_SURFACE_SELECTOR},#hn-collapse-button,#hn-submit-button,#${BUTTON_PENDING_ID}`)) {
-				own.remove();
-			}
+				for (const own of copy.querySelectorAll(`${OWN_SURFACE_SELECTOR},#hn-collapse-button,#hn-submit-button,#${BUTTON_PENDING_ID}`)) {
+					own.remove();
+				}
 
-			const found = readerFromDocument(copy, location.href);
+				return copy;
+			}, location.href);
 			const chars = found?.chars || 0;
 
 			if (chars >= READER_MIN_CHARS && chars === last && document.readyState === "complete") {
@@ -37241,6 +38799,12 @@ ${frontPageChooserHTML()}
 				byline: reader.byline,
 				html: reader.content.innerHTML,
 				chars: reader.chars,
+				authors: reader.authors,
+				published: reader.published,
+				modified: reader.modified,
+				dek: reader.dek,
+				metaLines: reader.metaLines,
+				avatar: reader.avatar,
 			},
 		});
 		window.close();
@@ -38390,7 +39954,7 @@ ${frontPageChooserHTML()}
 	);
 
 	const READER_DROP_TAGS = new Set(
-		"SCRIPT STYLE NOSCRIPT TEMPLATE IFRAME FRAME FRAMESET OBJECT EMBED APPLET FORM INPUT BUTTON SELECT TEXTAREA OPTION LABEL NAV ASIDE FOOTER SVG CANVAS VIDEO AUDIO SOURCE TRACK MAP AREA DIALOG MENU LINK META HEAD TITLE BASE MATH".split(
+		"SCRIPT STYLE NOSCRIPT TEMPLATE IFRAME FRAME FRAMESET OBJECT EMBED APPLET FORM INPUT BUTTON SELECT TEXTAREA OPTION LABEL NAV ASIDE SVG CANVAS VIDEO AUDIO SOURCE TRACK MAP AREA DIALOG MENU LINK META HEAD TITLE BASE MATH".split(
 			" ",
 		),
 	);
@@ -38400,10 +39964,37 @@ ${frontPageChooserHTML()}
 	);
 
 	const READER_BLOCK_TAGS = new Set(
-		"P H1 H2 H3 H4 H5 H6 FIGURE UL OL DL BLOCKQUOTE PRE TABLE HR DIV SECTION ARTICLE MAIN HEADER CENTER ADDRESS DETAILS HGROUP".split(
+		"P H1 H2 H3 H4 H5 H6 FIGURE FIGCAPTION UL OL DL BLOCKQUOTE PRE TABLE HR DIV SECTION ARTICLE MAIN HEADER CENTER ADDRESS DETAILS HGROUP".split(
 			" ",
 		),
 	);
+
+	const READER_MARKS = { furniture: "\uE010", furnitureAfter: "\uE011", kicker: "\uE012", subtitle: "\uE013", author: "\uE014", card: "\uE015" };
+
+	const READER_MARK_PATTERN = /[\uE010-\uE015]/g;
+
+	const READER_ROLE_WORDS = {
+		furniture: new Set(
+			"related popular trending recommended recirc recirculation tag tags topics share sharing social follow newsletter subscribe promo ad ads advert advertisement native sponsor sponsored cta ctas preferred comments reuse affiliate disclaimer terms player footer engagement utility prevnext pagination breadcrumb breadcrumbs menu nav".split(
+				" ",
+			),
+		),
+		furnitureAfter: new Set("category categories more".split(" ")),
+		card: new Set("card cards".split(" ")),
+		kicker: new Set("kicker eyebrow deck category categories anno overline label rubric".split(" ")),
+		subtitle: new Set("subtitle standfirst subhead subheadline dek summary excerpt intro description lede".split(" ")),
+	};
+
+	const READER_AROUND_WEB = /around-?the-?web|from-?your-?site/i;
+
+	const READER_AUTHOR_NAMES = /author|byline|contributor|writer|(?:^|[\s_-])bio(?:$|[\s_-])|avatar/i;
+
+	const READER_AUTHOR_PAGE = /\/(?:authors?|contributors?|writers?|columnists?|journalists?|reporters?|staff|people|profiles?)\/[^/]+\/?$/i;
+
+	const READER_BLOCK_SELECTOR = "p, li, h1, h2, h3, h4, h5, h6, figcaption, blockquote, dt, dd";
+
+	const READER_DATE = /\b(?:\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?,?\s+\d{4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{2,4})\b/i;
+	const READER_DATE_GLUED = new RegExp(READER_DATE.source.replace(/^\\b/, ""), "i");
 
 	function readerURL(value, base) {
 		try {
@@ -38434,7 +40025,7 @@ ${frontPageChooserHTML()}
 		];
 
 		for (const candidate of candidates) {
-			if (!candidate || /^data:/i.test(candidate.trim())) {
+			if (!candidate || /^data:/i.test(candidate.trim()) || /placeholder[^/]*$/i.test(candidate.split(/[?#]/)[0])) {
 				continue;
 			}
 
@@ -38465,7 +40056,31 @@ ${frontPageChooserHTML()}
 		});
 	}
 
+	const READER_OWN_MARKERS = new Set(
+		"P caption|IMG author|ASIDE author-card|IMG author-photo|DIV author-name|DIV author-role|P author-bio|A author-more".split("|").map((pair) => pair.trim()),
+	);
+
 	function readerElementPlan(element, base) {
+		const tag = element.nodeName.toUpperCase();
+		const marker = element.getAttribute("data-reader") || "";
+		const marked = READER_OWN_MARKERS.has(`${tag} ${marker}`);
+
+		if ((tag === "ASIDE" || tag === "DIV") && marked) {
+			return element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true"
+				? { drop: true }
+				: { attributes: [["data-reader", marker]] };
+		}
+
+		const plan = readerBasePlan(element, base);
+
+		if (marked && plan.attributes) {
+			plan.attributes.push(["data-reader", marker]);
+		}
+
+		return plan;
+	}
+
+	function readerBasePlan(element, base) {
 		const tag = element.nodeName.toUpperCase();
 
 		if (
@@ -38528,6 +40143,133 @@ ${frontPageChooserHTML()}
 		return { attributes: [] };
 	}
 
+	function readerWrapLooseInline(content, doc) {
+		let run = [];
+
+		const flush = () => {
+			if (!run.length) {
+				return;
+			}
+
+			const loose = run;
+
+			run = [];
+
+			if (!loose.some((node) => node.nodeType === Node.ELEMENT_NODE || node.nodeValue.trim())) {
+				return;
+			}
+
+			const paragraph = doc.createElement("p");
+
+			loose[0].before(paragraph);
+			paragraph.append(...loose);
+		};
+
+		for (const child of [...content.childNodes]) {
+			const loose =
+				child.nodeType === Node.TEXT_NODE ||
+				(child.nodeType === Node.ELEMENT_NODE && !READER_BLOCK_TAGS.has(child.nodeName.toUpperCase()));
+
+			if (loose) {
+				run.push(child);
+			} else {
+				flush();
+			}
+		}
+
+		flush();
+	}
+
+	function readerPrepareSource(doc) {
+		for (const marked of doc.querySelectorAll("[data-reader]")) {
+			marked.removeAttribute("data-reader");
+		}
+
+		for (const amp of doc.querySelectorAll("amp-img, amp-anim")) {
+			const image = doc.createElement("img");
+
+			for (const name of ["src", "srcset", "alt"]) {
+				if (amp.hasAttribute(name)) {
+					image.setAttribute(name, amp.getAttribute(name));
+				}
+			}
+
+			amp.replaceWith(image);
+		}
+
+		for (const wrapper of [...doc.querySelectorAll("span > div")].reverse()) {
+			wrapper.replaceWith(...wrapper.childNodes, " ");
+		}
+
+		const pageLength = readerSquash(doc.body?.textContent).length;
+
+		for (const link of doc.querySelectorAll('a[href^="#"]')) {
+			const target =
+				link.isConnected && /^skip\b/i.test(readerSquash(link.textContent))
+					? doc.getElementById(link.getAttribute("href").slice(1))
+					: null;
+
+			if (!target || target.contains(link) || !(link.compareDocumentPosition(target) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+				continue;
+			}
+
+			const skipped = doc.createRange();
+
+			skipped.setStartBefore(link);
+			skipped.setEndBefore(target);
+
+			if (readerSquash(skipped.toString()).length > pageLength * 0.2) {
+				continue;
+			}
+
+			skipped.deleteContents();
+
+			if (readerSquash(target.textContent).length <= 80 && !target.querySelector("img, p, li")) {
+				target.remove();
+			}
+		}
+
+		for (const video of doc.querySelectorAll("video[poster]")) {
+			const poster = (video.getAttribute("poster") || "").trim();
+
+			if (poster) {
+				const image = doc.createElement("img");
+
+				image.setAttribute("src", poster);
+				image.setAttribute("alt", "");
+				video.replaceWith(image);
+			}
+		}
+
+		for (const figure of doc.querySelectorAll("figure")) {
+			const caption = figure.querySelector("figcaption");
+
+			if (!caption || !figure.querySelector("video, iframe, embed, object")) {
+				continue;
+			}
+
+			const rest = figure.cloneNode(true);
+
+			for (const part of rest.querySelectorAll("figcaption, video, iframe, embed, object")) {
+				part.remove();
+			}
+
+			if (!(rest.textContent || "").trim() && !rest.querySelector("img, picture, svg, canvas, pre, table, audio, math, blockquote")) {
+				caption.remove();
+			}
+		}
+
+		for (const element of doc.querySelectorAll("span, i, b, em, strong, div")) {
+			if (
+				element.isConnected &&
+				!(element.textContent || "").trim() &&
+				!element.querySelector("img, picture, svg, video, iframe, canvas, br, hr, input")
+			) {
+				element.replaceWith(doc.createTextNode(" "));
+			}
+		}
+	}
+
 	function cleanReaderTree(node, base, inert) {
 		for (const child of [...node.childNodes]) {
 			if (child.nodeType === Node.COMMENT_NODE) {
@@ -38547,15 +40289,18 @@ ${frontPageChooserHTML()}
 			}
 
 			if (plan.unwrap || plan.paragraph) {
-				const holder = plan.paragraph
-					? inert.createElement("p")
-					: inert.createDocumentFragment();
+				const holder = inert.createDocumentFragment();
 
 				while (child.firstChild) {
 					holder.appendChild(child.firstChild);
 				}
 
 				cleanReaderTree(holder, base, inert);
+
+				if (plan.paragraph) {
+					readerWrapLooseInline(holder, inert);
+				}
+
 				child.replaceWith(holder);
 				continue;
 			}
@@ -38661,11 +40406,27 @@ ${frontPageChooserHTML()}
 		return title;
 	}
 
+	function readerPickHeading(doc) {
+		const headings = [...doc.querySelectorAll("h1")];
+		const named = readerKey(doc.title);
+		const fits = (heading) => {
+			const key = readerKey(heading?.textContent);
+
+			return Boolean(key) && named.includes(key);
+		};
+
+		return { headings, chosen: fits(headings[0]) ? headings[0] : headings.find(fits) || headings[0] };
+	}
+
+	function readerHeadingTitle(doc) {
+		return readerPickHeading(doc).chosen?.textContent;
+	}
+
 	function readerTitle(doc, url) {
 		for (const candidate of [
 			doc.querySelector('meta[property="og:title"]')?.getAttribute("content"),
 			doc.querySelector('meta[name="twitter:title"]')?.getAttribute("content"),
-			doc.querySelector("h1")?.textContent,
+			readerHeadingTitle(doc),
 			doc.title,
 		]) {
 			const title = String(candidate || "").trim().replace(/\s+/g, " ");
@@ -38692,10 +40453,18 @@ ${frontPageChooserHTML()}
 
 		const [short, long] = a.length < b.length ? [a, b] : [b, a];
 
-		return short.length >= 10 && short.length >= long.length * 0.6 && long.includes(short);
+		if (short.length >= 10 && short.length >= long.length * 0.6 && long.includes(short)) {
+			return true;
+		}
+
+		const words = (value) => String(value || "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+		const [fewer, more] = [words(text), words(title)].sort((x, y) => x.length - y.length);
+		const pool = new Set(more);
+
+		return fewer.length >= 5 && fewer.length >= more.length * 0.75 && fewer.filter((word) => pool.has(word)).length >= fewer.length * 0.9;
 	}
 
-	function dropReaderChrome(root) {
+	function dropReaderChrome(root, loose) {
 		const total = readerTextLength(root);
 
 		for (const element of [...root.querySelectorAll("*")]) {
@@ -38703,7 +40472,7 @@ ${frontPageChooserHTML()}
 				continue;
 			}
 
-			const names = `${element.getAttribute("class") || ""} ${element.id || ""}`;
+			const names = `${readerClassNames(element)} ${element.id || ""}`;
 
 			if (
 				READER_UNSEEN_NAMES.test(names) ||
@@ -38713,7 +40482,7 @@ ${frontPageChooserHTML()}
 				continue;
 			}
 
-			if (!READER_CHROME_TAGS.has(element.nodeName.toUpperCase()) || element.closest("pre, code")) {
+			if (loose || !READER_CHROME_TAGS.has(element.nodeName.toUpperCase()) || element.closest("pre, code")) {
 				continue;
 			}
 
@@ -38721,75 +40490,1150 @@ ${frontPageChooserHTML()}
 				READER_CHROME_ROLES.has(String(element.getAttribute("role") || "").toLowerCase()) ||
 				READER_CHROME_NAMES.test(names);
 
-			if (chrome && !(READER_CONTENT_NAMES.test(names) && readerTextLength(element) >= total * 0.3)) {
+			if (chrome && readerTextLength(element) < total * (READER_CONTENT_NAMES.test(names) ? 0.3 : 0.5)) {
 				element.remove();
 			}
 		}
 	}
 
-	function readerScoredRoot(doc) {
-		const scores = new Map();
-		const prose = new Map();
+	// Adapted from Defuddle 0.19.5, https://github.com/kepano/defuddle
+	// Copyright (c) 2025 Steph Ango (@kepano)
+	//
+	// Permission is hereby granted, free of charge, to any person obtaining a copy
+	// of this software and associated documentation files (the "Software"), to deal
+	// in the Software without restriction, including without limitation the rights
+	// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+	// copies of the Software, and to permit persons to whom the Software is
+	// furnished to do so, subject to the following conditions:
+	//
+	// The above copyright notice and this permission notice shall be included in all
+	// copies or substantial portions of the Software.
+	//
+	// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+	// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+	// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+	// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+	// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+	// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+	// SOFTWARE.
 
-		for (const block of doc.body.querySelectorAll("p, pre, blockquote, li")) {
-			const length = readerTextLength(block);
+	const READER_ENTRY_POINTS = [
+		"#post",
+		".post-content",
+		".post-body",
+		".article-content",
+		"#article-content",
+		".js-article-content",
+		".article_post",
+		".article-wrapper",
+		".entry-content",
+		".content-article",
+		".instapaper_body",
+		".post",
+		".markdown-body",
+		"article",
+		'[role="article"]',
+		"main",
+		'[role="main"]',
+		".article-body",
+		"#content",
+		"body",
+	];
 
-			if (length < 60 || block.closest("nav, aside, footer, form") || readerLinkShare(block) > 0.5) {
-				continue;
+	const READER_FOOTNOTE_REFERENCES = [
+		"sup.reference",
+		"cite.ltx_cite",
+		'sup[id^="fnr"]',
+		'span[id^="fnr"]',
+		'span[class*="footnote_ref"]',
+		'span[class*="footnote-ref"]',
+		"span.footnote-link",
+		"a.citation",
+		'a[id^="ref-link"]',
+		'a[href^="#fn"]',
+		'a[href^="#cite"]',
+		'a[href^="#reference"]',
+		'a[href^="#footnote"]',
+		'a[href^="#r"]',
+		'a[href^="#b"]',
+		'a[href*="cite_note"]',
+		'a[href*="cite_ref"]',
+		"a.footnote-anchor",
+		"span.footnote-hovercard-target a",
+		'a[role="doc-biblioref"]',
+		'a[id^="fnref"]',
+		'a[id^="ref-link"]',
+		"sup.footnoteref",
+		"sup.footnote-reference",
+		'sup[data-fn] > a[href^="#"]',
+		'sup[id^="ftnt_ref"] a[href^="#ftnt"]',
+		'span.easy-footnote > a[href^="#easy-footnote-bottom-"]',
+		'a.footnote[href^="#"]',
+		'a[data-type="noteref"]',
+	].join(",");
+
+	const READER_FOOTNOTE_LISTS = [
+		"div.footnote ol",
+		"div.footnotes ol",
+		'div[role="doc-endnotes"]',
+		'div[role="doc-footnotes"]',
+		"ol.footnotes-list",
+		"ol.footnotes",
+		"ol.references",
+		'ol[class*="article-references"]',
+		"section.footnotes ol",
+		'section[role="doc-endnotes"]',
+		'section[role="doc-footnotes"]',
+		'section[role="doc-bibliography"]',
+		"ul.footnotes-list",
+		"ul.ltx_biblist",
+		'div.footnote[data-component-name="FootnoteToDOM"]',
+		"div.footnotes-footer",
+		"div.footnote-definitions",
+		"div.footnote-definition",
+		"ol.wp-block-footnotes",
+		"ol.easy-footnotes-wrapper",
+		"div.footnotes-segment",
+		"#footnotes",
+	].join(",");
+
+	const READER_CONTENT_DATE = /\b(?:(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}|\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*,?\s+\d{4})\b/i;
+
+	const READER_CONTENT_AUTHOR = /\b(?:by|written by|author:)\s+[A-Za-z\s]+\b/i;
+
+	function readerWordCount(text) {
+		let words = 0;
+		let inWord = false;
+
+		for (let index = 0; index < text.length; index += 1) {
+			const code = text.charCodeAt(index);
+
+			if (
+				(code >= 0x3040 && code <= 0x30ff) ||
+				(code >= 0x3400 && code <= 0x4dbf) ||
+				(code >= 0x4e00 && code <= 0x9fff) ||
+				(code >= 0xf900 && code <= 0xfaff) ||
+				(code >= 0xac00 && code <= 0xd7af)
+			) {
+				words += 1;
+				inWord = false;
+			} else if (code <= 32) {
+				inWord = false;
+			} else if (!inWord) {
+				words += 1;
+				inWord = true;
 			}
+		}
 
-			let weight = 1;
-			let depth = 0;
+		return words;
+	}
 
-			for (let up = block.parentElement; up && up !== doc.documentElement; up = up.parentElement) {
-				prose.set(up, (prose.get(up) || 0) + length);
+	function readerContentScore(element) {
+		const text = element.textContent || "";
+		const words = readerWordCount(text);
+		const style = element.getAttribute("style") || "";
+		const names = (element.getAttribute("class") || "").toLowerCase();
+		let score = words + element.getElementsByTagName("p").length * 10 + text.split(",").length - 1;
 
-				if (depth < 4) {
-					scores.set(up, (scores.get(up) || 0) + (1 + Math.min(3, length / 100)) * weight);
-					weight *= 0.6;
-				}
+		score -= (element.getElementsByTagName("img").length / (words || 1)) * 3;
 
-				depth += 1;
+		if (style.includes("float: right") || style.includes("text-align: right") || element.getAttribute("align") === "right") {
+			score += 5;
+		}
+
+		if (READER_CONTENT_DATE.test(text)) {
+			score += 10;
+		}
+
+		if (READER_CONTENT_AUTHOR.test(text)) {
+			score += 10;
+		}
+
+		if (names.includes("content") || names.includes("article") || names.includes("post")) {
+			score += 15;
+		}
+
+		if (element.querySelector(READER_FOOTNOTE_REFERENCES)) {
+			score += 10;
+		}
+
+		if (element.querySelector(READER_FOOTNOTE_LISTS)) {
+			score += 10;
+		}
+
+		score -= element.getElementsByTagName("table").length * 5;
+
+		const table = element.nodeName === "TD" ? element.closest("table") : null;
+
+		if (table) {
+			const tableNames = (table.getAttribute("class") || "").toLowerCase();
+			const cells = [...table.getElementsByTagName("td")];
+			const index = cells.indexOf(element);
+
+			if (
+				(parseInt(table.getAttribute("width") || "0", 10) > 400 ||
+					table.getAttribute("align") === "center" ||
+					tableNames.includes("content") ||
+					tableNames.includes("article")) &&
+				index > 0 &&
+				index < cells.length - 1
+			) {
+				score += 10;
 			}
+		}
+
+		let linked = 0;
+
+		for (const link of element.getElementsByTagName("a")) {
+			linked += (link.textContent || "").length;
+		}
+
+		return score * (1 - Math.min(linked / (text.length || 1), 0.5));
+	}
+
+	function readerTableRoot(doc) {
+		const layout = [...doc.getElementsByTagName("table")].some((table) => {
+			const names = (table.getAttribute("class") || "").toLowerCase();
+
+			return (
+				parseInt(table.getAttribute("width") || "0", 10) > 400 ||
+				table.getAttribute("align") === "center" ||
+				names.includes("content") ||
+				names.includes("article") ||
+				[...table.getElementsByTagName("tr")].some((row) => {
+					const cells = [...row.children].filter((cell) => cell.nodeName === "TD");
+
+					return cells.length >= 2 && cells.some((cell) => cell.getAttribute("width"));
+				})
+			);
+		});
+
+		if (!layout) {
+			return null;
 		}
 
 		let best = null;
 		let top = 0;
 
-		for (const [element, score] of scores) {
+		for (const cell of doc.getElementsByTagName("td")) {
+			const score = readerContentScore(cell);
+
 			if (score > top) {
-				best = element;
+				best = cell;
 				top = score;
 			}
 		}
 
-		while (best && best !== doc.body && best.parentElement && (prose.get(best.parentElement) || 0) >= (prose.get(best) || 0) * 1.2) {
-			best = best.parentElement;
-		}
-
-		return best && readerTextLength(best) >= READER_MIN_CHARS ? best : null;
-	}
-
-	function readerRoot(doc) {
-		for (const [candidate, floor] of [
-			[doc.querySelector("main article"), 800],
-			[doc.querySelector("article"), 800],
-			[doc.querySelector("main"), READER_MIN_CHARS],
-			[doc.querySelector("[role='main']"), READER_MIN_CHARS],
-		]) {
-			if (candidate && readerTextLength(candidate) >= floor) {
-				dropReaderChrome(candidate);
-				return candidate;
-			}
-		}
-
-		if (!doc.body) {
+		if (!best || top <= 50) {
 			return null;
 		}
 
-		dropReaderChrome(doc.body);
+		return readerWordCount(best.textContent || "") * 2 < readerWordCount((doc.body || doc.documentElement).textContent || "") ? null : best;
+	}
 
-		return readerScoredRoot(doc) || doc.body;
+	function readerEntryRoot(doc) {
+		const candidates = [];
+
+		READER_ENTRY_POINTS.forEach((selector, index) => {
+			for (const element of doc.querySelectorAll(selector)) {
+				if (doc.body?.contains(element)) {
+					candidates.push({ element, index, score: (READER_ENTRY_POINTS.length - index) * 40 + readerContentScore(element) });
+				}
+			}
+		});
+
+		if (!candidates.length) {
+			return null;
+		}
+
+		candidates.sort((a, b) => b.score - a.score);
+
+		const top = candidates[0];
+
+		if (candidates.length === 1 && top.element === doc.body) {
+			return readerTableRoot(doc) || doc.body;
+		}
+
+		let best = top;
+
+		for (const child of candidates.slice(1)) {
+			if (
+				child.index < best.index &&
+				best.element.contains(child.element) &&
+				readerWordCount(child.element.textContent || "") > 50 &&
+				candidates.filter((other) => other.index === child.index && top.element.contains(other.element)).length <= 1
+			) {
+				best = child;
+			}
+		}
+
+		return best.element;
+	}
+
+	const READER_LISTED_EXACT = [
+		"noscript",
+		'script:not([type^="math/"])',
+		"style",
+		"meta",
+		"link",
+		"audio:not([src]):not(:has(source))",
+		"video:not([src]):not(:has(source))",
+		".jwplayer",
+		'.ad:not([class*="gradient"])',
+		'[class^="ad-" i]',
+		'[class$="-ad" i]',
+		"[data-ad-wrapper]",
+		'[id^="ad-" i]',
+		'[id$="-ad" i]',
+		'[role="banner" i]',
+		'[alt*="advert" i]',
+		".promo",
+		".Promo",
+		"#barrier-page",
+		".alert",
+		'[rel="sponsored" i]',
+		'[href*="source=promotion" i]',
+		'[id="comments" i]',
+		'[id="comment" i]',
+		'div[class*="cover-"]',
+		'div[id*="cover-"]',
+		"ads-breadcrumbs",
+		"header:not(:has(p + p)):not(:has(img))",
+		'header[class~="fixed"]',
+		'header[class~="sticky"]',
+		".header:not(.banner)",
+		"#header",
+		"#Header",
+		"#banner",
+		"#Banner",
+		"nav",
+		".navigation",
+		"#navigation",
+		'[role="navigation" i]',
+		'[role="dialog" i]',
+		'[role="alertdialog" i]',
+		'[role*="complementary" i]',
+		'[class*="pagination" i]',
+		".menu",
+		"#siteSub",
+		".previous",
+		".author",
+		".Author",
+		'[class$="_bio"]',
+		"#categories",
+		".contributor",
+		".date",
+		"#date",
+		"[data-date]",
+		".entry-meta",
+		".meta",
+		".tags",
+		"#tags",
+		'[rel="tag"]',
+		".headline",
+		"#headline",
+		"#title",
+		"#Title",
+		"#articleTag",
+		'[href*="/author/"]',
+		'[href*="/author?"]',
+		'[href$="/author"]',
+		'a[href*="copyright.com"]',
+		'a[href*="google.com/preferences"]',
+		'[href="#top"]',
+		'[href="#Top"]',
+		'[href="#page-header"]',
+		'[href="#content"]',
+		'[href="#site-content"]',
+		'[href="#main-content"]',
+		'[href^="#main"]',
+		'[src*="author"]',
+		".toc",
+		".Toc",
+		"#toc",
+		'[href*="#toc"]',
+		"footer",
+		"ignore",
+		".aside",
+		'aside:not([class*="callout"])',
+		"button",
+		"canvas",
+		"date",
+		"dialog",
+		"fieldset",
+		"form",
+		'input:not([type="checkbox"])',
+		'input[type="checkbox"][class*="sidebar" i]',
+		'input[type="checkbox"][id*="sidebar" i]',
+		'input[type="checkbox"][class*="drawer" i]',
+		'input[type="checkbox"][id*="drawer" i]',
+		'input[type="checkbox"][class*="hamburger" i]',
+		'input[type="checkbox"][id*="hamburger" i]',
+		'input[type="checkbox"][class*="toggle" i]',
+		'input[type="checkbox"][id*="toggle" i]',
+		'input[type="checkbox"][class*="trigger" i]',
+		'input[type="checkbox"][id*="trigger" i]',
+		"label",
+		"option",
+		"select",
+		'[role="listbox"]',
+		'[role="option"]',
+		"textarea",
+		"[hidden]",
+		'[aria-hidden="true"]:not([class*="math"]):not(svg):not([class*="paywall"])',
+		".hidden",
+		".invisible",
+		"instaread-player",
+		"iframe:not([src])",
+		'iframe[src*="blink.net"]',
+		'iframe[src*="giscus.app"]',
+		'iframe[src*="tinypass.com"]',
+		'iframe[src*="trinitymedia.ai"]',
+		'[class="logo" i]',
+		"#logo",
+		"#Logo",
+		"#newsletter",
+		"#Newsletter",
+		".subscribe",
+		'[data-component-name="ButtonCreateButton"]',
+		'[data-component-name="DigestPostEmbed"]',
+		'[data-component-name="SubscribeWidgetToDOM"]',
+		'[class*="digestPostEmbed"]',
+		".noprint",
+		'[data-print-layout="hide" i]',
+		'[data-block="donotprint" i]',
+		'[class*="clickable-icon" i]',
+		'li span[class*="ltx_tag" i][class*="ltx_tag_item" i]',
+		'a[href^="#"][class*="anchor" i]',
+		'a[href^="#"][class*="ref" i]:not(.ltx_ref):not(.footnote-backref)',
+		'[data-container*="most-viewed" i]',
+		".sidebar",
+		".Sidebar",
+		"#sidebar",
+		"#Sidebar",
+		"#side-bar",
+		"#secondary",
+		"#sitesub",
+		'[href*="/sitemap/sitemap.xml"]',
+		'[data-link-name*="skip" i]',
+		'[aria-label*="skip" i]',
+		'[title^="Share on" i]',
+		'[aria-label="Dismiss" i]',
+		'[aria-label="Close" i]',
+		"svg[data-icon]",
+		'[data-testid="load-more-posts"] + div',
+		".copyright",
+		"#copyright",
+		".licensebox",
+		"#page-info",
+		"#rss",
+		"#feed",
+		".gutter",
+		"#primaryaudio",
+		"#NYT_ABOVE_MAIN_CONTENT_REGION",
+		'[data-testid="photoviewer-children-figure"] > span',
+		"table.infobox",
+		'[data-optimizely="related-articles-section" i]',
+		'[data-orientation="vertical"]',
+		".gh-header-sticky",
+		'[data-testid="issue-metadata-sticky"]',
+	];
+
+	const READER_LISTED_PARTIAL = [
+		"a-statement",
+		"(?<!main-)access-wall",
+		"activitypub",
+		"actioncall",
+		"adcontainer",
+		"addcomment",
+		"addtoany",
+		"advert",
+		"adlayout",
+		"ad-tldr",
+		"ad-placement",
+		"adplacehold",
+		"ads-container",
+		"_ad_",
+		"AdBlock_",
+		"AdUnit",
+		"after_content",
+		"after_main_article",
+		"afterpost",
+		"allterms",
+		"-alert-",
+		"alert-box",
+		"_archive",
+		"around-the-web",
+		"aroundpages",
+		"article-author",
+		"article-badges",
+		"article-banner",
+		"article-bottom-section",
+		"article-bottom",
+		"article-category",
+		"article-card",
+		"article-citation",
+		"article-continues",
+		"article__copy",
+		"article_date",
+		"article-date",
+		"article-end ",
+		"articleheader",
+		"article_header",
+		"article-header",
+		"article__header",
+		"article__hero",
+		"article__info",
+		"article-info",
+		"article-meta",
+		"article_meta",
+		"article__meta",
+		"articlename",
+		"article-subject",
+		"article_subject",
+		"article-snippet",
+		"article-separator",
+		"article--share",
+		"article-share",
+		"article--topics",
+		"article-tools",
+		"articletags",
+		"article-tags",
+		"article_tags",
+		"articletitle",
+		"article-title",
+		"article_title",
+		"articletopics",
+		"article-topics",
+		"article-actions",
+		"article--lede",
+		"articlewell",
+		"associated-people",
+		"ambient-video__button",
+		"audio-card",
+		"beyondwords",
+		"about-author",
+		"author-bio",
+		"author-box",
+		"author-info",
+		"author_info",
+		"authorm",
+		"author-mini-bio",
+		"author-name",
+		"author-publish-info",
+		"authored-by",
+		"avatar",
+		"back-to-top",
+		"backlink_container",
+		"backlinks-section",
+		"bio-block",
+		"biobox",
+		"blog-pager",
+		"bookmark-",
+		"-bookmark",
+		"bottominfo",
+		"bottomnav",
+		"bottom-of-article",
+		"bottom-wrapper",
+		"brand-bar",
+		"bcrumb",
+		"breadcrumb",
+		"brdcrumb",
+		"crumbs",
+		"bubblewrapper",
+		"button-wrapper",
+		"buttons-container",
+		"btn-",
+		"-btn",
+		"byline",
+		"captcha",
+		"card-text",
+		"card-media",
+		"card-post",
+		"carouselcontainer",
+		"carousel-container",
+		"cat_header",
+		"cat-overlay",
+		"catlinks",
+		"_categories",
+		"card-author",
+		"card-content",
+		"chapter-list",
+		"collections",
+		"comments",
+		"-comment\\b",
+		"commentbox",
+		"comment-button",
+		"commentcomp",
+		"comment-content",
+		"comment-count",
+		"comment-form",
+		"comment-number",
+		"comment-respond",
+		"comment-thread",
+		"comment-wrap",
+		"complementary",
+		"consent",
+		"contact-",
+		"contactus",
+		"cookie.law",
+		"content-card",
+		"copycontent",
+		"copy-tooltip",
+		"content-topics",
+		"contentpromo",
+		"context-bar",
+		"context-widget",
+		"core-collateral",
+		"cover-image",
+		"cover-photo",
+		"cover-wrap",
+		"created-date",
+		"creative-commons_",
+		"c-subscribe",
+		"_cta",
+		"-cta",
+		"cta-",
+		"cta_",
+		"current-issue",
+		"custom-list-number",
+		"dateline",
+		"dateheader",
+		"date-header",
+		"date-pub",
+		"disclaimer",
+		"disclosure",
+		"discussion",
+		"discuss_",
+		"-dismiss",
+		"disqus",
+		"donate",
+		"donation",
+		"dropdown",
+		"editorial_contact",
+		"editorial-contact",
+		"element-invisible",
+		"elementor-shortcode",
+		"eletters",
+		"emailsignup",
+		"emoji-bar",
+		"engagement-widget",
+		"enhancement-",
+		"entry-author-info",
+		"entry-categories",
+		"entry-date",
+		"entry-title",
+		"entry-utility",
+		"-error",
+		"error-",
+		"eyebrow",
+		"expand-reduce",
+		"external-anchor",
+		"externallinkembedwrapper",
+		"extra-services",
+		"extra-title",
+		"facebook",
+		"fancy-box",
+		"favorite",
+		"featured-content",
+		"feature_feed",
+		"feedback",
+		"feed-links",
+		"field-site-sections",
+		"filed",
+		"fixheader",
+		"floating-vid",
+		"follower",
+		"footer",
+		"footnote-back",
+		"footnoteback",
+		"form-group",
+		"for-you",
+		"frontmatter",
+		"further-reading",
+		"fullbleedheader",
+		"gallery-count",
+		"gated-popup",
+		"gh-feed",
+		"gist-meta",
+		"goog-",
+		"graph-view",
+		"hamburger",
+		"hawk-",
+		"header-pattern",
+		"hero[_\\-a-z]",
+		"hide-for-print",
+		"hide-print",
+		"hide-when-no-script",
+		"hidden-print",
+		"hidden-sidenote",
+		"hidden-accessibility",
+		"home-link",
+		"icon-sidebar",
+		"inarticle-ad",
+		"infoline",
+		"inline-topic",
+		"instacartIntegration",
+		"interlude",
+		"interaction",
+		"itemendrow",
+		"intro-date",
+		"invisible",
+		"jp-no-solution",
+		"jp-relatedposts",
+		"jswarning",
+		"js-warning",
+		"jumplink",
+		"jumpto",
+		"jump-to-",
+		"js-skip-to-content",
+		"keepreading",
+		"keep-reading",
+		"keep_reading",
+		"keyword_wrap",
+		"kicker",
+		"labstab",
+		"-labels",
+		"language-name",
+		"lastupdated",
+		"latest-content",
+		"-ledes-",
+		"-license",
+		"license-",
+		"lightbox-popup",
+		"like-button",
+		"link-box",
+		"links-grid",
+		"links-title",
+		"listing-dynamic-terms",
+		"list-tags",
+		"live-blog-header-live-label",
+		"listinks",
+		"loading",
+		"loa-info",
+		"(?:(?<![\\w-])logo|logo(?![\\w-]))",
+		"ltx_role_refnum",
+		"ltx_tag_bibitem",
+		"ltx_error",
+		"masthead",
+		"marketing",
+		"media-card",
+		"media-inquiry",
+		"-menu",
+		"menu-",
+		"metadata",
+		"meta-bottom",
+		"meta-date",
+		"meta-row",
+		"might-like",
+		"minibio",
+		"more-about",
+		"mod-paywall",
+		"_modal",
+		"-modal",
+		"more-",
+		"morenews",
+		"morestories",
+		"more_wrapper",
+		"most-read",
+		"move-helper",
+		"mw-editsection",
+		"mw-cite-backlink",
+		"mw-indicators",
+		"mw-jump-link",
+		"nav-",
+		"nav_",
+		"navcontainer",
+		"navigation-post",
+		"next-",
+		"next_prev",
+		"no-script",
+		"newsgallery",
+		"news-story-title",
+		"newsletter_",
+		"newsletterbanner",
+		"newslettercontainer",
+		"newsletter-form",
+		"newsletter-signup",
+		"newslettersignup",
+		"newsletterwidget",
+		"newsletterwrapper",
+		"not-found",
+		"notessection",
+		"nomobile",
+		"noprint",
+		"onward-journey",
+		"open-slideshow",
+		"originally-published",
+		"osano-cm",
+		"other-blogs",
+		"outline-view",
+		"pagefoot",
+		"pagehead",
+		"page-header",
+		"page-title",
+		"paywall_message",
+		"-partners",
+		"permission-",
+		"plea",
+		"popular",
+		"popup_links",
+		"pop_stories",
+		"pop-up",
+		"post__author",
+		"post-author",
+		"post-bottom",
+		"post__category",
+		"postcomment",
+		"postdate",
+		"post-date",
+		"post_date",
+		"post-details",
+		"post-feeds",
+		"postinfo",
+		"post-info",
+		"post_info",
+		"post-inline-date",
+		"post-links",
+		"postlist",
+		"post_list",
+		"post_meta",
+		"post-meta",
+		"postmeta",
+		"post_more",
+		"postnavi",
+		"post-navigation",
+		"postpath",
+		"post-preview",
+		"postsnippet",
+		"post_snippet",
+		"post-snippet",
+		"post-subject",
+		"posttax",
+		"post-tax",
+		"post_tax",
+		"posttag",
+		"post-tag",
+		"post_time",
+		"posttitle",
+		"post-title",
+		"post_title",
+		"post__title",
+		"post-ufi-button",
+		"prev-post",
+		"prevnext",
+		"prev_next",
+		"prev-next",
+		"previousnext",
+		"press-inquiries",
+		"print-none",
+		"print-header",
+		"print:hidden",
+		"privacy-notice",
+		"privacy-settings",
+		"profile",
+		"promo_article",
+		"promo-bar",
+		"promo-box",
+		"pubdate",
+		"pub_date",
+		"pub-date",
+		"publish_date",
+		"publish-date",
+		"publication-date",
+		"publicationName",
+		"qr-code",
+		"qr_code",
+		"quick_up",
+		"_rail",
+		"ratingscontainer",
+		"ratingssection",
+		"reactions",
+		"read_also",
+		"readmore",
+		"read-next",
+		"read_next",
+		"read_time",
+		"read-time",
+		"reading_time",
+		"reading-time",
+		"reading-list",
+		"recent-",
+		"recent-articles",
+		"recentpost",
+		"recent_post",
+		"recent-post",
+		"recommend",
+		"redirectedfrom",
+		"recirc",
+		"register",
+		"(?<!h[1-6]-)related",
+		"-relance",
+		"relevant",
+		"relposts",
+		"reversefootnote",
+		"rightcol",
+		"\\bnocontent\\b",
+		"_rss",
+		"rss-link",
+		"rubricwrapper",
+		"scroll_to",
+		"scroll-to",
+		"_search",
+		"-search",
+		"section-nav",
+		"series-banner",
+		"share-box",
+		"sharedaddy",
+		"share-icons",
+		"sharelinks",
+		"share-links",
+		"share-post",
+		"share-print",
+		"share-section",
+		"share-text",
+		"sharing_",
+		"shariff-",
+		"shortcode-id",
+		"show-for-print",
+		"sidebartitle",
+		"sidebar-content",
+		"sidebar-element",
+		"sidebar-wrapper",
+		"sideitems",
+		"sidebar-author",
+		"sidebar-item",
+		"side-box",
+		"sign-in-gate",
+		"similar-",
+		"similar_",
+		"similars-",
+		"site-index",
+		"site-header",
+		"siteheader",
+		"site-name",
+		"site-wordpress",
+		"skip-content",
+		"skip-to-content",
+		"skip-link",
+		"c-skip-link",
+		"_skip-link",
+		"-slider",
+		"slug-wrap",
+		"social-author",
+		"social-button",
+		"social-shar",
+		"social-date",
+		"speechify-ignore",
+		"speedbump",
+		"sponsor",
+		"springercitation",
+		"_stats",
+		"sticky-social",
+		"story-date",
+		"story-navigation",
+		"storyreadtime",
+		"storysmall",
+		"storypublishdate",
+		"subject-label",
+		"submenu",
+		"-subscribe-",
+		"subscriber-drive",
+		"subscription-",
+		"_tags",
+		"tags__item",
+		"tag_list",
+		"tag-list",
+		"tag-module",
+		"takeaways",
+		"taxonomy",
+		"table-of-contents",
+		"tblc",
+		"tabs-",
+		"terminaltout",
+		"time-rubric",
+		"timestamp",
+		"time-read",
+		"time-to-read",
+		"tip_off",
+		"-ticker",
+		"tiptout",
+		"-tout-",
+		"toc-container",
+		"toggle-caption",
+		"tooltip-content",
+		"topbar",
+		"subnavbar",
+		"topic-authors",
+		"topic-footer",
+		"topic-list",
+		"topic-subnav",
+		"top-wrapper",
+		"tree-item",
+		"trending",
+		"trust-feat",
+		"trust-badge",
+		"trust-project",
+		"chakra-badge",
+		"twiblock",
+		"u-hide",
+		"upsell",
+		"vid_carousel",
+		"viewbottom",
+		"view-language",
+		"yarpp-related",
+		"welcomebox",
+		"widget_pages",
+		"window__widget",
+		"w-form-done",
+		"w-form-fail",
+	];
+
+	const READER_LISTED_EXACT_SELECTOR = READER_LISTED_EXACT.join(",");
+
+	const READER_LISTED_HIDDEN = '[hidden],[aria-hidden="true"]:not([class*="math"]):not(svg):not([class*="paywall"]),.hidden,.invisible';
+
+	const READER_LISTED_PATTERN = new RegExp(READER_LISTED_PARTIAL.join("|"), "i");
+
+	const READER_LISTED_WHOLE = new RegExp(`^(?:${READER_LISTED_PARTIAL.join("|")})$`, "i");
+
+	const READER_LISTED_ATTRIBUTES = ["data-component", "data-test", "data-testid", "data-test-id", "data-qa", "data-cy"];
+
+	const READER_LISTED_HOLDERS = "[class],[id],[data-component],[data-test],[data-testid],[data-test-id],[data-qa],[data-cy]";
+
+	const READER_RESPONSIVE_SHOW = /^(?:sm|md|lg|xl|2xl|min-\[|max-\[):(?:block|flex|grid|inline|table|contents)/;
+
+	function dropReaderListed(doc, root, loose) {
+		const prose = [...root.querySelectorAll("p")].filter((paragraph) => readerTextLength(paragraph) >= 140 && readerLinkShare(paragraph) < 0.5);
+		const first = prose[0];
+		const last = prose.filter((paragraph) => !paragraph.textContent.includes(READER_MARKS.author)).pop();
+		const held = [];
+
+		for (let node = first; node && node !== root && node.parentNode; node = node.parentNode) {
+			for (let sibling = node.parentNode.firstChild; sibling && sibling !== node; sibling = sibling.nextSibling) {
+				if (
+					sibling.nodeType === Node.ELEMENT_NODE &&
+					(sibling.matches("img, picture, h1, time") || sibling.querySelector("img, picture, h1, time") || sibling.textContent.includes(READER_MARKS.author))
+				) {
+					held.push(sibling);
+				}
+			}
+		}
+
+		for (let node = last; node && node !== root && node.parentNode; node = node.parentNode) {
+			for (let sibling = node.nextSibling; sibling; sibling = sibling.nextSibling) {
+				if (sibling.nodeType === Node.ELEMENT_NODE && sibling.textContent.includes(READER_MARKS.author)) {
+					held.push(sibling);
+				}
+			}
+		}
+
+		const marks = held.map((element) => {
+			const mark = doc.createComment("");
+
+			element.replaceWith(mark);
+			return [mark, element];
+		});
+		const listed = new Set();
+		const named = new Set();
+		const spared = [];
+
+		for (const element of root.querySelectorAll(READER_LISTED_EXACT_SELECTOR)) {
+			if (
+				!element.closest("pre, code") &&
+				!(element.matches(READER_LISTED_HIDDEN) && (element.getAttribute("class") || "").split(/\s+/).some((name) => READER_RESPONSIVE_SHOW.test(name)))
+			) {
+				listed.add(element);
+			}
+		}
+
+		for (const element of loose ? [] : root.querySelectorAll(READER_LISTED_HOLDERS)) {
+			if (listed.has(element) || element.tagName === "CODE" || element.tagName === "PRE" || element.querySelector("pre") || element.closest("code, pre")) {
+				continue;
+			}
+
+			const heading = /^H[1-6]$/.test(element.tagName);
+			const names = [element.getAttribute("class") || "", ...(heading ? [] : READER_LISTED_ATTRIBUTES.map((name) => element.getAttribute(name) || ""))]
+				.join(" ")
+				.toLowerCase();
+			const id = heading ? "" : (element.id || "").toLowerCase();
+
+			if (
+				(names.trim() && READER_LISTED_PATTERN.test(names)) ||
+				(id && (/[\s_\-:.]/.test(id) ? READER_LISTED_PATTERN : READER_LISTED_WHOLE).test(id))
+			) {
+				listed.add(element);
+				named.add(element);
+			}
+		}
+
+		for (const element of listed) {
+			if (
+				(element.tagName === "A" && element.closest("h1, h2, h3, h4, h5, h6")) ||
+				element.matches(READER_FOOTNOTE_LISTS) ||
+				element.querySelector(READER_FOOTNOTE_LISTS) ||
+				element.parentElement?.matches(READER_FOOTNOTE_LISTS) ||
+				(element.classList.contains("footnote-backref") && element.closest("#footnotes"))
+			) {
+				continue;
+			}
+
+			if (
+				named.has(element) &&
+				first?.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING &&
+				element.nodeName !== "A" &&
+				!element.querySelector("a")
+			) {
+				spared.push(element);
+				continue;
+			}
+
+			if (element.nodeName === "A" && readerTextLength(element.parentElement?.closest("p, li")) > readerTextLength(element)) {
+				continue;
+			}
+
+			if (element.tagName === "BUTTON" && element.querySelector("img, picture, video")) {
+				const parent = element.parentElement;
+
+				if (parent) {
+					for (const media of element.querySelectorAll("img, picture, video")) {
+						parent.insertBefore(media, element);
+					}
+
+					element.remove();
+				}
+
+				continue;
+			}
+
+			if (element.tagName === "BUTTON" && element.closest("p, li, td, th, span, h1, h2, h3, h4, h5, h6")) {
+				element.replaceWith(...element.childNodes);
+				continue;
+			}
+
+			element.remove();
+		}
+
+		for (const element of spared) {
+			if (/^H[1-6]$/.test(element.nodeName) && !element.nextElementSibling) {
+				element.remove();
+			}
+		}
+
+		for (const [mark, element] of marks) {
+			mark.replaceWith(element);
+		}
+	}
+
+	function readerRoot(doc, loose) {
+		const root = readerEntryRoot(doc);
+
+		if (root) {
+			dropReaderListed(doc, root, loose);
+			dropReaderChrome(root, loose);
+		}
+
+		return root;
 	}
 
 	function tidyReaderContent(content) {
@@ -38846,7 +41690,7 @@ ${frontPageChooserHTML()}
 			let removed = false;
 
 			for (const element of [...content.querySelectorAll("p, h1, h2, h3, h4, h5, h6, li, ul, ol, dl, blockquote, figure, figcaption")]) {
-				if (!element.textContent.trim() && !element.querySelector("img, pre, table, hr")) {
+				if (readerIsBlank(element)) {
 					element.remove();
 					removed = true;
 				}
@@ -38860,6 +41704,1023 @@ ${frontPageChooserHTML()}
 		return prose[0] || null;
 	}
 
+	function readerSquash(text) {
+		return String(text || "")
+			.replace(READER_MARK_PATTERN, "")
+			.replace(/\s+/g, " ")
+			.trim();
+	}
+
+	function readerClassNames(element) {
+		return (element.getAttribute("class") || "")
+			.split(/\s+/)
+			.filter((name) => !/[:[\]()@/]/.test(name))
+			.join(" ");
+	}
+
+	function readerOwnNames(element) {
+		const id =
+			element.id && readerKey(element.textContent).startsWith(readerKey(element.id)) ? "" : element.id || "";
+
+		return `${readerClassNames(element)} ${id}`;
+	}
+
+	function readerWordSet(names) {
+		return new Set(
+			names
+				.replace(/follow[-_]?up/gi, "followup")
+				.split(/[^A-Za-z0-9]+|(?<=[a-z])(?=[A-Z])/)
+				.filter(Boolean)
+				.map((word) => word.toLowerCase()),
+		);
+	}
+
+	function readerClassWords(element) {
+		return readerWordSet(readerOwnNames(element));
+	}
+
+	const READER_ARTICLE_TYPE = /(?:Article|BlogPosting|Posting|Report|Review)$/;
+
+	function readerDeclared(doc) {
+		const declared = { authors: [], published: "", modified: "", descriptions: [] };
+		const addName = (name) => {
+			const text = readerSquash(typeof name === "string" ? name : name?.name);
+			const parts = text.split(/\s*[,;]\s*|\s+and\s+/i).map((part) => part.trim());
+
+			if (parts.length > 1 && parts.every((part) => part.split(/\s+/).length >= 2)) {
+				parts.forEach(addOne);
+				return;
+			}
+
+			addOne(text);
+		};
+		const addOne = (text) => {
+			const value = text
+				.replace(/^["'\u201C\u2018\u201E]+|["'\u201D\u2019]+$/g, "")
+				.trim();
+
+			if (
+				declared.authors.length < 10 &&
+				value.length >= 3 &&
+				value.length <= 60 &&
+				!/^https?:/i.test(value) &&
+				!declared.authors.some((known) => known.toLowerCase() === value.toLowerCase())
+			) {
+				declared.authors.push(value);
+			}
+		};
+		const nodesOf = (value) =>
+			[value].flat().flatMap((node) => (node && typeof node === "object" ? [node, ...nodesOf(node["@graph"] || [])] : []));
+		const typed = (node, pattern) => [node?.["@type"]].flat().some((type) => pattern.test(String(type)));
+		const isArticle = (node) => typed(node, READER_ARTICLE_TYPE);
+		const read = (node) => {
+			for (const key of ["author", "creator"]) {
+				[node[key]].flat().forEach(addName);
+			}
+
+			if (!declared.published && typeof node.datePublished === "string") {
+				declared.published = node.datePublished.trim();
+			}
+
+			if (!declared.modified && typeof node.dateModified === "string") {
+				declared.modified = node.dateModified.trim();
+			}
+		};
+		const nodes = [];
+
+		for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
+			try {
+				nodes.push(...nodesOf(JSON.parse(script.textContent)));
+			} catch {}
+		}
+
+		const articles = new Set(
+			nodes.flatMap((node) => [node, ...nodesOf([node.mainEntity, node.mainEntityOfPage])].filter((inner) => isArticle(inner))),
+		);
+		const pages = nodes.filter((node) => typed(node, /^WebPage$/));
+
+		(articles.size ? [...articles] : pages.length ? pages : nodes).forEach(read);
+		pages.forEach((node) => {
+			declared.published ||= typeof node.datePublished === "string" ? node.datePublished.trim() : "";
+			declared.modified ||= typeof node.dateModified === "string" ? node.dateModified.trim() : "";
+		});
+
+		const meta = (selector) => (doc.querySelector(selector)?.getAttribute("content") || "").trim();
+
+		addName(meta('meta[name="author"]'));
+		declared.published ||= meta('meta[property="article:published_time"]');
+		declared.modified ||= meta('meta[property="article:modified_time"]');
+
+		for (const selector of [
+			'meta[property="og:description"]',
+			'meta[name="twitter:description"]',
+			'meta[name="description"]',
+		]) {
+			const key = readerKey(meta(selector));
+
+			if (key.length >= 20 && !declared.descriptions.includes(key)) {
+				declared.descriptions.push(key);
+			}
+		}
+
+		return declared;
+	}
+
+	function readerSquashedLength(element, stop) {
+		const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+		let text = "";
+
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+			text += node.nodeValue;
+
+			if (text.length > 4000) {
+				const partial = readerSquash(text).length;
+
+				return partial >= stop ? partial : readerSquash(element.textContent).length;
+			}
+		}
+
+		return readerSquash(text).length;
+	}
+
+	function markReaderRoles(doc) {
+		const bodyLength = readerSquash(doc.body?.textContent).length;
+
+		for (const element of doc.body?.querySelectorAll("*") || []) {
+			let names = `${readerClassNames(element)} ${element.id}`;
+			let words = readerWordSet(names);
+			let roles = "";
+
+			if (
+				element.id &&
+				(READER_AROUND_WEB.test(names) ||
+					READER_AUTHOR_NAMES.test(names) ||
+					Object.values(READER_ROLE_WORDS).some((set) => [...words].some((word) => set.has(word))))
+			) {
+				names = readerOwnNames(element);
+				words = readerWordSet(names);
+			}
+
+			if (READER_AROUND_WEB.test(names)) {
+				roles += READER_MARKS.furniture;
+			}
+
+			for (const [role, set] of Object.entries(READER_ROLE_WORDS)) {
+				if (
+					[...words].some((word) => set.has(word)) &&
+					!((role === "furnitureAfter" || role === "card") && element.closest("figure, figcaption"))
+				) {
+					roles += READER_MARKS[role];
+				}
+			}
+
+			const author =
+				READER_AUTHOR_NAMES.test(names) ||
+				element.getAttribute("itemprop") === "author" ||
+				element.matches('a[rel~="author"], .h-card, .p-author') ||
+				(element.nodeName === "A" && READER_AUTHOR_PAGE.test((element.getAttribute("href") || "").split(/[?#]/)[0]));
+
+			if (author) {
+				roles += READER_MARKS.author;
+			}
+
+			if (!roles || readerSquashedLength(element, Math.min(1501, bodyLength * 0.4)) >= Math.min(1501, bodyLength * 0.4)) {
+				continue;
+			}
+
+			if (author) {
+				for (const image of element.nodeName === "IMG" ? [element] : element.querySelectorAll("img")) {
+					image.setAttribute("data-reader", "author");
+				}
+			}
+
+			const walker = doc.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+
+			for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+				if (node.nodeValue.trim()) {
+					const start = node.nodeValue.slice(0, 8);
+
+					node.nodeValue = [...roles].filter((mark) => !start.includes(mark)).join("") + node.nodeValue;
+				}
+			}
+		}
+	}
+
+	function readerTakeMarks(content) {
+		const roles = new Map();
+		const roleOf = new Map(Object.entries(READER_MARKS).map(([role, mark]) => [mark, role]));
+
+		for (const element of content.querySelectorAll(`${READER_BLOCK_SELECTOR}, a`)) {
+			if (element.nodeName === "A" && element.closest(READER_BLOCK_SELECTOR)) {
+				continue;
+			}
+
+			const walker = content.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+			const share = new Map();
+			let total = 0;
+
+			for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+				if (node.parentElement?.closest("time")) {
+					continue;
+				}
+
+				const length = node.nodeValue.replace(READER_MARK_PATTERN, "").trim().length;
+
+				total += length;
+
+				for (const mark of new Set(node.nodeValue.match(READER_MARK_PATTERN) || [])) {
+					share.set(mark, (share.get(mark) || 0) + length);
+				}
+			}
+
+			const found = [...share].filter(([, length]) => total && length / total >= 0.6).map(([mark]) => roleOf.get(mark));
+
+			if (found.length) {
+				roles.set(element, new Set(found));
+			}
+		}
+
+		const walker = content.ownerDocument.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+			if (READER_MARK_PATTERN.test(node.nodeValue)) {
+				node.nodeValue = node.nodeValue.replace(READER_MARK_PATTERN, "");
+			}
+
+			READER_MARK_PATTERN.lastIndex = 0;
+		}
+
+		return roles;
+	}
+
+	function readerAltKeys(root) {
+		return new Set(
+			[...root.querySelectorAll("img")].map((image) => readerKey(image.getAttribute("alt"))).filter((key) => key.length >= 20),
+		);
+	}
+
+	const READER_CREDIT_LINE = /(?:^|\s[|\/]\s|\s)(?:Getty Images|Reuters|AP|AFP|Bloomberg|EPA|Shutterstock|Unsplash|Alamy)$/;
+
+	const READER_PHOTO_CREDIT = /\b(?:photo(?:graph)?|image|illustration|picture)s?\s+(?:by|courtesy(?:\s+of)?)\s+\S[^.!?]{0,100}$/i;
+
+	function readerIsCaption(block, altKeys) {
+		const text = readerSquash(block.textContent);
+		const key = readerKey(text);
+		const before = block.previousElementSibling;
+		const underImage = Boolean(before && !readerSquash(before.textContent) && before.querySelector("img"));
+
+		return (
+			altKeys.has(key) ||
+			(text.length <= 400 && [...altKeys].some((alt) => key.startsWith(alt))) ||
+			(text.length <= 80 && READER_CREDIT_LINE.test(text) && underImage) ||
+			(text.length <= 400 && READER_PHOTO_CREDIT.test(text) && underImage) ||
+			(text.length <= 160 && /^(?:image|photo|illustration|credit|source|courtesy|graphic)s?\s*:/i.test(text))
+		);
+	}
+
+	function readerSubtitleCandidate(block, roles, declared, altKeys = readerAltKeys(block.getRootNode())) {
+		if (block.nodeName === "FIGCAPTION" || block.closest("figure") || readerIsCaption(block, altKeys)) {
+			return false;
+		}
+
+		const text = readerSquash(block.textContent);
+		const key = readerKey(text);
+		const described =
+			key.length >= 20 && declared.descriptions.some((d) => d === key || d.includes(key) || key.includes(d));
+
+		return (described && text.length <= 140) || (Boolean(roles.get(block)?.has("subtitle")) && text.length <= 160);
+	}
+
+	function readerBoundary(content, roles, declared) {
+		const altKeys = readerAltKeys(content);
+		const prose = [...content.querySelectorAll("p")].filter(
+			(paragraph) =>
+				!paragraph.querySelector(READER_BLOCK_SELECTOR) &&
+				readerSquash(paragraph.textContent).length >= 140 &&
+				!roles.get(paragraph)?.has("author") &&
+				!roles.get(paragraph)?.has("furniture") &&
+				!readerSubtitleCandidate(paragraph, roles, declared, altKeys) &&
+				!readerIsAuthorBio(paragraph.textContent, declared) &&
+				!readerIsCaption(paragraph, altKeys),
+		);
+
+		return { first: prose[0] || null, last: prose[prose.length - 1] || null };
+	}
+
+	const READER_HEADER_LINE = /^(?:reviewed|edited|fact[- ]?checked|updated|last updated|produced|translated)\b/i;
+
+	const READER_BYLINE = /^(?:by\s+|(?:posted|published|written)\b.{0,80}?\bby\s+)(\S.*)$/i;
+
+	const READER_NAME_BREAKS = /\s(?:in|on|at)\s|[,|\u2022\u00b7\u2014\u2013]/i;
+
+	const READER_DATE_WORDS = /^(?:(?:posted|published|updated|last|written|on|at|by)(?:\s+|$))+$/i;
+
+	const READER_DATE_FILLER = new RegExp(
+		"\\b(?:posted|published|updated|last|on|at|(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?)\\b|\\d{1,2}:\\d{2}(?::\\d{2})?\\s*(?:am|pm)?|[•·|–—,:-]",
+		"gi",
+	);
+
+	const READER_TIME_ZONES = /\b(?:UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|BST|CET|CEST|IST|JST|AEST|AEDT)\b/g;
+
+	const READER_NAME_PARTICLES = new Set("van von de da del di la le bin al ibn".split(" "));
+
+	function readerNameSpan(rest) {
+		const cuts = [rest.search(READER_NAME_BREAKS), rest.search(READER_DATE_GLUED), rest.search(/\s(?:posted|published|updated)\b/i)].filter(
+			(index) => index >= 0,
+		);
+
+		return cuts.length ? rest.slice(0, Math.min(...cuts)) : rest;
+	}
+
+	function readerBylineName(text) {
+		const line = readerSquash(text);
+		const found = line.length <= 120 ? line.match(READER_BYLINE) : null;
+
+		if (!found) {
+			return "";
+		}
+
+		const rest = readerNameSpan(found[1]);
+		const name = readerSquash(rest).replace(/[.:;]+$/, "");
+		const words = name.split(" ");
+		const person = !/[!?]|\p{Ll}[.!?](?:\s|$)/u.test(rest) && words.every((word) => READER_NAME_PARTICLES.has(word) || /^\p{Lu}[\p{L}\p{M}'\u2019.-]*$/u.test(word));
+
+		return words.length >= 2 &&
+			words.length <= 5 &&
+			person &&
+			!READER_DATE_WORDS.test(name)
+			? name
+			: "";
+	}
+
+	function readerIsAuthorBio(text, declared) {
+		const line = readerSquash(text).toLowerCase();
+
+		return (
+			line.length <= 500 &&
+			declared.authors.some((name) => {
+				const own = readerSquash(name).toLowerCase();
+
+				return own.includes(" ") && line.startsWith(own) && /^.{0,40}?\s(?:is|was|writes|covers|has)\s/.test(line.slice(own.length));
+			})
+		);
+	}
+
+	function readerIsDateLine(text) {
+		const line = readerSquash(text);
+
+		if (/^estimated\s+\d+\s*min(?:ute)?s?$/i.test(line)) {
+			return true;
+		}
+
+		if (/\bmin(?:ute)?s?\s+read\b/i.test(line) && line.length <= 60) {
+			const rest = line.replace(READER_DATE, "").replace(/\d+\s*min(?:ute)?s?\s+read/i, "").replace(/[•·|–—-]/g, "");
+
+			if (readerSquash(rest).length <= 3) {
+				return true;
+			}
+		}
+
+		if (line.length > 100 || !READER_DATE.test(line)) {
+			return false;
+		}
+
+		const rest = line
+			.replace(new RegExp(READER_DATE.source, "gi"), "")
+			.replace(READER_TIME_ZONES, "")
+			.replace(READER_DATE_FILLER, "");
+
+		return readerSquash(rest).length <= 3;
+	}
+
+	function readerIsBlank(element) {
+		const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+			if (node.nodeType === Node.TEXT_NODE ? node.nodeValue.trim() : /^(?:IMG|PRE|TABLE|HR)$/.test(node.nodeName)) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	function readerRemoveBlock(content, element) {
+		let parent = element.parentElement;
+
+		element.remove();
+
+		while (parent && parent !== content && readerIsBlank(parent)) {
+			const up = parent.parentElement;
+
+			parent.remove();
+			parent = up;
+		}
+	}
+
+	function readerMarkCaptions(content) {
+		const altKeys = readerAltKeys(content);
+		const blocks = [...content.querySelectorAll(`${READER_BLOCK_SELECTOR}, figure`)].filter(
+			(block) => !block.querySelector(READER_BLOCK_SELECTOR),
+		);
+		let recent = [];
+
+		for (const block of blocks) {
+			const key = readerKey(block.textContent);
+
+			if (block.nodeName === "P" && readerIsCaption(block, altKeys)) {
+				if (recent.includes(key)) {
+					readerRemoveBlock(content, block);
+					continue;
+				}
+
+				block.setAttribute("data-reader", "caption");
+			}
+
+			recent = [...recent, key].slice(-3);
+		}
+	}
+
+	function readerTakeLead(content, roles, declared, first, lead) {
+		const taken = { dek: "", metaLines: [], author: "", published: "" };
+		let dated = Boolean(declared.published || lead.date);
+
+		if (!first) {
+			return taken;
+		}
+
+		const altKeys = readerAltKeys(content);
+		const blocks = [...content.querySelectorAll(READER_BLOCK_SELECTOR)].filter(
+			(block) =>
+				!block.querySelector(READER_BLOCK_SELECTOR) &&
+				!block.contains(first) &&
+				first.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_PRECEDING,
+		);
+
+		for (const block of blocks) {
+			if (
+				!content.contains(block) ||
+				roles.get(block)?.has("author") ||
+				block.getAttribute("data-reader") === "caption" ||
+				block.closest("figure, figcaption")
+			) {
+				continue;
+			}
+
+			const text = readerSquash(block.textContent);
+
+			const name = /^H[1-6]$/.test(block.nodeName) ? "" : readerBylineName(text);
+			const own = declared.authors.concat(lead.author || taken.author || []).map((other) => readerKey(other));
+
+			if (roles.get(block)?.has("kicker") && text.length <= 40) {
+				readerRemoveBlock(content, block);
+			} else if (name && (!own.length || own.includes(readerKey(name)))) {
+				if (!own.length) {
+					taken.author = name;
+				}
+
+				if (!dated && READER_DATE.test(text)) {
+					taken.published = text.match(READER_DATE)[0];
+					dated = true;
+				}
+
+				readerRemoveBlock(content, block);
+			} else if (text.length <= 120 && READER_HEADER_LINE.test(text)) {
+				taken.metaLines.push(text.replace(/\s+[\/|]\s+/g, " \u00b7 "));
+				readerRemoveBlock(content, block);
+			} else if (readerIsAuthorBio(text, declared)) {
+				readerRemoveBlock(content, block);
+			} else if (text.length <= 100 && readerIsDateLine(text) && (dated || READER_DATE.test(text))) {
+				if (!dated) {
+					taken.published = text.match(READER_DATE)[0];
+					dated = true;
+				}
+
+				readerRemoveBlock(content, block);
+			} else if (!taken.dek && readerSubtitleCandidate(block, roles, declared, altKeys)) {
+				taken.dek = text;
+				readerRemoveBlock(content, block);
+			}
+		}
+
+		return taken;
+	}
+
+	const READER_PHRASES = /^(?:most popular|most read|related(?: stories| articles| posts| reading)?|read (?:later|more|next)|up next|next article|previous article|more stories|more news|latest(?: news| stories)?|top stories|trending(?: now)?|popular (?:now|today)|editor'?s picks|keep reading|what to read next|also in .{2,40}|more (?:from|in|on) .{2,40}|you (?:might|may) also like|recommended(?: for you)?|tell others:?|share(?: this(?: article| post| story)?)?:?|topics:?|tags:?|filed under:?|(?:topics|tags|themes|categories|filed under):\s.+|listen to this (?:article|story)|-?\d{1,2}:\d{2}(?::\d{2})?|advertiser content.*|sponsored(?: content)?|advertisement|image credits?:.*|photo credits?:.*|license this (?:photo|image)|\d+ of \d+\s*\|?\s*(?:license this (?:photo|image))?|follow topics and authors.*|choose .{2,40} as (?:your|a) preferred source.*|add us as a preferred source.*|see more .{2,30} in google.*)$/i;
+
+	const READER_LEAD_PHRASES = /^back to .{2,30}$/i;
+
+	const READER_COMMISSION = /\b(?:may|might|could) earn (?:a |an )?(?:small |affiliate )?commission/i;
+
+	const READER_SECTION_LABELS = /^(?:most popular|most read|related(?: stories| articles| posts| reading)?|read (?:more|next)|up next|next article|previous article|also in .{2,40}|more (?:from|in|on) .{2,40}|more stories|more news|latest(?: news| stories)?|top stories|trending(?: now)?|popular (?:now|today)|editor'?s picks|keep reading|what to read next|you (?:might|may) also like|recommended(?: for you)?)$/i;
+
+	const READER_CONTROL_ALTS = /^(?:comments?|share|print|email|e-mail|facebook|twitter|x|linkedin|reddit|whatsapp|copy link|bookmark|save)$/i;
+
+	function readerTakeFurniture(content, roles, boundary) {
+		const { first, last } = boundary;
+		const marked = new Set();
+		const text = (element) => readerSquash(element.textContent);
+		const isAuthor = (element) => {
+			for (let up = element; up && up !== content; up = up.parentElement) {
+				if (roles.get(up)?.has("author")) {
+					return true;
+				}
+			}
+
+			return false;
+		};
+		const hasRole = (element) => Boolean(element.getAttribute("data-reader") === "caption" || roles.get(element)?.size);
+		const label = (line) => line.length <= 40 && !/[.!?]$/.test(line) && READER_SECTION_LABELS.test(line);
+		const conditional = new Set();
+		const blocks = [...content.querySelectorAll(READER_BLOCK_SELECTOR)].filter(
+			(block) => !block.querySelector(READER_BLOCK_SELECTOR) && text(block),
+		);
+
+		for (const block of blocks) {
+			if (isAuthor(block)) {
+				continue;
+			}
+
+			const line = text(block);
+			const lead = Boolean(first && first.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_PRECEDING);
+			const tail = Boolean(last && last.compareDocumentPosition(block) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+			const strong =
+				(roles.get(block)?.has("furniture") && line.length < 400) ||
+				(tail &&
+					!block.closest("figure, figcaption") &&
+					line.length < 400 &&
+					((roles.get(block)?.has("furnitureAfter") && (line.length <= 80 || readerLinkShare(block) >= 0.5)) ||
+						(roles.get(block)?.has("card") && readerLinkShare(block) >= 0.5))) ||
+				((lead || tail) && line.length <= 200 && READER_PHRASES.test(line)) ||
+				(lead && line.length <= 200 && READER_LEAD_PHRASES.test(line)) ||
+				((lead || tail) && line.length <= 250 && READER_COMMISSION.test(line));
+
+			if (strong || label(line)) {
+				marked.add(block);
+
+				if (first && last && !lead && !tail && (/^H[1-6]$/.test(block.nodeName) || label(line))) {
+					conditional.add(block);
+				}
+			}
+		}
+
+		for (const link of content.querySelectorAll("a")) {
+			if (!link.closest(READER_BLOCK_SELECTOR) && roles.get(link)?.has("furniture") && !isAuthor(link)) {
+				marked.add(link);
+			}
+		}
+
+		const nodes = [...content.querySelectorAll(`${READER_BLOCK_SELECTOR}, a, img, figure`)].filter(
+			(element) => element.nodeName !== "A" || !element.closest(READER_BLOCK_SELECTOR),
+		);
+		const closes = (element) =>
+			/^H[1-6]$/.test(element.nodeName) ||
+			(element.nodeName === "P" && text(element).length >= 140 && !hasRole(element) && !isAuthor(element));
+		const linkRun = (from) => {
+			let total = 0;
+			let linked = 0;
+
+			for (let at = from + 1; at < nodes.length && !closes(nodes[at]); at += 1) {
+				const element = nodes[at];
+
+				if (element.nodeName === "A") {
+					total += readerTextLength(element);
+					linked += readerTextLength(element);
+				} else if (element.matches(READER_BLOCK_SELECTOR) && !element.querySelector(READER_BLOCK_SELECTOR)) {
+					const length = readerTextLength(element);
+
+					total += length;
+					linked += length * readerLinkShare(element);
+				}
+			}
+
+			return total ? linked / total : 0;
+		};
+		const inside = (element) => {
+			for (let up = element.parentElement; up; up = up.parentElement) {
+				if (marked.has(up)) {
+					return true;
+				}
+			}
+
+			return false;
+		};
+		let inSection = false;
+
+		for (const [at, element] of nodes.entries()) {
+			const line = text(element);
+			const heading = /^H[1-6]$/.test(element.nodeName);
+
+			if (conditional.has(element) && linkRun(at) < 0.5) {
+				marked.delete(element);
+			}
+
+			if (marked.has(element) && (heading || label(line))) {
+				inSection = true;
+				continue;
+			}
+
+			if (closes(element)) {
+				inSection = false;
+				continue;
+			}
+
+			if (!inSection || marked.has(element) || inside(element)) {
+				continue;
+			}
+
+			const author = isAuthor(element);
+
+			if ((!author && hasRole(element)) || (author && line.length > 80)) {
+				continue;
+			}
+
+			if (author) {
+				for (let up = element; up && up !== content; up = up.parentElement) {
+					roles.get(up)?.delete("author");
+				}
+			}
+
+			marked.add(element);
+		}
+
+		for (const element of marked) {
+			if (content.contains(element)) {
+				readerRemoveBlock(content, element);
+			}
+		}
+
+		for (const image of [...content.querySelectorAll("img")]) {
+			if (READER_CONTROL_ALTS.test(readerSquash(image.getAttribute("alt")))) {
+				readerRemoveBlock(content, image);
+			}
+		}
+	}
+
+	const READER_SIZE_PARAMS = new Set("w h width height resize quality q fit crop strip auto fm format dpr s size".split(" "));
+
+	function readerImageKey(src) {
+		try {
+			const url = new URL(src);
+			const rest = [...url.searchParams]
+				.filter(([name]) => !READER_SIZE_PARAMS.has(name.toLowerCase()))
+				.map(([name, value]) => `${name}=${value}`)
+				.join("&");
+			const key = url.searchParams.get("url") || url.origin + url.pathname + (rest ? `?${rest}` : "");
+
+			return key.replace(/-\d{2,4}x\d{2,4}(?=\.\w+(?:[?#]|$))/, "");
+		} catch {
+			return String(src || "");
+		}
+	}
+
+	function readerDropDuplicateImages(content, roles) {
+		const exempt = (image) => {
+			for (let up = image; up && up !== content; up = up.parentElement) {
+				if (roles.get(up)?.has("author") || up.getAttribute("data-reader") === "author") {
+					return true;
+				}
+			}
+
+			return false;
+		};
+		const adjacent = (earlier, image) => {
+			let node = image.previousSibling;
+
+			while (node && (node.nodeType === Node.COMMENT_NODE || (node.nodeType === Node.TEXT_NODE && !node.nodeValue.trim()))) {
+				node = node.previousSibling;
+			}
+
+			return node === earlier;
+		};
+		const seen = new Map();
+
+		for (const image of [...content.querySelectorAll("img")]) {
+			if (exempt(image) || !image.getAttribute("src")) {
+				continue;
+			}
+
+			const key = readerImageKey(image.getAttribute("src"));
+			const earlier = seen.get(key);
+
+			if (earlier && adjacent(earlier, image)) {
+				readerRemoveBlock(content, earlier);
+				seen.set(key, image);
+			} else if (earlier) {
+				readerRemoveBlock(content, image);
+			} else {
+				seen.set(key, image);
+			}
+		}
+	}
+
+	function readerTakeAuthorCards(content, roles, declared, last) {
+		if (!last || !declared.authors.length) {
+			return;
+		}
+
+		const text = (element) => readerSquash(element.textContent);
+		const lowNames = declared.authors.map((name) => name.toLowerCase());
+		const names = (element) => lowNames.some((name) => text(element).toLowerCase().includes(name));
+		const leaves = [...content.querySelectorAll(`${READER_BLOCK_SELECTOR}, img, a`)].filter((element) => {
+			if (element !== last && !(last.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+				return false;
+			}
+
+			if (element.nodeName === "IMG") {
+				return true;
+			}
+
+			if (element.nodeName === "A") {
+				return !element.closest(READER_BLOCK_SELECTOR) && Boolean(text(element));
+			}
+
+			return !element.querySelector(READER_BLOCK_SELECTOR) && Boolean(text(element));
+		});
+		const marked = (element) => {
+			for (let up = element; up && up !== content; up = up.parentElement) {
+				if (roles.get(up)?.has("author") || up.getAttribute("data-reader") === "author") {
+					return true;
+				}
+			}
+
+			return element.nodeName !== "IMG" && !element.closest("figure, figcaption") && text(element).length <= 80 && names(element);
+		};
+		const linkOnly = (element) =>
+			element.nodeName === "A" ||
+			(Boolean(element.querySelector("a")) &&
+				text(element) === readerSquash([...element.querySelectorAll("a")].map((link) => link.textContent).join(" ")));
+		const sentence = (element) => /[.!?”"]$/.test(text(element));
+		const seenBios = new Set();
+		let at = 0;
+
+		while (at < leaves.length) {
+			if (!marked(leaves[at])) {
+				at += 1;
+				continue;
+			}
+
+			const region = [leaves[at]];
+			let next = at + 1;
+
+			while (next < leaves.length) {
+				const element = leaves[next];
+				const between = text(element).length <= 40 && !sentence(element) && leaves[next + 1] && marked(leaves[next + 1]);
+
+				if (!(marked(element) || between || (linkOnly(element) && text(element).length <= 60))) {
+					break;
+				}
+
+				region.push(element);
+				next += 1;
+			}
+
+			at = next;
+
+			const all = region.map(text).join(" ").toLowerCase();
+			const name = declared.authors.find((each) => all.includes(each.toLowerCase()));
+			const photo = region.find((element) => element.nodeName === "IMG" && element.getAttribute("src"));
+			const bio = region
+				.filter((element) => element.nodeName !== "IMG" && !linkOnly(element) && (text(element).length > 60 || sentence(element)))
+				.filter((element, index, list) => list.findIndex((other) => text(other) === text(element)) === index);
+
+			if (!name || (!photo && !bio.length)) {
+				continue;
+			}
+
+			const bioKey = bio.map(text).join(" ").toLowerCase();
+			const remove = () => {
+				for (const element of region) {
+					if (content.contains(element)) {
+						readerRemoveBlock(content, element);
+					}
+				}
+			};
+
+			if (bioKey && seenBios.has(bioKey)) {
+				remove();
+				continue;
+			}
+
+			seenBios.add(bioKey);
+
+			const lowName = name.toLowerCase();
+			const nameBlock = region.find(
+				(element) => element.nodeName !== "IMG" && !bio.includes(element) && text(element).toLowerCase().includes(lowName),
+			);
+			let role = "";
+
+			if (nameBlock) {
+				const line = text(nameBlock).replace(/^by\s+/i, "");
+				const index = line.toLowerCase().indexOf(lowName);
+				const rest = readerSquash(line.slice(0, index) + " " + line.slice(index + name.length)).replace(/^[,|–—-]\s*/, "");
+
+				if (index >= 0 && rest.length <= 60) {
+					role = rest;
+				}
+			}
+
+			if (!role) {
+				const line = region.find(
+					(element) =>
+						element !== nameBlock &&
+						element.nodeName !== "IMG" &&
+						!bio.includes(element) &&
+						!linkOnly(element) &&
+						text(element).length <= 60 &&
+						!text(element).toLowerCase().includes(lowName),
+				);
+
+				if (line) {
+					role = text(line);
+				}
+			}
+
+			const more = region.find((element) => linkOnly(element) && element !== nameBlock && !/^\d+ comments?$/i.test(text(element)));
+			const moreLink = more && (more.nodeName === "A" ? more : more.querySelector("a"));
+			const card = content.ownerDocument.createElement("aside");
+			const add = (tag, kind, value) => {
+				const element = content.ownerDocument.createElement(tag);
+
+				element.setAttribute("data-reader", kind);
+				card.append(element);
+
+				if (value !== undefined) {
+					element.textContent = value;
+				}
+
+				return element;
+			};
+
+			card.setAttribute("data-reader", "author-card");
+
+			if (photo) {
+				add("img", "author-photo").setAttribute("src", photo.getAttribute("src"));
+			}
+
+			add("div", "author-name", name);
+
+			if (role) {
+				add("div", "author-role", role);
+			}
+
+			for (const paragraph of bio) {
+				add("p", "author-bio").append(...[...paragraph.childNodes].map((node) => node.cloneNode(true)));
+			}
+
+			if (moreLink?.getAttribute("href")) {
+				add("a", "author-more", text(more)).setAttribute("href", moreLink.getAttribute("href"));
+			}
+
+			const first = region[0];
+
+			(first.nodeName === "IMG" ? first.closest("p, figure") || first : first).before(card);
+			remove();
+		}
+	}
+
+	function readerTakeFirstLabel(content, roles) {
+		const leaf = (element) => !element.querySelector(`${READER_BLOCK_SELECTOR}, figure`);
+		const first = [...content.querySelectorAll(`${READER_BLOCK_SELECTOR}, figure`)].find(
+			(element) => leaf(element) && readerSquash(element.textContent),
+		);
+
+		if (!first || roles.get(first)?.size || first.querySelector("img")) {
+			return;
+		}
+
+		const text = readerSquash(first.textContent);
+		const label = first.nodeName === "P" && text.length <= 20 && text.split(" ").length <= 2 && !/[.!?:,]/.test(text);
+		const crumbs = text.length <= 80 && text.split(/\s+[>\u203a\u00bb]\s+/).length >= 2;
+
+		if (/^https?:\/\/\S+$/.test(text) || crumbs || label) {
+			readerRemoveBlock(content, first);
+		}
+	}
+
+	function readerMarkAuthors(content, roles, declared) {
+		const names = declared.authors.map(
+			(name) =>
+				new RegExp(`(?<![\\p{L}\\p{N}])${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\p{L}\\p{N}])`, "iu"),
+		);
+		const named = (text) => Boolean(text) && names.some((name) => name.test(text));
+		const mark = (element) => roles.set(element, (roles.get(element) || new Set()).add("author"));
+		const inside = (element) => {
+			for (let up = element.parentElement; up && up !== content; up = up.parentElement) {
+				if (roles.get(up)?.has("author")) {
+					return true;
+				}
+			}
+
+			return false;
+		};
+
+		for (const block of content.querySelectorAll(`${READER_BLOCK_SELECTOR}, figure`)) {
+			if (block.querySelector("p, li, blockquote, figure") || roles.get(block)?.has("author")) {
+				continue;
+			}
+
+			const text = readerSquash(block.textContent).toLowerCase();
+			const images = [...block.querySelectorAll("img")];
+
+			if (text) {
+				if (
+					text.length <= 80 &&
+					!/^H[1-6]$/.test(block.nodeName) &&
+					!READER_HEADER_LINE.test(text) &&
+					!block.closest("figure, figcaption") &&
+					named(text)
+				) {
+					mark(block);
+				}
+			} else if (
+				images.length &&
+				(images.every((image) => image.getAttribute("data-reader") === "author") ||
+					(!block.closest("figure") && images.every((image) => named(readerSquash(image.getAttribute("alt")).toLowerCase()))))
+			) {
+				mark(block);
+			}
+		}
+
+		for (const image of content.querySelectorAll("img")) {
+			if (!image.closest("figure") && named(readerSquash(image.getAttribute("alt")).toLowerCase())) {
+				image.setAttribute("data-reader", "author");
+			}
+
+			if (image.getAttribute("data-reader") === "author" && !inside(image)) {
+				mark(image);
+			}
+		}
+
+		for (const list of content.querySelectorAll("ul, ol")) {
+			const items = [...list.children].filter((item) => item.nodeName === "LI");
+
+			if (
+				items.some((item) => roles.get(item)?.has("author")) &&
+				items.every((item) => readerSquash(item.textContent).length <= 60)
+			) {
+				items.forEach(mark);
+			}
+		}
+	}
+
+	function readerTakeLeadAuthors(content, roles, first) {
+		const taken = { avatar: "", author: "", date: "" };
+
+		if (!first) {
+			return taken;
+		}
+
+		const lead = [...roles]
+			.filter(
+				([element, set]) =>
+					set.has("author") &&
+					content.contains(element) &&
+					!element.contains(first) &&
+					first.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_PRECEDING,
+			)
+			.map(([element]) => element)
+			.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+		let lines = null;
+
+		for (const element of lead) {
+			if (!content.contains(element)) {
+				continue;
+			}
+
+			const image = element.nodeName === "IMG" ? element : element.querySelector("img");
+
+			if (!taken.avatar && image) {
+				taken.avatar = image.getAttribute("src") || "";
+			}
+
+			if (!lines && element.nodeName !== "IMG" && readerSquash(element.textContent)) {
+				const copy = element.cloneNode(true);
+
+				for (const lineBreak of copy.querySelectorAll("br")) {
+					lineBreak.replaceWith("\n");
+				}
+
+				lines = copy.textContent.split("\n").map(readerSquash).filter(Boolean);
+				const dated = lines.find((line) => READER_DATE_GLUED.test(line)) || "";
+				const plain = lines.find((line) => !READER_DATE_GLUED.test(line) && line.length <= 80);
+				const glued = dated.match(READER_DATE_GLUED);
+
+				const named = lines.map(readerBylineName).find(Boolean);
+				const span = readerNameSpan(readerSquash(plain ?? (glued ? dated.slice(0, glued.index) : "")).replace(/^by\s+/i, ""));
+				const guess = /[!?]|\p{Ll}[.!?](?:\s|$)/u.test(span) ? "" : readerSquash(span).replace(/[.:;]+$/, "");
+
+				taken.date = glued?.[0] || "";
+				taken.author = named || (READER_DATE_WORDS.test(guess) ? "" : guess);
+			}
+
+			readerRemoveBlock(content, element);
+		}
+
+		return taken;
+	}
+
 	function extractReaderArticle(html, url) {
 		const text = String(html || "");
 
@@ -38867,52 +42728,91 @@ ${frontPageChooserHTML()}
 			return null;
 		}
 
-		return readerFromDocument(new DOMParser().parseFromString(text, "text/html"), url);
+		return readerFromFresh(() => new DOMParser().parseFromString(text, "text/html"), url);
 	}
 
-	function readerFromDocument(doc, url) {
-		for (const junk of doc.querySelectorAll("script, style, noscript, template")) {
+	function readerFromFresh(fresh, url) {
+		const first = readerFromDocument(fresh(), url);
+
+		if (first && first.chars >= 1200) {
+			return first;
+		}
+
+		const retry = readerFromDocument(fresh(), url, true);
+
+		return retry && (!first || retry.chars > first.chars * 2) ? retry : first;
+	}
+
+	function readerFromDocument(doc, url, loose) {
+		const declared = readerDeclared(doc);
+
+		for (const junk of doc.querySelectorAll("script, style, template")) {
 			junk.remove();
 		}
 
-		const title = readerTitle(doc, url);
-		const root = readerRoot(doc);
+		readerPrepareSource(doc);
+		markReaderRoles(doc);
+
+		const title = readerTitle(doc, url).replace(READER_MARK_PATTERN, "");
+		const picked = readerPickHeading(doc);
+		const early =
+			picked.chosen !== picked.headings[0] && readerKey(picked.chosen?.textContent) === readerKey(title)
+				? readerKey(picked.headings[0].textContent)
+				: "";
+		const root = readerRoot(doc, loose);
 
 		if (!root) {
 			return null;
 		}
 
-		let byline = String(
-			doc.querySelector('meta[name="author"]')?.getAttribute("content") || "",
-		).trim();
 		const content = doc.createElement("div");
 
 		content.append(...root.childNodes);
 		cleanReaderTree(content, url, doc);
+		readerWrapLooseInline(content, doc);
+
+		const roles = readerTakeMarks(content);
 
 		const firstProse = tidyReaderContent(content);
 
 		for (const heading of [...content.querySelectorAll("h1, h2")].slice(0, 3)) {
 			if (
 				(!firstProse || firstProse.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_PRECEDING) &&
-				readerRepeatsTitle(heading.textContent, title)
+				(readerRepeatsTitle(heading.textContent, title) || (early && heading.nodeName === "H1" && readerKey(heading.textContent) === early))
 			) {
 				heading.remove();
 			}
 		}
 
-		const body = (content.textContent || "").replace(/\s+/g, " ").trim();
+		readerMarkCaptions(content);
+		readerMarkAuthors(content, roles, declared);
 
-		if (byline && body.slice(0, 600).toLowerCase().includes(byline.toLowerCase())) {
-			byline = "";
-		}
+		const boundary = readerBoundary(content, roles, declared);
+		const first = boundary.first;
+		const lead = readerTakeLeadAuthors(content, roles, first);
+		const header = readerTakeLead(content, roles, declared, first, lead);
+
+		readerTakeFurniture(content, roles, boundary);
+		readerTakeAuthorCards(content, roles, declared, boundary.last);
+		readerDropDuplicateImages(content, roles);
+		readerTakeFirstLabel(content, roles);
+
+		const fallback = lead.author || header.author;
+		const authors = declared.authors.length ? declared.authors : fallback ? [fallback] : [];
+		const body = (content.textContent || "").replace(/\s+/g, " ").trim();
 
 		return {
 			title,
-			byline,
+			byline: authors.join(", "),
 			site: hostLabel(url),
 			content,
 			chars: body.length,
+			authors,
+			published: declared.published || lead.date || header.published,
+			modified: declared.modified,
+			dek: header.dek,
+			metaLines: header.metaLines,
+			avatar: authors.length ? lead.avatar : "",
 		};
 	}
 
