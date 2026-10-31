@@ -174,6 +174,20 @@ Worth stating plainly, because the permissions are broad by necessity:
   already has there. The script never handles either password and never
   posts a session cookie anywhere. Those two are the only sources with write
   access; the rest are read-only.
+- **Safari's Userscripts extension reads Reddit in a temporary window.** Since
+  1.6.18.1, pressing Sync or loading more Reddit replies opens a window on
+  `www.reddit.com`, using that site's existing session. Background browsing
+  opens no window and can use cached content or the existing archive fallback.
+  An internal `/api/me.json` check determines whether sign-in is needed; its
+  account data stays in the Reddit window. Only allowed public feed, post and
+  comment fields return through userscript storage, with rate-limit metadata.
+  Cookies, authorization headers, tokens and Reddit's modhash are never copied
+  to the calling page or its responses. Each read session requires a stored,
+  random code, expires within five minutes, accepts only the supported read
+  endpoints, respects server waits, and stops if Reddit is disabled. The window
+  closes and temporary records are removed when finished. Settings › Sources
+  explains the behavior before enabling Reddit, with a one-time announcement
+  for existing users. Other userscript managers keep their existing transport.
 - **A popup acts only on a request the script stored for it.** Before it
   opens a popup to vote, reply or submit, the script stores what you asked
   for under a one-time code and puts the code in the popup's address. The
@@ -244,6 +258,7 @@ with its address as `<page>`.
 | Hacker News (vote, reply, submit) | popup window on `news.ycombinator.com` | the one story or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
 | Reddit | `GET www.reddit.com/search.json?type=link&limit=25&q=<page>` | `<page>` | May carry Reddit session or device cookies when your browser and userscript manager permit them. A signed-in Reddit tab does not guarantee that these requests share its session |
 | Reddit (fallback) | `GET arctic-shift.photon-reddit.com<path>` | the same lookup, against an archive mirror | No identifier, no session |
+| Reddit (Safari Userscripts reads) | temporary window on `www.reddit.com`, using `GET /api/me.json` internally, then supported listing, lookup, thread and more-replies endpoints | the topics, article address or thread requested by Sync or loading more replies; nothing at background page load through this window | Yes, using the existing Reddit session. Account details stay in the Reddit window; only allowed public fields and rate-limit metadata return |
 | Reddit (vote, reply, submit) | popup window on `old.reddit.com` | the one post or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
 | Bluesky | `GET constellation.microcosm.blue/links/all?target=<page>` | `<page>`, plus a `User-Agent` naming Backchannel and its version | No |
 | Bluesky | `GET constellation.microcosm.blue/xrpc/blue.microcosm.links.getBacklinks?subject=<page>&source=...&limit=100` | `<page>` | No |

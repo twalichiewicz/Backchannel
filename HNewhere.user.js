@@ -657,6 +657,7 @@
 		if (syncAppearancePreferences(merged)) {
 			reapplyThemes();
 		}
+		redditReadSourceOn = Boolean(merged.sources?.reddit);
 
 		return merged;
 	}
@@ -668,6 +669,7 @@
 		};
 
 		await save(STORAGE.settings, next);
+		redditReadSourceOn = Boolean(next.sources?.reddit);
 
 		if (syncAppearancePreferences(next)) {
 			reapplyThemes();
@@ -5229,7 +5231,7 @@ ${
 	sourcePoints(source).length && !help
 		? `<ul class="source-points">${sourcePoints(source).map((point) => `<li>${escapeHTML(point)}</li>`).join("")}</ul>`
 		: ""
-}${cells ? "</div>" : ""}`,
+}${source.id === "reddit" && usesRedditReadWindow() ? '<p class="reddit-read-disclosure">In Safari with Userscripts, press Sync to refresh Reddit. A temporary Reddit window uses your Reddit login and closes when finished. Sign in there if asked.</p>' : ""}${cells ? "</div>" : ""}`,
 			)
 			.join("");
 	}
@@ -5405,6 +5407,292 @@ ${
 	const REDDIT_RATE_FLOOR = 10;
 	const REDDIT_POLL_KEY = "HNewhere:reddit_poll";
 
+	// #region hnewhere-test-export
+	function redditReadPath(path) {
+		if (typeof path !== "string" || path.length > 10000 || !path.startsWith("/") || path.startsWith("//") || /[\\#\s]/.test(path) || /%(?:2f|5c|2e)/i.test(path.split("?")[0])) return null;
+		const url = new URL(path, "https://www.reddit.com");
+		const params = url.searchParams;
+		const keys = [...params.keys()];
+
+		if (url.origin !== "https://www.reddit.com" || new Set(keys).size !== keys.length) return null;
+		const only = (...allowed) => keys.every((key) => allowed.includes(key));
+		const limit = (max) => !params.has("limit") || /^\d+$/.test(params.get("limit")) && Number(params.get("limit")) > 0 && Number(params.get("limit")) <= max;
+		const article = (value) => { try { return /^https?:$/.test(new URL(value).protocol); } catch { return false; } };
+		let allowed = false;
+
+		if (/^\/r\/[a-z0-9_+]+\.json$/i.test(url.pathname)) allowed = only("limit") && limit(100);
+		else if (url.pathname === "/api/info.json") allowed = only("url", "id") && keys.length === 1 && (article(params.get("url")) || /^t3_[a-z0-9]+$/i.test(params.get("id") || ""));
+		else if (url.pathname === "/search.json") allowed = only("type", "limit", "q") && params.get("type") === "link" && limit(25) && params.get("q")?.startsWith("url:") && article(params.get("q").slice(4));
+		else if (/^\/(?:r\/[a-z0-9_]+\/)?comments\/[a-z0-9]+(?:\/[^/?#]+)?\/?\.json$/i.test(url.pathname)) allowed = only("limit", "sort") && limit(500) && (!params.has("sort") || params.get("sort") === "top");
+		else if (url.pathname === "/api/morechildren.json") allowed = only("api_type", "link_id", "sort", "children") && params.get("api_type") === "json" && /^t3_[a-z0-9]+$/i.test(params.get("link_id") || "") && (!params.has("sort") || params.get("sort") === "top") && /^[a-z0-9]+(?:,[a-z0-9]+)*$/i.test(params.get("children") || "") && params.get("children").split(",").length <= 100;
+		return allowed ? url.pathname + url.search : null;
+	}
+
+	function publicRedditJSON(value) {
+		const containers = new Set(["data", "children", "replies", "json", "things", "errors"]);
+		const fields = new Set(["kind", "id", "title", "url", "permalink", "author", "score", "num_comments", "created_utc", "subreddit", "subreddit_name_prefixed", "selftext", "selftext_html", "body", "body_html", "parent_id", "link_id", "is_submitter", "removed_by_category", "count", "reason", "error", "message"]);
+		let nodes = 0;
+		let size = 0;
+		const visit = (item, depth = 0) => {
+			if (++nodes > 20000 || depth > 40) throw new Error("Reddit response is too large");
+			if (typeof item === "string") {
+				size += item.length;
+				if (size > 2000000) throw new Error("Reddit response is too large");
+				return item;
+			}
+			if (item === null || typeof item === "boolean" || typeof item === "number" && Number.isFinite(item)) return item;
+			if (Array.isArray(item)) return item.map((entry) => visit(entry, depth + 1));
+			const result = {};
+			for (const [key, entry] of Object.entries(item || {})) {
+				if (containers.has(key) || fields.has(key) && (entry === null || ["string", "number", "boolean"].includes(typeof entry))) result[key] = visit(entry, depth + 1);
+			}
+			return result;
+		};
+		return visit(value);
+	}
+
+	function validRedditReadStage(stage, nonce, now = Date.now()) {
+		if (stage?.kind !== "reddit-read" || stage.nonce !== nonce || !/^[a-f0-9]{32}$/.test(nonce || "") || !Number.isFinite(stage.ts) || !Number.isFinite(stage.expires) || stage.ts > now || stage.expires <= now || stage.expires - stage.ts > 300000) return false;
+		try { const url = new URL(stage.origin); return /^https?:$/.test(url.protocol) && url.origin === stage.origin; } catch { return false; }
+	}
+	// #endregion hnewhere-test-export
+
+	let redditReadSourceOn = false;
+	let redditReadBatch = null;
+	let redditReadWaitUntil = 0;
+	let redditReadNoticeScheduled = false;
+	let redditReadNoticeShown = false;
+	const REDDIT_READ_NOTICE_KEY = "HNewhere:reddit_read_window_notice";
+	const REDDIT_READ_RESUME_KEY = "HNewhere:reddit_read_resume";
+	const REDDIT_READ_SOURCE = "hnewhere-reddit-read";
+
+	function usesRedditReadWindow() {
+		try { return GM.info?.scriptHandler === "Userscripts"; } catch { return false; }
+	}
+
+	function scheduleRedditReadNotice(attempt = 0) {
+		if (!usesRedditReadWindow() || redditReadNoticeScheduled || redditReadNoticeShown) return;
+		redditReadNoticeScheduled = true;
+		window.setTimeout(async () => {
+			redditReadNoticeScheduled = false;
+			if (!sidebarUI?.shadow || !isSidebarVisible() || !(await loadSettings()).sources?.reddit || await load(REDDIT_READ_NOTICE_KEY, false)) return;
+			if (sidebarUI.shadow.querySelector("#toast.is-showing")) { if (attempt < 10) scheduleRedditReadNotice(attempt + 1); return; }
+			redditReadNoticeShown = true;
+			showToast("Reddit refreshes now use a temporary window in Safari. Press Sync to open it; sign in there if asked. It closes when finished.", { persist: true, action: { label: "Got it", onAct: () => save(REDDIT_READ_NOTICE_KEY, true).catch(console.error) } });
+		}, attempt ? 1200 : 500);
+	}
+
+	function redditReadFailure(reason) {
+		return { ok: false, status: 0, json: null, rateLimit: null, localFailure: reason || "window-unavailable" };
+	}
+
+	async function waitRedditReadReply(batch, requestId, timeout = 20000) {
+		let deadline = Math.min(batch.expires, Date.now() + timeout);
+
+		while (!batch.cancelled && Date.now() < deadline) {
+			const reply = await load(BRIDGE_RESULT_PREFIX + batch.nonce, null);
+
+			if (reply?.source === REDDIT_READ_SOURCE && reply.nonce === batch.nonce && reply.requestId === requestId && Number.isFinite(reply.ts) && reply.ts >= batch.created) {
+				if (reply.phase === "login") {
+					deadline = batch.expires;
+					if (Date.now() - reply.ts > 10000) return { error: "window-unavailable" };
+					if (!batch.awaitingLogin) {
+						batch.awaitingLogin = true;
+						showToast("Sign in to Reddit in the temporary window, then press Continue.", { persist: true, action: { label: "Cancel", onAct: () => { batch.cancelled = true; } } });
+					}
+				} else if (["ready", "response", "error", "closed"].includes(reply.phase)) {
+					if (batch.awaitingLogin) { batch.awaitingLogin = false; showToast(""); }
+					return reply;
+				}
+			}
+			await new Promise((resolve) => window.setTimeout(resolve, 150));
+		}
+		return { error: batch.cancelled ? "cancelled" : "timeout" };
+	}
+
+	async function prepareRedditReadBatch(batch) {
+		if (!batch.popup) return { error: "popup-blocked" };
+		const settings = await loadSettings();
+		const cooldown = await load(REDDIT_POLL_KEY, null);
+
+		if (!settings.sources?.reddit || cooldown?.until > Date.now()) return { error: "not-needed" };
+		const stage = { kind: "reddit-read", nonce: batch.nonce, origin: location.origin, ts: batch.created, expires: batch.expires, request: null };
+
+		await stageBridgePayload(batch.nonce, stage);
+		await indexBridgePayload(batch.nonce);
+		batch.popup.location = "https://www.reddit.com/#" + new URLSearchParams({ backchannel_read: "1", nonce: batch.nonce });
+		const reply = await waitRedditReadReply(batch, 0, 30000);
+
+		batch.connected = reply.phase === "ready";
+		return reply;
+	}
+
+	async function finishRedditReadBatch(batch) {
+		batch.closing = true;
+		try {
+			await redditRequestQueue.catch(() => {});
+			const stage = await readBridgePayload(batch.nonce);
+
+			if (stage && batch.connected && !batch.cancelled) {
+				await stageBridgePayload(batch.nonce, { ...stage, done: true });
+				await waitRedditReadReply(batch, "done", 2000);
+			}
+		} finally {
+			await Promise.allSettled([clearBridgePayload(batch.nonce), forget(BRIDGE_RESULT_PREFIX + batch.nonce)]);
+			try { batch.popup?.close(); } catch {}
+			if (redditReadBatch === batch) redditReadBatch = null;
+		}
+	}
+
+	function runRedditReadAction(task) {
+		if (!usesRedditReadWindow() || !redditReadSourceOn || redditReadWaitUntil > Date.now()) return Promise.resolve().then(task);
+		let batch = redditReadBatch;
+
+		if (!batch || batch.closing) {
+			const nonce = crypto.randomUUID().replaceAll("-", "");
+			const popup = window.open("about:blank", REDDIT_READ_SOURCE + "_" + nonce, "width=760,height=680,resizable=yes,scrollbars=yes");
+
+			batch = { nonce, popup, created: Date.now(), expires: Date.now() + SIGN_IN_TIMEOUT, connected: false, closing: false, cancelled: false, users: 0, sequence: 0, accessVersion: redditAccessVersion };
+			redditReadBatch = batch;
+			batch.preparing = prepareRedditReadBatch(batch).catch(() => ({ error: "window-unavailable" }));
+		}
+		batch.users++;
+		return (async () => {
+			try {
+				const ready = await batch.preparing;
+
+				if (ready.error && ready.error !== "not-needed" && !batch.reported) {
+					batch.reported = true;
+					showToast(ready.error === "popup-blocked" ? "Allow popups for this site, then press Sync to refresh Reddit." : ready.error === "cancelled" ? "Reddit refresh cancelled." : ready.error === "limited" ? "Reddit requests are temporarily limited. Try syncing again later." : "The Reddit window did not respond. Press Sync to try again.", { page: true });
+				}
+				return await task();
+			} finally {
+				batch.users--;
+				if (!batch.users) await finishRedditReadBatch(batch);
+			}
+		})();
+	}
+
+	async function requestRedditReadWindow(path, batch) {
+		const safePath = redditReadPath(path);
+
+		if (!safePath || !batch?.connected || batch.cancelled || batch.closing || Date.now() >= batch.expires || ++batch.sequence > 50) return redditReadFailure("window-unavailable");
+		const stage = await readBridgePayload(batch.nonce);
+
+		if (!validRedditReadStage(stage, batch.nonce) || !(await loadSettings()).sources?.reddit) return redditReadFailure("disabled");
+		await stageBridgePayload(batch.nonce, { ...stage, request: { id: batch.sequence, path: safePath } });
+		const reply = await waitRedditReadReply(batch, batch.sequence);
+
+		return reply.phase === "response" && reply.response ? reply.response : redditReadFailure(reply.error);
+	}
+
+	async function dispatchRedditReadWindow() {
+		if (location.origin !== "https://www.reddit.com" || window.top !== window) return false;
+		const payload = parseBridgeHash("backchannel_read") || peekBridgeReload(REDDIT_READ_RESUME_KEY);
+		const nonce = payload?.nonce;
+
+		if (!nonce) return false;
+		const stage = await readBridgePayload(nonce);
+
+		if (!validRedditReadStage(stage, nonce)) { clearBridgeReload(REDDIT_READ_RESUME_KEY); return false; }
+		stageBridgeReload(REDDIT_READ_RESUME_KEY, { nonce });
+		const publish = (data) => save(BRIDGE_RESULT_PREFIX + nonce, { source: REDDIT_READ_SOURCE, nonce, ts: Date.now(), ...data });
+		const work = async () => {
+			let previous = 0;
+			let completed = false;
+			let paused = false;
+			let authenticated = false;
+			let lastLoginReport = 0;
+			const fetchJSON = async (path) => {
+				let response;
+				try { response = await fetch(path, { credentials: "same-origin", cache: "no-store", redirect: path === "/api/me.json" ? "manual" : "error", signal: AbortSignal.timeout(10000) }); }
+				catch { return { ok: false, status: 0, json: null, rateLimit: null }; }
+				if (response.type === "opaqueredirect") return { ok: false, status: 0, json: null, rateLimit: null, needsSignIn: true };
+				const text = await response.text();
+				let json = null;
+
+				try { json = JSON.parse(text); } catch {}
+				const headers = [...response.headers].map(([key, value]) => `${key}: ${value}`).join("\n");
+				const rateLimit = parseRateLimit(headers);
+
+				if (rateLimit && !Number.isFinite(rateLimit.remaining)) delete rateLimit.remaining;
+				return { ok: response.ok && json !== null, status: response.status, json, rateLimit, retryAfterSeconds: parseRetryAfter(headers), finalUrl: response.url, contentType: response.headers.get("content-type")?.split(";")[0] || "" };
+			};
+			try {
+				while (true) {
+					const current = await readBridgePayload(nonce);
+
+					if (!validRedditReadStage(current, nonce) || current.done) { completed = true; break; }
+					if (!(await loadSettings()).sources?.reddit) { await publish({ phase: "error", requestId: current.request?.id || 0, error: "disabled" }); break; }
+					if (paused) {
+						if (Date.now() - lastLoginReport > 1000) { await publish({ phase: "login", requestId: 0 }); lastLoginReport = Date.now(); }
+					} else if (!authenticated) {
+						const identity = await fetchJSON("/api/me.json");
+						const exhausted = identity.rateLimit?.remaining < REDDIT_RATE_FLOOR;
+						const transient = identity.status === 429 || identity.status >= 500 || identity.status === 0;
+						const pause = Math.max(identity.retryAfterSeconds || 0, exhausted ? identity.rateLimit.resetSeconds || 600 : identity.status === 429 ? identity.rateLimit?.resetSeconds || 0 : 0, transient ? 60 : 0);
+
+						if (!(await loadSettings()).sources?.reddit) { await publish({ phase: "error", requestId: 0, error: "disabled" }); break; }
+						if (!identity.needsSignIn && pause > 0) {
+							const until = Date.now() + pause * 1000;
+							const latest = await load(REDDIT_POLL_KEY, null);
+
+							if (!(latest?.until > until)) await save(REDDIT_POLL_KEY, { until, status: exhausted || identity.status === 429 ? "limited" : "unavailable", failures: transient ? 1 : 0, httpStatus: identity.status });
+							await publish({ phase: "error", requestId: 0, error: exhausted || identity.status === 429 ? "limited" : "unavailable" });
+							break;
+						}
+						authenticated = Boolean(identity.ok && identity.json?.data?.name);
+						if (authenticated) {
+							document.getElementById(SIGN_IN_NOTE_ID)?.remove();
+							await publish({ phase: "ready", requestId: 0 });
+						} else {
+							paused = true;
+							await documentReady();
+							showSignInNote({ noun: "refresh Reddit" });
+							const note = document.getElementById(SIGN_IN_NOTE_ID);
+							const button = document.createElement("button");
+
+							button.textContent = "Continue";
+							button.style.marginLeft = "12px";
+							button.onclick = () => { paused = false; };
+							note.textContent = "Sign in to Reddit, then press Continue to refresh Backchannel.";
+							note.append(button);
+							await publish({ phase: "login", requestId: 0 });
+						}
+					} else if (current.request?.id > previous) {
+						const request = current.request;
+						const path = redditReadPath(request.path);
+						const cooldown = await load(REDDIT_POLL_KEY, null);
+
+						if (!path || request.id > 50 || cooldown?.until > Date.now()) { await publish({ phase: "error", requestId: request.id, error: "invalid-request" }); previous = request.id; }
+						else {
+							let response;
+
+							try {
+								response = await fetchJSON(path);
+								response = (await loadSettings()).sources?.reddit ? { ...response, json: publicRedditJSON(response.json) } : redditReadFailure("disabled");
+							}
+							catch { response = { ok: false, status: 0, json: null, rateLimit: null }; }
+							previous = request.id;
+							await publish({ phase: "response", requestId: request.id, response });
+						}
+					}
+					await new Promise((resolve) => window.setTimeout(resolve, 150));
+				}
+			} catch {
+				await publish({ phase: "error", requestId: previous, error: "window-unavailable" }).catch(() => {});
+			} finally {
+				clearBridgeReload(REDDIT_READ_RESUME_KEY);
+				if (completed) await publish({ phase: "closed", requestId: "done" }).catch(() => {});
+				window.close();
+			}
+		};
+		if (typeof navigator.locks?.request === "function") {
+			navigator.locks.request(REDDIT_READ_SOURCE + nonce, { ifAvailable: true }, (lock) => lock ? work() : undefined).catch(console.error);
+		} else await publish({ phase: "error", requestId: 0, error: "window-unavailable" });
+		return true;
+	}
+
 	const redditRequests = new Map();
 	let redditRequestQueue = Promise.resolve();
 	let redditAccessVersion = 0;
@@ -5421,11 +5709,12 @@ ${
 
 	function redditFetch(path, archivePath, { listing = false, retryAccess = false } = {}) {
 		const accessVersion = redditAccessVersion;
-		const key = JSON.stringify([path, archivePath || "", listing, retryAccess, accessVersion]);
+		const readBatch = usesRedditReadWindow() ? redditReadBatch : null;
+		const key = JSON.stringify([path, archivePath || "", listing, retryAccess, accessVersion, readBatch?.nonce || ""]);
 
 		if (redditRequests.has(key)) return redditRequests.get(key);
 
-		const turn = redditRequestQueue.then(() => fetchReddit(path, archivePath, { listing, retryAccess, accessVersion }));
+		const turn = redditRequestQueue.then(() => fetchReddit(path, archivePath, { listing, retryAccess, accessVersion, readBatch }));
 		const done = () => redditRequests.delete(key);
 
 		redditRequests.set(key, turn);
@@ -5433,8 +5722,10 @@ ${
 		return turn;
 	}
 
-	async function fetchReddit(path, archivePath, { listing, retryAccess, accessVersion }) {
-		let tier = retryAccess && accessVersion === redditAccessVersion ? "loid" : await redditTier();
+	async function fetchReddit(path, archivePath, { listing, retryAccess, accessVersion, readBatch }) {
+		const windowTransport = usesRedditReadWindow();
+		const connected = windowTransport && readBatch?.connected && !readBatch.cancelled && !readBatch.closing;
+		let tier = retryAccess && accessVersion === redditAccessVersion || connected && readBatch.accessVersion === redditAccessVersion ? "loid" : await redditTier();
 		let attempted = false;
 		let httpStatus = 0;
 		let retryAt = 0;
@@ -5446,12 +5737,23 @@ ${
 			return null;
 		};
 
+		if (windowTransport && !connected) {
+			const cooldown = await load(REDDIT_POLL_KEY, null);
+
+			redditReadWaitUntil = Number(cooldown?.until) || 0;
+			if (redditReadWaitUntil > Date.now()) { retryAt = redditReadWaitUntil; return unavailable(cooldown.status === "limited" ? "limited" : "unavailable"); }
+			if (listing) return unavailable("window");
+			if (!archivePath) return null;
+			tier = "archive";
+		}
+
 		if (tier === "off") {
 			return unavailable("access");
 		}
 
 		if (tier === "loid") {
 			const cooldown = await load(REDDIT_POLL_KEY, null);
+			redditReadWaitUntil = Number(cooldown?.until) || 0;
 
 			if (Number.isFinite(cooldown?.until) && Date.now() < cooldown.until) {
 				retryAt = cooldown.until;
@@ -5460,7 +5762,9 @@ ${
 			}
 
 			attempted = true;
-			const result = await requestWithMeta("https://www.reddit.com" + path);
+			const result = windowTransport ? await requestRedditReadWindow(path, readBatch) : await requestWithMeta("https://www.reddit.com" + path);
+
+			if (result.localFailure) { attempted = false; return unavailable("window"); }
 			const now = Date.now();
 			const exhausted = result.rateLimit?.remaining < REDDIT_RATE_FLOOR;
 			const transient = result.status === 0 || result.status === 429 || result.status >= 500;
@@ -5482,6 +5786,7 @@ ${
 				} else {
 					await save(REDDIT_POLL_KEY, { until: retryAt, status: exhausted || result.status === 429 ? "limited" : "unavailable", failures: transient ? failures : 0, httpStatus });
 				}
+				redditReadWaitUntil = retryAt;
 			} else if (result.ok && cooldown) {
 				const latest = await load(REDDIT_POLL_KEY, null);
 
@@ -5705,13 +6010,13 @@ ${
 						return { ok: true, added: [], remaining: [] };
 					}
 
-					const result = await redditFetch(
+					const result = await runRedditReadAction(() => redditFetch(
 						"/api/morechildren.json?api_type=json&link_id=t3_" +
 							encodeURIComponent(discussion.id) +
 							"&sort=top&children=" +
 							encodeURIComponent(batch.join(",")),
 						null,
-					);
+					));
 
 					if (!result) {
 						return { ok: false, added: [], remaining: ids };
@@ -8215,7 +8520,9 @@ button {
 			(!view.startsWith("topic:") || feed.topic === view.slice(6)));
 		const messages = failures.map((feed) => {
 			const name = getSource(feed.source)?.label || feed.source;
-			const message = feed.status === "access"
+			const message = feed.status === "window"
+				? "Press Sync to refresh Reddit in a temporary window."
+				: feed.status === "access"
 				? `${name} isn't allowing access to its feed right now.`
 				: feed.status === "limited"
 					? `${name} requests are temporarily limited. Try syncing again later.`
@@ -14854,7 +15161,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 			button.disabled = true;
 			try {
-				await renderBrowseView(ui, { force: true });
+				await runRedditReadAction(() => renderBrowseView(ui, { force: true }));
 			} catch (error) {
 				console.error(error);
 			} finally {
@@ -15064,6 +15371,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 		sidebar.style.display = "";
 		showUpdateTips();
+		scheduleRedditReadNotice();
 		await saveSidebarState("open");
 
 		const restoreButton = document.getElementById("hn-restore-button");
@@ -15654,6 +15962,7 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 
 			if (settings.frontPageMode !== undefined) {
 				await refreshForSourceChange();
+				scheduleRedditReadNotice();
 				return;
 			}
 
@@ -18625,6 +18934,13 @@ button.shortcut-key {
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
+}
+
+.reddit-read-disclosure {
+	margin:5px 0 0;
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.5;
 }
 
 .source-line {
@@ -25761,7 +26077,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			button.onclick = (event) => {
 				event.preventDefault();
 				event.stopPropagation();
-				onSync();
+				runRedditReadAction(onSync).catch(console.error);
 			};
 			fragment.appendChild(button);
 		}
@@ -25931,6 +26247,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 			const ui = await createSidebar({ pageMode: options.pageMode });
 			sidebarUI = ui;
+			scheduleRedditReadNotice();
 
 			if (generation !== sidebarGeneration) {
 				return;
@@ -35598,6 +35915,7 @@ ${settingsModalHTML()}
 		renderAppDiscussionEmpty();
 		watchNoteSelection(await loadSettings());
 		await refreshAppSources();
+		scheduleRedditReadNotice();
 	}
 
 	function wireApp(ui) {
@@ -36105,7 +36423,7 @@ ${settingsModalHTML()}
 
 			pullSyncing = true;
 			paintPull(36, "syncing…", true);
-			renderAppList({ force: true })
+			runRedditReadAction(() => renderAppList({ force: true }))
 				.catch(console.error)
 				.finally(() => {
 					pullSyncing = false;
@@ -36128,10 +36446,10 @@ ${settingsModalHTML()}
 			button.classList.add("is-syncing");
 			button.setAttribute("aria-busy", "true");
 
-			const runs = await Promise.allSettled([
+			const runs = await runRedditReadAction(() => Promise.allSettled([
 				renderAppList({ force: true }),
 				Promise.resolve(appState?.discussionSync?.()),
-			]);
+			]));
 
 			for (const run of runs) {
 				if (run.status === "rejected") {
@@ -44401,6 +44719,7 @@ ${frontPageChooserHTML()}
 	// -------------------------
 
 	async function init() {
+		if (await dispatchRedditReadWindow()) return;
 		await seedSources();
 		await migrateStorage();
 		await migrateSourceKeys();

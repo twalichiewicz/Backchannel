@@ -19,6 +19,11 @@ use to detect updates, so every release bumps it.
   feed, denied access and temporary request limits from an empty list. Saved
   articles remain available when a feed cannot be refreshed. Sidebar sync
   failures use a temporary toast.
+- **Reddit refreshes in Safari's Userscripts extension use a temporary window.**
+  Press Sync to refresh feeds and discussions with your Reddit login, or load
+  more replies to fetch them. Sign in there if asked; it closes when
+  finished. Settings › Sources explains the change before enabling Reddit,
+  and existing Reddit users get a one-time announcement.
 
 ### Changed
 
