@@ -49,6 +49,8 @@ use to detect updates, so every release bumps it.
 
 ### Fixed
 
+- Informational modals use the app's font on every page. Source help wraps within
+  the window in Reader and Sidebar, including the Reddit connection explanation.
 - Clicking an article highlight opens a hidden Discussion panel in Reader.
 - Unread removes a read article when another article opens, while keeping the
   current article in place. Undoing Mark all as read restores the list.

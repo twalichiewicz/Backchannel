@@ -5221,6 +5221,53 @@
 		return `<button class="source-help" type="button" aria-label="About ${escapeHTML(source.label)}" aria-description="${points}" data-tip="${points}">?</button>`;
 	}
 
+	let sourceHelpTipsWatched = false;
+
+	function hideSourceHelpTip(shadow = sidebarUI?.shadow) {
+		const tip = shadow?.querySelector("#source-help-tip");
+
+		if (tip) tip.hidden = true;
+	}
+
+	function showSourceHelpTip(button, shadow) {
+		if (!button?.dataset.tip || !shadow) return;
+		let tip = shadow.querySelector("#source-help-tip");
+
+		if (!tip) {
+			tip = document.createElement("div");
+			tip.id = "source-help-tip";
+			tip.className = "app-tip source-help-tip";
+			tip.setAttribute("role", "tooltip");
+			shadow.append(tip);
+		}
+		tip.textContent = button.dataset.tip;
+		tip.hidden = false;
+		tip.style.left = "0px";
+		tip.style.top = "0px";
+		tip.style.maxWidth = "";
+		const origin = tip.getBoundingClientRect();
+		const scale = origin.width / tip.offsetWidth || 1;
+
+		tip.style.maxWidth = `${Math.min(300, (window.innerWidth - 16) / scale)}px`;
+		const box = button.getBoundingClientRect();
+		const size = tip.getBoundingClientRect();
+		const below = box.bottom + 8 + size.height <= window.innerHeight - 8 || box.top - 8 - size.height < 8;
+		const left = Math.max(8, Math.min(box.left, window.innerWidth - size.width - 8));
+		const top = Math.max(8, Math.min(below ? box.bottom + 8 : box.top - size.height - 8, window.innerHeight - size.height - 8));
+		const arrow = Math.max(8, Math.min((left + size.width - box.left - box.width / 2) / scale - 4, tip.offsetWidth - 16));
+
+		tip.classList.toggle("is-below", below);
+		tip.classList.toggle("is-above", !below);
+		tip.style.left = `${(left - origin.left) / scale}px`;
+		tip.style.top = `${(top - origin.top) / scale}px`;
+		tip.style.setProperty("--arrow", `${arrow}px`);
+		if (!sourceHelpTipsWatched) {
+			sourceHelpTipsWatched = true;
+			window.addEventListener("resize", () => hideSourceHelpTip());
+			window.addEventListener("scroll", () => hideSourceHelpTip(), true);
+		}
+	}
+
 	function sourceListHTML({ idPrefix = "", cells = false, help = false } = {}) {
 		return [...SOURCES.values()]
 			.map(
@@ -31654,8 +31701,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	background:var(--surface);
 	color:var(--surface-text);
 	box-shadow:0 24px 64px rgba(0,0,0,.35);
-	font-size:12px;
-	line-height:1.35;
+	font:400 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+	letter-spacing:normal;
+	word-spacing:normal;
+	text-transform:none;
 	text-align:left;
 }
 
@@ -32075,6 +32124,32 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 .app-tip.is-below::before {
 	top:-4px;
+	right:var(--arrow, 12px);
+	left:auto;
+	margin-top:0;
+}
+
+.source-help-tip {
+	position:fixed;
+	z-index:2147483647;
+	box-sizing:border-box;
+	width:max-content;
+	max-width:min(300px, calc(100vw - 16px));
+	white-space:pre-wrap;
+	overflow-wrap:anywhere;
+	letter-spacing:normal;
+	word-spacing:normal;
+	text-transform:none;
+	transform:none;
+}
+
+.source-help-tip[hidden] {
+	display:none;
+}
+
+.source-help-tip.is-above::before {
+	top:auto;
+	bottom:-4px;
 	right:var(--arrow, 12px);
 	left:auto;
 	margin-top:0;
@@ -36962,68 +37037,38 @@ ${settingsModalHTML()}
 			nav?.append(credits);
 		}
 
-		if (app) {
-			const helpIn = (event) => event.target?.closest?.(".source-help") || null;
+		const helpIn = (event) => event.target?.closest?.(".source-help") || null;
 
-			content.addEventListener("pointerover", (event) => {
-				const help = helpIn(event);
+		shadow.addEventListener("scroll", () => hideSourceHelpTip(shadow), true);
+		content.addEventListener("pointerover", (event) => {
+			const help = helpIn(event);
 
-				if (help && event.pointerType !== "touch") {
-					showAppTip(help, { phone: true });
-				}
-			});
-			content.addEventListener("pointerout", (event) => {
-				const help = helpIn(event);
+			if (help && event.pointerType !== "touch") showSourceHelpTip(help, shadow);
+		});
+		content.addEventListener("pointerout", (event) => {
+			const help = helpIn(event);
 
-				if (help && !help.contains(event.relatedTarget)) {
-					hideAppTip();
-				}
-			});
-			content.addEventListener("focusin", (event) => {
-				const help = helpIn(event);
+			if (help && !help.contains(event.relatedTarget)) hideSourceHelpTip(shadow);
+		});
+		content.addEventListener("focusin", (event) => {
+			const help = helpIn(event);
 
-				if (help?.matches(":focus-visible")) {
-					showAppTip(help, { phone: true });
-				}
-			});
-			content.addEventListener("focusout", (event) => {
-				if (helpIn(event)) {
-					hideAppTip();
-				}
-			});
-			content.addEventListener(
-				"click",
-				(event) => {
-					const help = helpIn(event);
+			if (help?.matches(":focus-visible")) showSourceHelpTip(help, shadow);
+		});
+		content.addEventListener("focusout", (event) => {
+			if (helpIn(event)) hideSourceHelpTip(shadow);
+		});
+		content.addEventListener("click", (event) => {
+			const help = helpIn(event);
 
-					if (help) {
-						showAppTip(help, { phone: true });
-					}
-				},
-				true,
-			);
-			content.addEventListener("scroll", hideAppTip);
-			modal.addEventListener(
-				"pointerdown",
-				(event) => {
-					if (!helpIn(event)) {
-						hideAppTip();
-					}
-				},
-				true,
-			);
-		} else {
-			for (const help of panel.querySelectorAll(".source-help")) {
-				const tip = document.createElement("span");
-
-				tip.className = "op-pill-tip";
-				tip.setAttribute("aria-hidden", "true");
-				tip.textContent = help.dataset.tip;
-				help.append(tip);
-			}
-		}
+			if (help) showSourceHelpTip(help, shadow);
+		}, true);
+		modal.addEventListener("pointerdown", (event) => {
+			if (!helpIn(event)) hideSourceHelpTip(shadow);
+		}, true);
 
 		const showSection = (section, target = "") => {
+			hideSourceHelpTip(shadow);
 			const tab = tabs.find((each) => each.dataset.settingsSection === section) || tabs[0];
 			const panes = panel.querySelector(".settings-panes");
 
@@ -37060,6 +37105,7 @@ ${settingsModalHTML()}
 		};
 
 		const setOpen = (open) => {
+			hideSourceHelpTip(shadow);
 			if (open === !modal.hidden) {
 				return;
 			}
