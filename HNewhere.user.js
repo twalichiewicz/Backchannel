@@ -6490,9 +6490,9 @@ ${
 		},
 
 		async frontPage() {
-			const stories = await lobstersJSON("https://lobste.rs/hottest.json");
+			const stories = await frontPageJSON("https://lobste.rs/hottest.json");
 
-			return (Array.isArray(stories) ? stories : [])
+			return stories
 				.filter((story) => isOffSiteLink(story.url, ["lobste.rs"]))
 				.map(lobstersStory);
 		},
@@ -7948,13 +7948,9 @@ button {
 		},
 
 		async frontPage() {
-			const links = await mastodonJSON(
+			const links = await frontPageJSON(
 				`${MASTODON_INSTANCE}/api/v1/trends/links?limit=40`,
 			);
-
-			if (!Array.isArray(links)) {
-				return [];
-			}
 
 			return links.filter((link) => isOffSiteLink(link?.url)).map(mastodonTrendStory);
 		},
@@ -8013,11 +8009,12 @@ button {
 		},
 
 		async frontPage() {
-			const res = await lemmyJSON(
+			const res = await frontPageJSON(
 				"https://lemmy.world/api/v3/post/list?sort=Active&type_=All&limit=50",
+				"posts",
 			);
 
-			return (res?.posts || [])
+			return res.posts
 				.filter((view) => isOffSiteLink(view.post?.url, [], ["/pictrs/"]))
 				.map(lemmyStory);
 		},
@@ -8607,11 +8604,19 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
+	async function frontPageJSON(url, field = "") {
+		const result = await requestWithMeta(url);
+		const listing = field ? result.json?.[field] : result.json;
+
+		if (!result.ok || !Array.isArray(listing)) throw new Error("Feed returned no listing");
+		return result.json;
+	}
+
 	async function fetchFrontPageFeed(feed, force = false) {
 		let stories = [];
 
 		if (feed.kind === "front") {
-			stories = (await getSource(feed.source).frontPage({ force })) || [];
+			stories = await getSource(feed.source).frontPage({ force });
 		} else if (feed.kind === "subreddits") {
 			const result = await redditFetch(`/r/${feed.target}.json?limit=100`, null, { listing: true, retryAccess: force });
 
@@ -8624,21 +8629,24 @@ button {
 				.filter((post) => post?.id && isOffSiteLink(post.url, REDDIT_SELF_HOSTS))
 				.map(redditStory);
 		} else if (feed.kind === "community") {
-			const res = await lemmyJSON(
+			const res = await frontPageJSON(
 				`https://lemmy.world/api/v3/post/list?community_name=${encodeURIComponent(feed.target)}&sort=Active&type_=All&limit=50`,
+				"posts",
 			);
 
-			stories = (res?.posts || [])
+			stories = res.posts
 				.filter((view) => isOffSiteLink(view.post?.url, [], ["/pictrs/"]))
 				.map(lemmyStory);
 		} else if (feed.kind === "feed") {
-			const res = await bskyJSON(
+			const res = await frontPageJSON(
 				`${BSKY_APPVIEW}/app.bsky.feed.getFeed?feed=${encodeURIComponent(feed.target)}&limit=100`,
+				"feed",
 			);
 
-			stories = bskyFeedStories(res?.feed);
+			stories = bskyFeedStories(res.feed);
 		}
 
+		if (!Array.isArray(stories)) throw new Error("Feed returned no listing");
 		return feed.topic ? stories.map((story) => ({ ...story, topic: feed.topic })) : stories;
 	}
 
@@ -41408,12 +41416,24 @@ ${frontPageChooserHTML()}
 			return;
 		}
 
-		if (root && link && !event.defaultPrevented && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !link.hasAttribute("download")) {
-			const target = (link.getAttribute("target") || "").toLowerCase();
+		if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.hasAttribute("download")) return;
+		let target = (link.getAttribute("target") || "").trim().toLowerCase();
+
+		if ((target === "_top" || target === "_parent") && (link.protocol === "http:" || link.protocol === "https:")) {
+			target = "_self";
+			link.target = target;
+		}
+
+		if (root) {
 			const url = new URL(link.href, here);
 			const current = new URL(here);
 
-			if ((!target || target === "_self") && url.origin === current.origin && url.pathname === current.pathname && url.search === current.search && (url.hash || url.href.endsWith("#"))) {
+			if ((!target || target === "_self") && url.origin === current.origin && url.pathname === current.pathname && url.search === current.search) {
+				if (!url.hash && !url.href.endsWith("#")) {
+					link.target = "_blank";
+					link.relList.add("noopener");
+					return;
+				}
 				if (!url.hash) {
 					event.preventDefault();
 					if (appIsPhone()) {

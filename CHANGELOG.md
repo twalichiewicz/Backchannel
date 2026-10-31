@@ -60,10 +60,13 @@ use to detect updates, so every release bumps it.
 - Unread removes a read article when another article opens, while keeping the
   current article in place. Undoing Mark all as read restores the list.
 - Links inside Reader articles open in a new tab, keeping the current article
-  open. Links within a read-out can jump to their passage.
+  open, including links targeting the top or parent window and links back to
+  the original article. Links within a read-out can jump to their passage.
 - Article lists keep comment totals with the site and age. Sidebar article
   menus capitalize their actions and leave comment totals beside the article.
 - Sync retries Reddit after an access failure while respecting rate-limit waits.
+- Failed or malformed source feeds keep saved articles and no longer produce a
+  successful sync confirmation. Valid empty feeds still refresh normally.
 - Reddit requests share pending work and stop queued polls after an access
   denial or rate limit. Server retry waits survive reloads, temporary failures
   back off, and private-community errors leave other Reddit feeds available.
