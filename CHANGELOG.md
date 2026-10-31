@@ -20,10 +20,12 @@ use to detect updates, so every release bumps it.
   articles remain available when a feed cannot be refreshed. Sidebar sync
   failures use a temporary toast.
 - **Reddit refreshes in Safari's Userscripts extension use a temporary window.**
-  Press Sync to refresh feeds and discussions with your Reddit login, or load
-  more replies to fetch them. Sign in there if asked; it closes when
-  finished. Settings › Sources explains the change before enabling Reddit,
-  and existing Reddit users get a one-time announcement.
+  An informative modal explains the change and starts your first refresh when
+  you confirm. Article lists then try automatically, with a button to continue
+  if Safari blocks the window. Sync and loading more replies use the same
+  flow. Sign in there if asked; the window closes when finished. Settings ›
+  Sources explains it before enabling Reddit. Lists no longer repeat the
+  temporary-window instruction.
 
 ### Changed
 

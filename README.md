@@ -41,12 +41,13 @@
 1. Browse the web as usual. If a thread exists for that page the (BC) button lights up, letting you know people are discussing this site. 
 2. You can visit [backchnnl.app](https://backchnnl.app) once you have the script installed to have a customizable front page you can bookmark.
 3. You can directly upload to Hacker News and Reddit using the **↑** button.
-4. In Safari with **Userscripts**, press **Sync** to refresh Reddit in a
-   temporary window using your Reddit login. Sign in there if asked, then press
-   **Continue**. The window closes when finished. Loading more Reddit replies
-   uses the same flow. Background browsing keeps cached content and available
-   archive results without opening a window. Settings › Sources explains this
-   before you enable Reddit; existing users get a one-time announcement.
+4. In Safari with **Userscripts**, an introductory modal explains Reddit's
+   temporary window. Choose **Open Reddit and refresh** to start. Article lists
+   then try refreshing automatically; if Safari blocks the window, use the
+   modal's button to continue. Sign in to Reddit there if asked, then press
+   **Continue**. The window closes when finished. **Sync** and loading more
+   Reddit replies use the same flow. Other articles stay available while you
+   sign in. Settings › Sources explains this before you enable Reddit.
 
 ## FAQ
 
@@ -60,7 +61,8 @@ no persistent identifier attached.
 - Reddit sends the pages you visit to reddit.com, and if you're
 signed in to Reddit, those requests arrive as your account. Signed out, they carry a long-lived device identifier
 instead. In Safari's Userscripts extension, live reads happen in a temporary
-Reddit window when you press Sync or load more replies, using your Reddit login.
+Reddit window when your article list loads, you press Sync, or you load more
+replies, using your Reddit login after you confirm the introduction.
 Voting and replying go through that same session, and only when you press something.
 - Bluesky sends the pages you visit to Constellation, an independent index of
 Bluesky links, not to Bluesky. Bluesky is asked only about the posts

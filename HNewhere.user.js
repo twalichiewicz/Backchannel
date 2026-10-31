@@ -5231,7 +5231,7 @@ ${
 	sourcePoints(source).length && !help
 		? `<ul class="source-points">${sourcePoints(source).map((point) => `<li>${escapeHTML(point)}</li>`).join("")}</ul>`
 		: ""
-}${source.id === "reddit" && usesRedditReadWindow() ? '<p class="reddit-read-disclosure">In Safari with Userscripts, press Sync to refresh Reddit. A temporary Reddit window uses your Reddit login and closes when finished. Sign in there if asked.</p>' : ""}${cells ? "</div>" : ""}`,
+}${source.id === "reddit" && usesRedditReadWindow() ? '<p class="reddit-read-disclosure">In Safari with Userscripts, a temporary Reddit window refreshes your articles using your Reddit login. Sign in there if asked; it closes when finished. We’ll explain before your first refresh.</p>' : ""}${cells ? "</div>" : ""}`,
 			)
 			.join("");
 	}
@@ -5462,6 +5462,7 @@ ${
 	let redditReadWaitUntil = 0;
 	let redditReadNoticeScheduled = false;
 	let redditReadNoticeShown = false;
+	let redditReadInitialAttempted = false;
 	const REDDIT_READ_NOTICE_KEY = "HNewhere:reddit_read_window_notice";
 	const REDDIT_READ_RESUME_KEY = "HNewhere:reddit_read_resume";
 	const REDDIT_READ_SOURCE = "hnewhere-reddit-read";
@@ -5470,16 +5471,89 @@ ${
 		try { return GM.info?.scriptHandler === "Userscripts"; } catch { return false; }
 	}
 
-	function scheduleRedditReadNotice(attempt = 0) {
+	function scheduleRedditReadNotice() {
 		if (!usesRedditReadWindow() || redditReadNoticeScheduled || redditReadNoticeShown) return;
 		redditReadNoticeScheduled = true;
 		window.setTimeout(async () => {
 			redditReadNoticeScheduled = false;
-			if (!sidebarUI?.shadow || !isSidebarVisible() || !(await loadSettings()).sources?.reddit || await load(REDDIT_READ_NOTICE_KEY, false)) return;
-			if (sidebarUI.shadow.querySelector("#toast.is-showing")) { if (attempt < 10) scheduleRedditReadNotice(attempt + 1); return; }
-			redditReadNoticeShown = true;
-			showToast("Reddit refreshes now use a temporary window in Safari. Press Sync to open it; sign in there if asked. It closes when finished.", { persist: true, action: { label: "Got it", onAct: () => save(REDDIT_READ_NOTICE_KEY, true).catch(console.error) } });
-		}, attempt ? 1200 : 500);
+			if (!sidebarUI?.shadow || !isSidebarVisible() || !(await loadSettings()).sources?.reddit || await load(REDDIT_READ_NOTICE_KEY, false) === 2) return;
+			showRedditReadNotice();
+		}, 0);
+	}
+
+	function showRedditReadNotice(retry = false) {
+		const ui = sidebarUI;
+		const shadow = ui?.shadow;
+
+		if (!shadow || !isSidebarVisible() || shadow.querySelector("#reddit-read-modal")) return;
+		redditReadNoticeShown = true;
+		const modal = document.createElement("div");
+
+		modal.id = "reddit-read-modal";
+		modal.className = "app-settings-modal reddit-read-modal";
+		modal.innerHTML = `<div class="app-settings-dialog reddit-read-dialog" role="dialog" aria-modal="true" aria-labelledby="reddit-read-title" aria-describedby="reddit-read-description" tabindex="-1">
+<div class="app-settings-top"><span class="app-settings-title">Reddit in Safari</span><button class="reddit-read-close app-head-icon" type="button" aria-label="Close Reddit introduction">${APP_CLOSE_ICON}</button></div>
+<div class="reddit-read-content"><span class="reddit-read-mark" aria-hidden="true">${APP_SOURCE_ICONS.reddit}</span><h2 id="reddit-read-title">${retry ? "Open Reddit to finish refreshing" : "A new way to refresh Reddit"}</h2>
+<div id="reddit-read-description"><p>Backchannel opens a temporary Reddit window to refresh your articles and discussions using your Reddit login.</p><p>Sign in there if asked, then press Continue. The window closes when the refresh is finished.</p>${retry ? "<p>Safari needs your click to open this window. Your other articles are ready to read.</p>" : "<p>We’ll start your first refresh now, then try automatically when your article list loads.</p>"}</div></div>
+<div class="reddit-read-actions"><button class="reddit-read-later" type="button">Not now</button><button class="reddit-read-confirm" type="button">Open Reddit and refresh</button></div></div>`;
+		const returnTo = shadow.activeElement;
+		const behind = [...shadow.children].filter((element) => element.tagName !== "STYLE").map((element) => [element, element.inert]);
+
+		for (const [element] of behind) element.inert = true;
+		shadow.append(modal);
+		const close = () => {
+			modal.remove();
+			for (const [element, inert] of behind) element.inert = inert;
+			if (returnTo?.isConnected) returnTo.focus({ preventScroll: true });
+		};
+		const confirm = modal.querySelector(".reddit-read-confirm");
+
+		modal.querySelector(".reddit-read-close").onclick = close;
+		modal.querySelector(".reddit-read-later").onclick = close;
+		confirm.onclick = () => {
+			close();
+			redditReadInitialAttempted = true;
+			const accepted = save(REDDIT_READ_NOTICE_KEY, 2);
+
+			runRedditReadAction(async () => {
+				await accepted;
+				if (!(await loadSettings()).sources?.reddit || sidebarUI !== ui) return;
+				await refreshRedditReadViews(ui);
+			}).catch(console.error);
+		};
+		modal.addEventListener("click", (event) => {
+			event.stopPropagation();
+			if (event.target === modal) close();
+		});
+		modal.addEventListener("keydown", (event) => {
+			event.stopPropagation();
+			if (event.key === "Escape") { event.preventDefault(); close(); }
+			if (event.key !== "Tab") return;
+			const stops = [...modal.querySelectorAll("button")];
+			const edge = event.shiftKey ? stops[0] : stops.at(-1);
+
+			if (shadow.activeElement === edge) {
+				event.preventDefault();
+				(event.shiftKey ? stops.at(-1) : stops[0]).focus();
+			}
+		});
+		confirm.focus({ preventScroll: true });
+	}
+
+	async function refreshRedditReadViews(ui) {
+		if (appState) {
+			await Promise.all([renderAppList({ force: true }), appState.open ? openAppDiscussion(appState.open.row) : Promise.resolve()]);
+		} else if (isBrowsing(ui)) {
+			await renderBrowseView(ui, { force: true });
+		} else {
+			const found = await discoverAll(pageAddresses(), await loadSettings());
+
+			if (sidebarUI !== ui) return;
+			if (found.length) {
+				sidebarHasDiscussion = true;
+				await renderDiscussions(found, ui);
+			} else await ui.syncStatus?.onSync?.();
+		}
 	}
 
 	function redditReadFailure(reason) {
@@ -5544,13 +5618,18 @@ ${
 		}
 	}
 
-	function runRedditReadAction(task) {
+	function runRedditReadAction(task, { automatic = false } = {}) {
 		if (!usesRedditReadWindow() || !redditReadSourceOn || redditReadWaitUntil > Date.now()) return Promise.resolve().then(task);
 		let batch = redditReadBatch;
 
 		if (!batch || batch.closing) {
 			const nonce = crypto.randomUUID().replaceAll("-", "");
 			const popup = window.open("about:blank", REDDIT_READ_SOURCE + "_" + nonce, "width=760,height=680,resizable=yes,scrollbars=yes");
+
+			if (!popup && automatic) {
+				showRedditReadNotice(true);
+				return Promise.resolve();
+			}
 
 			batch = { nonce, popup, created: Date.now(), expires: Date.now() + SIGN_IN_TIMEOUT, connected: false, closing: false, cancelled: false, users: 0, sequence: 0, accessVersion: redditAccessVersion };
 			redditReadBatch = batch;
@@ -5709,7 +5788,7 @@ ${
 
 	function redditFetch(path, archivePath, { listing = false, retryAccess = false } = {}) {
 		const accessVersion = redditAccessVersion;
-		const readBatch = usesRedditReadWindow() ? redditReadBatch : null;
+		const readBatch = usesRedditReadWindow() && redditReadBatch?.connected ? redditReadBatch : null;
 		const key = JSON.stringify([path, archivePath || "", listing, retryAccess, accessVersion, readBatch?.nonce || ""]);
 
 		if (redditRequests.has(key)) return redditRequests.get(key);
@@ -8274,6 +8353,8 @@ button {
 	const FRONT_PAGE_CACHE_KEY = "HNewhere:frontpage_cache";
 
 	const FRONT_PAGE_TTL = 5 * 60 * 1000;
+	const frontPageLoads = new Map();
+	let frontPageRequestId = 0;
 
 	const TOPICS = [
 		{ id: "world", label: "World" },
@@ -8495,6 +8576,7 @@ button {
 	}
 
 	async function loadTopicFeed(feed, force) {
+		const request = ++frontPageRequestId;
 		const key = FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`;
 		const cached = await load(key, null);
 
@@ -8502,10 +8584,11 @@ button {
 			return { stories: cached.stories, status: cached.status || "ok", cached: Boolean(cached.status && cached.status !== "ok" && cached.stories.length), attempted: false };
 		}
 
+		frontPageLoads.set(key, Math.max(frontPageLoads.get(key) || 0, request));
 		const result = await frontPageFeedResult(feed, force);
 		const stories = result.status === "ok" ? result.stories : cached?.stories || [];
 
-		await save(key, { timestamp: Date.now(), stories, status: result.status });
+		if (frontPageLoads.get(key) === request) await save(key, { timestamp: Date.now(), stories, status: result.status });
 
 		return { ...result, stories, cached: result.status !== "ok" && stories.length > 0 };
 	}
@@ -8515,14 +8598,12 @@ button {
 	}
 
 	function frontPageFailureText(feedStates, view = "all") {
-		const failures = feedStates.filter((feed) => feed.status !== "ok" &&
+		const failures = feedStates.filter((feed) => feed.status !== "ok" && feed.status !== "window" &&
 			(!view.startsWith("source:") || feed.source === view.slice(7)) &&
 			(!view.startsWith("topic:") || feed.topic === view.slice(6)));
 		const messages = failures.map((feed) => {
 			const name = getSource(feed.source)?.label || feed.source;
-			const message = feed.status === "window"
-				? "Press Sync to refresh Reddit in a temporary window."
-				: feed.status === "access"
+			const message = feed.status === "access"
 				? `${name} isn't allowing access to its feed right now.`
 				: feed.status === "limited"
 					? `${name} requests are temporarily limited. Try syncing again later.`
@@ -8535,12 +8616,27 @@ button {
 	}
 
 	async function loadFrontPages(options = {}) {
+		const request = ++frontPageRequestId;
 		const settings = options.settings || (await loadSettings());
 		const feeds = frontPageFeeds(
 			settings,
 			frontPageSourceIds(settings),
 			enabledSourceIds(settings, registeredSourceIds()),
 		);
+
+		if (usesRedditReadWindow() && !redditReadInitialAttempted && !redditReadBatch && isSidebarVisible() && feeds.some((feed) => feed.source === "reddit")) {
+			redditReadInitialAttempted = true;
+			const [accepted, cooldown] = await Promise.all([load(REDDIT_READ_NOTICE_KEY, false), load(REDDIT_POLL_KEY, null)]);
+
+			if (accepted === 2 && !(cooldown?.until > Date.now())) {
+				const ui = sidebarUI;
+
+				runRedditReadAction(async () => {
+					if (sidebarUI === ui && (await loadSettings()).sources?.reddit) await refreshRedditReadViews(ui);
+				}, { automatic: true }).catch(console.error);
+			}
+			if (accepted !== 2) scheduleRedditReadNotice();
+		}
 
 		if (!feeds.length) {
 			return { rows: [], sources: [], topics: [], attempted: false };
@@ -8570,6 +8666,7 @@ button {
 			return { rows: cached.rows, sources: cached.sources || [], topics: cached.topics || [], feedStates: cached.feedStates || [], attempted: false };
 		}
 
+		frontPageLoads.set(cacheKey, Math.max(frontPageLoads.get(cacheKey) || 0, request));
 		const results = await Promise.all(feeds.map(async (feed) => {
 			const result = await frontPageFeedResult(feed, options.force);
 
@@ -8587,7 +8684,7 @@ button {
 		const topics = [...new Set(feeds.filter((feed, index) => lists[index].length && feed.topic).map((feed) => feed.topic))];
 		const rows = mergeStoriesByURL(blendStories(lists.filter((list) => list.length)));
 
-		await save(cacheKey, { timestamp: Date.now(), rows, sources: answered, topics, feedStates });
+		if (frontPageLoads.get(cacheKey) === request) await save(cacheKey, { timestamp: Date.now(), rows, sources: answered, topics, feedStates });
 
 		return { rows, sources: answered, topics, feedStates, attempted: results.some((result) => result.attempted) };
 	}
@@ -31487,6 +31584,87 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	text-align:left;
 }
 
+#reddit-read-modal {
+	z-index:2147483647;
+	padding:20px;
+}
+
+.reddit-read-dialog.app-settings-dialog {
+	width:min(440px, 100%);
+	height:auto;
+	max-height:100%;
+	overflow-y:auto;
+}
+
+.reddit-read-content {
+	padding:24px;
+}
+
+.reddit-read-mark {
+	display:inline-flex;
+	padding:10px;
+	border-radius:14px;
+	background:var(--help-bg);
+	color:var(--accent);
+}
+
+.reddit-read-mark svg {
+	width:32px;
+	height:32px;
+}
+
+.reddit-read-content h2 {
+	margin:16px 0 12px;
+	font-size:20px;
+	font-weight:600;
+	line-height:1.25;
+}
+
+#reddit-read-description {
+	color:var(--muted);
+	font-size:13px;
+	line-height:1.6;
+}
+
+#reddit-read-description p {
+	margin:0;
+}
+
+#reddit-read-description p + p {
+	margin-top:10px;
+}
+
+.reddit-read-actions {
+	display:flex;
+	flex-wrap:wrap;
+	justify-content:flex-end;
+	gap:8px;
+	padding:14px 20px;
+	border-top:1px solid var(--surface-divider);
+}
+
+.reddit-read-actions button {
+	padding:9px 12px;
+	border:1px solid var(--surface-border);
+	border-radius:6px;
+	background:var(--surface);
+	color:var(--surface-text);
+	font:inherit;
+	cursor:pointer;
+}
+
+.reddit-read-actions .reddit-read-confirm {
+	border-color:var(--accent);
+	background:var(--accent);
+	color:var(--bg);
+	font-weight:600;
+}
+
+.reddit-read-dialog button:focus-visible {
+	outline:2px solid var(--accent);
+	outline-offset:3px;
+}
+
 .app-settings-top {
 	display:flex;
 	align-items:center;
@@ -40848,6 +41026,7 @@ ${frontPageChooserHTML()}
 	};
 
 	function appShortcutFor(event, mod, shortcuts = appShortcuts) {
+		if (sidebarUI?.shadow?.querySelector("#reddit-read-modal")) return null;
 		const key = appKeyName(event.key);
 		const held = appIsApple() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 
