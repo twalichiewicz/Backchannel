@@ -26,8 +26,8 @@ use to detect updates, so every release bumps it.
   toast confirms the overall sync. The introduction is remembered locally
   after confirmation or dismissal. Front Pages tries refreshing on its first
   load; later refreshes start with Sync, without a repeated window reminder.
-  Settings › Sources keeps the connection explanation under (?). Lists no longer
-  repeat the temporary-window instruction.
+  Settings › Sources explains Reddit's access changes and session refreshes
+  under (?). Lists no longer repeat the temporary-window instruction.
 
 ### Changed
 

@@ -5215,7 +5215,7 @@
 	function sourceHelpHTML(source) {
 		const points = escapeHTML([
 			...sourcePoints(source),
-			...(source.id === "reddit" && usesRedditReadWindow() ? ["In Safari with Userscripts, a temporary Reddit window refreshes your articles using your Reddit login. Sign in there if asked; it closes when finished. We’ll explain before your first refresh."] : []),
+			...(source.id === "reddit" && usesRedditReadWindow() ? ["Reddit’s access changes mean Backchannel opens a temporary Reddit window whenever your session needs refreshing. Sign in there if asked; it closes automatically when finished."] : []),
 		].join("\n"));
 
 		return `<button class="source-help" type="button" aria-label="About ${escapeHTML(source.label)}" aria-description="${points}" data-tip="${points}">?</button>`;
