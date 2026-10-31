@@ -45,16 +45,16 @@
    Backchannel's illustrated introduction explains the updated connection.
    Choose **Continue** to start. When your Reddit session needs refreshing,
    a temporary Reddit window opens; sign in there if asked. The window closes
-   when finished, and **Reddit synced** confirms a successful refresh.
+   when finished, and **Synced** confirms the overall refresh.
    The introduction is remembered locally after confirmation or dismissal.
-   Article lists try refreshing automatically, with a brief **Sync** toast if
-   your browser needs a click. **Sync** and loading more Reddit replies use the
-   same flow. Other articles stay available while you sign in. Settings ›
+   Front Pages tries refreshing on its first load; use **Sync** for later
+   refreshes. Loading more Reddit replies uses the same temporary-window flow.
+   Other articles stay available while you sign in. Settings ›
    Sources › **(?)** explains the connection.
 
-System messages slide down from the top; feedback for user actions slides up from
-the bottom. Toasts use black and white in both Reader and Sidebar, with reduced
-motion when your device requests it.
+Compact system messages slide down from the top; feedback for user actions
+slides up from the bottom. Toasts use black and white in both Reader and Sidebar,
+with reduced motion when your device requests it.
 
 ## FAQ
 

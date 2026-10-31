@@ -23,15 +23,17 @@ use to detect updates, so every release bumps it.
   explains Reddit's changes and how session refreshes work, with a single
   Continue button to start. Article lists then try automatically. Sync and
   loading more replies use the same temporary window. Sign in there if asked; it closes when finished, and a
-  toast confirms a successful Reddit sync. The introduction is remembered locally
-  after confirmation or dismissal; blocked refreshes offer a brief Sync action.
+  toast confirms the overall sync. The introduction is remembered locally
+  after confirmation or dismissal. Front Pages tries refreshing on its first
+  load; later refreshes start with Sync, without a repeated window reminder.
   Settings › Sources keeps the connection explanation under (?). Lists no longer
   repeat the temporary-window instruction.
 
 ### Changed
 
-- **Toasts use black and white throughout the app.** System messages enter
+- **Compact toasts use black and white throughout the app.** System messages enter
   from the top; feedback for user actions enters from the bottom. Reduced-motion preferences are respected.
+- Sync completion reflects the full refresh across the selected sources.
 - **The Sidebar's Backchannel view shares Reader's article lists.** Search and
   icon tabs for Unread, All articles, Queue and Collection sit under the header
   with inline counts. Search finds articles, queued and saved pages, notes and
@@ -40,6 +42,7 @@ use to detect updates, so every release bumps it.
   Sync and Mark all as read sit in the header alongside its other controls.
   Articles still open in the browser tab, and the header returns to the current
   page's discussion.
+- Sidebar header action icons use matching visual sizes.
 - Collection previews stay compact as a wider Sidebar adds more columns.
 - **Annotations show quoted passages without the ambient heat map.**
 - **The Sidebar has rounded exposed corners**, matching Reader's shape.

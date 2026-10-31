@@ -178,7 +178,7 @@ Worth stating plainly, because the permissions are broad by necessity:
 - **Safari's Userscripts extension reads Reddit in a temporary window.** Since
   1.6.18.1, confirming the introduction starts a refresh in a window on
   `www.reddit.com`, using that site's existing session. Article lists then try
-  automatically, with a temporary Sync toast if the browser blocks the window.
+  automatically on their first load; later refreshes start with Sync.
   The introduction's dismissal or confirmation is stored locally with the app's
   data and survives cache cleanup. Pressing Sync or loading more replies can also
   open the window. Background page discovery opens no window and can use cached

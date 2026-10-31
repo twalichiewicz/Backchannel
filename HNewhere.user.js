@@ -5354,14 +5354,12 @@ ${
 
 		async frontPage() {
 			const html = await requestText(HN_ORIGIN + "/news");
-
-			if (!html) {
-				return [];
-			}
-
-			return parseFrontPage(
+			const stories = parseFrontPage(
 				new DOMParser().parseFromString(html, "text/html"),
 			).map(hnStory);
+
+			if (!stories.length) throw new Error("Hacker News feed unavailable");
+			return stories;
 		},
 
 		async recover(story) {
@@ -5466,6 +5464,7 @@ ${
 	let redditReadNoticeScheduled = false;
 	let redditReadNoticeShown = false;
 	let redditReadInitialAttempted = false;
+	let syncRunId = 0;
 	const REDDIT_READ_NOTICE_KEY = "HNewhere:reddit_read_window_notice";
 	const REDDIT_READ_RESUME_KEY = "HNewhere:reddit_read_resume";
 	const REDDIT_READ_SOURCE = "hnewhere-reddit-read";
@@ -5516,10 +5515,10 @@ ${
 			const accepted = close();
 			redditReadInitialAttempted = true;
 
-			runRedditReadAction(async () => {
+			runSync(async () => {
 				await accepted;
 				if (!(await loadSettings()).sources?.reddit || sidebarUI !== ui) return;
-				await refreshRedditReadViews(ui);
+				return refreshRedditReadViews(ui);
 			}).catch(console.error);
 		};
 		modal.addEventListener("click", (event) => {
@@ -5543,9 +5542,9 @@ ${
 
 	async function refreshRedditReadViews(ui) {
 		if (appState) {
-			await Promise.all([renderAppList({ force: true }), appState.open ? openAppDiscussion(appState.open.row) : Promise.resolve()]);
+			return Promise.allSettled([renderAppList({ force: true }), appState.open ? openAppDiscussion(appState.open.row) : Promise.resolve()]);
 		} else if (isBrowsing(ui)) {
-			await renderBrowseView(ui, { force: true });
+			return renderBrowseView(ui, { force: true });
 		} else {
 			const found = await discoverAll(pageAddresses(), await loadSettings());
 
@@ -5616,8 +5615,30 @@ ${
 			await Promise.allSettled([clearBridgePayload(batch.nonce), forget(BRIDGE_RESULT_PREFIX + batch.nonce)]);
 			try { batch.popup?.close(); } catch {}
 			if (redditReadBatch === batch) redditReadBatch = null;
-			if (batch.reads > 0 && !batch.failed && !batch.cancelled && isSidebarVisible() && (await loadSettings()).sources?.reddit) showToast("Reddit synced", { kind: "system" });
+			if (batch.syncRun === syncRunId && batch.synced && !batch.failed && !batch.cancelled && isSidebarVisible()) showToast("Synced", { kind: "system" });
 		}
+	}
+
+	function runSync(task, options = {}) {
+		const runId = ++syncRunId;
+		if (sidebarUI?.shadow?.getElementById("toast")?.textContent === "Synced") showToast("");
+		return runRedditReadAction(async () => {
+			const batch = usesRedditReadWindow() && redditReadSourceOn && !redditReadBatch?.closing ? redditReadBatch : null;
+			const result = await task();
+			const runs = Array.isArray(result) ? result : [{ status: "fulfilled", value: result }];
+			const feeds = runs.flatMap((run) => run.status === "fulfilled" ? run.value?.feedStates || [] : []);
+			const failed = runs.some((run) => run.status === "rejected") || feeds.some((feed) => feed.status !== "ok");
+			const synced = feeds.length > 0 && !failed;
+
+			if (batch) {
+				if (synced && runId === syncRunId) {
+					batch.synced = true;
+					batch.syncRun = runId;
+				}
+				batch.failed ||= failed;
+			} else if (synced && runId === syncRunId && isSidebarVisible()) showToast("Synced", { kind: "system" });
+			return result;
+		}, options);
 	}
 
 	function runRedditReadAction(task, { automatic = false } = {}) {
@@ -5629,7 +5650,6 @@ ${
 			const popup = window.open("about:blank", REDDIT_READ_SOURCE + "_" + nonce, "width=760,height=680,resizable=yes,scrollbars=yes");
 
 			if (!popup && automatic) {
-				showToast("Reddit needs a window to sync", { kind: "system", action: { label: "Sync", onAct: () => runRedditReadAction(() => refreshRedditReadViews(sidebarUI)).catch(console.error) } });
 				return Promise.resolve();
 			}
 
@@ -8644,8 +8664,8 @@ button {
 			if (accepted && !(cooldown?.until > Date.now())) {
 				const ui = sidebarUI;
 
-				runRedditReadAction(async () => {
-					if (sidebarUI === ui && (await loadSettings()).sources?.reddit) await refreshRedditReadViews(ui);
+				runSync(async () => {
+					if (sidebarUI === ui && (await loadSettings()).sources?.reddit) return refreshRedditReadViews(ui);
 				}, { automatic: true }).catch(console.error);
 			}
 			if (!accepted) scheduleRedditReadNotice();
@@ -11539,14 +11559,14 @@ html[data-backchannel-installed] .chin {
 	box-sizing:border-box;
 	width:max-content;
 	max-width:min(480px, calc(100% - 32px));
-	padding:10px 16px;
+	padding:5px 10px;
 	border:1px solid rgba(255,255,255,.16);
-	border-radius:14px;
+	border-radius:7px;
 	background:#1b1b1b;
 	color:#fff;
-	box-shadow:0 8px 28px rgba(0,0,0,.22), 0 2px 6px rgba(0,0,0,.12);
-	font-size:12px;
-	line-height:1.4;
+	box-shadow:0 4px 14px rgba(0,0,0,.22);
+	font-size:11px;
+	line-height:1.35;
 	text-align:center;
 	opacity:0;
 	visibility:hidden;
@@ -15314,7 +15334,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 			button.disabled = true;
 			try {
-				await runRedditReadAction(() => renderBrowseView(ui, { force: true }));
+				await runSync(() => renderBrowseView(ui, { force: true }));
 			} catch (error) {
 				console.error(error);
 			} finally {
@@ -15442,6 +15462,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			renderBrowseHomeFilters(ui, sourceIds, topicIds, counts, view);
 			paintBrowseHome(ui);
 		}
+		return { feedStates };
 	}
 
 	async function renderBrowseView(ui, options = {}) {
@@ -15457,6 +15478,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 		const state = ui.browseHome;
 		let sequence;
+		let outcome;
 
 		if (state) {
 			const previous = state.view;
@@ -15506,13 +15528,14 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			setBrowseNote(ui, COLLECTION_NOTE);
 			await renderCollectionView(ui, list, isCurrent);
 		} else {
-			await renderFrontPageView(ui, list, options, isCurrent);
+			outcome = await renderFrontPageView(ui, list, options, isCurrent);
 		}
 
 		if (state && isCurrent()) {
 			fillAppRowThumbs(list);
 			paintBrowseHome(ui);
 		}
+		return outcome;
 	}
 
 	async function revealSidebar() {
@@ -32343,6 +32366,21 @@ ${SEARCH_CSS}
 	cursor:default;
 }
 
+#browse-home-mark-read svg {
+	width:16px;
+	height:16px;
+}
+
+#browse-home-sync svg {
+	width:22px;
+	height:22px;
+}
+
+#panel > header #hide-site > svg {
+	width:14px;
+	height:14px;
+}
+
 #panel > header .wordmark-tail {
 	overflow:hidden;
 }
@@ -36628,7 +36666,7 @@ ${settingsModalHTML()}
 
 			pullSyncing = true;
 			paintPull(36, "syncing…", true);
-			runRedditReadAction(() => renderAppList({ force: true }))
+			runSync(() => renderAppList({ force: true }))
 				.catch(console.error)
 				.finally(() => {
 					pullSyncing = false;
@@ -36651,7 +36689,7 @@ ${settingsModalHTML()}
 			button.classList.add("is-syncing");
 			button.setAttribute("aria-busy", "true");
 
-			const runs = await runRedditReadAction(() => Promise.allSettled([
+			const runs = await runSync(() => Promise.allSettled([
 				renderAppList({ force: true }),
 				Promise.resolve(appState?.discussionSync?.()),
 			]));
@@ -38983,6 +39021,7 @@ ${frontPageChooserHTML()}
 		const list = ui.shadow.querySelector("#app-list-body");
 		const view = state.view;
 		const request = ++state.listSeq;
+		let outcome;
 
 		paintAppRail();
 		await paintAppOnboarding();
@@ -39015,6 +39054,7 @@ ${frontPageChooserHTML()}
 				return;
 			}
 
+			outcome = { feedStates };
 			state.rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
 			state.rowsByURL = new Map(
 				state.rows.map((row) => [normalizeURL(row.story.url) || row.story.url, row]),
@@ -39075,6 +39115,7 @@ ${frontPageChooserHTML()}
 		state.listView = view;
 		decorateAppRows(list);
 		await paintAppCounts();
+		return request === state.listSeq ? outcome : undefined;
 	}
 
 	function decorateAppRows(list) {
