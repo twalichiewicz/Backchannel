@@ -61,11 +61,12 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Hypothes.is | `api.hypothes.is` | the URL of each page you visit, to find public annotations on it. No account, signed in or out |
   | *no source enabled* | none | nothing -- the script performs no lookup at all. Kind of weird to use it this way, but no judgements. |
 
-  Ten sit outside that table because they are not lookups:
+  Eleven sit outside that table because they are not lookups:
 
   | Host | When | What it is told |
   | --- | --- | --- |
   | `old.reddit.com` | only when you press vote, reply or submit | the post or comment you are acting on, or the page you submit, in a popup window you can see. Nothing at page load |
+  | `platform.theverge.com` | when the Reddit connection notice is shown | a fixed illustration image, requested without a referrer. No article URL or Reddit session is sent |
   | `cdn.jsdelivr.net` | when your manager fetches the script's declared resources, and again from the page itself if it did not | nothing about you -- it is a file download of a fixed, versioned URL |
   | the page you open in the reader on backchnnl.app | only when that page gives no answer from inside its frame | nothing but the request itself: one `GET` without cookies, to read whether it may be framed, whether it is a picture and, if it may not be framed, its text |
   | the site of each article in the reader's list on backchnnl.app or the Sidebar's Backchannel view | when the list shows the article, since 1.6.15 in Reader and 1.6.18.1 in the Sidebar | nothing but a request for its icon, `/favicon.ico`, sent without a referrer |
@@ -188,8 +189,10 @@ Worth stating plainly, because the permissions are broad by necessity:
   random code, expires within five minutes, accepts only the supported read
   endpoints, respects server waits, and stops if Reddit is disabled. The window
   closes and temporary records are removed when finished. Settings › Sources
-  explains the behavior before enabling Reddit, with an informative modal
-  for existing users. Other userscript managers keep their existing transport.
+  explains the behavior before enabling Reddit. An illustrated notice explains
+  Reddit's access changes and session refreshes, with Continue to start, and a
+  toast confirms successful syncs. Other userscript managers keep their existing
+  transport.
 - **A popup acts only on a request the script stored for it.** Before it
   opens a popup to vote, reply or submit, the script stores what you asked
   for under a one-time code and puts the code in the popup's address. The

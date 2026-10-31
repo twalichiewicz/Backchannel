@@ -19,13 +19,13 @@ use to detect updates, so every release bumps it.
   feed, denied access and temporary request limits from an empty list. Saved
   articles remain available when a feed cannot be refreshed. Sidebar sync
   failures use a temporary toast.
-- **Reddit refreshes in Safari's Userscripts extension use a temporary window.**
-  An informative modal explains the change and starts your first refresh when
-  you confirm. Article lists then try automatically, with a button to continue
-  if Safari blocks the window. Sync and loading more replies use the same
-  flow. Sign in there if asked; the window closes when finished. Settings ›
-  Sources explains it before enabling Reddit. Lists no longer repeat the
-  temporary-window instruction.
+- **Reddit adapts to updated access requirements.** An illustrated notice
+  explains Reddit's changes and how session refreshes work, with a single
+  Continue button to start. Article lists then try automatically, with Continue
+  if your browser needs a click. Sync and loading more replies use the same
+  temporary window. Sign in there if asked; it closes when finished, and a
+  toast confirms a successful Reddit sync. Settings › Sources explains it before
+  enabling Reddit. Lists no longer repeat the temporary-window instruction.
 
 ### Changed
 

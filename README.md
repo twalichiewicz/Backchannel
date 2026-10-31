@@ -41,13 +41,15 @@
 1. Browse the web as usual. If a thread exists for that page the (BC) button lights up, letting you know people are discussing this site. 
 2. You can visit [backchnnl.app](https://backchnnl.app) once you have the script installed to have a customizable front page you can bookmark.
 3. You can directly upload to Hacker News and Reddit using the **↑** button.
-4. In Safari with **Userscripts**, an introductory modal explains Reddit's
-   temporary window. Choose **Open Reddit and refresh** to start. Article lists
-   then try refreshing automatically; if Safari blocks the window, use the
-   modal's button to continue. Sign in to Reddit there if asked, then press
-   **Continue**. The window closes when finished. **Sync** and loading more
-   Reddit replies use the same flow. Other articles stay available while you
-   sign in. Settings › Sources explains this before you enable Reddit.
+4. Reddit is [changing access for other apps](https://support.reddithelp.com/hc/en-us/articles/54353370049684-Changelog-October-8-2026).
+   Backchannel's illustrated introduction explains the updated connection.
+   Choose **Continue** to start. When your Reddit session needs refreshing,
+   a temporary Reddit window opens; sign in there if asked. The window closes
+   when finished, and **Reddit synced.** confirms a successful refresh.
+   Article lists try refreshing automatically, with **Continue** if your browser
+   needs a click. **Sync** and loading more Reddit replies use the same flow.
+   Other articles stay available while you sign in. Settings › Sources explains
+   this before you enable Reddit.
 
 ## FAQ
 

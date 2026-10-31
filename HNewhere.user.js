@@ -5492,10 +5492,10 @@ ${
 		modal.id = "reddit-read-modal";
 		modal.className = "app-settings-modal reddit-read-modal";
 		modal.innerHTML = `<div class="app-settings-dialog reddit-read-dialog" role="dialog" aria-modal="true" aria-labelledby="reddit-read-title" aria-describedby="reddit-read-description" tabindex="-1">
-<div class="app-settings-top"><span class="app-settings-title">Reddit in Safari</span><button class="reddit-read-close app-head-icon" type="button" aria-label="Close Reddit introduction">${APP_CLOSE_ICON}</button></div>
-<div class="reddit-read-content"><span class="reddit-read-mark" aria-hidden="true">${APP_SOURCE_ICONS.reddit}</span><h2 id="reddit-read-title">${retry ? "Open Reddit to finish refreshing" : "A new way to refresh Reddit"}</h2>
-<div id="reddit-read-description"><p>Backchannel opens a temporary Reddit window to refresh your articles and discussions using your Reddit login.</p><p>Sign in there if asked, then press Continue. The window closes when the refresh is finished.</p>${retry ? "<p>Safari needs your click to open this window. Your other articles are ready to read.</p>" : "<p>We’ll start your first refresh now, then try automatically when your article list loads.</p>"}</div></div>
-<div class="reddit-read-actions"><button class="reddit-read-later" type="button">Not now</button><button class="reddit-read-confirm" type="button">Open Reddit and refresh</button></div></div>`;
+<img class="reddit-read-image" src="https://platform.theverge.com/wp-content/uploads/sites/2/2025/02/STK115_Reddit_04.jpg?quality=90&amp;strip=all&amp;crop=0%2C0%2C100%2C100&amp;w=750" width="750" height="499" alt="" referrerpolicy="no-referrer">
+<div class="reddit-read-content"><h2 id="reddit-read-title">${retry ? "Reconnect to Reddit" : "Reddit is changing how apps connect"}</h2>
+<div id="reddit-read-description"><p>Reddit is restricting access for third-party apps and ending RSS feed support. To keep articles and discussions available, Backchannel now connects through your Reddit login.</p><p>Whenever your Reddit session needs refreshing, a temporary Reddit window will open. Sign in there if asked; the window closes automatically when the refresh finishes.</p>${retry ? "<p>Choose Continue to let your browser open Reddit and finish syncing.</p>" : "<p>Choose Continue to start your first refresh.</p>"}</div></div>
+<div class="reddit-read-actions"><button class="reddit-read-confirm" type="button">Continue</button></div></div>`;
 		const returnTo = shadow.activeElement;
 		const behind = [...shadow.children].filter((element) => element.tagName !== "STYLE").map((element) => [element, element.inert]);
 
@@ -5508,8 +5508,6 @@ ${
 		};
 		const confirm = modal.querySelector(".reddit-read-confirm");
 
-		modal.querySelector(".reddit-read-close").onclick = close;
-		modal.querySelector(".reddit-read-later").onclick = close;
 		confirm.onclick = () => {
 			close();
 			redditReadInitialAttempted = true;
@@ -5615,6 +5613,7 @@ ${
 			await Promise.allSettled([clearBridgePayload(batch.nonce), forget(BRIDGE_RESULT_PREFIX + batch.nonce)]);
 			try { batch.popup?.close(); } catch {}
 			if (redditReadBatch === batch) redditReadBatch = null;
+			if (batch.reads > 0 && !batch.failed && !batch.cancelled && isSidebarVisible() && (await loadSettings()).sources?.reddit) showToast("Reddit synced.");
 		}
 	}
 
@@ -5645,6 +5644,9 @@ ${
 					showToast(ready.error === "popup-blocked" ? "Allow popups for this site, then press Sync to refresh Reddit." : ready.error === "cancelled" ? "Reddit refresh cancelled." : ready.error === "limited" ? "Reddit requests are temporarily limited. Try syncing again later." : "The Reddit window did not respond. Press Sync to try again.", { page: true });
 				}
 				return await task();
+			} catch (error) {
+				batch.failed = true;
+				throw error;
 			} finally {
 				batch.users--;
 				if (!batch.users) await finishRedditReadBatch(batch);
@@ -5654,15 +5656,22 @@ ${
 
 	async function requestRedditReadWindow(path, batch) {
 		const safePath = redditReadPath(path);
+		const complete = (response) => {
+			if (batch) {
+				if (response.ok) batch.reads = (batch.reads || 0) + 1;
+				else batch.failed = true;
+			}
+			return response;
+		};
 
-		if (!safePath || !batch?.connected || batch.cancelled || batch.closing || Date.now() >= batch.expires || ++batch.sequence > 50) return redditReadFailure("window-unavailable");
+		if (!safePath || !batch?.connected || batch.cancelled || batch.closing || Date.now() >= batch.expires || ++batch.sequence > 50) return complete(redditReadFailure("window-unavailable"));
 		const stage = await readBridgePayload(batch.nonce);
 
-		if (!validRedditReadStage(stage, batch.nonce) || !(await loadSettings()).sources?.reddit) return redditReadFailure("disabled");
+		if (!validRedditReadStage(stage, batch.nonce) || !(await loadSettings()).sources?.reddit) return complete(redditReadFailure("disabled"));
 		await stageBridgePayload(batch.nonce, { ...stage, request: { id: batch.sequence, path: safePath } });
 		const reply = await waitRedditReadReply(batch, batch.sequence);
 
-		return reply.phase === "response" && reply.response ? reply.response : redditReadFailure(reply.error);
+		return complete(reply.phase === "response" && reply.response ? reply.response : redditReadFailure(reply.error));
 	}
 
 	async function dispatchRedditReadWindow() {
@@ -5809,6 +5818,7 @@ ${
 		let httpStatus = 0;
 		let retryAt = 0;
 		const unavailable = (status = "unavailable") => {
+			if (connected) readBatch.failed = true;
 			if (listing) {
 				throw Object.assign(new Error("Reddit feed unavailable" + (httpStatus ? ` (HTTP ${httpStatus})` : "")), { feedStatus: status, feedAttempted: attempted, httpStatus, retryAt });
 			}
@@ -31600,21 +31610,17 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	padding:24px;
 }
 
-.reddit-read-mark {
-	display:inline-flex;
-	padding:10px;
-	border-radius:14px;
-	background:var(--help-bg);
-	color:var(--accent);
-}
-
-.reddit-read-mark svg {
-	width:32px;
-	height:32px;
+.reddit-read-image {
+	display:block;
+	flex:0 0 auto;
+	width:100%;
+	height:auto;
+	max-height:200px;
+	object-fit:cover;
 }
 
 .reddit-read-content h2 {
-	margin:16px 0 12px;
+	margin:0 0 12px;
 	font-size:20px;
 	font-weight:600;
 	line-height:1.25;
@@ -31636,11 +31642,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 .reddit-read-actions {
 	display:flex;
-	flex-wrap:wrap;
-	justify-content:flex-end;
-	gap:8px;
-	padding:14px 20px;
-	border-top:1px solid var(--surface-divider);
+	justify-content:center;
+	padding:0 24px 24px;
 }
 
 .reddit-read-actions button {
@@ -31654,6 +31657,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 }
 
 .reddit-read-actions .reddit-read-confirm {
+	min-width:120px;
 	border-color:var(--accent);
 	background:var(--accent);
 	color:var(--bg);
