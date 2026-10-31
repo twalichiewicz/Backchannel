@@ -54,6 +54,8 @@ use to detect updates, so every release bumps it.
   connection explanation. The Reddit introduction matches the empty Reader
   pane's darker background in dark mode and loads its illustration from
   Backchannel's own hosting.
+- The Reddit introduction keeps keyboard focus visible in small windows and
+  with large text, including when switching from mouse to keyboard in Safari.
 - Clicking an article highlight opens a hidden Discussion panel in Reader.
 - Unread removes a read article when another article opens, while keeping the
   current article in place. Undoing Mark all as read restores the list.

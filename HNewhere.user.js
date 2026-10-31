@@ -5572,19 +5572,17 @@ ${
 			event.stopPropagation();
 			if (event.target === modal) close().catch(console.error);
 		});
+		modal.addEventListener("pointerdown", () => delete modal.dataset.keyboard);
 		modal.addEventListener("keydown", (event) => {
 			event.stopPropagation();
 			if (event.key === "Escape") { event.preventDefault(); close().catch(console.error); }
 			if (event.key !== "Tab") return;
-			const stops = [...modal.querySelectorAll("button")];
-			const edge = event.shiftKey ? stops[0] : stops.at(-1);
-
-			if (shadow.activeElement === edge) {
-				event.preventDefault();
-				(event.shiftKey ? stops.at(-1) : stops[0]).focus();
-			}
+			event.preventDefault();
+			modal.dataset.keyboard = "true";
+			confirm.focus();
+			confirm.scrollIntoView({ block: "nearest" });
 		});
-		confirm.focus({ preventScroll: true });
+		modal.querySelector("[role=dialog]").focus({ preventScroll: true });
 	}
 
 	async function refreshRedditReadViews(ui) {
@@ -31767,6 +31765,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 }
 
 .reddit-read-actions button {
+	scroll-margin:6px;
 	padding:9px 12px;
 	border:1px solid var(--surface-border);
 	border-radius:6px;
@@ -31784,7 +31783,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	font-weight:600;
 }
 
-.reddit-read-dialog button:focus-visible {
+.reddit-read-dialog button:focus-visible,
+#reddit-read-modal[data-keyboard] button:focus {
 	outline:2px solid var(--accent);
 	outline-offset:3px;
 }
