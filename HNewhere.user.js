@@ -2625,6 +2625,9 @@
 						status: response.status,
 						json,
 						rateLimit: parseRateLimit(response.responseHeaders),
+						retryAfterSeconds: parseRetryAfter(response.responseHeaders),
+						finalUrl: response.finalUrl || url,
+						contentType: /^content-type:\s*([^;\r\n]+)/im.exec(response.responseHeaders || "")?.[1].trim().toLowerCase() || "",
 					});
 				},
 				onerror: () => resolve(failure),
@@ -3711,6 +3714,16 @@
 			remaining: remaining ? Number(remaining[1]) : Infinity,
 			resetSeconds: reset ? Number(reset[1]) : 0,
 		};
+	}
+
+	function parseRetryAfter(headerText, now = Date.now()) {
+		const value = /^retry-after:\s*([^\r\n]+)/im.exec(headerText || "")?.[1].trim();
+
+		if (!value || !/^\d+$/.test(value) && !/^[a-z]{3,9}[,\s]/i.test(value)) return 0;
+
+		const seconds = /^\d+$/.test(value) ? Number(value) : (Date.parse(value) - now) / 1000;
+
+		return Number.isFinite(seconds) ? Math.max(0, Math.ceil(seconds)) : 0;
 	}
 
 	const MIRROR_SUBREDDITS = new Set(["hackernews", "hypeurls"]);
@@ -5390,8 +5403,11 @@ ${
 	const REDDIT_TIER_KEY = "HNewhere:reddit_tier";
 	const REDDIT_TIER_TTL = 10 * 60 * 1000;
 	const REDDIT_RATE_FLOOR = 10;
+	const REDDIT_POLL_KEY = "HNewhere:reddit_poll";
 
-	let redditRateResumeAt = 0;
+	const redditRequests = new Map();
+	let redditRequestQueue = Promise.resolve();
+	let redditAccessVersion = 0;
 
 	async function redditTier() {
 		const stored = await load(REDDIT_TIER_KEY, null);
@@ -5403,11 +5419,28 @@ ${
 		return "loid";
 	}
 
-	async function redditFetch(path, archivePath, { listing = false, retryAccess = false } = {}) {
-		let tier = retryAccess ? "loid" : await redditTier();
+	function redditFetch(path, archivePath, { listing = false, retryAccess = false } = {}) {
+		const accessVersion = redditAccessVersion;
+		const key = JSON.stringify([path, archivePath || "", listing, retryAccess, accessVersion]);
+
+		if (redditRequests.has(key)) return redditRequests.get(key);
+
+		const turn = redditRequestQueue.then(() => fetchReddit(path, archivePath, { listing, retryAccess, accessVersion }));
+		const done = () => redditRequests.delete(key);
+
+		redditRequests.set(key, turn);
+		redditRequestQueue = turn.then(done, done);
+		return turn;
+	}
+
+	async function fetchReddit(path, archivePath, { listing, retryAccess, accessVersion }) {
+		let tier = retryAccess && accessVersion === redditAccessVersion ? "loid" : await redditTier();
+		let attempted = false;
+		let httpStatus = 0;
+		let retryAt = 0;
 		const unavailable = (status = "unavailable") => {
 			if (listing) {
-				throw Object.assign(new Error("Reddit feed unavailable"), { feedStatus: status });
+				throw Object.assign(new Error("Reddit feed unavailable" + (httpStatus ? ` (HTTP ${httpStatus})` : "")), { feedStatus: status, feedAttempted: attempted, httpStatus, retryAt });
 			}
 
 			return null;
@@ -5418,17 +5451,41 @@ ${
 		}
 
 		if (tier === "loid") {
-			if (Date.now() < redditRateResumeAt) {
-				return unavailable("limited");
+			const cooldown = await load(REDDIT_POLL_KEY, null);
+
+			if (Number.isFinite(cooldown?.until) && Date.now() < cooldown.until) {
+				retryAt = cooldown.until;
+				httpStatus = cooldown.httpStatus || 0;
+				return unavailable(cooldown.status === "limited" ? "limited" : "unavailable");
 			}
 
+			attempted = true;
 			const result = await requestWithMeta("https://www.reddit.com" + path);
+			const now = Date.now();
+			const exhausted = result.rateLimit?.remaining < REDDIT_RATE_FLOOR;
+			const transient = result.status === 0 || result.status === 429 || result.status >= 500;
+			const failures = Math.min(5, Math.max(0, Number(cooldown?.failures) || 0) + 1);
+			const pause = Math.max(
+				result.retryAfterSeconds || 0,
+				exhausted ? result.rateLimit.resetSeconds || 600 : result.status === 429 ? result.rateLimit?.resetSeconds || 0 : 0,
+				transient ? Math.min(900, 60 * 2 ** (failures - 1)) : 0,
+			);
 
-			if (result.rateLimit) {
-				redditRateResumeAt =
-					result.rateLimit.remaining < REDDIT_RATE_FLOOR
-						? Date.now() + (result.rateLimit.resetSeconds || 600) * 1000
-						: 0;
+			httpStatus = result.status;
+
+			if (pause > 0) {
+				retryAt = now + pause * 1000;
+				const latest = await load(REDDIT_POLL_KEY, null);
+
+				if (Number.isFinite(latest?.until) && latest.until > retryAt) {
+					retryAt = latest.until;
+				} else {
+					await save(REDDIT_POLL_KEY, { until: retryAt, status: exhausted || result.status === 429 ? "limited" : "unavailable", failures: transient ? failures : 0, httpStatus });
+				}
+			} else if (result.ok && cooldown) {
+				const latest = await load(REDDIT_POLL_KEY, null);
+
+				if (!(latest?.until > now)) await save(REDDIT_POLL_KEY, { until: 0, status: "ok", failures: 0, httpStatus });
 			}
 
 			if (result.ok) {
@@ -5436,13 +5493,19 @@ ${
 				return { json: result.json, tier };
 			}
 
-			const next = redditTierForStatus(result.status, tier);
+			if (result.status === 403 && ["private", "banned", "quarantined", "gold_only"].includes(String(result.json?.reason || "").toLowerCase())) {
+				return unavailable("access");
+			}
+
+			const login = result.status >= 200 && result.status < 300 && !result.json && (result.contentType === "text/html" || /\/login(?:[/?#]|$)/i.test(result.finalUrl || ""));
+			const next = redditTierForStatus(result.status === 401 || login ? 403 : result.status, tier);
 
 			if (next === tier) {
 				return unavailable(result.status === 429 ? "limited" : "unavailable");
 			}
 
 			await save(REDDIT_TIER_KEY, { tier: next, timestamp: Date.now() });
+			redditAccessVersion++;
 			tier = next;
 		}
 
@@ -8122,7 +8185,7 @@ button {
 			return { stories: await fetchFrontPageFeed(feed, force), status: "ok", attempted: true };
 		} catch (error) {
 			console.warn("Backchannel " + feed.source + " feed failed:", error);
-			return { stories: [], status: error?.feedStatus || "unavailable", attempted: true };
+			return { stories: [], status: error?.feedStatus || "unavailable", attempted: error?.feedAttempted !== false };
 		}
 	}
 

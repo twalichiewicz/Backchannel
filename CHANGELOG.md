@@ -44,6 +44,9 @@ use to detect updates, so every release bumps it.
 - Article lists keep comment totals with the site and age. Sidebar article
   menus capitalize their actions and leave comment totals beside the article.
 - Sync retries Reddit after an access failure while respecting rate-limit waits.
+- Reddit requests share pending work and stop queued polls after an access
+  denial or rate limit. Server retry waits survive reloads, temporary failures
+  back off, and private-community errors leave other Reddit feeds available.
 
 ## [1.6.18] — 2026-10-23
 
