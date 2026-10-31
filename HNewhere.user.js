@@ -5240,7 +5240,7 @@
 			tip.setAttribute("role", "tooltip");
 			shadow.append(tip);
 		}
-		tip.textContent = button.dataset.tip;
+		tip.innerHTML = `<ul>${button.dataset.tip.split("\n").map((point) => `<li>${escapeHTML(point)}</li>`).join("")}</ul>`;
 		tip.hidden = false;
 		tip.style.left = "0px";
 		tip.style.top = "0px";
@@ -16487,6 +16487,7 @@ ${frontPageChooserHTML()}
 	const THEME_CSS = `
 :host {
 	--bg:#f6f6ef;
+	--article-bg:#e8e8e1;
 	--text:#000;
 	--header-bg:var(--accent);
 	--header-text:#fff;
@@ -16539,6 +16540,7 @@ ${frontPageChooserHTML()}
 
 :host(.${DARK_CLASS}) {
 	--bg:#1e1e1e;
+	--article-bg:#151515;
 	--text:#dcdcdc;
 	--header-bg:#1b5732;
 	--header-text:#f0fff5;
@@ -31720,6 +31722,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	overflow-y:auto;
 }
 
+:host(.${DARK_CLASS}) .reddit-read-dialog {
+	background:var(--article-bg);
+}
+
 .reddit-read-content {
 	padding:24px;
 }
@@ -32145,6 +32151,12 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 .source-help-tip[hidden] {
 	display:none;
+}
+
+.source-help-tip ul {
+	margin:0;
+	padding:0 0 0 14px;
+	list-style:disc outside;
 }
 
 .source-help-tip.is-above::before {
@@ -32836,12 +32848,10 @@ ${SEARCH_CSS}
 	--rail-bg:var(--header-bg);
 	--rail-fg:var(--header-text);
 	--open-row:rgba(var(--accent-rgb), .13);
-	--article-bg:#e8e8e1;
 }
 
 :host(.${DARK_CLASS}) {
 	--open-row:rgba(var(--accent-rgb), .22);
-	--article-bg:#151515;
 }
 
 #app {
