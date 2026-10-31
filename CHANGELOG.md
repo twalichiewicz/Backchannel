@@ -21,14 +21,17 @@ use to detect updates, so every release bumps it.
   failures use a temporary toast.
 - **Reddit adapts to updated access requirements.** An illustrated notice
   explains Reddit's changes and how session refreshes work, with a single
-  Continue button to start. Article lists then try automatically, with Continue
-  if your browser needs a click. Sync and loading more replies use the same
-  temporary window. Sign in there if asked; it closes when finished, and a
-  toast confirms a successful Reddit sync. Settings › Sources explains it before
-  enabling Reddit. Lists no longer repeat the temporary-window instruction.
+  Continue button to start. Article lists then try automatically. Sync and
+  loading more replies use the same temporary window. Sign in there if asked; it closes when finished, and a
+  toast confirms a successful Reddit sync. The introduction is remembered locally
+  after confirmation or dismissal; blocked refreshes offer a brief Sync action.
+  Settings › Sources keeps the connection explanation under (?). Lists no longer
+  repeat the temporary-window instruction.
 
 ### Changed
 
+- **Toasts use black and white throughout the app.** System messages enter
+  from the top; feedback for user actions enters from the bottom. Reduced-motion preferences are respected.
 - **The Sidebar's Backchannel view shares Reader's article lists.** Search and
   icon tabs for Unread, All articles, Queue and Collection sit under the header
   with inline counts. Search finds articles, queued and saved pages, notes and

@@ -5213,7 +5213,10 @@
 	}
 
 	function sourceHelpHTML(source) {
-		const points = escapeHTML(sourcePoints(source).join("\n"));
+		const points = escapeHTML([
+			...sourcePoints(source),
+			...(source.id === "reddit" && usesRedditReadWindow() ? ["In Safari with Userscripts, a temporary Reddit window refreshes your articles using your Reddit login. Sign in there if asked; it closes when finished. We’ll explain before your first refresh."] : []),
+		].join("\n"));
 
 		return `<button class="source-help" type="button" aria-label="About ${escapeHTML(source.label)}" aria-description="${points}" data-tip="${points}">?</button>`;
 	}
@@ -5231,7 +5234,7 @@ ${
 	sourcePoints(source).length && !help
 		? `<ul class="source-points">${sourcePoints(source).map((point) => `<li>${escapeHTML(point)}</li>`).join("")}</ul>`
 		: ""
-}${source.id === "reddit" && usesRedditReadWindow() ? '<p class="reddit-read-disclosure">In Safari with Userscripts, a temporary Reddit window refreshes your articles using your Reddit login. Sign in there if asked; it closes when finished. We’ll explain before your first refresh.</p>' : ""}${cells ? "</div>" : ""}`,
+}${cells ? "</div>" : ""}`,
 			)
 			.join("");
 	}
@@ -5476,12 +5479,12 @@ ${
 		redditReadNoticeScheduled = true;
 		window.setTimeout(async () => {
 			redditReadNoticeScheduled = false;
-			if (!sidebarUI?.shadow || !isSidebarVisible() || !(await loadSettings()).sources?.reddit || await load(REDDIT_READ_NOTICE_KEY, false) === 2) return;
+			if (!sidebarUI?.shadow || !isSidebarVisible() || !(await loadSettings()).sources?.reddit || await load(REDDIT_READ_NOTICE_KEY, false)) return;
 			showRedditReadNotice();
 		}, 0);
 	}
 
-	function showRedditReadNotice(retry = false) {
+	function showRedditReadNotice() {
 		const ui = sidebarUI;
 		const shadow = ui?.shadow;
 
@@ -5493,8 +5496,8 @@ ${
 		modal.className = "app-settings-modal reddit-read-modal";
 		modal.innerHTML = `<div class="app-settings-dialog reddit-read-dialog" role="dialog" aria-modal="true" aria-labelledby="reddit-read-title" aria-describedby="reddit-read-description" tabindex="-1">
 <img class="reddit-read-image" src="https://platform.theverge.com/wp-content/uploads/sites/2/2025/02/STK115_Reddit_04.jpg?quality=90&amp;strip=all&amp;crop=0%2C0%2C100%2C100&amp;w=750" width="750" height="499" alt="" referrerpolicy="no-referrer">
-<div class="reddit-read-content"><h2 id="reddit-read-title">${retry ? "Reconnect to Reddit" : "Reddit is changing how apps connect"}</h2>
-<div id="reddit-read-description"><p>Reddit is restricting access for third-party apps and ending RSS feed support. To keep articles and discussions available, Backchannel now connects through your Reddit login.</p><p>Whenever your Reddit session needs refreshing, a temporary Reddit window will open. Sign in there if asked; the window closes automatically when the refresh finishes.</p>${retry ? "<p>Choose Continue to let your browser open Reddit and finish syncing.</p>" : "<p>Choose Continue to start your first refresh.</p>"}</div></div>
+<div class="reddit-read-content"><h2 id="reddit-read-title">Reddit is changing how apps connect</h2>
+<div id="reddit-read-description"><p>Reddit is restricting access for third-party apps and ending RSS feed support. To keep articles and discussions available, Backchannel now connects through your Reddit login.</p><p>Whenever your Reddit session needs refreshing, a temporary Reddit window will open. Sign in there if asked; the window closes automatically when the refresh finishes.</p><p>Choose Continue to start your first refresh.</p></div></div>
 <div class="reddit-read-actions"><button class="reddit-read-confirm" type="button">Continue</button></div></div>`;
 		const returnTo = shadow.activeElement;
 		const behind = [...shadow.children].filter((element) => element.tagName !== "STYLE").map((element) => [element, element.inert]);
@@ -5505,13 +5508,13 @@ ${
 			modal.remove();
 			for (const [element, inert] of behind) element.inert = inert;
 			if (returnTo?.isConnected) returnTo.focus({ preventScroll: true });
+			return save(REDDIT_READ_NOTICE_KEY, 2);
 		};
 		const confirm = modal.querySelector(".reddit-read-confirm");
 
 		confirm.onclick = () => {
-			close();
+			const accepted = close();
 			redditReadInitialAttempted = true;
-			const accepted = save(REDDIT_READ_NOTICE_KEY, 2);
 
 			runRedditReadAction(async () => {
 				await accepted;
@@ -5521,11 +5524,11 @@ ${
 		};
 		modal.addEventListener("click", (event) => {
 			event.stopPropagation();
-			if (event.target === modal) close();
+			if (event.target === modal) close().catch(console.error);
 		});
 		modal.addEventListener("keydown", (event) => {
 			event.stopPropagation();
-			if (event.key === "Escape") { event.preventDefault(); close(); }
+			if (event.key === "Escape") { event.preventDefault(); close().catch(console.error); }
 			if (event.key !== "Tab") return;
 			const stops = [...modal.querySelectorAll("button")];
 			const edge = event.shiftKey ? stops[0] : stops.at(-1);
@@ -5570,7 +5573,7 @@ ${
 					if (Date.now() - reply.ts > 10000) return { error: "window-unavailable" };
 					if (!batch.awaitingLogin) {
 						batch.awaitingLogin = true;
-						showToast("Sign in to Reddit in the temporary window, then press Continue.", { persist: true, action: { label: "Cancel", onAct: () => { batch.cancelled = true; } } });
+						showToast("Sign in to Reddit in the temporary window, then press Continue.", { kind: "system", persist: true, action: { label: "Cancel", onAct: () => { batch.cancelled = true; } } });
 					}
 				} else if (["ready", "response", "error", "closed"].includes(reply.phase)) {
 					if (batch.awaitingLogin) { batch.awaitingLogin = false; showToast(""); }
@@ -5613,7 +5616,7 @@ ${
 			await Promise.allSettled([clearBridgePayload(batch.nonce), forget(BRIDGE_RESULT_PREFIX + batch.nonce)]);
 			try { batch.popup?.close(); } catch {}
 			if (redditReadBatch === batch) redditReadBatch = null;
-			if (batch.reads > 0 && !batch.failed && !batch.cancelled && isSidebarVisible() && (await loadSettings()).sources?.reddit) showToast("Reddit synced.");
+			if (batch.reads > 0 && !batch.failed && !batch.cancelled && isSidebarVisible() && (await loadSettings()).sources?.reddit) showToast("Reddit synced", { kind: "system" });
 		}
 	}
 
@@ -5626,7 +5629,7 @@ ${
 			const popup = window.open("about:blank", REDDIT_READ_SOURCE + "_" + nonce, "width=760,height=680,resizable=yes,scrollbars=yes");
 
 			if (!popup && automatic) {
-				showRedditReadNotice(true);
+				showToast("Reddit needs a window to sync", { kind: "system", action: { label: "Sync", onAct: () => runRedditReadAction(() => refreshRedditReadViews(sidebarUI)).catch(console.error) } });
 				return Promise.resolve();
 			}
 
@@ -5641,7 +5644,7 @@ ${
 
 				if (ready.error && ready.error !== "not-needed" && !batch.reported) {
 					batch.reported = true;
-					showToast(ready.error === "popup-blocked" ? "Allow popups for this site, then press Sync to refresh Reddit." : ready.error === "cancelled" ? "Reddit refresh cancelled." : ready.error === "limited" ? "Reddit requests are temporarily limited. Try syncing again later." : "The Reddit window did not respond. Press Sync to try again.", { page: true });
+					showToast(ready.error === "popup-blocked" ? "Allow popups for this site, then press Sync to refresh Reddit." : ready.error === "cancelled" ? "Reddit refresh cancelled." : ready.error === "limited" ? "Reddit requests are temporarily limited. Try syncing again later." : "The Reddit window did not respond. Press Sync to try again.", { kind: "system", page: true });
 				}
 				return await task();
 			} catch (error) {
@@ -8638,14 +8641,14 @@ button {
 			redditReadInitialAttempted = true;
 			const [accepted, cooldown] = await Promise.all([load(REDDIT_READ_NOTICE_KEY, false), load(REDDIT_POLL_KEY, null)]);
 
-			if (accepted === 2 && !(cooldown?.until > Date.now())) {
+			if (accepted && !(cooldown?.until > Date.now())) {
 				const ui = sidebarUI;
 
 				runRedditReadAction(async () => {
 					if (sidebarUI === ui && (await loadSettings()).sources?.reddit) await refreshRedditReadViews(ui);
 				}, { automatic: true }).catch(console.error);
 			}
-			if (accepted !== 2) scheduleRedditReadNotice();
+			if (!accepted) scheduleRedditReadNotice();
 		}
 
 		if (!feeds.length) {
@@ -11508,34 +11511,70 @@ html[data-backchannel-installed] .chin {
 
 	const TOAST_DISMISS_MS = 5200;
 
-	const TOAST_HTML = `<div id="toast" class="toast" role="status" aria-live="polite"></div>`;
+	const TOAST_HTML = `<div id="toast" class="toast" data-kind="user" role="status" aria-live="polite"></div>`;
 
 	const TOAST_CSS = `
-.toast {
+.toast-viewport {
+	all:initial;
 	position:absolute;
-	top:8px;
+	inset:0;
+	z-index:2147483647;
+	overflow:hidden;
+	pointer-events:none;
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+:host([data-hnewhere-app]) .toast-viewport,
+:host([data-hnewhere-page-mode]) .toast-viewport,
+:host([data-hnewhere-toast]) .toast-viewport {
+	position:fixed;
+}
+
+.toast {
+	--toast-edge:calc(16px + env(safe-area-inset-top, 0px));
+	--toast-away:calc(-100% - var(--toast-edge) - 8px);
+	position:absolute;
+	top:var(--toast-edge);
 	left:50%;
-	transform:translate(-50%,-14px);
+	box-sizing:border-box;
 	width:max-content;
-	max-width:calc(100% - 24px);
-	padding:8px 12px;
-	border-radius:999px;
-	background:var(--accent);
-	color:var(--accent-ink);
-	box-shadow:0 4px 14px rgba(0,0,0,.22);
+	max-width:min(480px, calc(100% - 32px));
+	padding:10px 16px;
+	border:1px solid rgba(255,255,255,.16);
+	border-radius:14px;
+	background:#1b1b1b;
+	color:#fff;
+	box-shadow:0 8px 28px rgba(0,0,0,.22), 0 2px 6px rgba(0,0,0,.12);
 	font-size:12px;
 	line-height:1.4;
 	text-align:center;
 	opacity:0;
 	visibility:hidden;
 	pointer-events:none;
-	transition:opacity .18s ease, transform .18s ease, visibility .18s;
+	transform:translate(-50%,var(--toast-away)) scale(.97);
+	filter:blur(2px);
+	transition:transform .32s cubic-bezier(.4,0,1,1), opacity .2s ease, filter .25s ease, visibility 0s linear .32s;
+}
+
+.toast[data-kind="user"] {
+	--toast-edge:var(--toast-bottom, calc(16px + env(safe-area-inset-bottom, 0px)));
+	--toast-away:calc(100% + var(--toast-edge) + 8px);
+	top:auto;
+	bottom:var(--toast-edge);
+}
+
+:host(.${DARK_CLASS}) .toast {
+	border-color:rgba(0,0,0,.12);
+	background:#f7f7f7;
+	color:#111;
 }
 
 .toast.is-showing {
 	opacity:1;
 	visibility:visible;
-	transform:translate(-50%,0);
+	transform:translate(-50%,0) scale(1);
+	filter:blur(0);
+	transition:transform .44s cubic-bezier(.16,1,.3,1), opacity .18s ease, filter .28s ease, visibility 0s;
 }
 
 .toast.has-action.is-showing {
@@ -11543,32 +11582,32 @@ html[data-backchannel-installed] .chin {
 }
 
 .toast-trailer {
-	opacity:.65;
+	opacity:.75;
 }
 
 .toast .toast-action {
+	padding:0;
+	border:0;
+	background:none;
 	color:inherit;
-	font-size:inherit;
-	text-decoration-color:currentColor;
-}
-`;
-
-	const PAGE_TOAST_CSS = `
-.toast-layer {
-	all:initial;
-	position:fixed;
-	left:0;
-	right:0;
-	bottom:0;
-	height:0;
-	z-index:2147483647;
-	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+	font:inherit;
+	text-decoration:underline;
+	text-underline-offset:2px;
+	cursor:pointer;
 }
 
-.toast {
-	top:auto;
-	bottom:calc(16px + env(safe-area-inset-bottom, 0px));
-	transform:translate(-50%,14px);
+@media (prefers-reduced-motion: reduce) {
+	.toast {
+		transform:translate(-50%,0);
+		filter:none;
+		transition:opacity .12s ease, visibility 0s linear .12s;
+	}
+
+	.toast.is-showing {
+		transform:translate(-50%,0);
+		filter:none;
+		transition:opacity .12s ease, visibility 0s;
+	}
 }
 `;
 
@@ -11591,7 +11630,7 @@ html[data-backchannel-installed] .chin {
 
 			const shadow = host.attachShadow({ mode: "open" });
 
-			shadow.innerHTML = `<style>${THEME_CSS}${CHROME_CSS}${TOAST_CSS}${PAGE_TOAST_CSS}</style><div class="toast-layer">${TOAST_HTML}</div>`;
+			shadow.innerHTML = `<style>${THEME_CSS}${CHROME_CSS}${TOAST_CSS}</style><div class="toast-viewport">${TOAST_HTML}</div>`;
 			adoptStyles(shadow);
 			document.documentElement.appendChild(host);
 			shadow.getElementById("toast").getBoundingClientRect();
@@ -11607,11 +11646,11 @@ html[data-backchannel-installed] .chin {
 				if (!toast.classList.contains("is-showing") && pageToastHost?.shadowRoot.contains(toast)) {
 					removePageToast();
 				}
-			}, 300);
+			}, 360);
 		}
 	}
 
-	function showToast(message, { persist = false, action = null, page = false } = {}) {
+	function showToast(message, { persist = false, action = null, page = false, kind = "user" } = {}) {
 		if (sidebarUI?.shadow) {
 			removePageToast();
 		}
@@ -11630,6 +11669,13 @@ html[data-backchannel-installed] .chin {
 			return;
 		}
 
+		if (toast.dataset.kind !== kind) {
+			toast.classList.remove("is-showing");
+			toast.style.transition = "none";
+			toast.dataset.kind = kind;
+			toast.getBoundingClientRect();
+			toast.style.removeProperty("transition");
+		}
 		toast.textContent = message;
 		toast.classList.toggle("has-action", Boolean(action));
 		toast.onmouseenter = null;
@@ -12224,7 +12270,7 @@ html[data-backchannel-installed] .chin {
 			itemId,
 			descriptor.action,
 			descriptor.url,
-			() => showToast(`Waiting for sign-in on ${label}…`, { persist: true }),
+			() => showToast(`Waiting for sign-in on ${label}…`, { kind: "system", persist: true }),
 		);
 
 		return (async () => {
@@ -12243,7 +12289,7 @@ html[data-backchannel-installed] .chin {
 						href: result.url,
 					});
 				} else if (isSidebarLevelReason(result?.reason)) {
-					showToast(voteFailureMessage(result, label));
+					showToast(voteFailureMessage(result, label), { kind: "system" });
 				} else {
 					sayVote(container, itemId, voteFailureMessage(result, label));
 				}
@@ -15319,7 +15365,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			const message = frontPageFailureText(feedStates.filter((feed) => feed.attempted));
 
 			if (message) {
-				showToast(message);
+				showToast(message, { kind: "system" });
 				ui.browseHome.feedNotice = message;
 			} else if (!frontPageFailureText(feedStates) && ui.shadow.querySelector("#toast")?.textContent === ui.browseHome.feedNotice) {
 				showToast("");
@@ -19043,12 +19089,7 @@ button.shortcut-key {
 	line-height:1.35;
 }
 
-.reddit-read-disclosure {
-	margin:5px 0 0;
-	color:var(--muted);
-	font-size:11px;
-	line-height:1.5;
-}
+
 
 .source-line {
 	display:flex;
@@ -22984,7 +23025,8 @@ ${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-dock
 <div id="resize-handle" aria-hidden="true"></div>
 
 ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMode, settings: !appMode, title: appMode ? "Discussion" : "" })}
-<div class="toast-layer">${appMode ? "" : TOAST_HTML}<div id="compose-dock" class="compose-dock" hidden><button id="compose-dock-close" class="compose-dock-close" type="button" aria-label="Close the composer" title="Close">&times;</button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
+${appMode ? "" : `<div class="toast-viewport">${TOAST_HTML}</div>`}
+<div class="toast-layer"><div id="compose-dock" class="compose-dock" hidden><button id="compose-dock-close" class="compose-dock-close" type="button" aria-label="Close the composer" title="Close">&times;</button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
 <div class="filter-banner-head">
@@ -33814,25 +33856,6 @@ ${READER_LIST_CSS}
 	z-index:40;
 }
 
-#app > .toast-layer {
-	position:fixed;
-	left:0;
-	right:0;
-	bottom:0;
-	height:0;
-	z-index:40;
-}
-
-#app > .toast-layer .toast {
-	top:auto;
-	bottom:16px;
-	transform:translate(-50%,14px);
-}
-
-#app > .toast-layer .toast.is-showing {
-	transform:translate(-50%,0);
-}
-
 #header-submit {
 	display:none !important;
 }
@@ -35135,8 +35158,8 @@ header .item-action-link {
 		display:none !important;
 	}
 
-	#app > .toast-layer .toast {
-		bottom:calc(76px + env(safe-area-inset-bottom, 0px));
+	#app > .toast-viewport {
+		--toast-bottom:calc(76px + env(safe-area-inset-bottom, 0px));
 	}
 
 	:host {
@@ -36028,7 +36051,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 </section>
 ${settingsPanelHTML()}
 ${settingsModalHTML()}
-<div class="toast-layer">${TOAST_HTML}</div>
+<div class="toast-viewport">${TOAST_HTML}</div>
 <div id="app-reading">
 <section id="app-article" aria-label="Article">
 <div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="${escapeHTML(appShortcutTip("front-pages"))}">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Style settings" title="Style settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="${escapeHTML(appShortcutTip("discussion"))}" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>

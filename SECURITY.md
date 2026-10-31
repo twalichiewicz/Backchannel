@@ -178,9 +178,11 @@ Worth stating plainly, because the permissions are broad by necessity:
 - **Safari's Userscripts extension reads Reddit in a temporary window.** Since
   1.6.18.1, confirming the introduction starts a refresh in a window on
   `www.reddit.com`, using that site's existing session. Article lists then try
-  automatically, with an actionable modal if Safari blocks the window. Pressing
-  Sync or loading more replies can also open it. Background page discovery
-  opens no window and can use cached content or the existing archive fallback.
+  automatically, with a temporary Sync toast if the browser blocks the window.
+  The introduction's dismissal or confirmation is stored locally with the app's
+  data and survives cache cleanup. Pressing Sync or loading more replies can also
+  open the window. Background page discovery opens no window and can use cached
+  content or the existing archive fallback.
   An internal `/api/me.json` check determines whether sign-in is needed; its
   account data stays in the Reddit window. Only allowed public feed, post and
   comment fields return through userscript storage, with rate-limit metadata.
@@ -189,8 +191,8 @@ Worth stating plainly, because the permissions are broad by necessity:
   random code, expires within five minutes, accepts only the supported read
   endpoints, respects server waits, and stops if Reddit is disabled. The window
   closes and temporary records are removed when finished. Settings › Sources
-  explains the behavior before enabling Reddit. An illustrated notice explains
-  Reddit's access changes and session refreshes, with Continue to start, and a
+  keeps the explanation under (?). An illustrated notice explains Reddit's
+  access changes and session refreshes, with Continue to start, and a
   toast confirms successful syncs. Other userscript managers keep their existing
   transport.
 - **A popup acts only on a request the script stored for it.** Before it
