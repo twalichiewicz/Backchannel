@@ -2626,7 +2626,7 @@
 						json,
 						rateLimit: parseRateLimit(response.responseHeaders),
 						retryAfterSeconds: parseRetryAfter(response.responseHeaders),
-						finalUrl: response.finalUrl || url,
+						finalUrl: response.finalUrl || response.responseURL || url,
 						contentType: /^content-type:\s*([^;\r\n]+)/im.exec(response.responseHeaders || "")?.[1].trim().toLowerCase() || "",
 					});
 				},

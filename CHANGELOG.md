@@ -47,6 +47,7 @@ use to detect updates, so every release bumps it.
 - Reddit requests share pending work and stop queued polls after an access
   denial or rate limit. Server retry waits survive reloads, temporary failures
   back off, and private-community errors leave other Reddit feeds available.
+- Redirected requests are recognized in Safari's Userscripts extension.
 
 ## [1.6.18] — 2026-10-23
 
