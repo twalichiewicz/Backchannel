@@ -5541,7 +5541,7 @@ ${
 		modal.id = "reddit-read-modal";
 		modal.className = "app-settings-modal reddit-read-modal";
 		modal.innerHTML = `<div class="app-settings-dialog reddit-read-dialog" role="dialog" aria-modal="true" aria-labelledby="reddit-read-title" aria-describedby="reddit-read-description" tabindex="-1">
-<img class="reddit-read-image" src="https://platform.theverge.com/wp-content/uploads/sites/2/2025/02/STK115_Reddit_04.jpg?quality=90&amp;strip=all&amp;crop=0%2C0%2C100%2C100&amp;w=750" width="750" height="499" alt="" referrerpolicy="no-referrer">
+<img class="reddit-read-image" src="https://backchnnl.app/src/reddit-connection.jpg" width="750" height="499" alt="" referrerpolicy="no-referrer">
 <div class="reddit-read-content"><h2 id="reddit-read-title">Reddit is changing how apps connect</h2>
 <div id="reddit-read-description"><p>Reddit is restricting access for third-party apps and ending RSS feed support. To keep articles and discussions available, Backchannel now connects through your Reddit login.</p><p>Whenever your Reddit session needs refreshing, a temporary Reddit window will open. Sign in there if asked; the window closes automatically when the refresh finishes.</p><p>Choose Continue to start your first refresh.</p></div></div>
 <div class="reddit-read-actions"><button class="reddit-read-confirm" type="button">Continue</button></div></div>`;

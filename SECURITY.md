@@ -66,7 +66,7 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Host | When | What it is told |
   | --- | --- | --- |
   | `old.reddit.com` | only when you press vote, reply or submit | the post or comment you are acting on, or the page you submit, in a popup window you can see. Nothing at page load |
-  | `platform.theverge.com` | when the Reddit connection notice is shown | a fixed illustration image, requested without a referrer. No article URL or Reddit session is sent |
+  | `backchnnl.app` | when the Reddit connection notice is shown | a fixed illustration image, requested without a referrer. No article URL or Reddit session is sent |
   | `cdn.jsdelivr.net` | when your manager fetches the script's declared resources, and again from the page itself if it did not | nothing about you -- it is a file download of a fixed, versioned URL |
   | the page you open in the reader on backchnnl.app | only when that page gives no answer from inside its frame | nothing but the request itself: one `GET` without cookies, to read whether it may be framed, whether it is a picture and, if it may not be framed, its text |
   | the site of each article in the reader's list on backchnnl.app or the Sidebar's Backchannel view | when the list shows the article, since 1.6.15 in Reader and 1.6.18.1 in the Sidebar | nothing but a request for its icon, `/favicon.ico`, sent without a referrer |

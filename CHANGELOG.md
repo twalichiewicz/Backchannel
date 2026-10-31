@@ -52,7 +52,8 @@ use to detect updates, so every release bumps it.
 - Informational modals use the app's font on every page. Source help wraps within
   the window with visible bullets in Reader and Sidebar, including the Reddit
   connection explanation. The Reddit introduction matches the empty Reader
-  pane's darker background in dark mode.
+  pane's darker background in dark mode and loads its illustration from
+  Backchannel's own hosting.
 - Clicking an article highlight opens a hidden Discussion panel in Reader.
 - Unread removes a read article when another article opens, while keeping the
   current article in place. Undoing Mark all as read restores the list.
