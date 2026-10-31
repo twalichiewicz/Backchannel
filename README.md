@@ -76,9 +76,12 @@ Webmail, banking, auth flows, and cloud consoles are excluded outright.
 
 Full detail, including a host-by-host table, in [SECURITY.md](SECURITY.md).
 
-### When I enable annotations, I see faintly highlighted text that isn't directly quoted
+### What do annotations highlight?
 
-When you enable annotations, the script generates a heat map of which content in the article the discussions are focusing on. So even if a piece of text isn't directly quoted by a comment, it may receive the highlighter effect. If it's distracting, you can disable showing annotations when the sidebar is closed by making sure **Show when sidebar closed** is not enabled.
+Annotations highlight quoted passages so you can jump between the article and
+the discussion about them. Clicking a highlight opens the Discussion panel.
+To show highlights while the Sidebar is closed, enable **Show when Sidebar
+closed**. The ambient heat map was removed in v1.6.18.1.
 
 ### Where did HNewhere go?
 

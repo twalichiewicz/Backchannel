@@ -8,6 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.18.1] — 2026-10-30
+
+### Added
+
+- **Compact Discussion controls in Reader.** Settings › General can switch
+  between an article and its discussion at any window width, using the floating
+  controls beside the article.
+- **Source availability messages.** Reader distinguishes an unavailable Reddit
+  feed, denied access and temporary request limits from an empty list. Saved
+  articles remain available when a feed cannot be refreshed. Sidebar sync
+  failures use a temporary toast.
+
+### Changed
+
+- **The Sidebar's Backchannel view shares Reader's article lists.** Search and
+  icon tabs for Unread, All articles, Queue and Collection sit under the header
+  with inline counts. Search finds articles, queued and saved pages, notes and
+  settings, with Cancel returning to the previous list. Topic sections scroll
+  within the panel; individual sources slide into view under All articles.
+  Sync and Mark all as read sit in the header alongside its other controls.
+  Articles still open in the browser tab, and the header returns to the current
+  page's discussion.
+- Collection previews stay compact as a wider Sidebar adds more columns.
+- **Annotations show quoted passages without the ambient heat map.**
+- **The Sidebar has rounded exposed corners**, matching Reader's shape.
+
+### Fixed
+
+- Clicking an article highlight opens a hidden Discussion panel in Reader.
+- Unread removes a read article when another article opens, while keeping the
+  current article in place. Undoing Mark all as read restores the list.
+- Links inside Reader articles open in a new tab, keeping the current article
+  open. Links within a read-out can jump to their passage.
+- Article lists keep comment totals with the site and age. Sidebar article
+  menus capitalize their actions and leave comment totals beside the article.
+- Sync retries Reddit after an access failure while respecting rate-limit waits.
+
 ## [1.6.18] — 2026-10-23
 
 ### Added

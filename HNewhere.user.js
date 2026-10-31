@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.18
+// @version      1.6.18.1
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -439,6 +439,7 @@
 		commentSort: "best",
 		newCommentsFirst: false,
 		keepSidebarSize: true,
+		readerCompact: false,
 		commentImages: false,
 		updateCheck: true,
 	};
@@ -2323,6 +2324,10 @@
       ${button}`;
 	}
 
+	function setActionLabel(button, label) {
+		button.textContent = button.closest(".browse-row-menu") ? label.charAt(0).toUpperCase() + label.slice(1) : label;
+	}
+
 	function paintSaveControls(root, entries, folderOf = () => "", folders = []) {
 		const list = Array.isArray(entries) ? entries : [];
 
@@ -2335,7 +2340,7 @@
 			const folder = folderOf(button);
 			const on = list.some((entry) => savedCovers(entry, item, folder, folders));
 
-			button.textContent = on ? "unsave" : "save";
+			setActionLabel(button, on ? "unsave" : "save");
 			button.classList.toggle("item-action-on", on);
 		}
 	}
@@ -2519,7 +2524,7 @@
 				text: button.dataset.saveText || "",
 			}, saveContextFor(button));
 
-			button.textContent = on ? "unsave" : "save";
+			setActionLabel(button, on ? "unsave" : "save");
 			button.classList.toggle("item-action-on", on);
 		} finally {
 			button.disabled = false;
@@ -5229,6 +5234,7 @@ ${
 
 	// #region hnewhere-test-export
 	const HINTED_SETTINGS = new Set([
+		"readerCompact",
 		"annotations",
 		"pdfReader",
 		"notepad",
@@ -5397,16 +5403,23 @@ ${
 		return "loid";
 	}
 
-	async function redditFetch(path, archivePath) {
-		let tier = await redditTier();
+	async function redditFetch(path, archivePath, { listing = false, retryAccess = false } = {}) {
+		let tier = retryAccess ? "loid" : await redditTier();
+		const unavailable = (status = "unavailable") => {
+			if (listing) {
+				throw Object.assign(new Error("Reddit feed unavailable"), { feedStatus: status });
+			}
+
+			return null;
+		};
 
 		if (tier === "off") {
-			return null;
+			return unavailable("access");
 		}
 
 		if (tier === "loid") {
 			if (Date.now() < redditRateResumeAt) {
-				return null;
+				return unavailable("limited");
 			}
 
 			const result = await requestWithMeta("https://www.reddit.com" + path);
@@ -5419,13 +5432,14 @@ ${
 			}
 
 			if (result.ok) {
+				if (retryAccess) await save(REDDIT_TIER_KEY, { tier, timestamp: Date.now() });
 				return { json: result.json, tier };
 			}
 
 			const next = redditTierForStatus(result.status, tier);
 
 			if (next === tier) {
-				return null;
+				return unavailable(result.status === 429 ? "limited" : "unavailable");
 			}
 
 			await save(REDDIT_TIER_KEY, { tier: next, timestamp: Date.now() });
@@ -5433,7 +5447,7 @@ ${
 		}
 
 		if (tier !== "archive" || !archivePath) {
-			return null;
+			return unavailable("access");
 		}
 
 		const archive = await requestWithMeta(
@@ -5568,8 +5582,12 @@ ${
 				.map(redditDiscussion);
 		},
 
-		async frontPage() {
-			const result = await redditFetch("/r/popular.json?limit=100");
+		async frontPage({ force = false } = {}) {
+			const result = await redditFetch("/r/popular.json?limit=100", null, { listing: true, retryAccess: force });
+
+			if (!Array.isArray(result?.json?.data?.children)) {
+				throw new Error("Reddit feed returned no listing");
+			}
 			const posts = (result?.json?.data?.children || []).map(
 				(child) => child.data,
 			);
@@ -8062,13 +8080,17 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
-	async function fetchFrontPageFeed(feed) {
+	async function fetchFrontPageFeed(feed, force = false) {
 		let stories = [];
 
 		if (feed.kind === "front") {
-			stories = (await getSource(feed.source).frontPage()) || [];
+			stories = (await getSource(feed.source).frontPage({ force })) || [];
 		} else if (feed.kind === "subreddits") {
-			const result = await redditFetch(`/r/${feed.target}.json?limit=100`);
+			const result = await redditFetch(`/r/${feed.target}.json?limit=100`, null, { listing: true, retryAccess: force });
+
+			if (!Array.isArray(result?.json?.data?.children)) {
+				throw new Error("Reddit feed returned no listing");
+			}
 
 			stories = (result?.json?.data?.children || [])
 				.map((child) => child.data)
@@ -8095,26 +8117,51 @@ button {
 
 	const FRONT_PAGE_FEED_KEY = "HNewhere:frontpage_feed:";
 
+	async function frontPageFeedResult(feed, force = false) {
+		try {
+			return { stories: await fetchFrontPageFeed(feed, force), status: "ok", attempted: true };
+		} catch (error) {
+			console.warn("Backchannel " + feed.source + " feed failed:", error);
+			return { stories: [], status: error?.feedStatus || "unavailable", attempted: true };
+		}
+	}
+
 	async function loadTopicFeed(feed, force) {
 		const key = FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`;
 		const cached = await load(key, null);
 
-		if (!force && cached?.stories?.length && Date.now() - cached.timestamp < FRONT_PAGE_TTL) {
-			return cached.stories;
+		if (!force && Array.isArray(cached?.stories) && Date.now() - cached.timestamp < FRONT_PAGE_TTL) {
+			return { stories: cached.stories, status: cached.status || "ok", cached: Boolean(cached.status && cached.status !== "ok" && cached.stories.length), attempted: false };
 		}
 
-		try {
-			const stories = await fetchFrontPageFeed(feed);
+		const result = await frontPageFeedResult(feed, force);
+		const stories = result.status === "ok" ? result.stories : cached?.stories || [];
 
-			if (stories.length) {
-				await save(key, { timestamp: Date.now(), stories });
-				return stories;
-			}
-		} catch (e) {
-			console.warn("Backchannel " + feed.source + " topic feed failed:", e);
-		}
+		await save(key, { timestamp: Date.now(), stories, status: result.status });
 
-		return cached?.stories || [];
+		return { ...result, stories, cached: result.status !== "ok" && stories.length > 0 };
+	}
+
+	function frontPageFeedStates(feeds, results) {
+		return feeds.map((feed, index) => ({ source: feed.source, topic: feed.topic || "", status: results[index].status, cached: Boolean(results[index].cached), attempted: Boolean(results[index].attempted) }));
+	}
+
+	function frontPageFailureText(feedStates, view = "all") {
+		const failures = feedStates.filter((feed) => feed.status !== "ok" &&
+			(!view.startsWith("source:") || feed.source === view.slice(7)) &&
+			(!view.startsWith("topic:") || feed.topic === view.slice(6)));
+		const messages = failures.map((feed) => {
+			const name = getSource(feed.source)?.label || feed.source;
+			const message = feed.status === "access"
+				? `${name} isn't allowing access to its feed right now.`
+				: feed.status === "limited"
+					? `${name} requests are temporarily limited. Try syncing again later.`
+					: `${name} is unavailable right now. Try syncing again later.`;
+
+			return message + (feed.cached ? " Showing saved articles." : "");
+		});
+
+		return [...new Set(messages)].join(" ");
 	}
 
 	async function loadFrontPages(options = {}) {
@@ -8126,16 +8173,19 @@ button {
 		);
 
 		if (!feeds.length) {
-			return { rows: [], sources: [], topics: [] };
+			return { rows: [], sources: [], topics: [], attempted: false };
 		}
 
 		if (feeds.some((feed) => feed.topic)) {
-			const lists = await Promise.all(feeds.map((feed) => loadTopicFeed(feed, options.force)));
+			const results = await Promise.all(feeds.map((feed) => loadTopicFeed(feed, options.force)));
+			const lists = results.map((result) => result.stories);
 
 			return {
 				rows: liftMergedRows(mergeStoriesByURL(blendStories(lists.filter((list) => list.length)))),
 				sources: [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))],
 				topics: [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.topic))],
+				feedStates: frontPageFeedStates(feeds, results),
+				attempted: results.some((result) => result.attempted),
 			};
 		}
 
@@ -8144,34 +8194,32 @@ button {
 
 		if (
 			!options.force &&
-			cached?.rows?.length &&
+			Array.isArray(cached?.rows) &&
 			Date.now() - cached.timestamp < FRONT_PAGE_TTL
 		) {
-			return { rows: cached.rows, sources: cached.sources || [], topics: cached.topics || [] };
+			return { rows: cached.rows, sources: cached.sources || [], topics: cached.topics || [], feedStates: cached.feedStates || [], attempted: false };
 		}
 
-		const lists = await Promise.all(
-			feeds.map(async (feed) => {
-				try {
-					return (await getSource(feed.source).frontPage()) || [];
-				} catch (e) {
-					console.warn("Backchannel " + feed.source + " front page failed:", e);
-					return [];
-				}
-			}),
-		);
+		const results = await Promise.all(feeds.map(async (feed) => {
+			const result = await frontPageFeedResult(feed, options.force);
+
+			if (result.status !== "ok") {
+				result.stories = (cached?.rows || []).flatMap((row) => [row.story, ...(row.also || [])]).filter((story) => story.source === feed.source);
+				result.cached = result.stories.length > 0;
+			}
+
+			return result;
+		}));
+		const lists = results.map((result) => result.stories);
+		const feedStates = frontPageFeedStates(feeds, results);
 
 		const answered = [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))];
 		const topics = [...new Set(feeds.filter((feed, index) => lists[index].length && feed.topic).map((feed) => feed.topic))];
 		const rows = mergeStoriesByURL(blendStories(lists.filter((list) => list.length)));
 
-		if (!rows.length) {
-			return { rows: cached?.rows || [], sources: cached?.sources || [], topics: cached?.topics || [] };
-		}
+		await save(cacheKey, { timestamp: Date.now(), rows, sources: answered, topics, feedStates });
 
-		await save(cacheKey, { timestamp: Date.now(), rows, sources: answered, topics });
-
-		return { rows, sources: answered, topics };
+		return { rows, sources: answered, topics, feedStates, attempted: results.some((result) => result.attempted) };
 	}
 
 	// -------------------------
@@ -12291,7 +12339,9 @@ html[data-backchannel-installed] .chin {
 		if (on) {
 			browseTab =
 				options.tab ||
-				(queueHasItems
+				(ui.browseHome && frontPageAvailable
+					? "front"
+					: queueHasItems
 					? "queue"
 					: frontPageAvailable
 						? "front"
@@ -12301,7 +12351,12 @@ html[data-backchannel-installed] .chin {
 		}
 
 		const swap = () => {
+			closeBrowseRowMenus(ui.shadow);
 			panel.classList.toggle("browsing", on);
+			if (ui.browseHome) {
+				if (!on) setBrowseSearchOpen(ui, false, { restoreFocus: false, restoreScroll: false });
+				paintBrowseHome(ui);
+			}
 			refreshSidebarSubtitle(ui);
 
 			const picking = Boolean(ui.body?.querySelector(".source-picker"));
@@ -12415,6 +12470,7 @@ html[data-backchannel-installed] .chin {
 		if (appState && !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) {
 			event.preventDefault();
 			openAppStory(story, { focus }).catch(console.error);
+			if (openPanel) revealAppDiscussion();
 			return;
 		}
 
@@ -12442,10 +12498,17 @@ html[data-backchannel-installed] .chin {
 
 	function renderBrowseRow(story, container, rank, options = {}) {
 		const isWriting = story.kind === "comment" || story.kind === "noted";
+		const readerRow = Boolean(appState) || options.readerRow === true;
 		const age = `<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>`;
 		const inPost = story.context
 			? `in ${escapeHTML(story.context)}${story.site ? ` (${escapeHTML(story.site)})` : ""}`
 			: "";
+		const discussions = [story, ...(options.also || [])];
+		const totalComments = discussions.reduce((sum, each) => sum + (each.descendants || 0), 0);
+		const counted = totalComments > 0 && discussions.some((each) => Number.isFinite(each.descendants));
+		const sourceCount = new Set(discussions.map((each) => each.source || "hn")).size;
+		const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}" title="Open discussion">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalComments === 1 ? "comment" : "comments"}${readerRow && sourceCount > 1 ? ` across ${sourceCount} sources` : ""}</a>`;
+		const metadata = [story.site ? escapeHTML(story.site) : "", readerRow && story.time ? age : "", readerRow && counted ? commentTotal : ""].filter(Boolean).join(", ");
 
 		const rowQueueLink = () => `|
 	<button class="browse-queue-link" type="button">queue</button>`;
@@ -12482,25 +12545,10 @@ html[data-backchannel-installed] .chin {
 	<button class="item-action-link browse-delete-note-link" type="button">delete</button>`;
 			}
 
-			const discussions = [story, ...(options.also || [])];
-			const totalComments = discussions.reduce(
-				(sum, each) => sum + (each.descendants || 0),
-				0,
-			);
-			const counted =
-				totalComments > 0 &&
-				discussions.some((each) => Number.isFinite(each.descendants));
-			const totalWord = totalComments === 1 ? "comment" : "comments";
-			const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
-	title="Go to the page and read what was said about it">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalWord}</a>`;
-			const sourceCount = new Set(discussions.map((each) => each.source || "hn")).size;
-			const sourcesTotal = `<span class="browse-sources-total">${totalComments}+ ${totalWord}${sourceCount > 1 ? ` across ${sourceCount} sources` : ""}</span>`;
-
-			if (appState) {
+			if (readerRow) {
 				return `${rowQueueLink()}
 	${rowActions()}
-	${rowHideLink()}
-	${counted ? `|\n\t${commentTotal}\n\t${sourcesTotal}` : ""}`.replace(/^\s*\|\s*/, "");
+	${rowHideLink()}`.replace(/^\s*\|\s*/, "");
 			}
 
 			return `${
@@ -12536,17 +12584,17 @@ html[data-backchannel-installed] .chin {
 				? `${rank}.`
 				: ""
 	}</div>
-	${appState && !isWriting ? appRowThumbHTML(story) : ""}
+	${readerRow && !isWriting ? appRowThumbHTML(story) : ""}
 	<div class="browse-main">
 	<div class="story-title">
 	<a class="browse-title-link${isWriting ? " browse-quote" : ""}" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
-	${story.site && !isWriting ? `<span class="browse-site">(${escapeHTML(story.site)}${appState && story.time ? `, ${age}` : ""})</span>` : ""}
+	${metadata && !isWriting ? `<span class="browse-site">(${metadata})</span>` : ""}
 	</div>
 	<div class="story-meta">
 	${meta}
 	</div>
 	</div>
-	${appState && !isWriting ? `<button class="browse-more" type="button" aria-label="More" aria-haspopup="true">${MORE_ICON}</button>` : ""}
+	${readerRow && !isWriting ? `<button class="browse-more" type="button" aria-label="More" aria-haspopup="menu"${options.readerRow ? ' aria-expanded="false"' : ""}>${MORE_ICON}</button>` : ""}
 	`;
 
 		const more = row.querySelector(".browse-more");
@@ -12554,7 +12602,11 @@ html[data-backchannel-installed] .chin {
 		if (more) {
 			more.onclick = (event) => {
 				event.stopPropagation();
-				openAppRowMenu(row, more);
+				if (appState) {
+					openAppRowMenu(row, more);
+				} else {
+					toggleBrowseRowMenu(row, more, event.detail === 0);
+				}
 			};
 		}
 
@@ -12597,7 +12649,7 @@ html[data-backchannel-installed] .chin {
 			const queuedLabel = options.inQueue ? "unqueue" : "queued";
 			const key = queueKey(story);
 			const paintQueued = (queued) => {
-				queueButton.textContent = queued ? queuedLabel : "queue";
+				setActionLabel(queueButton, queued ? queuedLabel : "queue");
 			};
 
 			if (options.inQueue) {
@@ -12621,7 +12673,7 @@ html[data-backchannel-installed] .chin {
 						: addToQueue(entries, story, Date.now());
 				});
 
-				queueButton.textContent = already ? "queue" : queuedLabel;
+				paintQueued(!already);
 
 				if (already && row.parentElement?.closest("#browse-list") && browseTab === "queue") {
 					row.remove();
@@ -12634,6 +12686,23 @@ html[data-backchannel-installed] .chin {
 
 		row.querySelector(".browse-title-link").onclick = (event) =>
 			openStoryFromRow(story, event);
+
+		if (options.readerRow) {
+			const menu = document.createElement("div");
+
+			menu.className = "browse-row-menu dropdown";
+			menu.setAttribute("role", "menu");
+			menu.setAttribute("aria-label", "Article actions");
+			menu.hidden = true;
+
+			for (const action of row.querySelectorAll(".story-meta button")) {
+				action.setAttribute("role", "menuitem");
+				menu.append(action);
+				setActionLabel(action, action.textContent);
+			}
+
+			row.append(menu);
+		}
 
 		container.appendChild(row);
 		return row;
@@ -12674,6 +12743,11 @@ html[data-backchannel-installed] .chin {
 
 		if (frontTab) {
 			frontTab.hidden = !frontPageAvailable;
+			const allTab = root.querySelector("#browse-tab-all");
+
+			if (allTab) {
+				allTab.hidden = !frontPageAvailable;
+			}
 		}
 
 		if (wordmark) {
@@ -12738,6 +12812,12 @@ html[data-backchannel-installed] .chin {
 	}
 
 	function paintBrowseTab(tab, on, label, widthProperty, hasClass) {
+		if (tab.classList.contains("browse-home-tab")) {
+			tab.hidden = !on;
+			tab.setAttribute("aria-hidden", String(!on));
+			tab.tabIndex = on && tab.getAttribute("aria-selected") === "true" ? 0 : -1;
+			return;
+		}
 		if (on) {
 			tab.textContent = label;
 			tab.style.setProperty(widthProperty, tab.scrollWidth + "px");
@@ -12772,6 +12852,11 @@ html[data-backchannel-installed] .chin {
 			loadCollected(),
 		]);
 		const state = collectionTabState(saved, noted, collected);
+		const badge = tab.querySelector(".rail-badge");
+
+		if (badge) {
+			badge.textContent = state.fresh ? compactCount(state.fresh) : "";
+		}
 
 		notedHasItems = state.has;
 		tab.classList.toggle("has-fresh", state.fresh > 0);
@@ -13858,6 +13943,11 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 		const entries = await loadQueue();
 		const unread = unreadQueueCount(entries);
+		const badge = tab.querySelector(".rail-badge");
+
+		if (badge) {
+			badge.textContent = unread ? compactCount(unread) : "";
+		}
 
 		queueHasItems = entries.length > 0;
 
@@ -14270,7 +14360,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			return;
 		}
 
-		const reload = () => renderQueueView(ui, list);
+		const reload = () => isCurrent() ? ui.browseHome ? renderBrowseView(ui) : renderQueueView(ui, list, isCurrent) : Promise.resolve();
 		let rank = 0;
 
 		list.replaceChildren();
@@ -14288,6 +14378,8 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			const row = renderBrowseRow(entry, list, (rank += 1), {
 				inQueue: true,
 				reload,
+				readerRow: Boolean(ui.browseHome),
+				unreadDot: ui.browseHome ? !entry.readAt : undefined,
 			});
 
 			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
@@ -14296,8 +14388,8 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		refreshSaveControls().catch(console.error);
 
 		refreshQueueEntries(entries).then((refreshed) => {
-			if (refreshed && isBrowsing(ui) && browseTab === "queue") {
-				renderQueueView(ui, list).catch(console.error);
+			if (refreshed && isCurrent() && isBrowsing(ui) && browseTab === "queue") {
+				renderQueueView(ui, list, isCurrent).catch(console.error);
 			}
 		});
 
@@ -14309,7 +14401,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			clear.onclick = async () => {
 				await mutateQueue((queued) => clearReadFromQueue(queued));
 
-				await renderQueueView(ui, list);
+				await reload();
 				refreshQueueCount(ui.shadow);
 				refreshNextUp(ui.shadow);
 			};
@@ -14318,6 +14410,10 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			nav.className = "browse-nav";
 			nav.appendChild(clear);
 			list.appendChild(nav);
+		}
+
+		if (ui.browseHome && isCurrent()) {
+			fillAppRowThumbs(list);
 		}
 	}
 
@@ -14378,71 +14474,451 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		list.replaceChildren(wrap);
 	}
 
-	async function renderFrontPageView(ui, list) {
+	function browseTabContents(label, icon, count = "") {
+		return `<span class="browse-home-tab-title"><span class="browse-home-icon" aria-hidden="true">${icon}</span><span class="browse-home-label">${escapeHTML(label)}</span></span><span class="rail-badge" aria-hidden="true">${count ? compactCount(count) : ""}</span>`;
+	}
+
+	function sidebarHomeChromeHTML() {
+		const tabs = APP_VIEWS.map((view) => `<button id="browse-tab-${view.id === "unread" ? "front" : view.id}" class="browse-tab browse-home-tab${view.id === "unread" ? " is-current" : ""}" data-browse-view="${view.id}" type="button" role="tab" aria-label="${view.label}" aria-selected="${view.id === "unread"}" aria-controls="browse-list" tabindex="${view.id === "unread" ? 0 : -1}"${view.id === "queue" || view.id === "collection" ? " hidden" : ""}>${browseTabContents(view.label, view.icon)}</button>`).join("");
+
+		return `<div class="browse-home-nav-row"><button id="browse-home-search-toggle" type="button" aria-label="Search Backchannel" title="Search Backchannel" aria-expanded="false" aria-controls="browse-home-search-page">${APP_ICON('<circle cx="7" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m10 10 3.5 3.5" stroke="currentColor" stroke-width="1.5"/>')}</button><nav class="browse-tabs browse-home-nav browse-home-scroll" role="tablist" aria-label="Backchannel views">${tabs}</nav></div>
+<div id="browse-home-filters" hidden></div>
+<div id="browse-home-search-page" class="app-search-page" role="dialog" aria-label="Search Backchannel" hidden><div class="app-search-head"><input id="browse-home-search" class="app-search-input" type="search" placeholder="Search Backchannel" aria-label="Search Backchannel" autocomplete="off" autocorrect="off" spellcheck="false"><button id="browse-home-search-close" class="app-search-close" type="button">Cancel</button></div><div id="browse-home-search-results" class="app-search-results"></div></div>`;
+	}
+
+	let browseRowMenuCleanup = null;
+
+	function closeBrowseRowMenus(shadow) {
+		browseRowMenuCleanup?.();
+		browseRowMenuCleanup = null;
+
+		for (const menu of shadow.querySelectorAll(".browse-row-menu")) {
+			menu.hidden = true;
+			menu.parentElement.querySelector(".browse-more")?.setAttribute("aria-expanded", "false");
+		}
+	}
+
+	function toggleBrowseRowMenu(row, opener, keyboard = false) {
+		const menu = row.querySelector(".browse-row-menu");
+		const open = menu.hidden;
+		const shadow = row.getRootNode();
+
+		closeBrowseRowMenus(shadow);
+		menu.hidden = !open;
+		opener.setAttribute("aria-expanded", String(open));
+
+		if (open) {
+			menu.classList.remove("opens-up");
+			const panel = row.getRootNode().querySelector("#panel").getBoundingClientRect();
+
+			menu.classList.toggle("opens-up", menu.getBoundingClientRect().bottom > panel.bottom - 72);
+
+			const outside = (event) => {
+				if (!event.composedPath().includes(menu) && !event.composedPath().includes(opener)) closeBrowseRowMenus(shadow);
+			};
+			const leave = (event) => {
+				if (!menu.contains(event.relatedTarget) && event.relatedTarget !== opener) closeBrowseRowMenus(shadow);
+			};
+			const away = (event) => {
+				if (event.target !== menu) closeBrowseRowMenus(shadow);
+			};
+			const keys = (event) => {
+				if (event.key !== "Escape") return;
+
+				closeBrowseRowMenus(shadow);
+				opener.focus({ preventScroll: true });
+				event.preventDefault();
+				event.stopPropagation();
+			};
+
+			window.addEventListener("pointerdown", outside, true);
+			window.addEventListener("focusin", outside, true);
+			window.addEventListener("keydown", keys, true);
+			window.addEventListener("resize", away);
+			shadow.addEventListener("scroll", away, true);
+			menu.addEventListener("focusout", leave);
+			opener.addEventListener("focusout", leave);
+			browseRowMenuCleanup = () => {
+				window.removeEventListener("pointerdown", outside, true);
+				window.removeEventListener("focusin", outside, true);
+				window.removeEventListener("keydown", keys, true);
+				window.removeEventListener("resize", away);
+				shadow.removeEventListener("scroll", away, true);
+				menu.removeEventListener("focusout", leave);
+				opener.removeEventListener("focusout", leave);
+			};
+			if (keyboard) menu.querySelector("[role=menuitem]")?.focus({ preventScroll: true });
+		}
+	}
+
+	function paintBrowseHome(ui) {
+		const state = ui.browseHome;
+		const view = state.view;
+		const markable = isBrowsing(ui) && !isSubmitting(ui) && !state.searchOpen && appViewIsFrontPage(view);
+
+		ui.shadow.querySelector("#browse-home-mark-read").hidden = !markable;
+		ui.shadow.querySelector("#browse-home-sync").hidden = !markable;
+
+		for (const button of ui.shadow.querySelectorAll(".browse-home-nav [data-browse-view]")) {
+			const matches = button.dataset.browseView === view || (button.dataset.browseView === "all" && (view.startsWith("source:") || view.startsWith("topic:")));
+			const current = matches && !state.searchOpen;
+
+			button.classList.toggle("is-current", current);
+			button.setAttribute("aria-selected", String(current));
+			button.tabIndex = matches ? 0 : -1;
+			if (current) ui.shadow.querySelector("#browse-list").setAttribute("aria-labelledby", button.id);
+		}
+
+		for (const section of ui.shadow.querySelectorAll("[data-filter-group]")) {
+			const visible = !state.searchOpen && appViewIsFrontPage(view) && (section.dataset.filterGroup !== "sources" || view !== "unread");
+
+			section.classList.toggle("is-collapsed", !visible);
+			section.setAttribute("aria-hidden", String(!visible));
+			section.inert = !visible;
+		}
+	}
+
+	function renderBrowseHomeFilters(ui, sourceIds, topicIds, counts, view) {
+		const filters = ui.shadow.querySelector("#browse-home-filters");
+		const focused = filters.contains(ui.shadow.activeElement) ? ui.shadow.activeElement?.dataset.browseView : "";
+		const scrolls = new Map([...filters.querySelectorAll("[data-filter-group]")].map((section) => [section.dataset.filterGroup, section.querySelector(".browse-home-scroll").scrollLeft]));
+
+		for (const [group, label, ids] of [["topics", "Topics", topicIds], ["sources", "Sources", sourceIds]]) {
+			let section = filters.querySelector(`[data-filter-group="${group}"]`);
+
+			if (!ids.length) {
+				section?.remove();
+				continue;
+			}
+
+			if (!section) {
+				section = document.createElement("div");
+				section.className = "browse-home-filter-reveal is-collapsed";
+				section.dataset.filterGroup = group;
+				section.innerHTML = `<section class="browse-home-filter-section">${group === "topics" ? '<h3 class="browse-home-filter-label">Topics</h3>' : ""}<div class="browse-home-scroll" role="group" aria-label="${label}"></div></section>`;
+				filters.append(section);
+			}
+
+			const scroller = section.querySelector(".browse-home-scroll");
+
+			scroller.replaceChildren();
+
+			for (const id of ids) {
+				const key = (group === "topics" ? "topic:" : "source:") + id;
+				const name = appViewLabel(key);
+				const icon = (group === "topics" ? TOPIC_ICONS[id] : APP_SOURCE_ICONS[id]) || `<span class="rail-monogram">${escapeHTML(name.slice(0, 2))}</span>`;
+				const button = document.createElement("button");
+
+				button.type = "button";
+				button.className = "browse-home-tab browse-home-filter";
+				button.dataset.browseView = key;
+				button.setAttribute("aria-pressed", String(view === key));
+				button.innerHTML = browseTabContents(name, icon, counts[group][id]);
+				button.onclick = () => renderBrowseView(ui, { view: ui.browseHome.view === key ? "all" : key }).catch(console.error);
+				scroller.append(button);
+			}
+
+			scroller.scrollLeft = scrolls.get(group) || 0;
+		}
+
+		filters.hidden = !filters.childElementCount;
+		paintBrowseHome(ui);
+		const restore = [...filters.querySelectorAll("[data-browse-view]")].find((button) => button.dataset.browseView === focused);
+
+		if (restore && !restore.closest("[data-filter-group]").inert) {
+			restore.focus({ preventScroll: true });
+			restore.scrollIntoView({ block: "nearest", inline: "nearest" });
+		}
+	}
+
+	function setBrowseSearchOpen(ui, open, { restoreFocus = true, restoreScroll = true } = {}) {
+		const { shadow, browseHome: state } = ui;
+		const show = Boolean(open);
+		const input = shadow.querySelector("#browse-home-search");
+
+		if (Boolean(state.searchOpen) === show) {
+			if (show) input.focus({ preventScroll: true });
+			return;
+		}
+
+		const list = shadow.querySelector("#browse-list");
+		const toggle = shadow.querySelector("#browse-home-search-toggle");
+
+		if (show) state.searchScroll = list.scrollTop;
+		state.searchOpen = show;
+		state.searchSequence = (state.searchSequence || 0) + 1;
+		shadow.querySelector("#browse-view").classList.toggle("is-searching", show);
+		shadow.querySelector("#browse-home-search-page").hidden = !show;
+		toggle.setAttribute("aria-expanded", String(show));
+		toggle.setAttribute("aria-pressed", String(show));
+		paintBrowseHome(ui);
+
+		if (show) {
+			input.value = "";
+			renderBrowseSearch(ui);
+			input.focus({ preventScroll: true });
+		} else {
+			if (restoreScroll) {
+				list.scrollTop = state.searchScroll || 0;
+				const held = list.scrollTop;
+				const sequence = state.sequence;
+				const searchSequence = state.searchSequence;
+
+				Promise.all(shadow.querySelector("#browse-home-filters").getAnimations({ subtree: true }).map((animation) => animation.finished.catch(() => {}))).then(() => {
+					if (!state.searchOpen && state.sequence === sequence && state.searchSequence === searchSequence && list.scrollTop === held) list.scrollTop = state.searchScroll || 0;
+				});
+			}
+			if (restoreFocus) toggle.focus({ preventScroll: true });
+		}
+	}
+
+	function browseSearchEntries(ui) {
+		const { browseHome: state, shadow } = ui;
+		const entries = APP_VIEWS.map((view) => ({ group: "Go to", title: view.label, note: "", keys: view.id === "collection" ? `${view.label} saved` : view.label, run: () => renderBrowseView(ui, { view: view.id }).catch(console.error) }));
+
+		entries.push({ group: "Go to", title: "Settings", note: "", keys: "settings preferences", run: () => openAppSettingsSection("general") });
+		for (const [kind, ids] of [["Topic", state.topicIds || []], ["Source", state.sourceIds || []]]) {
+			for (const id of ids) {
+				const view = kind.toLowerCase() + ":" + id;
+				const label = appViewLabel(view);
+
+				entries.push({ group: "Go to", title: label, note: kind, keys: `${label} ${kind} ${kind}s ${id}`, typed: true, run: () => renderBrowseView(ui, { view }).catch(console.error) });
+			}
+		}
+		for (const row of state.searchRows || state.rows || []) {
+			const story = row.story;
+
+			entries.push({ group: "Articles", title: story.title, note: story.site || "", url: story.url, keys: `${story.title} ${story.site || ""}`, run: () => openStoryFromRow(story, new MouseEvent("click")) });
+		}
+		for (const item of state.searchListIndex || []) {
+			entries.push({ ...item, run: () => openStoryFromRow(item.story, new MouseEvent("click")) });
+		}
+		entries.push(...settingsSearchEntries(shadow, openAppSettingsSection));
+		return entries;
+	}
+
+	function renderBrowseSearch(ui) {
+		if (!ui.browseHome.searchOpen) return;
+
+		renderSearchResults(ui.shadow.querySelector("#browse-home-search-results"), browseSearchEntries(ui), ui.shadow.querySelector("#browse-home-search").value, (entry) => {
+			setBrowseSearchOpen(ui, false);
+			setTimeout(() => entry.run(), 0);
+		});
+	}
+
+	async function openBrowseSearch(ui) {
+		const { browseHome: state } = ui;
+
+		if (state.searchOpen) {
+			ui.shadow.querySelector("#browse-home-search").focus({ preventScroll: true });
+			return;
+		}
+
+		state.searchRows = state.rows?.length ? state.rows : state.searchRows || [];
+		setBrowseSearchOpen(ui, true);
+		const sequence = state.searchSequence;
+		const [queue, documents, hidden, settings, front] = await Promise.all([loadQueue(), loadCollectionDocuments(), loadHiddenStoryKeys(), loadSettings(), state.rows?.length ? null : loadFrontPages()]);
+
+		if (!state.searchOpen || state.searchSequence !== sequence || ui !== sidebarUI) return;
+
+		const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabledSourceIds(settings, registeredSourceIds()));
+
+		state.sourceIds = [...new Set(feeds.map((feed) => feed.source))];
+		state.topicIds = [...new Set(feeds.map((feed) => feed.topic).filter(Boolean))];
+		state.searchRows = (front?.rows || state.rows || []).filter((row) => !isStoryHidden(row.story, hidden));
+		state.searchListIndex = searchListIndex(queue, documents);
+		renderBrowseSearch(ui);
+	}
+
+	async function markBrowseHomeRead(ui) {
+		const state = ui.browseHome;
+		const rows = appViewRows(state.rows || [], state.view, state.seen || {}).filter((row) => rowIsUnread(row, state.seen || {}));
+		const keys = rows.flatMap(rowDiscussionKeys);
+
+		if (!keys.length) {
+			return;
+		}
+
+		const previous = await markManySeen(keys);
+
+		await renderBrowseView(ui);
+		showToast(`Marked ${pluralize(rows.length, "article", "articles")} as read`, { action: { label: "undo", onAct: () => restoreManySeen(previous).then(() => renderBrowseView(ui)).catch(console.error) } });
+	}
+
+	function wireBrowseHome(ui) {
+		const { shadow, browseHome: state } = ui;
+		const list = shadow.querySelector("#browse-list");
+		const search = shadow.querySelector("#browse-home-search");
+		const toggle = shadow.querySelector("#browse-home-search-toggle");
+
+		for (const button of shadow.querySelectorAll(".browse-home-nav [data-browse-view]")) {
+			button.onclick = () => {
+				setBrowseSearchOpen(ui, false, { restoreFocus: false, restoreScroll: false });
+				renderBrowseView(ui, { view: button.dataset.browseView }).catch(console.error);
+			};
+		}
+		shadow.querySelector("#browse-view").addEventListener("keydown", (event) => {
+			if (event.altKey || event.ctrlKey || event.metaKey || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+
+			const scroller = event.target.closest(".browse-home-scroll");
+
+			if (!scroller) return;
+
+			const buttons = [...scroller.querySelectorAll("button:not([hidden])")];
+			const at = buttons.indexOf(event.target.closest("button"));
+			const index = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (at + (event.key === "ArrowLeft" ? -1 : 1) + buttons.length) % buttons.length;
+			const button = buttons[index];
+
+			button.focus({ preventScroll: true });
+			button.click();
+			button.scrollIntoView({ block: "nearest", inline: "nearest" });
+			event.preventDefault();
+			event.stopPropagation();
+		});
+
+		toggle.onclick = () => state.searchOpen ? setBrowseSearchOpen(ui, false) : openBrowseSearch(ui).catch(console.error);
+		search.oninput = () => renderBrowseSearch(ui);
+		shadow.querySelector("#browse-home-search-close").onclick = () => setBrowseSearchOpen(ui, false);
+		shadow.querySelector("#browse-home-search-page").addEventListener("keydown", (event) => {
+			if (event.key !== "Escape") return;
+
+			event.preventDefault();
+			event.stopPropagation();
+			setBrowseSearchOpen(ui, false);
+		});
+		shadow.querySelector("#browse-home-sync").onclick = async (event) => {
+			const button = event.currentTarget;
+
+			button.disabled = true;
+			try {
+				await renderBrowseView(ui, { force: true });
+			} catch (error) {
+				console.error(error);
+			} finally {
+				button.disabled = false;
+			}
+		};
+		shadow.querySelector("#browse-home-mark-read").onclick = () => markBrowseHomeRead(ui).catch(console.error);
+		list.addEventListener("click", (event) => {
+			if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.target.closest("a, button, input, textarea, .browse-row-menu")) return;
+
+			event.target.closest(".browse-row")?.querySelector(".browse-title-link")?.click();
+		});
+		shadow.addEventListener("click", (event) => {
+			if (!event.target.closest(".browse-row-menu, .browse-more")) closeBrowseRowMenus(shadow);
+		});
+		shadow.addEventListener("keydown", (event) => {
+			const menu = shadow.querySelector(".browse-row-menu:not([hidden])");
+
+			if (!menu) return;
+			if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+				if (!menu.contains(shadow.activeElement) && shadow.activeElement !== menu.parentElement.querySelector(".browse-more")) return;
+
+				const items = [...menu.querySelectorAll("[role=menuitem]:not(:disabled)")];
+				const current = items.indexOf(shadow.activeElement);
+				const index = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (current + (event.key === "ArrowUp" ? -1 : 1) + items.length) % items.length;
+
+				items[index]?.focus();
+				event.preventDefault();
+				event.stopPropagation();
+			}
+		});
+	}
+
+	async function renderFrontPageView(ui, list, options = {}, isCurrent = () => true) {
 		if (!list.childElementCount) {
 			renderBrowseSkeleton(list, "Loading Front Pages…");
 		}
 
-		const requested = browsePage;
-		const [{ rows: allRows, sources, topics }, queued, hiddenKeys] = await Promise.all([
-			loadFrontPages(),
+		const [{ rows: allRows, sources, topics, feedStates = [], attempted = false }, queued, hiddenKeys, seen, settings] = await Promise.all([
+			loadFrontPages({ force: options.force }),
 			loadQueue(),
 			loadHiddenStoryKeys(),
+			load(STORAGE.seen, {}),
+			loadSettings(),
 		]);
 
-		if (browsePage !== requested || browseTab !== "front") {
+		if (attempted && ui.browseHome && ui === sidebarUI && isSidebarVisible() && (isCurrent() || options.force)) {
+			const message = frontPageFailureText(feedStates.filter((feed) => feed.attempted));
+
+			if (message) {
+				showToast(message);
+				ui.browseHome.feedNotice = message;
+			} else if (!frontPageFailureText(feedStates) && ui.shadow.querySelector("#toast")?.textContent === ui.browseHome.feedNotice) {
+				showToast("");
+				ui.browseHome.feedNotice = "";
+			}
+		}
+
+		if (!isCurrent() || browseTab !== "front") {
 			return;
 		}
 
 		const queuedKeys = new Set(queued.map(queueKey));
 		const rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
+		const state = ui.browseHome;
+		let view = state?.view || "all";
+		const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabledSourceIds(settings, registeredSourceIds()));
+		const sourceIds = [...new Set(feeds.map((feed) => feed.source))];
+		const topicIds = [...new Set(feeds.map((feed) => feed.topic).filter(Boolean))];
+
+		if ((view.startsWith("source:") && !sourceIds.includes(view.slice(7))) || (view.startsWith("topic:") && !topicIds.includes(view.slice(6)))) {
+			view = "all";
+
+			if (state) {
+				state.view = state.frontView = view;
+			}
+		}
+
+		const shown = appViewRows(rows, view, seen || {});
+		const failureText = frontPageFailureText(feedStates, view);
 
 		setBlendNote(ui, sources, topics);
-
-		if (!allRows.length) {
-			list.textContent = "Could not load Front Pages.";
-			return;
-		}
-
-		if (!rows.length) {
-			list.textContent = "Everything in Front Pages is hidden.";
-			return;
-		}
-
-		const lastPage = Math.max(1, Math.ceil(rows.length / FRONT_PAGE_SIZE));
-		const page = Math.min(requested, lastPage);
-		const start = (page - 1) * FRONT_PAGE_SIZE;
-
-		browsePage = page;
-
 		list.replaceChildren();
-		rows
-			.slice(start, start + FRONT_PAGE_SIZE)
-			.forEach((row, index) =>
-				renderBrowseRow(row.story, list, start + index + 1, {
+
+		if (!shown.length) {
+			const note = document.createElement("div");
+
+			note.className = "browse-empty";
+			note.textContent = failureText ? "No articles available. Try syncing again." : allRows.length && !rows.length ? "Everything in Front Pages is hidden." : view === "unread" ? "All caught up." : "Nothing here right now.";
+			list.append(note);
+		}
+
+		shown.forEach((row, index) => {
+			const element = renderBrowseRow(row.story, list, state ? 0 : index + 1, {
 					also: row.also,
 					queuedKeys,
 					hideable: true,
 					reload: () => renderBrowseView(ui),
-				}),
-			);
+					readerRow: Boolean(state),
+					unreadDot: state ? rowIsUnread(row, seen || {}) : undefined,
+				});
 
-		const cardSettings = await loadSettings();
+			element.classList.toggle("is-unread", rowIsUnread(row, seen || {}));
+		});
 
-		if (cardSettings.frontPageMode === undefined && browseTab === "front") {
-			list.prepend(frontPageCardElement(cardSettings, () => refreshFrontPageConsumers()));
+		if (settings.frontPageMode === undefined) {
+			list.prepend(frontPageCardElement(settings, () => refreshFrontPageConsumers()));
 		}
 
 		refreshSaveControls().catch(console.error);
 
-		renderBrowseNav(
-			list,
-			{ page, nextPage: page < lastPage ? page + 1 : null },
-			(target) => {
-				scrollBrowseToTop(ui);
-				renderBrowseView(ui, { page: target }).catch(console.error);
-			},
-		);
+		if (state) {
+			state.rows = rows;
+			state.seen = seen || {};
+			state.sourceIds = sourceIds;
+			state.topicIds = topicIds;
+			const counts = appViewCounts(rows, state.seen, sourceIds, topicIds);
+
+			for (const id of ["unread", "all"]) {
+				const badge = ui.shadow.querySelector(`[data-browse-view="${id}"] .rail-badge`);
+
+				badge.textContent = counts[id] ? compactCount(counts[id]) : "";
+			}
+
+			renderBrowseHomeFilters(ui, sourceIds, topicIds, counts, view);
+			paintBrowseHome(ui);
+		}
 	}
 
 	async function renderBrowseView(ui, options = {}) {
@@ -14452,19 +14928,34 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			return;
 		}
 
-		if (Number.isFinite(options.page)) {
-			browsePage = Math.max(1, options.page);
-		}
-
 		if (options.tab) {
 			browseTab = options.tab;
 		}
 
-		for (const tab of ui.shadow.querySelectorAll(".browse-tab")) {
-			const isCurrent = tab.id === "browse-tab-" + (browseTab || "front");
-			tab.classList.toggle("is-current", isCurrent);
-			tab.setAttribute("aria-selected", String(isCurrent));
+		const state = ui.browseHome;
+		let sequence;
+
+		if (state) {
+			const previous = state.view;
+
+			state.view = options.view || (browseTab === "front" ? state.frontView : browseTab) || "unread";
+			browseTab = appViewIsFrontPage(state.view) ? "front" : state.view;
+			if (browseTab === "front") state.frontView = state.view;
+			sequence = ++state.sequence;
+			closeBrowseRowMenus(ui.shadow);
+			if (previous !== state.view) {
+				list.scrollTop = 0;
+			}
+			paintBrowseHome(ui);
+		} else {
+			for (const tab of ui.shadow.querySelectorAll(".browse-tab")) {
+				const current = tab.id === "browse-tab-" + (browseTab || "front");
+				tab.classList.toggle("is-current", current);
+				tab.setAttribute("aria-selected", String(current));
+			}
 		}
+
+		const isCurrent = () => !state || (state.sequence === sequence && isBrowsing(ui));
 
 		if (sidebarHasDiscussion) {
 			setWordmarkLocation(ui, "Discussion", { elsewhere: true });
@@ -14474,26 +14965,31 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 		await refreshSubmitAffordance(ui.shadow);
 
-		refreshQueueCount(ui.shadow);
+		if (!isCurrent()) return;
 
-		if (list.dataset.browseTab !== browseTab) {
+		refreshQueueCount(ui.shadow).catch(console.error);
+
+		const view = state?.view || browseTab;
+
+		if (list.dataset.browseTab !== view) {
 			list.replaceChildren();
-			list.dataset.browseTab = browseTab;
+			list.dataset.browseTab = view;
 		}
 
 		if (browseTab === "queue") {
 			setBrowseNote(ui, QUEUE_NOTE);
-			await renderQueueView(ui, list);
-			return;
-		}
-
-		if (browseTab === "collection") {
+			await renderQueueView(ui, list, isCurrent);
+		} else if (browseTab === "collection") {
 			setBrowseNote(ui, COLLECTION_NOTE);
-			await renderCollectionView(ui, list);
-			return;
+			await renderCollectionView(ui, list, isCurrent);
+		} else {
+			await renderFrontPageView(ui, list, options, isCurrent);
 		}
 
-		await renderFrontPageView(ui, list);
+		if (state && isCurrent()) {
+			fillAppRowThumbs(list);
+			paintBrowseHome(ui);
+		}
 	}
 
 	async function revealSidebar() {
@@ -19019,6 +19515,7 @@ ${title ? `<span id="app-discussion-sort" class="app-discussion-sort"></span><sp
 <path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
 </svg>
 </button>
+${browse ? `<button id="browse-home-mark-read" type="button" aria-label="Mark all as read" title="Mark all as read" hidden>${APP_MARK_READ_ICON}</button><button id="browse-home-sync" type="button" aria-label="Sync" title="Sync" hidden>${APP_SYNC_ICON}</button>` : ""}
 ${hide ? `<span class="hide-control">
 <button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Disable Backchannel here" title="Disable Backchannel here">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -19133,6 +19630,14 @@ ${settings ? settingsPanelHTML() : ""}
 <div class="manage-table-tools"><button type="button" class="manage-table-add" aria-label="Disable Backchannel on a site or page" title="Disable Backchannel on a site or page">+</button><button type="button" class="manage-table-remove" aria-label="Turn Backchannel back on for the chosen site" title="Turn Backchannel back on for the chosen site" disabled>&minus;</button></div>
 </div>
 </div>
+</div>
+
+<div class="settings-group">
+<label class="settings-option">
+<input id="setting-reader-compact" data-setting="readerCompact" type="checkbox">
+<span>Use compact Discussion controls in Reader</span>
+</label>
+<div class="settings-option-hint">Switch between the article and its discussion instead of showing both at once.</div>
 </div>
 
 <div class="settings-group">
@@ -19302,6 +19807,7 @@ ${frontPageChooserHTML()}
 				"#setting-auto-open-only-from-hn",
 			),
 			keepSidebarSize: shadow.querySelector("#setting-keep-sidebar-size"),
+			readerCompact: shadow.querySelector("#setting-reader-compact"),
 			commentImages: shadow.querySelector("#setting-comment-images"),
 			updateCheck: shadow.querySelector("#setting-update-check"),
 		};
@@ -19810,6 +20316,11 @@ ${frontPageChooserHTML()}
 
 			if (setting === "keepSidebarSize") {
 				applySidebarZoom();
+				return;
+			}
+
+			if (setting === "readerCompact") {
+				setAppCompactMode(settings.readerCompact);
 				return;
 			}
 
@@ -20519,6 +21030,18 @@ ${frontPageChooserHTML()}
 	max-width:none;
 	border-left:0;
 	box-shadow:none;
+}
+
+#panel:not(.page-mode):not(.app-docked) {
+	border-radius:12px 0 0 12px;
+}
+
+#panel:not(.page-mode):not(.app-docked) > header {
+	border-top-left-radius:12px;
+}
+
+#panel:not(.page-mode):not(.app-docked) > #comments {
+	border-bottom-left-radius:12px;
 }
 
 #panel.page-mode > header {
@@ -21967,7 +22490,7 @@ blockquote.comment-quote-redundant {
 }
 
 ${TOAST_CSS}
-${appMode ? APP_CSS : SIDEBAR_SETTINGS_MODAL_CSS}
+${appMode ? APP_CSS : SIDEBAR_SETTINGS_MODAL_CSS + SIDEBAR_HOME_CSS}
 </style>
 
 ${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-docked"' : pageMode ? ' class="page-mode"' : ""}>
@@ -21984,14 +22507,14 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 <div id="filter-banner-quote" class="filter-banner-quote"></div>
 </div>
 <div id="comments-content">Loading...</div>
-<div id="browse-view" class="browse-view">
-<div class="browse-tabs" role="tablist">
+<div id="browse-view" class="browse-view${appMode ? "" : " browse-home"}">
+${appMode ? `<div class="browse-tabs" role="tablist">
 <button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front pages</button>
 <button id="browse-tab-queue" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">queue</button>
 <button id="browse-tab-collection" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">collection</button>
-</div>
+</div>` : sidebarHomeChromeHTML()}
 <div id="browse-blend-note" class="browse-blend-note" hidden></div>
-<div id="browse-list"></div>
+<div id="browse-list"${appMode ? "" : ' class="reader-list" role="tabpanel" aria-labelledby="browse-tab-front"'}></div>
 </div>
 <div id="submit-view" class="submit-view"></div>
 <div id="next-up" class="next-up hidden"></div>
@@ -22187,6 +22710,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 
 		host._cleanup = () => {
 			destroyed = true;
+			closeBrowseRowMenus(shadow);
 			clearTimeout(resizeTimer);
 			resizeHandle?.removeEventListener("mousedown", onResizeMouseDown);
 			document.removeEventListener("mousemove", onMouseMove);
@@ -22205,6 +22729,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 
 		if (minimizeButton) {
 			minimizeButton.onclick = async () => {
+				closeBrowseRowMenus(shadow);
 				host.style.display = "none";
 				clearArticleAnnotations();
 				setSettingsOpen(false);
@@ -22238,6 +22763,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			headerSubtitle: shadow.querySelector("#header-subtitle"),
 			filterBanner,
 			filterBannerQuote,
+			browseHome: appMode ? null : { view: "unread", frontView: "unread", sequence: 0, rows: [], seen: {} },
 		};
 
 		const browseToggle = shadow.querySelector("#browse-toggle");
@@ -22250,11 +22776,13 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 				}
 
 				const browsing = isBrowsing(ui);
+				const where = shadow.querySelector(".wordmark-where");
+				const target = browsing ? where && where.clientWidth < where.scrollWidth ? ".wordmark-root, .wordmark-where" : ".wordmark-where" : ".wordmark-root";
 
 				if (
 					event.detail &&
 					shadow.querySelector("#panel")?.classList.contains("has-trail") &&
-					!event.target?.closest?.(browsing ? ".wordmark-where" : ".wordmark-root")
+					!event.target?.closest?.(target)
 				) {
 					return;
 				}
@@ -22285,6 +22813,10 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 					);
 				};
 			}
+		}
+
+		if (ui.browseHome) {
+			wireBrowseHome(ui);
 		}
 
 		const submitButton = shadow.querySelector("#header-submit");
@@ -29476,8 +30008,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 		activeCommentFilter = filter;
 
-		if (appIsPhone() && options.scroll !== false) {
-			setAppStage("discussion");
+		if (options.scroll !== false) {
+			revealAppDiscussion();
 		}
 
 		const visibleCommentIds = getVisibleCommentIds([...directMatchIds]);
@@ -30483,15 +31015,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			});
 		}
 
-		const controller = annotationController;
-
-		scheduleIdleTask(() => {
-			if (annotationController !== controller) {
-				return;
-			}
-
-			controller.setHeatRegions(buildHeatRegions(renderedComments, articleIndex));
-		});
 	}
 
 	// -------------------------
@@ -30978,6 +31501,612 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 }
 
 @media (max-width: 700px) {${SETTINGS_MODAL_PHONE_CSS}}
+`;
+
+	const READER_LIST_CSS = `
+.reader-list {
+	--thumb:30px;
+}
+
+.reader-list .browse-row:has(.browse-thumb-wrap) {
+	align-items:flex-start;
+	gap:8px;
+}
+
+.reader-list .browse-row:has(.browse-thumb-wrap) .browse-rank {
+	display:none;
+}
+
+.reader-list .browse-thumb-wrap {
+	display:block;
+	position:relative;
+	flex:0 0 auto;
+	width:var(--thumb);
+	height:var(--thumb);
+	margin-top:2px;
+	border-radius:calc(var(--thumb) * .23);
+	background:var(--hover-tint);
+}
+
+.reader-list .browse-thumb {
+	display:block;
+	width:calc(var(--thumb) * .46);
+	height:calc(var(--thumb) * .46);
+	margin:calc(var(--thumb) * .27);
+	object-fit:contain;
+}
+
+.reader-list .has-preview .browse-thumb {
+	width:100%;
+	height:100%;
+	margin:0;
+	border-radius:inherit;
+	object-fit:cover;
+}
+
+.reader-list .is-generic .browse-thumb {
+	display:none;
+}
+
+.reader-list .is-pending .browse-thumb {
+	opacity:0;
+}
+
+.reader-list .is-generic::before,
+.reader-list .is-pending::before {
+	content:"";
+	position:absolute;
+	inset:calc(var(--thumb) * .27);
+	box-sizing:border-box;
+	border:1.5px solid currentColor;
+	border-radius:3px;
+	background:
+		linear-gradient(currentColor, currentColor) 50% 32% / 56% 1.5px no-repeat,
+		linear-gradient(currentColor, currentColor) 50% 54% / 56% 1.5px no-repeat,
+		linear-gradient(currentColor, currentColor) 50% 76% / 56% 1.5px no-repeat;
+	opacity:.42;
+}
+
+.reader-list .browse-row.is-unread .browse-thumb-wrap::after {
+	content:"";
+	position:absolute;
+	top:-4px;
+	right:-2px;
+	width:9px;
+	height:9px;
+	border-radius:50%;
+	background:var(--accent);
+	box-shadow:0 0 0 1.5px var(--bg, #fff);
+}
+
+.reader-list .browse-site .browse-comments-total {
+	text-decoration:none;
+}
+
+
+`;
+
+	const SEARCH_CSS = `
+.app-search-page {
+	position:absolute;
+	inset:0;
+	z-index:2;
+	display:flex;
+	flex-direction:column;
+	background:var(--bg);
+	color:var(--text);
+}
+
+.app-search-head {
+	display:flex;
+	flex:0 0 auto;
+	align-items:center;
+	gap:8px;
+	height:36px;
+	padding:0 12px;
+	box-sizing:border-box;
+	border-bottom:1px solid var(--border-soft);
+}
+
+.app-search-input {
+	flex:1 1 auto;
+	min-width:0;
+	box-sizing:border-box;
+	height:24px;
+	padding:0 8px;
+	border:0;
+	border-radius:6px;
+	background:var(--hover-tint, rgba(0,0,0,.06));
+	color:inherit;
+	font:inherit;
+	outline:none;
+	-webkit-appearance:none;
+}
+
+.app-search-input:focus-visible {
+	outline:2px solid var(--rail-bg);
+	outline-offset:-1px;
+}
+
+.app-search-close {
+	display:none;
+	flex:0 0 auto;
+	border:0;
+	background:none;
+	font:inherit;
+	cursor:pointer;
+}
+
+.app-search-results {
+	flex:1 1 auto;
+	min-height:0;
+	overflow:auto;
+	padding:2px 6px 16px;
+}
+
+.app-search-group-name {
+	padding:12px 6px 4px;
+	color:var(--meta);
+	font-size:11px;
+	font-weight:600;
+	letter-spacing:.04em;
+	text-transform:uppercase;
+}
+
+.app-search-item {
+	display:flex;
+	flex-direction:column;
+	gap:1px;
+	width:100%;
+	padding:6px;
+	border:0;
+	border-radius:6px;
+	background:none;
+	color:inherit;
+	font:inherit;
+	line-height:1.3;
+	text-align:left;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.app-search-item:hover {
+		background:var(--hover-tint, rgba(0,0,0,.06));
+	}
+}
+
+.app-search-item:focus-visible {
+	outline:2px solid var(--rail-bg);
+	outline-offset:-2px;
+}
+
+.app-search-item-note {
+	color:var(--meta);
+	font-size:11px;
+}
+
+.app-search-item-note:empty {
+	display:none;
+}
+
+`;
+
+	const SIDEBAR_HOME_CSS = `
+${READER_LIST_CSS}
+${SEARCH_CSS}
+
+#panel.browsing:not(.app-docked) #comments {
+	padding:0;
+	overflow:hidden;
+}
+
+#panel.browsing .browse-home {
+	position:relative;
+	display:flex;
+	flex-direction:column;
+	height:100%;
+	min-height:0;
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.browse-home [hidden] {
+	display:none !important;
+}
+
+#browse-home-search-toggle {
+	display:grid;
+	place-items:center;
+	border:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+}
+
+#browse-home-search-toggle[aria-expanded="true"] {
+	border-bottom-color:var(--accent);
+	color:var(--text);
+}
+
+#browse-home-mark-read[hidden],
+#browse-home-sync[hidden],
+#panel:not(.browsing) :is(#browse-home-mark-read, #browse-home-sync),
+#panel.submitting :is(#browse-home-mark-read, #browse-home-sync) {
+	display:none;
+}
+
+#browse-home-sync:disabled {
+	opacity:.4;
+	cursor:default;
+}
+
+#panel > header .wordmark-tail {
+	overflow:hidden;
+}
+
+.browse-home.is-searching #browse-list {
+	display:none;
+}
+
+.browse-home .app-search-page {
+	--rail-bg:var(--accent);
+	position:relative;
+	inset:auto;
+	flex:1 1 auto;
+	min-height:0;
+}
+
+.browse-home .app-search-head {
+	height:auto;
+	padding:10px 12px;
+}
+
+.browse-home .app-search-input {
+	height:38px;
+	padding:0 10px;
+	font-size:16px;
+}
+
+.browse-home .app-search-close {
+	display:block;
+	color:inherit;
+}
+
+#browse-home-filters {
+	display:flex;
+	flex-direction:column;
+	flex:0 0 auto;
+	min-width:0;
+}
+
+.browse-home-filter-reveal {
+	display:grid;
+	grid-template-rows:1fr;
+	min-width:0;
+	opacity:1;
+	visibility:visible;
+	transform:none;
+	transition:grid-template-rows .18s ease, opacity .18s ease, transform .18s ease, visibility .18s;
+}
+
+.browse-home-filter-reveal.is-collapsed {
+	grid-template-rows:0fr;
+	opacity:0;
+	visibility:hidden;
+	transform:translateY(-6px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.browse-home-filter-reveal {
+		transition:none;
+	}
+}
+
+.browse-home-filter-section {
+	display:flex;
+	align-items:center;
+	min-width:0;
+	min-height:0;
+	overflow:hidden;
+	box-shadow:inset 0 -1px 0 var(--surface-divider);
+}
+
+.browse-home-filter-label {
+	flex:0 0 60px;
+	box-sizing:border-box;
+	margin:0;
+	padding-left:12px;
+	color:var(--meta);
+	font-size:11px;
+	font-weight:500;
+}
+
+.browse-home #browse-blend-note {
+	display:none;
+}
+
+.browse-home #browse-list {
+	--thumb:44px;
+	flex:1 1 auto;
+	min-height:0;
+	padding:0 0 12px;
+	overflow:auto;
+	overscroll-behavior:contain;
+}
+
+.browse-home .browse-row {
+	position:relative;
+	box-sizing:border-box;
+	margin:0;
+	padding:10px 44px 10px 12px;
+	border-bottom:1px solid var(--surface-divider);
+	cursor:pointer;
+}
+
+.browse-home .browse-row:has(.browse-thumb-wrap) {
+	align-items:center;
+	gap:10px;
+}
+
+.browse-home .browse-thumb-wrap {
+	margin-top:0;
+}
+
+.browse-home .browse-title-link {
+	font-size:14px;
+	line-height:1.4;
+	font-weight:500;
+	text-decoration:none;
+}
+
+.browse-home .browse-row:not(.is-unread) .browse-title-link {
+	color:var(--muted);
+}
+
+.browse-home .browse-site {
+	display:block;
+	margin-top:2px;
+	font-size:11px;
+	line-height:1.4;
+	color:var(--meta);
+}
+
+.browse-home .story-meta {
+	font-size:0;
+	line-height:1.4;
+}
+
+.browse-home .browse-more {
+	position:absolute;
+	right:4px;
+	top:50%;
+	transform:translateY(-50%);
+	display:grid;
+	place-items:center;
+	width:36px;
+	height:36px;
+	padding:9px;
+	border:0;
+	border-radius:50%;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+}
+
+.browse-home .browse-more svg {
+	width:18px;
+	height:18px;
+}
+
+.browse-row-menu {
+	position:absolute;
+	top:calc(100% - 8px);
+	right:8px;
+	z-index:30;
+	box-sizing:border-box;
+	min-width:150px;
+	max-width:calc(100% - 16px);
+	max-height:240px;
+	overflow:auto;
+	box-shadow:0 4px 18px #0003;
+}
+
+.browse-row-menu.opens-up {
+	top:auto;
+	bottom:calc(100% - 8px);
+}
+
+.browse-row-menu button,
+.browse-row-menu a {
+	display:block;
+	box-sizing:border-box;
+	width:100%;
+	margin:0;
+	padding:8px 12px;
+	border:0;
+	background:none;
+	color:var(--text);
+	font:13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	text-align:left;
+	text-decoration:none;
+	cursor:pointer;
+}
+
+#browse-home-search-toggle:hover,
+.browse-home .browse-more:hover,
+.browse-row-menu :is(button, a):hover,
+.browse-row-menu :is(button, a):focus-visible {
+	background:var(--hover-tint);
+}
+
+.browse-home-nav-row {
+	display:flex;
+	flex:0 0 auto;
+	min-width:0;
+	padding-left:8px;
+	border-bottom:1px solid var(--surface-divider);
+	background:var(--bg);
+	color:var(--text);
+}
+
+#browse-home-search-toggle {
+	flex:0 0 auto;
+	box-sizing:border-box;
+	width:40px;
+	height:36px;
+	padding:9px 12px;
+	border-bottom:2px solid transparent;
+	border-radius:0;
+}
+
+#browse-home-search-toggle svg {
+	width:16px;
+	height:16px;
+}
+
+.browse-home-scroll {
+	box-sizing:border-box;
+	display:flex;
+	flex:1 1 auto;
+	min-width:0;
+	align-items:center;
+	gap:2px;
+	margin:0;
+	padding:0 8px 0 0;
+	overflow-x:auto;
+	scrollbar-width:none;
+	background:var(--bg);
+	color:var(--text);
+	font-family:inherit;
+	font-size:12px;
+}
+
+.browse-home-scroll::-webkit-scrollbar {
+	display:none;
+}
+
+.browse-home .browse-home-tab {
+	display:inline-flex;
+	flex:0 0 auto;
+	align-items:center;
+	justify-content:center;
+	gap:9px;
+	box-sizing:border-box;
+	min-width:40px;
+	min-height:36px;
+	margin:0;
+	padding:9px 12px;
+	border:0;
+	border-bottom:2px solid transparent;
+	background:none;
+	color:inherit;
+	font:inherit;
+	text-decoration:none;
+	white-space:nowrap;
+	cursor:pointer;
+}
+
+.browse-home .browse-home-tab::after {
+	content:none !important;
+	display:none !important;
+}
+
+.browse-home .browse-home-tab.is-current,
+.browse-home .browse-home-filter[aria-pressed="true"] {
+	border-bottom-color:var(--accent);
+	color:var(--text);
+	font-weight:600;
+}
+
+.browse-home-nav :is(#browse-tab-queue, #browse-tab-collection) {
+	margin-left:0;
+	max-width:none;
+	overflow:visible;
+}
+
+.browse-home .browse-home-tab:focus-visible,
+#browse-home-search-toggle:focus-visible {
+	outline:2px solid var(--accent);
+	outline-offset:-4px;
+}
+
+.browse-home .browse-home-tab:hover {
+	background:var(--hover-tint);
+}
+
+.browse-home .rail-badge {
+	flex:0 0 auto;
+	padding:1px 4px;
+	border-radius:8px;
+	background:var(--hover-tint);
+	color:var(--meta);
+	font-size:10px;
+	line-height:14px;
+	text-align:center;
+}
+
+.browse-home .rail-badge:empty {
+	display:none;
+}
+
+.browse-home-label {
+	flex:0 0 auto;
+}
+
+.browse-home-tab-title {
+	display:inline-flex;
+	align-items:center;
+	gap:6px;
+}
+
+.browse-home-icon {
+	display:inline-flex;
+	flex:0 0 16px;
+	align-items:center;
+	justify-content:center;
+	width:16px;
+	height:16px;
+}
+
+.browse-home-icon svg {
+	display:block;
+	width:16px;
+	height:16px;
+}
+
+.browse-home-icon .rail-hn {
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	width:16px;
+	height:14px;
+	border-radius:2px;
+	background:var(--text);
+	color:var(--bg);
+	font:700 8px/1 Verdana, Geneva, sans-serif;
+}
+
+.browse-home-icon .rail-monogram {
+	font:700 10px/1 Verdana, Geneva, sans-serif;
+}
+
+.browse-home .bc-wall {
+	grid-template-columns:repeat(auto-fill, minmax(min(100%, 120px), 1fr));
+}
+
+.browse-home .browse-card {
+	width:100%;
+	max-width:180px;
+	max-height:180px;
+}
+
+.browse-home .browse-empty,
+.browse-home .browse-feed-status,
+.browse-home .front-page-card,
+.browse-home .browse-skeleton,
+.browse-home .bc-wall {
+	margin:0;
+	padding:12px;
+}
 `;
 
 	const APP_CSS = `
@@ -31910,107 +33039,7 @@ ${SETTINGS_MODAL_CSS}
 	transition:height .2s ease;
 }
 
-#app-search-page {
-	position:absolute;
-	inset:0;
-	z-index:2;
-	display:flex;
-	flex-direction:column;
-	background:var(--bg);
-	color:var(--text);
-}
-
-.app-search-head {
-	display:flex;
-	flex:0 0 auto;
-	align-items:center;
-	gap:8px;
-	height:36px;
-	padding:0 12px;
-	box-sizing:border-box;
-	border-bottom:1px solid var(--border-soft);
-}
-
-.app-search-input {
-	flex:1 1 auto;
-	min-width:0;
-	box-sizing:border-box;
-	height:24px;
-	padding:0 8px;
-	border:0;
-	border-radius:6px;
-	background:var(--hover-tint, rgba(0,0,0,.06));
-	color:inherit;
-	font:inherit;
-	outline:none;
-	-webkit-appearance:none;
-}
-
-.app-search-input:focus-visible {
-	outline:2px solid var(--rail-bg);
-	outline-offset:-1px;
-}
-
-.app-search-close {
-	display:none;
-	flex:0 0 auto;
-	border:0;
-	background:none;
-	font:inherit;
-	cursor:pointer;
-}
-
-.app-search-results {
-	flex:1 1 auto;
-	min-height:0;
-	overflow:auto;
-	padding:2px 6px 16px;
-}
-
-.app-search-group-name {
-	padding:12px 6px 4px;
-	color:var(--meta);
-	font-size:11px;
-	font-weight:600;
-	letter-spacing:.04em;
-	text-transform:uppercase;
-}
-
-.app-search-item {
-	display:flex;
-	flex-direction:column;
-	gap:1px;
-	width:100%;
-	padding:6px;
-	border:0;
-	border-radius:6px;
-	background:none;
-	color:inherit;
-	font:inherit;
-	line-height:1.3;
-	text-align:left;
-	cursor:pointer;
-}
-
-@media (hover: hover) {
-	.app-search-item:hover {
-		background:var(--hover-tint, rgba(0,0,0,.06));
-	}
-}
-
-.app-search-item:focus-visible {
-	outline:2px solid var(--rail-bg);
-	outline-offset:-2px;
-}
-
-.app-search-item-note {
-	color:var(--meta);
-	font-size:11px;
-}
-
-.app-search-item-note:empty {
-	display:none;
-}
+${SEARCH_CSS}
 
 .app-list-resize {
 	position:absolute;
@@ -32065,75 +33094,7 @@ ${SETTINGS_MODAL_CSS}
 	display:none;
 }
 
-#app-list-body {
-	--thumb:30px;
-}
-
-#app-list-body .browse-row:has(.browse-thumb-wrap) {
-	align-items:flex-start;
-	gap:8px;
-}
-
-#app-list-body .browse-row:has(.browse-thumb-wrap) .browse-rank {
-	display:none;
-}
-
-#app-list-body .browse-thumb-wrap {
-	display:block;
-	position:relative;
-	flex:0 0 auto;
-	width:var(--thumb);
-	height:var(--thumb);
-	margin-top:2px;
-	border-radius:calc(var(--thumb) * .23);
-	background:var(--hover-tint);
-}
-
-#app-list-body .browse-thumb {
-	display:block;
-	width:calc(var(--thumb) * .46);
-	height:calc(var(--thumb) * .46);
-	margin:calc(var(--thumb) * .27);
-	object-fit:contain;
-}
-
-#app-list-body .has-preview .browse-thumb {
-	width:100%;
-	height:100%;
-	margin:0;
-	border-radius:inherit;
-	object-fit:cover;
-}
-
-#app-list-body .is-generic .browse-thumb {
-	display:none;
-}
-
-#app-list-body .is-generic::before {
-	content:"";
-	position:absolute;
-	inset:calc(var(--thumb) * .27);
-	box-sizing:border-box;
-	border:1.5px solid currentColor;
-	border-radius:3px;
-	background:
-		linear-gradient(currentColor, currentColor) 50% 32% / 56% 1.5px no-repeat,
-		linear-gradient(currentColor, currentColor) 50% 54% / 56% 1.5px no-repeat,
-		linear-gradient(currentColor, currentColor) 50% 76% / 56% 1.5px no-repeat;
-	opacity:.42;
-}
-
-#app-list-body .browse-row.is-unread .browse-thumb-wrap::after {
-	content:"";
-	position:absolute;
-	top:-4px;
-	right:-2px;
-	width:9px;
-	height:9px;
-	border-radius:50%;
-	background:var(--accent);
-	box-shadow:0 0 0 1.5px var(--bg, #fff);
-}
+${READER_LIST_CSS}
 
 #app-reading {
 	position:relative;
@@ -32177,6 +33138,14 @@ ${SETTINGS_MODAL_CSS}
 	overflow:auto;
 	overscroll-behavior:contain;
 	background:var(--reader-page, var(--article-bg));
+}
+
+.browse-feed-status {
+	padding:12px 16px;
+	border-bottom:1px solid var(--border-soft);
+	color:var(--meta);
+	font-size:12px;
+	line-height:1.5;
 }
 
 .app-article-image {
@@ -33855,6 +34824,110 @@ header .item-action-link {
 
 ${SETTINGS_MODAL_PHONE_CSS}
 }
+
+@media (min-width: 701px) {
+	#app.reader-compact #app-reading {
+		flex-direction:row;
+	}
+
+	#app.reader-compact #app-article {
+		flex:1 1 0;
+	}
+
+	#app.reader-compact #panel.app-docked {
+		position:relative;
+		flex:1 1 0;
+		top:auto;
+		left:auto;
+		width:auto !important;
+		max-width:none;
+		border:0;
+	}
+
+	#app.reader-compact[data-reader-stage="article"] #panel.app-docked,
+	#app.reader-compact[data-reader-stage="discussion"] #app-article,
+	#app.reader-compact #app-article .app-pane-middle,
+	#app.reader-compact #app-article > .app-pane-head,
+	#app.reader-compact #app-toggle-discussion,
+	#app.reader-compact #panel #resize-handle {
+		display:none !important;
+	}
+
+	#app.reader-compact.has-story[data-reader-stage="discussion"] #panel.app-docked {
+		display:flex !important;
+	}
+
+	#app.reader-compact #panel.app-docked > header {
+		padding-left:48px;
+	}
+
+	#app.reader-compact #app-bar {
+		display:flex !important;
+		position:absolute;
+		right:12px;
+		bottom:16px;
+		z-index:25;
+		flex-direction:column;
+		align-items:center;
+		gap:8px;
+	}
+
+	#app.reader-compact #app-bar[hidden] {
+		display:none !important;
+	}
+
+	#app.reader-compact #app-toggle-list {
+		position:absolute;
+		top:10px;
+		left:12px;
+		z-index:26;
+		border-radius:12px;
+		background:var(--surface);
+		box-shadow:0 0 0 1px var(--surface-border), 0 2px 8px rgba(0,0,0,.16);
+	}
+
+	#app.reader-compact .app-stack-button {
+		display:flex;
+		position:relative;
+		flex-direction:column;
+		align-items:center;
+		justify-content:center;
+		gap:2px;
+		box-sizing:border-box;
+		width:36px;
+		height:36px;
+		padding:0;
+		border:0;
+		border-radius:18px;
+		font:inherit;
+		cursor:pointer;
+	}
+
+	#app.reader-compact .app-stack-button svg {
+		width:18px;
+		height:18px;
+		fill:currentColor;
+	}
+
+	#app.reader-compact .app-stack-button[hidden] {
+		display:none;
+	}
+
+	#app.reader-compact #app-bar-discussion:has(.rail-badge:not(:empty)) {
+		height:50px;
+	}
+
+	#app.reader-compact #app-bar-discussion .rail-badge {
+		position:static;
+		min-width:0;
+		height:auto;
+		padding:0;
+		background:none;
+		box-shadow:none;
+		color:inherit;
+		font-size:10px;
+	}
+}
 `;
 
 	const READER_CSS = `
@@ -34388,7 +35461,7 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
 <div id="app-list-heading" class="app-list-heading"><span id="app-list-heading-text"></span><button id="app-list-heading-button" type="button" aria-haspopup="menu" aria-expanded="false" hidden></button></div>
 <div id="app-list-tags" class="app-list-tags" role="group" aria-label="Filters" hidden></div>
-<div id="app-list-body"></div>
+<div id="app-list-body" class="reader-list"></div>
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
 ${settingsPanelHTML()}
@@ -34457,6 +35530,7 @@ ${settingsModalHTML()}
 		}
 
 		wireApp(ui);
+		setAppCompactMode((await loadSettings()).readerCompact);
 		loadAppShortcuts(shortcuts).catch(console.error);
 		renderAppDiscussionEmpty();
 		watchNoteSelection(await loadSettings());
@@ -34554,6 +35628,7 @@ ${settingsModalHTML()}
 		const dropPaneCaret = () => {
 			paneCaret.list = null;
 			paneCaret.discussion = null;
+			appState.compactCaret = null;
 		};
 
 		const paintPaneToggles = () => {
@@ -34561,7 +35636,7 @@ ${settingsModalHTML()}
 			paintAppListToggle();
 
 			if (!appIsPhone()) {
-				shadow.querySelector("#app-bar-discussion").setAttribute("aria-pressed", paneHidden.discussion ? "false" : "true");
+				shadow.querySelector("#app-bar-discussion").setAttribute("aria-pressed", String(appUsesCompactDiscussion() ? appRoot.dataset.readerStage === "discussion" : !paneHidden.discussion));
 			}
 		};
 
@@ -34772,6 +35847,7 @@ ${settingsModalHTML()}
 			}
 		};
 		appState.togglePane = (pane, keyed = false) => setPaneHidden(pane, !paneHidden[pane], true, keyed);
+		appState.showDiscussion = () => setPaneHidden("discussion", false);
 		listToggle.onclick = () => appState.togglePane("list");
 		discussionToggle.onclick = () => appState.togglePane("discussion");
 		document.addEventListener("focusin", dropPaneCaret, true);
@@ -35018,7 +36094,9 @@ ${settingsModalHTML()}
 
 		shadow.querySelector("#app-bar-back").onclick = () => setAppStage("list");
 		shadow.querySelector("#app-bar-discussion").onclick = () => {
-			if (appIsPhone()) {
+			if (appUsesCompactDiscussion()) {
+				setAppCompactStage(appRoot.dataset.readerStage === "discussion" ? "article" : "discussion");
+			} else if (appIsPhone()) {
 				setAppStage(appRoot.dataset.stage === "discussion" ? "article" : "discussion");
 			} else {
 				appState.togglePane("discussion");
@@ -35604,7 +36682,7 @@ ${settingsModalHTML()}
 		const preview = appState?.previews?.get(normalizeURL(story.url) || story.url) || "";
 		const source = preview || (host ? `https://${host}/favicon.ico` : "");
 
-		return `<span class="browse-thumb-wrap${preview ? " has-preview" : ""}"><img class="browse-thumb" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-src="${escapeHTML(source)}"></span>`;
+		return `<span class="browse-thumb-wrap is-pending${preview ? " has-preview" : ""}"><img class="browse-thumb" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-src="${escapeHTML(source)}"></span>`;
 	}
 
 	function fillAppRowThumbs(list) {
@@ -35614,12 +36692,15 @@ ${settingsModalHTML()}
 			delete image.dataset.src;
 
 			if (!source) {
+				image.parentElement.classList.remove("is-pending");
 				image.parentElement.classList.add("is-generic");
 				continue;
 			}
 
+			image.onload = () => image.parentElement.classList.remove("is-pending");
 			image.onerror = () => {
 				image.removeAttribute("src");
+				image.parentElement.classList.remove("is-pending");
 				image.parentElement.classList.add("is-generic");
 			};
 			image.src = source;
@@ -35986,12 +37067,80 @@ ${settingsModalHTML()}
 		return window.matchMedia("(max-width: 700px)").matches;
 	}
 
+	function appUsesCompactDiscussion() {
+		return Boolean(appState?.readerCompact) && !appIsPhone();
+	}
+
+	function appUsesFloatingControls() {
+		return appUsesCompactDiscussion() || appIsStacked() || appIsPhone();
+	}
+
+	function setAppCompactMode(enabled) {
+		if (!appState) {
+			return;
+		}
+
+		appState.readerCompact = enabled === true;
+		appState.compactCaret = null;
+		const app = appState.ui.shadow.querySelector("#app");
+
+		app.classList.toggle("reader-compact", appState.readerCompact);
+		app.dataset.readerStage = "article";
+		setAppViewMenuOpen(false);
+		paintAppChrome();
+	}
+
+	function setAppCompactStage(stage, { keyed = false } = {}) {
+		if (!appUsesCompactDiscussion() || !appState.open) {
+			return;
+		}
+
+		const shadow = appState.ui.shadow;
+		const app = shadow.querySelector("#app");
+		const caret = appState.compactCaret;
+
+		if (app.dataset.readerStage === stage) {
+			return;
+		}
+
+		if (keyed && stage === "article") {
+			const held = appCaretIn(shadow.querySelector("#panel"));
+
+			held?.field.blur();
+			appState.compactCaret = held;
+		} else {
+			appState.compactCaret = null;
+		}
+
+		app.dataset.readerStage = stage;
+		setAppViewMenuOpen(false);
+		paintAppChrome();
+
+		if (keyed && stage === "discussion" && caret) {
+			appCaretBack(caret);
+		}
+	}
+
+	function revealAppDiscussion() {
+		if (!appState) {
+			return;
+		}
+
+		if (appUsesCompactDiscussion()) {
+			setAppCompactStage("discussion");
+		} else if (appIsPhone()) {
+			setAppStage("discussion");
+		} else {
+			appState.showDiscussion?.();
+		}
+	}
+
 	function appIsStacked() {
-		return window.matchMedia("(max-width: 1335px)").matches && !appIsPhone();
+		return window.matchMedia("(max-width: 1335px)").matches && !appIsPhone() && !appUsesCompactDiscussion();
 	}
 
 	function appViewMenuToggle(shadow) {
-		return shadow?.querySelector(appIsStacked() || appIsPhone() ? "#app-bar-view" : "#app-view-toggle");
+		return shadow?.querySelector(appUsesFloatingControls() ? "#app-bar-view" : "#app-view-toggle");
 	}
 
 	function appLayout() {
@@ -36312,13 +37461,20 @@ ${settingsModalHTML()}
 			delete shadow.querySelector("#app").dataset.scrolling;
 		}
 
-		const home = shadow.querySelector(appIsStacked() ? "#app-article" : "#app");
+		const compact = appUsesCompactDiscussion();
+		const home = shadow.querySelector(compact ? "#app-reading" : appIsStacked() ? "#app-article" : "#app");
+		const listToggle = shadow.querySelector("#app-toggle-list");
+		const listHome = shadow.querySelector(compact ? "#app-reading" : "#app-article > .app-pane-head");
 
-		if (bar.parentElement !== home) {
-			home.insertBefore(bar, appIsStacked() ? null : shadow.querySelector("#app-list"));
+		if (listToggle.parentElement !== listHome) {
+			listHome.insertBefore(listToggle, listHome.firstChild);
 		}
 
-		bar.hidden = appIsStacked() ? !shadow.querySelector("#app").classList.contains("has-story") : stage === "list";
+		if (bar.parentElement !== home) {
+			home.insertBefore(bar, home.id === "app" ? shadow.querySelector("#app-list") : null);
+		}
+
+		bar.hidden = compact || appIsStacked() ? !shadow.querySelector("#app").classList.contains("has-story") : stage === "list";
 		shadow.querySelector("#app-bar-back").hidden = stage === "list";
 		shadow.querySelector("#app-search").hidden = stage !== "list";
 
@@ -36326,7 +37482,7 @@ ${settingsModalHTML()}
 			setAppSearchOpen(false);
 		}
 
-		discussion.setAttribute("aria-pressed", String(appIsPhone() ? stage === "discussion" : !appState.panesHidden.discussion));
+		discussion.setAttribute("aria-pressed", String(compact ? shadow.querySelector("#app").dataset.readerStage === "discussion" : appIsPhone() ? stage === "discussion" : !appState.panesHidden.discussion));
 		discussion.querySelector(".rail-badge").textContent = total ? compactCount(total) : "";
 		paintAppBarActions();
 		paintAppNext();
@@ -36923,6 +38079,31 @@ ${note ? appShortcutNoteHTML(note) : ""}
 		};
 	}
 
+	function settingsSearchEntries(shadow, openSettings) {
+		const entries = [];
+
+		const panel = shadow.querySelector("#settings-panel");
+
+		const seen = new Set();
+
+		for (const field of panel?.querySelectorAll(".settings-field, .appearance-row, .settings-group label") || []) {
+			const label = (field.matches("label") ? field.textContent : field.querySelector(".settings-field-label, .appearance-row-label, label")?.textContent || "").trim().split("\n")[0].trim();
+			const owner = field.closest("[data-app-section]");
+			const section = ["appearance", "sidebar"].includes(owner?.dataset.appSection) ? owner.dataset.appSection : "general";
+
+			if (label && label.length < 80 && !seen.has(label) && !field.closest("#app-view-menu") && !field.closest('[data-pane="shortcuts"]')) {
+				seen.add(label);
+				entries.push({ group: "Settings", title: label, note: { general: "General", appearance: "Appearance", sidebar: "Sidebar" }[section], keys: `${label} settings`, run: () => openSettings(section) });
+			}
+		}
+
+		entries.push({ group: "Settings", title: "Sources", note: "Where comments come from", keys: "sources reddit hacker news bluesky lobsters mastodon lemmy settings", run: () => openSettings("sources") });
+		entries.push({ group: "Settings", title: "Disabled sites", note: "Sidebar", keys: "disabled sites blocked hidden manage settings sidebar", run: () => openSettings("sidebar", "#settings-blocked-section") });
+		entries.push({ group: "Settings", title: "Hidden links", note: "Sources", keys: "hidden links blocked disabled manage settings sources", run: () => openSettings("sources", "#settings-hidden-section") });
+
+		return entries;
+	}
+
 	function appSearchEntries() {
 		const state = appState;
 		const shadow = state.ui.shadow;
@@ -36946,34 +38127,35 @@ ${note ? appShortcutNoteHTML(note) : ""}
 			const story = entry.story;
 
 			if (story?.title) {
-				entries.push({ group: "Articles", title: story.title, note: story.site || "", keys: `${story.title} ${story.site || ""}`, run: () => openAppStory(story, { row: entry }).catch(console.error) });
+				entries.push({ group: "Articles", title: story.title, note: story.site || "", url: story.url, keys: `${story.title} ${story.site || ""}`, run: () => openAppStory(story, { row: entry }).catch(console.error) });
 			}
 		}
 
 		for (const item of state.listIndex) {
-			entries.push({ group: item.group, title: item.title, note: item.note, keys: item.keys || `${item.title} ${item.note}`, run: () => openAppURL(item.url) });
+			entries.push({ group: item.group, key: item.key, url: item.url, title: item.title, note: item.note, keys: item.keys || `${item.title} ${item.note}`, run: () => openAppURL(item.url) });
 		}
 
-		const panel = shadow.querySelector("#settings-panel");
+		entries.push(...settingsSearchEntries(shadow, openAppSettingsSection));
 
-		const seen = new Set();
+		return entries;
+	}
 
-		for (const field of panel?.querySelectorAll(".settings-field, .appearance-row, .settings-group label") || []) {
-			const label = (field.matches("label") ? field.textContent : field.querySelector(".settings-field-label, .appearance-row-label, label")?.textContent || "").trim().split("\n")[0].trim();
-			const owner = field.closest("[data-app-section]");
-			const section = ["appearance", "sidebar"].includes(owner?.dataset.appSection) ? owner.dataset.appSection : "general";
+	function searchListIndex(queue, documents) {
+		const index = [];
 
-			if (label && label.length < 80 && !seen.has(label) && !field.closest("#app-view-menu") && !field.closest('[data-pane="shortcuts"]')) {
-				seen.add(label);
-				entries.push({ group: "Settings", title: label, note: { general: "General", appearance: "Appearance", sidebar: "Sidebar" }[section], keys: `${label} settings`, run: () => openAppSettingsSection(section) });
+		for (const entry of queue) {
+			if (entry.title && entry.url) {
+				index.push({ group: "Queue", key: queueKey(entry), title: entry.title, note: entry.site || "", url: entry.url, story: entry, keys: `${entry.title} ${entry.site || ""} queue` });
 			}
 		}
 
-		entries.push({ group: "Settings", title: "Sources", note: "Where comments come from", keys: "sources reddit hacker news bluesky lobsters mastodon lemmy settings", run: () => openAppSettingsSection("sources") });
-		entries.push({ group: "Settings", title: "Disabled sites", note: "Sidebar", keys: "disabled sites blocked hidden manage settings sidebar", run: () => openAppSettingsSection("sidebar", "#settings-blocked-section") });
-		entries.push({ group: "Settings", title: "Hidden links", note: "Sources", keys: "hidden links blocked disabled manage settings sources", run: () => openAppSettingsSection("sources", "#settings-hidden-section") });
+		for (const doc of documents) {
+			if (doc.title && doc.url) {
+				index.push({ group: "Collection", key: doc.key, title: doc.title, note: doc.site || "", url: doc.url, story: documentStory(doc), keys: `${collectionHaystack(doc)} collection saved` });
+			}
+		}
 
-		return entries;
+		return index;
 	}
 
 	async function indexAppLists() {
@@ -36984,31 +38166,25 @@ ${note ? appShortcutNoteHTML(note) : ""}
 		}
 
 		const [queue, documents] = await Promise.all([loadQueue(), loadCollectionDocuments()]);
-		const index = [];
-
-		for (const entry of queue) {
-			if (entry.title && entry.url) {
-				index.push({ group: "Queue", title: entry.title, note: entry.site || "", url: entry.url, keys: `${entry.title} ${entry.site || ""} queue` });
-			}
-		}
-
-		for (const doc of documents) {
-			if (doc.title && doc.url) {
-				index.push({ group: "Collection", title: doc.title, note: doc.site || "", url: doc.url, keys: `${collectionHaystack(doc)} collection saved` });
-			}
-		}
-
-		state.listIndex = index;
+		state.listIndex = searchListIndex(queue, documents);
 	}
 
 	function renderAppSearch(query) {
 		const shadow = appState?.ui.shadow;
-		const results = shadow?.querySelector("#app-search-results");
 
-		if (!results) {
-			return;
-		}
+		renderSearchResults(shadow?.querySelector("#app-search-results"), appState ? appSearchEntries() : [], query, (entry) => {
+			setAppSearchOpen(false);
+			setTimeout(() => entry.run(), 0);
+		});
+	}
 
+	function renderSearchResults(results, entries, query, onSelect) {
+		if (!results) return;
+
+		const previousItems = [...results.querySelectorAll(".app-search-item")];
+		const focused = results.getRootNode().activeElement;
+		const previous = results.contains(focused) ? focused?.closest(".app-search-item") : null;
+		const heldScroll = results.scrollTop;
 		const needle = String(query || "").trim().toLowerCase();
 		const terms = needle.split(/\s+/).filter(Boolean);
 		const plain = (text) => String(text).split(/\s+/).map(readerKey).filter(Boolean).join(" ");
@@ -37023,7 +38199,7 @@ ${note ? appShortcutNoteHTML(note) : ""}
 
 			return words.every((word) => keys.includes(word));
 		};
-		const found = appSearchEntries().filter((entry) => (needle ? hit(entry) : entry.group === "Go to" && !entry.typed));
+		const found = entries.filter((entry) => (needle ? hit(entry) : entry.group === "Go to" && !entry.typed));
 		const tier = (entry) => {
 			if (!lead || entry.group !== "Go to") {
 				return 3;
@@ -37066,13 +38242,13 @@ ${note ? appShortcutNoteHTML(note) : ""}
 
 					item.type = "button";
 					item.className = "app-search-item";
+					item.dataset.searchKey = JSON.stringify([name, entry.key || entry.url || entry.title, entry.title, entry.note]);
 					item.innerHTML = `<span class="app-search-item-title"></span><span class="app-search-item-note"></span>`;
 					item.querySelector(".app-search-item-title").textContent = entry.title;
 					item.querySelector(".app-search-item-note").textContent = entry.note;
 					item.onclick = (event) => {
 						event.stopPropagation();
-						setAppSearchOpen(false);
-						setTimeout(() => entry.run(), 0);
+						onSelect(entry);
 					};
 					group.append(item);
 				}
@@ -37087,6 +38263,14 @@ ${note ? appShortcutNoteHTML(note) : ""}
 			empty.className = "browse-empty";
 			empty.textContent = "Nothing matches.";
 			results.append(empty);
+		}
+
+		if (previous) {
+			const items = [...results.querySelectorAll(".app-search-item")];
+			const replacement = items.find((item) => item.dataset.searchKey === previous.dataset.searchKey) || items[Math.min(previousItems.indexOf(previous), items.length - 1)] || results.parentElement.querySelector(".app-search-input");
+
+			replacement?.focus({ preventScroll: true });
+			results.scrollTop = heldScroll;
 		}
 	}
 
@@ -37234,7 +38418,7 @@ ${frontPageChooserHTML()}
 				renderBrowseSkeleton(list, "Loading Front Pages…");
 			}
 
-			const [{ rows: allRows }, hiddenKeys, queued, seen] = await Promise.all([
+			const [{ rows: allRows, feedStates = [] }, hiddenKeys, queued, seen] = await Promise.all([
 				loadFrontPages({ force }),
 				loadHiddenStoryKeys(),
 				loadQueue(),
@@ -37251,19 +38435,29 @@ ${frontPageChooserHTML()}
 			);
 			state.seen = seen || {};
 
-			const shown = appViewRows(state.rows, view, state.seen);
+			const shown = view === "unread" && state.open
+				? state.rows.filter((row) => rowIsUnread(row, state.seen) || (normalizeURL(row.story.url) || row.story.url) === state.open.key)
+				: appViewRows(state.rows, view, state.seen);
+			const failureText = frontPageFailureText(feedStates, view);
 			const queuedKeys = new Set(queued.map(queueKey));
 
 			list.replaceChildren();
 
 			if (!shown.length) {
 				renderAppListMessage(
-					!allRows.length
-						? "Could not load Front Pages."
+					failureText || (!allRows.length
+						? feedStates.length && feedStates.every((feed) => feed.status === "ok") ? "Nothing here right now." : "Could not load Front Pages."
 						: view === "unread"
 							? "All caught up."
-							: "Nothing here right now.",
+							: "Nothing here right now."),
 				);
+			} else if (failureText) {
+				const notice = document.createElement("div");
+
+				notice.className = "browse-feed-status";
+				notice.setAttribute("role", "status");
+				notice.textContent = failureText;
+				list.append(notice);
 			}
 
 			for (const row of shown) {
@@ -37396,8 +38590,34 @@ ${frontPageChooserHTML()}
 		}
 
 		state.seen = (await load(STORAGE.seen, {})) || {};
+		const list = state.ui.shadow.querySelector("#app-list-body");
+		const elements = [...list.querySelectorAll(".app-row")];
+		const removing = new Set(state.view === "unread" ? elements.filter((element) => {
+			const row = state.rowsByURL.get(element.dataset.appKey);
 
-		for (const element of state.ui.shadow.querySelectorAll("#app-list-body .app-row")) {
+			return row && element.dataset.appKey !== state.open?.key && !rowIsUnread(row, state.seen);
+		}) : []);
+		const edge = list.getBoundingClientRect().top;
+		const anchor = elements.find((element) => !removing.has(element) && element.getBoundingClientRect().bottom > edge);
+		const before = anchor?.getBoundingClientRect().top;
+		const phoneListHidden = appIsPhone() && (state.ui.shadow.querySelector("#app").dataset.stage !== "list" || state.moving);
+
+		if (phoneListHidden && state.listGeometry && removing.size) {
+			const boxes = [...removing].map((element) => state.listGeometry.get(element)).filter(Boolean);
+			const deltaAbove = (top) => boxes.filter((box) => box.top < top).reduce((sum, box) => sum + box.height, 0);
+
+			state.scrolls.list = Math.max(0, state.scrolls.list - deltaAbove(state.scrolls.list));
+
+			for (const [element, box] of state.listGeometry) {
+				if (removing.has(element)) {
+					state.listGeometry.delete(element);
+				} else {
+					box.top -= deltaAbove(box.top);
+				}
+			}
+		}
+
+		for (const element of elements) {
 			const row = state.rowsByURL.get(element.dataset.appKey);
 			const mark = element.querySelector(".app-unread-mark");
 
@@ -37410,9 +38630,28 @@ ${frontPageChooserHTML()}
 			element.classList.toggle("is-unread", unread);
 			mark.textContent = unread ? "●" : "";
 			mark.title = unread ? "Unread" : "";
+
+			if (removing.has(element)) {
+				element.remove();
+			}
+		}
+
+		if (anchor && list.getClientRects().length && !phoneListHidden) {
+			const delta = anchor.getBoundingClientRect().top - before;
+
+			if (appIsPhone()) {
+				window.scrollBy(0, delta);
+			} else {
+				list.scrollTop += delta;
+			}
+		}
+
+		if (state.view === "unread" && !list.querySelector(".app-row")) {
+			renderAppListMessage("All caught up.");
 		}
 
 		await paintAppCounts();
+		paintAppNext();
 	}
 
 	async function markAppViewRead() {
@@ -37439,7 +38678,7 @@ ${frontPageChooserHTML()}
 			action: {
 				label: "undo",
 				onAct: () => {
-					restoreManySeen(previous).then(refreshAppSeen).catch(console.error);
+					restoreManySeen(previous).then(() => renderAppList()).catch(console.error);
 				},
 			},
 		});
@@ -37463,7 +38702,16 @@ ${frontPageChooserHTML()}
 
 		const opened = { url, key, row: entry };
 
+		if (appIsPhone() && state.ui.shadow.querySelector("#app").dataset.stage === "list" && !state.moving) {
+			state.listGeometry = new Map([...state.ui.shadow.querySelectorAll("#app-list-body .app-row")].map((element) => {
+				const box = element.getBoundingClientRect();
+
+				return [element, { top: box.top + window.scrollY, height: box.height }];
+			}));
+		}
+
 		state.open = opened;
+		setAppCompactStage("article");
 		markCollectedArrival(url)
 			.then((marked) => {
 				if (marked) {
@@ -38521,21 +39769,7 @@ ${frontPageChooserHTML()}
 
 		element.append(head, body);
 		element.addEventListener("click", (event) => {
-			const link = event.target?.closest?.("a[href]");
-
-			if (
-				!link ||
-				event.button !== 0 ||
-				event.metaKey ||
-				event.ctrlKey ||
-				event.shiftKey ||
-				event.altKey
-			) {
-				return;
-			}
-
-			event.preventDefault();
-			openAppURL(link.href);
+			prepareArticleLink(event, article.url, element);
 		});
 
 		appReaderElement()?.remove();
@@ -38918,11 +40152,8 @@ ${frontPageChooserHTML()}
 		}
 
 		if (data.type === "focus-quote") {
+			revealAppDiscussion();
 			applyCommentFilter(String(data.key || ""));
-
-			if (appIsPhone()) {
-				setAppStage("discussion");
-			}
 		}
 	}
 
@@ -39204,12 +40435,17 @@ ${frontPageChooserHTML()}
 						openAppSearch();
 					},
 		"front-pages": () => appShortcutPane("list", "#app-toggle-list"),
-		discussion: () => appShortcutPane("discussion", appIsStacked() ? "#app-bar-discussion" : "#app-toggle-discussion"),
+		discussion: () => appUsesCompactDiscussion()
+			? () => {
+				closeAppMenus();
+				setAppCompactStage(appState.ui.shadow.querySelector("#app").dataset.readerStage === "discussion" ? "article" : "discussion", { keyed: true });
+			}
+			: appIsPhone() ? appShortcutPress("#app-bar-discussion") : appShortcutPane("discussion", appIsStacked() ? "#app-bar-discussion" : "#app-toggle-discussion"),
 		sidebar: () => null,
 		settings: () => appShortcutSettings(),
 		shortcuts: () => appShortcutSettings("shortcuts"),
 		save: () => {
-			const control = appShortcutControl(appIsPhone() || appIsStacked() ? "#app-bar-save" : '#app-article-actions [data-item-action="save"]');
+			const control = appShortcutControl(appUsesFloatingControls() ? "#app-bar-save" : '#app-article-actions [data-item-action="save"]');
 			const button = appState.ui.shadow.querySelector('#app-article-actions [data-item-action="save"]');
 
 			return control && button ? () => submitItemAction(button).catch(console.error) : null;
@@ -39220,7 +40456,7 @@ ${frontPageChooserHTML()}
 		"open-original": () => {
 			const url = appState.open?.url;
 
-			return url && appShortcutControl(appIsPhone() || appIsStacked() ? "#app-bar-open" : "#app-article-open")
+			return url && appShortcutControl(appUsesFloatingControls() ? "#app-bar-open" : "#app-article-open")
 				? () => {
 						rememberAppArrival(url).catch(console.error);
 						window.open(url, "_blank", "noopener");
@@ -39330,6 +40566,12 @@ ${frontPageChooserHTML()}
 		}
 
 		const action = appShortcutFor(event, true) || appShortcutFor(event, false);
+
+		if (action?.id === "search" && isSidebarVisible() && sidebarUI?.browseHome && isBrowsing(sidebarUI) && !isSubmitting(sidebarUI) && !isFrameField(event.composedPath()[0]) && sidebarUI.shadow.querySelector("#app-settings-modal")?.hidden) {
+			event.preventDefault();
+			openBrowseSearch(sidebarUI).catch(console.error);
+			return;
+		}
 
 		if (action?.id !== "sidebar" || isFrameField(event.composedPath()[0])) {
 			return;
@@ -39471,6 +40713,57 @@ ${frontPageChooserHTML()}
 		}
 
 		return url.href;
+	}
+
+	function prepareArticleLink(event, here = location.href, root = null) {
+		const link = event.target?.closest?.("a[href]");
+
+		if (root && link?.hasAttribute("download")) {
+			link.target = "_blank";
+			link.relList.add("noopener");
+			return;
+		}
+
+		if (root && link && !event.defaultPrevented && event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && !link.hasAttribute("download")) {
+			const target = (link.getAttribute("target") || "").toLowerCase();
+			const url = new URL(link.href, here);
+			const current = new URL(here);
+
+			if ((!target || target === "_self") && url.origin === current.origin && url.pathname === current.pathname && url.search === current.search && (url.hash || url.href.endsWith("#"))) {
+				if (!url.hash) {
+					event.preventDefault();
+					if (appIsPhone()) {
+						window.scrollTo(0, 0);
+					} else {
+						appReaderScroller()?.scrollTo(0, 0);
+					}
+					return;
+				}
+
+				let name;
+				try {
+					name = decodeURIComponent(url.hash.slice(1));
+				} catch {
+					name = url.hash.slice(1);
+				}
+
+				const destination = [...root.querySelectorAll("[data-reader-anchor]")].find((element) => element.dataset.readerAnchor === name);
+
+				if (destination) {
+					event.preventDefault();
+					destination.scrollIntoView();
+				} else {
+					link.target = "_blank";
+					link.relList.add("noopener");
+				}
+				return;
+			}
+		}
+
+		if (frameLinkTarget(event, here)) {
+			link.target = "_blank";
+			link.relList.add("noopener");
+		}
 	}
 
 	function frameVisibility() {
@@ -39685,12 +40978,7 @@ ${frontPageChooserHTML()}
 					return;
 				}
 
-				const url = frameLinkTarget(event);
-
-				if (url) {
-					event.preventDefault();
-					postToApp({ type: "open", url });
-				}
+				prepareArticleLink(event);
 			},
 			true,
 		);
@@ -39755,11 +41043,6 @@ ${frontPageChooserHTML()}
 		annotationController = controller;
 		postToApp({ type: "annotated", groups: groups.map(serializeAnnotationGroup) });
 
-		scheduleIdleTask(() => {
-			if (annotationController === controller) {
-				controller.setHeatRegions(buildHeatRegions(frameComments, index));
-			}
-		});
 	}
 
 	const APP_HELLO_MS = 200;
@@ -40077,6 +41360,15 @@ ${frontPageChooserHTML()}
 			plan.attributes.push(["data-reader", marker]);
 		}
 
+		const anchor = element.getAttribute("id") || (tag === "A" ? element.getAttribute("name") : "") || element.getAttribute("data-reader-anchor");
+
+		if (plan.attributes && anchor && anchor.length <= 512) {
+			plan.attributes.push(["data-reader-anchor", anchor]);
+		} else if ((plan.unwrap || plan.paragraph) && anchor && anchor.length <= 512) {
+			plan.anchor = anchor;
+			plan.anchorTag = READER_BLOCK_WRAPPERS.has(tag) ? "div" : "span";
+		}
+
 		return plan;
 	}
 
@@ -40101,9 +41393,20 @@ ${frontPageChooserHTML()}
 
 		if (tag === "A") {
 			const url = readerURL(element.getAttribute("href"), base);
+			const attributes = [["href", url?.href || ""], ["rel", "noopener noreferrer"]];
+
+			if (element.hasAttribute("download")) {
+				attributes.push(["download", element.getAttribute("download").slice(0, 256)]);
+			}
+
+			const target = element.getAttribute("target");
+
+			if (target && target.length <= 128) {
+				attributes.push(["target", target]);
+			}
 
 			return url
-				? { attributes: [["href", url.href], ["rel", "noopener noreferrer"]] }
+				? { attributes }
 				: { unwrap: true };
 		}
 
@@ -40301,7 +41604,15 @@ ${frontPageChooserHTML()}
 					readerWrapLooseInline(holder, inert);
 				}
 
-				child.replaceWith(holder);
+				if (plan.anchor) {
+					const anchored = inert.createElement(plan.anchorTag);
+
+					anchored.setAttribute("data-reader-anchor", plan.anchor);
+					anchored.append(holder);
+					child.replaceWith(anchored);
+				} else {
+					child.replaceWith(holder);
+				}
 				continue;
 			}
 
