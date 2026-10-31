@@ -41,6 +41,20 @@
 1. Browse the web as usual. If a thread exists for that page the (BC) button lights up, letting you know people are discussing this site. 
 2. You can visit [backchnnl.app](https://backchnnl.app) once you have the script installed to have a customizable front page you can bookmark.
 3. You can directly upload to Hacker News and Reddit using the **↑** button.
+4. Reddit is [changing access for other apps](https://support.reddithelp.com/hc/en-us/articles/54353370049684-Changelog-October-8-2026).
+   Backchannel's illustrated introduction explains the updated connection.
+   Choose **Continue** to start. When your Reddit session needs refreshing,
+   a temporary Reddit window opens; sign in there if asked. The window closes
+   when finished, and **Synced** confirms the overall refresh.
+   The introduction is remembered locally after confirmation or dismissal.
+   Front Pages tries refreshing on its first load; use **Sync** for later
+   refreshes. Loading more Reddit replies uses the same temporary-window flow.
+   Other articles stay available while you sign in. Settings ›
+   Sources › **(?)** explains the connection.
+
+Compact system messages slide down from the top; feedback for user actions
+slides up from the bottom. Toasts use black and white in both Reader and Sidebar,
+with reduced motion when your device requests it.
 
 ## FAQ
 
@@ -53,7 +67,10 @@ telemetry. Which hosts it contacts depends on which sources you switch on.
 no persistent identifier attached.
 - Reddit sends the pages you visit to reddit.com, and if you're
 signed in to Reddit, those requests arrive as your account. Signed out, they carry a long-lived device identifier
-instead. Voting and replying go through that same session, and only when you press something.
+instead. In Safari's Userscripts extension, live reads happen in a temporary
+Reddit window when your article list loads, you press Sync, or you load more
+replies, using your Reddit login after you confirm the introduction.
+Voting and replying go through that same session, and only when you press something.
 - Bluesky sends the pages you visit to Constellation, an independent index of
 Bluesky links, not to Bluesky. Bluesky is asked only about the posts
 Constellation names. No account is needed and neither host sets a cookie.
@@ -76,9 +93,12 @@ Webmail, banking, auth flows, and cloud consoles are excluded outright.
 
 Full detail, including a host-by-host table, in [SECURITY.md](SECURITY.md).
 
-### When I enable annotations, I see faintly highlighted text that isn't directly quoted
+### What do annotations highlight?
 
-When you enable annotations, the script generates a heat map of which content in the article the discussions are focusing on. So even if a piece of text isn't directly quoted by a comment, it may receive the highlighter effect. If it's distracting, you can disable showing annotations when the sidebar is closed by making sure **Show when sidebar closed** is not enabled.
+Annotations highlight quoted passages so you can jump between the article and
+the discussion about them. Clicking a highlight opens the Discussion panel.
+To show highlights while the Sidebar is closed, enable **Show when Sidebar
+closed**. The ambient heat map was removed in v1.6.18.1.
 
 ### Where did HNewhere go?
 

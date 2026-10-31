@@ -8,6 +8,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.18.1] — 2026-10-30
+
+### Added
+
+- **Compact Discussion controls in Reader.** Settings › General can switch
+  between an article and its discussion at any window width, using the floating
+  controls beside the article.
+- **Source availability messages.** Reader distinguishes an unavailable Reddit
+  feed, denied access and temporary request limits from an empty list. Saved
+  articles remain available when a feed cannot be refreshed. Sidebar sync
+  failures use a temporary toast.
+- **Reddit adapts to updated access requirements.** An illustrated notice
+  explains Reddit's changes and how session refreshes work, with a single
+  Continue button to start. Article lists then try automatically. Sync and
+  loading more replies use the same temporary window. Sign in there if asked; it closes when finished, and a
+  toast confirms the overall sync. The introduction is remembered locally
+  after confirmation or dismissal. Front Pages tries refreshing on its first
+  load; later refreshes start with Sync, without a repeated window reminder.
+  Settings › Sources explains Reddit's access changes and session refreshes
+  under (?). Lists no longer repeat the temporary-window instruction.
+
+### Changed
+
+- **Compact toasts use black and white throughout the app.** System messages enter
+  from the top; feedback for user actions enters from the bottom. Reduced-motion preferences are respected.
+- Sync completion reflects the full refresh across the selected sources.
+- **The Sidebar's Backchannel view shares Reader's article lists.** Search and
+  icon tabs for Unread, All articles, Queue and Collection sit under the header
+  with inline counts. Search finds articles, queued and saved pages, notes and
+  settings, with Cancel returning to the previous list. Topic sections scroll
+  within the panel; individual sources slide into view under All articles.
+  Sync and Mark all as read sit in the header alongside its other controls.
+  Articles still open in the browser tab, and the header returns to the current
+  page's discussion.
+- Sidebar header action icons use matching visual sizes.
+- Collection previews stay compact as a wider Sidebar adds more columns.
+- **Annotations show quoted passages without the ambient heat map.**
+- **The Sidebar has rounded exposed corners**, matching Reader's shape.
+
+### Fixed
+
+- Informational modals use the app's font on every page. Source help wraps within
+  the window with visible bullets in Reader and Sidebar, including the Reddit
+  connection explanation. The Reddit introduction matches the empty Reader
+  pane's darker background in dark mode and loads its illustration from
+  Backchannel's own hosting.
+- The Reddit introduction keeps keyboard focus visible in small windows and
+  with large text, including when switching from mouse to keyboard in Safari.
+- Clicking an article highlight opens a hidden Discussion panel in Reader.
+- Unread removes a read article when another article opens, while keeping the
+  current article in place. Undoing Mark all as read restores the list.
+- Links inside Reader articles open in a new tab, keeping the current article
+  open, including links targeting the top or parent window and links back to
+  the original article. Links within a read-out can jump to their passage.
+- Article lists keep comment totals with the site and age. Sidebar article
+  menus capitalize their actions and leave comment totals beside the article.
+- Sync retries Reddit after an access failure while respecting rate-limit waits.
+- Failed or malformed source feeds keep saved articles and no longer produce a
+  successful sync confirmation. Valid empty feeds still refresh normally.
+- Reddit requests share pending work and stop queued polls after an access
+  denial or rate limit. Server retry waits survive reloads, temporary failures
+  back off, and private-community errors leave other Reddit feeds available.
+- Redirected requests are recognized in Safari's Userscripts extension.
+
 ## [1.6.18] — 2026-10-23
 
 ### Added

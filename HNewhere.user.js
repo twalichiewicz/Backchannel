@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.18
+// @version      1.6.18.1
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -439,6 +439,7 @@
 		commentSort: "best",
 		newCommentsFirst: false,
 		keepSidebarSize: true,
+		readerCompact: false,
 		commentImages: false,
 		updateCheck: true,
 	};
@@ -656,6 +657,7 @@
 		if (syncAppearancePreferences(merged)) {
 			reapplyThemes();
 		}
+		redditReadSourceOn = Boolean(merged.sources?.reddit);
 
 		return merged;
 	}
@@ -667,6 +669,7 @@
 		};
 
 		await save(STORAGE.settings, next);
+		redditReadSourceOn = Boolean(next.sources?.reddit);
 
 		if (syncAppearancePreferences(next)) {
 			reapplyThemes();
@@ -2323,6 +2326,10 @@
       ${button}`;
 	}
 
+	function setActionLabel(button, label) {
+		button.textContent = button.closest(".browse-row-menu") ? label.charAt(0).toUpperCase() + label.slice(1) : label;
+	}
+
 	function paintSaveControls(root, entries, folderOf = () => "", folders = []) {
 		const list = Array.isArray(entries) ? entries : [];
 
@@ -2335,7 +2342,7 @@
 			const folder = folderOf(button);
 			const on = list.some((entry) => savedCovers(entry, item, folder, folders));
 
-			button.textContent = on ? "unsave" : "save";
+			setActionLabel(button, on ? "unsave" : "save");
 			button.classList.toggle("item-action-on", on);
 		}
 	}
@@ -2519,7 +2526,7 @@
 				text: button.dataset.saveText || "",
 			}, saveContextFor(button));
 
-			button.textContent = on ? "unsave" : "save";
+			setActionLabel(button, on ? "unsave" : "save");
 			button.classList.toggle("item-action-on", on);
 		} finally {
 			button.disabled = false;
@@ -2620,6 +2627,9 @@
 						status: response.status,
 						json,
 						rateLimit: parseRateLimit(response.responseHeaders),
+						retryAfterSeconds: parseRetryAfter(response.responseHeaders),
+						finalUrl: response.finalUrl || response.responseURL || url,
+						contentType: /^content-type:\s*([^;\r\n]+)/im.exec(response.responseHeaders || "")?.[1].trim().toLowerCase() || "",
 					});
 				},
 				onerror: () => resolve(failure),
@@ -3706,6 +3716,16 @@
 			remaining: remaining ? Number(remaining[1]) : Infinity,
 			resetSeconds: reset ? Number(reset[1]) : 0,
 		};
+	}
+
+	function parseRetryAfter(headerText, now = Date.now()) {
+		const value = /^retry-after:\s*([^\r\n]+)/im.exec(headerText || "")?.[1].trim();
+
+		if (!value || !/^\d+$/.test(value) && !/^[a-z]{3,9}[,\s]/i.test(value)) return 0;
+
+		const seconds = /^\d+$/.test(value) ? Number(value) : (Date.parse(value) - now) / 1000;
+
+		return Number.isFinite(seconds) ? Math.max(0, Math.ceil(seconds)) : 0;
 	}
 
 	const MIRROR_SUBREDDITS = new Set(["hackernews", "hypeurls"]);
@@ -5193,9 +5213,59 @@
 	}
 
 	function sourceHelpHTML(source) {
-		const points = escapeHTML(sourcePoints(source).join("\n"));
+		const points = escapeHTML([
+			...sourcePoints(source),
+			...(source.id === "reddit" && usesRedditReadWindow() ? ["Reddit’s access changes mean Backchannel opens a temporary Reddit window whenever your session needs refreshing. Sign in there if asked; it closes automatically when finished."] : []),
+		].join("\n"));
 
 		return `<button class="source-help" type="button" aria-label="About ${escapeHTML(source.label)}" aria-description="${points}" data-tip="${points}">?</button>`;
+	}
+
+	let sourceHelpTipsWatched = false;
+
+	function hideSourceHelpTip(shadow = sidebarUI?.shadow) {
+		const tip = shadow?.querySelector("#source-help-tip");
+
+		if (tip) tip.hidden = true;
+	}
+
+	function showSourceHelpTip(button, shadow) {
+		if (!button?.dataset.tip || !shadow) return;
+		let tip = shadow.querySelector("#source-help-tip");
+
+		if (!tip) {
+			tip = document.createElement("div");
+			tip.id = "source-help-tip";
+			tip.className = "app-tip source-help-tip";
+			tip.setAttribute("role", "tooltip");
+			shadow.append(tip);
+		}
+		tip.innerHTML = `<ul>${button.dataset.tip.split("\n").map((point) => `<li>${escapeHTML(point)}</li>`).join("")}</ul>`;
+		tip.hidden = false;
+		tip.style.left = "0px";
+		tip.style.top = "0px";
+		tip.style.maxWidth = "";
+		const origin = tip.getBoundingClientRect();
+		const scale = origin.width / tip.offsetWidth || 1;
+
+		tip.style.maxWidth = `${Math.min(300, (window.innerWidth - 16) / scale)}px`;
+		const box = button.getBoundingClientRect();
+		const size = tip.getBoundingClientRect();
+		const below = box.bottom + 8 + size.height <= window.innerHeight - 8 || box.top - 8 - size.height < 8;
+		const left = Math.max(8, Math.min(box.left, window.innerWidth - size.width - 8));
+		const top = Math.max(8, Math.min(below ? box.bottom + 8 : box.top - size.height - 8, window.innerHeight - size.height - 8));
+		const arrow = Math.max(8, Math.min((left + size.width - box.left - box.width / 2) / scale - 4, tip.offsetWidth - 16));
+
+		tip.classList.toggle("is-below", below);
+		tip.classList.toggle("is-above", !below);
+		tip.style.left = `${(left - origin.left) / scale}px`;
+		tip.style.top = `${(top - origin.top) / scale}px`;
+		tip.style.setProperty("--arrow", `${arrow}px`);
+		if (!sourceHelpTipsWatched) {
+			sourceHelpTipsWatched = true;
+			window.addEventListener("resize", () => hideSourceHelpTip());
+			window.addEventListener("scroll", () => hideSourceHelpTip(), true);
+		}
 	}
 
 	function sourceListHTML({ idPrefix = "", cells = false, help = false } = {}) {
@@ -5229,6 +5299,7 @@ ${
 
 	// #region hnewhere-test-export
 	const HINTED_SETTINGS = new Set([
+		"readerCompact",
 		"annotations",
 		"pdfReader",
 		"notepad",
@@ -5330,14 +5401,12 @@ ${
 
 		async frontPage() {
 			const html = await requestText(HN_ORIGIN + "/news");
-
-			if (!html) {
-				return [];
-			}
-
-			return parseFrontPage(
+			const stories = parseFrontPage(
 				new DOMParser().parseFromString(html, "text/html"),
 			).map(hnStory);
+
+			if (!stories.length) throw new Error("Hacker News feed unavailable");
+			return stories;
 		},
 
 		async recover(story) {
@@ -5384,8 +5453,405 @@ ${
 	const REDDIT_TIER_KEY = "HNewhere:reddit_tier";
 	const REDDIT_TIER_TTL = 10 * 60 * 1000;
 	const REDDIT_RATE_FLOOR = 10;
+	const REDDIT_POLL_KEY = "HNewhere:reddit_poll";
 
-	let redditRateResumeAt = 0;
+	// #region hnewhere-test-export
+	function redditReadPath(path) {
+		if (typeof path !== "string" || path.length > 10000 || !path.startsWith("/") || path.startsWith("//") || /[\\#\s]/.test(path) || /%(?:2f|5c|2e)/i.test(path.split("?")[0])) return null;
+		const url = new URL(path, "https://www.reddit.com");
+		const params = url.searchParams;
+		const keys = [...params.keys()];
+
+		if (url.origin !== "https://www.reddit.com" || new Set(keys).size !== keys.length) return null;
+		const only = (...allowed) => keys.every((key) => allowed.includes(key));
+		const limit = (max) => !params.has("limit") || /^\d+$/.test(params.get("limit")) && Number(params.get("limit")) > 0 && Number(params.get("limit")) <= max;
+		const article = (value) => { try { return /^https?:$/.test(new URL(value).protocol); } catch { return false; } };
+		let allowed = false;
+
+		if (/^\/r\/[a-z0-9_+]+\.json$/i.test(url.pathname)) allowed = only("limit") && limit(100);
+		else if (url.pathname === "/api/info.json") allowed = only("url", "id") && keys.length === 1 && (article(params.get("url")) || /^t3_[a-z0-9]+$/i.test(params.get("id") || ""));
+		else if (url.pathname === "/search.json") allowed = only("type", "limit", "q") && params.get("type") === "link" && limit(25) && params.get("q")?.startsWith("url:") && article(params.get("q").slice(4));
+		else if (/^\/(?:r\/[a-z0-9_]+\/)?comments\/[a-z0-9]+(?:\/[^/?#]+)?\/?\.json$/i.test(url.pathname)) allowed = only("limit", "sort") && limit(500) && (!params.has("sort") || params.get("sort") === "top");
+		else if (url.pathname === "/api/morechildren.json") allowed = only("api_type", "link_id", "sort", "children") && params.get("api_type") === "json" && /^t3_[a-z0-9]+$/i.test(params.get("link_id") || "") && (!params.has("sort") || params.get("sort") === "top") && /^[a-z0-9]+(?:,[a-z0-9]+)*$/i.test(params.get("children") || "") && params.get("children").split(",").length <= 100;
+		return allowed ? url.pathname + url.search : null;
+	}
+
+	function publicRedditJSON(value) {
+		const containers = new Set(["data", "children", "replies", "json", "things", "errors"]);
+		const fields = new Set(["kind", "id", "title", "url", "permalink", "author", "score", "num_comments", "created_utc", "subreddit", "subreddit_name_prefixed", "selftext", "selftext_html", "body", "body_html", "parent_id", "link_id", "is_submitter", "removed_by_category", "count", "reason", "error", "message"]);
+		let nodes = 0;
+		let size = 0;
+		const visit = (item, depth = 0) => {
+			if (++nodes > 20000 || depth > 40) throw new Error("Reddit response is too large");
+			if (typeof item === "string") {
+				size += item.length;
+				if (size > 2000000) throw new Error("Reddit response is too large");
+				return item;
+			}
+			if (item === null || typeof item === "boolean" || typeof item === "number" && Number.isFinite(item)) return item;
+			if (Array.isArray(item)) return item.map((entry) => visit(entry, depth + 1));
+			const result = {};
+			for (const [key, entry] of Object.entries(item || {})) {
+				if (containers.has(key) || fields.has(key) && (entry === null || ["string", "number", "boolean"].includes(typeof entry))) result[key] = visit(entry, depth + 1);
+			}
+			return result;
+		};
+		return visit(value);
+	}
+
+	function validRedditReadStage(stage, nonce, now = Date.now()) {
+		if (stage?.kind !== "reddit-read" || stage.nonce !== nonce || !/^[a-f0-9]{32}$/.test(nonce || "") || !Number.isFinite(stage.ts) || !Number.isFinite(stage.expires) || stage.ts > now || stage.expires <= now || stage.expires - stage.ts > 300000) return false;
+		try { const url = new URL(stage.origin); return /^https?:$/.test(url.protocol) && url.origin === stage.origin; } catch { return false; }
+	}
+	// #endregion hnewhere-test-export
+
+	let redditReadSourceOn = false;
+	let redditReadBatch = null;
+	let redditReadWaitUntil = 0;
+	let redditReadNoticeScheduled = false;
+	let redditReadNoticeShown = false;
+	let redditReadInitialAttempted = false;
+	let syncRunId = 0;
+	const REDDIT_READ_NOTICE_KEY = "HNewhere:reddit_read_window_notice";
+	const REDDIT_READ_RESUME_KEY = "HNewhere:reddit_read_resume";
+	const REDDIT_READ_SOURCE = "hnewhere-reddit-read";
+
+	function usesRedditReadWindow() {
+		try { return GM.info?.scriptHandler === "Userscripts"; } catch { return false; }
+	}
+
+	function scheduleRedditReadNotice() {
+		if (!usesRedditReadWindow() || redditReadNoticeScheduled || redditReadNoticeShown) return;
+		redditReadNoticeScheduled = true;
+		window.setTimeout(async () => {
+			redditReadNoticeScheduled = false;
+			if (!sidebarUI?.shadow || !isSidebarVisible() || !(await loadSettings()).sources?.reddit || await load(REDDIT_READ_NOTICE_KEY, false)) return;
+			showRedditReadNotice();
+		}, 0);
+	}
+
+	function showRedditReadNotice() {
+		const ui = sidebarUI;
+		const shadow = ui?.shadow;
+
+		if (!shadow || !isSidebarVisible() || shadow.querySelector("#reddit-read-modal")) return;
+		redditReadNoticeShown = true;
+		const modal = document.createElement("div");
+
+		modal.id = "reddit-read-modal";
+		modal.className = "app-settings-modal reddit-read-modal";
+		modal.innerHTML = `<div class="app-settings-dialog reddit-read-dialog" role="dialog" aria-modal="true" aria-labelledby="reddit-read-title" aria-describedby="reddit-read-description" tabindex="-1">
+<img class="reddit-read-image" src="https://backchnnl.app/src/reddit-connection.jpg" width="750" height="499" alt="" referrerpolicy="no-referrer">
+<div class="reddit-read-content"><h2 id="reddit-read-title">Reddit is changing how apps connect</h2>
+<div id="reddit-read-description"><p>Reddit is restricting access for third-party apps and ending RSS feed support. To keep articles and discussions available, Backchannel now connects through your Reddit login.</p><p>Whenever your Reddit session needs refreshing, a temporary Reddit window will open. Sign in there if asked; the window closes automatically when the refresh finishes.</p><p>Choose Continue to start your first refresh.</p></div></div>
+<div class="reddit-read-actions"><button class="reddit-read-confirm" type="button">Continue</button></div></div>`;
+		const returnTo = shadow.activeElement;
+		const behind = [...shadow.children].filter((element) => element.tagName !== "STYLE").map((element) => [element, element.inert]);
+
+		for (const [element] of behind) element.inert = true;
+		shadow.append(modal);
+		const close = () => {
+			modal.remove();
+			for (const [element, inert] of behind) element.inert = inert;
+			if (returnTo?.isConnected) returnTo.focus({ preventScroll: true });
+			return save(REDDIT_READ_NOTICE_KEY, 2);
+		};
+		const confirm = modal.querySelector(".reddit-read-confirm");
+
+		confirm.onclick = () => {
+			const accepted = close();
+			redditReadInitialAttempted = true;
+
+			runSync(async () => {
+				await accepted;
+				if (!(await loadSettings()).sources?.reddit || sidebarUI !== ui) return;
+				return refreshRedditReadViews(ui);
+			}).catch(console.error);
+		};
+		modal.addEventListener("click", (event) => {
+			event.stopPropagation();
+			if (event.target === modal) close().catch(console.error);
+		});
+		modal.addEventListener("pointerdown", () => delete modal.dataset.keyboard);
+		modal.addEventListener("keydown", (event) => {
+			event.stopPropagation();
+			if (event.key === "Escape") { event.preventDefault(); close().catch(console.error); }
+			if (event.key !== "Tab") return;
+			event.preventDefault();
+			modal.dataset.keyboard = "true";
+			confirm.focus();
+			confirm.scrollIntoView({ block: "nearest" });
+		});
+		modal.querySelector("[role=dialog]").focus({ preventScroll: true });
+	}
+
+	async function refreshRedditReadViews(ui) {
+		if (appState) {
+			return Promise.allSettled([renderAppList({ force: true }), appState.open ? openAppDiscussion(appState.open.row) : Promise.resolve()]);
+		} else if (isBrowsing(ui)) {
+			return renderBrowseView(ui, { force: true });
+		} else {
+			const found = await discoverAll(pageAddresses(), await loadSettings());
+
+			if (sidebarUI !== ui) return;
+			if (found.length) {
+				sidebarHasDiscussion = true;
+				await renderDiscussions(found, ui);
+			} else await ui.syncStatus?.onSync?.();
+		}
+	}
+
+	function redditReadFailure(reason) {
+		return { ok: false, status: 0, json: null, rateLimit: null, localFailure: reason || "window-unavailable" };
+	}
+
+	async function waitRedditReadReply(batch, requestId, timeout = 20000) {
+		let deadline = Math.min(batch.expires, Date.now() + timeout);
+
+		while (!batch.cancelled && Date.now() < deadline) {
+			const reply = await load(BRIDGE_RESULT_PREFIX + batch.nonce, null);
+
+			if (reply?.source === REDDIT_READ_SOURCE && reply.nonce === batch.nonce && reply.requestId === requestId && Number.isFinite(reply.ts) && reply.ts >= batch.created) {
+				if (reply.phase === "login") {
+					deadline = batch.expires;
+					if (Date.now() - reply.ts > 10000) return { error: "window-unavailable" };
+					if (!batch.awaitingLogin) {
+						batch.awaitingLogin = true;
+						showToast("Sign in to Reddit in the temporary window, then press Continue.", { kind: "system", persist: true, action: { label: "Cancel", onAct: () => { batch.cancelled = true; } } });
+					}
+				} else if (["ready", "response", "error", "closed"].includes(reply.phase)) {
+					if (batch.awaitingLogin) { batch.awaitingLogin = false; showToast(""); }
+					return reply;
+				}
+			}
+			await new Promise((resolve) => window.setTimeout(resolve, 150));
+		}
+		return { error: batch.cancelled ? "cancelled" : "timeout" };
+	}
+
+	async function prepareRedditReadBatch(batch) {
+		if (!batch.popup) return { error: "popup-blocked" };
+		const settings = await loadSettings();
+		const cooldown = await load(REDDIT_POLL_KEY, null);
+
+		if (!settings.sources?.reddit || cooldown?.until > Date.now()) return { error: "not-needed" };
+		const stage = { kind: "reddit-read", nonce: batch.nonce, origin: location.origin, ts: batch.created, expires: batch.expires, request: null };
+
+		await stageBridgePayload(batch.nonce, stage);
+		await indexBridgePayload(batch.nonce);
+		batch.popup.location = "https://www.reddit.com/#" + new URLSearchParams({ backchannel_read: "1", nonce: batch.nonce });
+		const reply = await waitRedditReadReply(batch, 0, 30000);
+
+		batch.connected = reply.phase === "ready";
+		return reply;
+	}
+
+	async function finishRedditReadBatch(batch) {
+		batch.closing = true;
+		try {
+			await redditRequestQueue.catch(() => {});
+			const stage = await readBridgePayload(batch.nonce);
+
+			if (stage && batch.connected && !batch.cancelled) {
+				await stageBridgePayload(batch.nonce, { ...stage, done: true });
+				await waitRedditReadReply(batch, "done", 2000);
+			}
+		} finally {
+			await Promise.allSettled([clearBridgePayload(batch.nonce), forget(BRIDGE_RESULT_PREFIX + batch.nonce)]);
+			try { batch.popup?.close(); } catch {}
+			if (redditReadBatch === batch) redditReadBatch = null;
+			if (batch.syncRun === syncRunId && batch.synced && !batch.failed && !batch.cancelled && isSidebarVisible()) showToast("Synced", { kind: "system" });
+		}
+	}
+
+	function runSync(task, options = {}) {
+		const runId = ++syncRunId;
+		if (sidebarUI?.shadow?.getElementById("toast")?.textContent === "Synced") showToast("");
+		return runRedditReadAction(async () => {
+			const batch = usesRedditReadWindow() && redditReadSourceOn && !redditReadBatch?.closing ? redditReadBatch : null;
+			const result = await task();
+			const runs = Array.isArray(result) ? result : [{ status: "fulfilled", value: result }];
+			const feeds = runs.flatMap((run) => run.status === "fulfilled" ? run.value?.feedStates || [] : []);
+			const failed = runs.some((run) => run.status === "rejected") || feeds.some((feed) => feed.status !== "ok");
+			const synced = feeds.length > 0 && !failed;
+
+			if (batch) {
+				if (synced && runId === syncRunId) {
+					batch.synced = true;
+					batch.syncRun = runId;
+				}
+				batch.failed ||= failed;
+			} else if (synced && runId === syncRunId && isSidebarVisible()) showToast("Synced", { kind: "system" });
+			return result;
+		}, options);
+	}
+
+	function runRedditReadAction(task, { automatic = false } = {}) {
+		if (!usesRedditReadWindow() || !redditReadSourceOn || redditReadWaitUntil > Date.now()) return Promise.resolve().then(task);
+		let batch = redditReadBatch;
+
+		if (!batch || batch.closing) {
+			const nonce = crypto.randomUUID().replaceAll("-", "");
+			const popup = window.open("about:blank", REDDIT_READ_SOURCE + "_" + nonce, "width=760,height=680,resizable=yes,scrollbars=yes");
+
+			if (!popup && automatic) {
+				return Promise.resolve();
+			}
+
+			batch = { nonce, popup, created: Date.now(), expires: Date.now() + SIGN_IN_TIMEOUT, connected: false, closing: false, cancelled: false, users: 0, sequence: 0, accessVersion: redditAccessVersion };
+			redditReadBatch = batch;
+			batch.preparing = prepareRedditReadBatch(batch).catch(() => ({ error: "window-unavailable" }));
+		}
+		batch.users++;
+		return (async () => {
+			try {
+				const ready = await batch.preparing;
+
+				if (ready.error && ready.error !== "not-needed" && !batch.reported) {
+					batch.reported = true;
+					showToast(ready.error === "popup-blocked" ? "Allow popups for this site, then press Sync to refresh Reddit." : ready.error === "cancelled" ? "Reddit refresh cancelled." : ready.error === "limited" ? "Reddit requests are temporarily limited. Try syncing again later." : "The Reddit window did not respond. Press Sync to try again.", { kind: "system", page: true });
+				}
+				return await task();
+			} catch (error) {
+				batch.failed = true;
+				throw error;
+			} finally {
+				batch.users--;
+				if (!batch.users) await finishRedditReadBatch(batch);
+			}
+		})();
+	}
+
+	async function requestRedditReadWindow(path, batch) {
+		const safePath = redditReadPath(path);
+		const complete = (response) => {
+			if (batch) {
+				if (response.ok) batch.reads = (batch.reads || 0) + 1;
+				else batch.failed = true;
+			}
+			return response;
+		};
+
+		if (!safePath || !batch?.connected || batch.cancelled || batch.closing || Date.now() >= batch.expires || ++batch.sequence > 50) return complete(redditReadFailure("window-unavailable"));
+		const stage = await readBridgePayload(batch.nonce);
+
+		if (!validRedditReadStage(stage, batch.nonce) || !(await loadSettings()).sources?.reddit) return complete(redditReadFailure("disabled"));
+		await stageBridgePayload(batch.nonce, { ...stage, request: { id: batch.sequence, path: safePath } });
+		const reply = await waitRedditReadReply(batch, batch.sequence);
+
+		return complete(reply.phase === "response" && reply.response ? reply.response : redditReadFailure(reply.error));
+	}
+
+	async function dispatchRedditReadWindow() {
+		if (location.origin !== "https://www.reddit.com" || window.top !== window) return false;
+		const payload = parseBridgeHash("backchannel_read") || peekBridgeReload(REDDIT_READ_RESUME_KEY);
+		const nonce = payload?.nonce;
+
+		if (!nonce) return false;
+		const stage = await readBridgePayload(nonce);
+
+		if (!validRedditReadStage(stage, nonce)) { clearBridgeReload(REDDIT_READ_RESUME_KEY); return false; }
+		stageBridgeReload(REDDIT_READ_RESUME_KEY, { nonce });
+		const publish = (data) => save(BRIDGE_RESULT_PREFIX + nonce, { source: REDDIT_READ_SOURCE, nonce, ts: Date.now(), ...data });
+		const work = async () => {
+			let previous = 0;
+			let completed = false;
+			let paused = false;
+			let authenticated = false;
+			let lastLoginReport = 0;
+			const fetchJSON = async (path) => {
+				let response;
+				try { response = await fetch(path, { credentials: "same-origin", cache: "no-store", redirect: path === "/api/me.json" ? "manual" : "error", signal: AbortSignal.timeout(10000) }); }
+				catch { return { ok: false, status: 0, json: null, rateLimit: null }; }
+				if (response.type === "opaqueredirect") return { ok: false, status: 0, json: null, rateLimit: null, needsSignIn: true };
+				const text = await response.text();
+				let json = null;
+
+				try { json = JSON.parse(text); } catch {}
+				const headers = [...response.headers].map(([key, value]) => `${key}: ${value}`).join("\n");
+				const rateLimit = parseRateLimit(headers);
+
+				if (rateLimit && !Number.isFinite(rateLimit.remaining)) delete rateLimit.remaining;
+				return { ok: response.ok && json !== null, status: response.status, json, rateLimit, retryAfterSeconds: parseRetryAfter(headers), finalUrl: response.url, contentType: response.headers.get("content-type")?.split(";")[0] || "" };
+			};
+			try {
+				while (true) {
+					const current = await readBridgePayload(nonce);
+
+					if (!validRedditReadStage(current, nonce) || current.done) { completed = true; break; }
+					if (!(await loadSettings()).sources?.reddit) { await publish({ phase: "error", requestId: current.request?.id || 0, error: "disabled" }); break; }
+					if (paused) {
+						if (Date.now() - lastLoginReport > 1000) { await publish({ phase: "login", requestId: 0 }); lastLoginReport = Date.now(); }
+					} else if (!authenticated) {
+						const identity = await fetchJSON("/api/me.json");
+						const exhausted = identity.rateLimit?.remaining < REDDIT_RATE_FLOOR;
+						const transient = identity.status === 429 || identity.status >= 500 || identity.status === 0;
+						const pause = Math.max(identity.retryAfterSeconds || 0, exhausted ? identity.rateLimit.resetSeconds || 600 : identity.status === 429 ? identity.rateLimit?.resetSeconds || 0 : 0, transient ? 60 : 0);
+
+						if (!(await loadSettings()).sources?.reddit) { await publish({ phase: "error", requestId: 0, error: "disabled" }); break; }
+						if (!identity.needsSignIn && pause > 0) {
+							const until = Date.now() + pause * 1000;
+							const latest = await load(REDDIT_POLL_KEY, null);
+
+							if (!(latest?.until > until)) await save(REDDIT_POLL_KEY, { until, status: exhausted || identity.status === 429 ? "limited" : "unavailable", failures: transient ? 1 : 0, httpStatus: identity.status });
+							await publish({ phase: "error", requestId: 0, error: exhausted || identity.status === 429 ? "limited" : "unavailable" });
+							break;
+						}
+						authenticated = Boolean(identity.ok && identity.json?.data?.name);
+						if (authenticated) {
+							document.getElementById(SIGN_IN_NOTE_ID)?.remove();
+							await publish({ phase: "ready", requestId: 0 });
+						} else {
+							paused = true;
+							await documentReady();
+							showSignInNote({ noun: "refresh Reddit" });
+							const note = document.getElementById(SIGN_IN_NOTE_ID);
+							const button = document.createElement("button");
+
+							button.textContent = "Continue";
+							button.style.marginLeft = "12px";
+							button.onclick = () => { paused = false; };
+							note.textContent = "Sign in to Reddit, then press Continue to refresh Backchannel.";
+							note.append(button);
+							await publish({ phase: "login", requestId: 0 });
+						}
+					} else if (current.request?.id > previous) {
+						const request = current.request;
+						const path = redditReadPath(request.path);
+						const cooldown = await load(REDDIT_POLL_KEY, null);
+
+						if (!path || request.id > 50 || cooldown?.until > Date.now()) { await publish({ phase: "error", requestId: request.id, error: "invalid-request" }); previous = request.id; }
+						else {
+							let response;
+
+							try {
+								response = await fetchJSON(path);
+								response = (await loadSettings()).sources?.reddit ? { ...response, json: publicRedditJSON(response.json) } : redditReadFailure("disabled");
+							}
+							catch { response = { ok: false, status: 0, json: null, rateLimit: null }; }
+							previous = request.id;
+							await publish({ phase: "response", requestId: request.id, response });
+						}
+					}
+					await new Promise((resolve) => window.setTimeout(resolve, 150));
+				}
+			} catch {
+				await publish({ phase: "error", requestId: previous, error: "window-unavailable" }).catch(() => {});
+			} finally {
+				clearBridgeReload(REDDIT_READ_RESUME_KEY);
+				if (completed) await publish({ phase: "closed", requestId: "done" }).catch(() => {});
+				window.close();
+			}
+		};
+		if (typeof navigator.locks?.request === "function") {
+			navigator.locks.request(REDDIT_READ_SOURCE + nonce, { ifAvailable: true }, (lock) => lock ? work() : undefined).catch(console.error);
+		} else await publish({ phase: "error", requestId: 0, error: "window-unavailable" });
+		return true;
+	}
+
+	const redditRequests = new Map();
+	let redditRequestQueue = Promise.resolve();
+	let redditAccessVersion = 0;
 
 	async function redditTier() {
 		const stored = await load(REDDIT_TIER_KEY, null);
@@ -5397,43 +5863,116 @@ ${
 		return "loid";
 	}
 
-	async function redditFetch(path, archivePath) {
-		let tier = await redditTier();
+	function redditFetch(path, archivePath, { listing = false, retryAccess = false } = {}) {
+		const accessVersion = redditAccessVersion;
+		const readBatch = usesRedditReadWindow() && redditReadBatch?.connected ? redditReadBatch : null;
+		const key = JSON.stringify([path, archivePath || "", listing, retryAccess, accessVersion, readBatch?.nonce || ""]);
+
+		if (redditRequests.has(key)) return redditRequests.get(key);
+
+		const turn = redditRequestQueue.then(() => fetchReddit(path, archivePath, { listing, retryAccess, accessVersion, readBatch }));
+		const done = () => redditRequests.delete(key);
+
+		redditRequests.set(key, turn);
+		redditRequestQueue = turn.then(done, done);
+		return turn;
+	}
+
+	async function fetchReddit(path, archivePath, { listing, retryAccess, accessVersion, readBatch }) {
+		const windowTransport = usesRedditReadWindow();
+		const connected = windowTransport && readBatch?.connected && !readBatch.cancelled && !readBatch.closing;
+		let tier = retryAccess && accessVersion === redditAccessVersion || connected && readBatch.accessVersion === redditAccessVersion ? "loid" : await redditTier();
+		let attempted = false;
+		let httpStatus = 0;
+		let retryAt = 0;
+		const unavailable = (status = "unavailable") => {
+			if (connected) readBatch.failed = true;
+			if (listing) {
+				throw Object.assign(new Error("Reddit feed unavailable" + (httpStatus ? ` (HTTP ${httpStatus})` : "")), { feedStatus: status, feedAttempted: attempted, httpStatus, retryAt });
+			}
+
+			return null;
+		};
+
+		if (windowTransport && !connected) {
+			const cooldown = await load(REDDIT_POLL_KEY, null);
+
+			redditReadWaitUntil = Number(cooldown?.until) || 0;
+			if (redditReadWaitUntil > Date.now()) { retryAt = redditReadWaitUntil; return unavailable(cooldown.status === "limited" ? "limited" : "unavailable"); }
+			if (listing) return unavailable("window");
+			if (!archivePath) return null;
+			tier = "archive";
+		}
 
 		if (tier === "off") {
-			return null;
+			return unavailable("access");
 		}
 
 		if (tier === "loid") {
-			if (Date.now() < redditRateResumeAt) {
-				return null;
+			const cooldown = await load(REDDIT_POLL_KEY, null);
+			redditReadWaitUntil = Number(cooldown?.until) || 0;
+
+			if (Number.isFinite(cooldown?.until) && Date.now() < cooldown.until) {
+				retryAt = cooldown.until;
+				httpStatus = cooldown.httpStatus || 0;
+				return unavailable(cooldown.status === "limited" ? "limited" : "unavailable");
 			}
 
-			const result = await requestWithMeta("https://www.reddit.com" + path);
+			attempted = true;
+			const result = windowTransport ? await requestRedditReadWindow(path, readBatch) : await requestWithMeta("https://www.reddit.com" + path);
 
-			if (result.rateLimit) {
-				redditRateResumeAt =
-					result.rateLimit.remaining < REDDIT_RATE_FLOOR
-						? Date.now() + (result.rateLimit.resetSeconds || 600) * 1000
-						: 0;
+			if (result.localFailure) { attempted = false; return unavailable("window"); }
+			const now = Date.now();
+			const exhausted = result.rateLimit?.remaining < REDDIT_RATE_FLOOR;
+			const transient = result.status === 0 || result.status === 429 || result.status >= 500;
+			const failures = Math.min(5, Math.max(0, Number(cooldown?.failures) || 0) + 1);
+			const pause = Math.max(
+				result.retryAfterSeconds || 0,
+				exhausted ? result.rateLimit.resetSeconds || 600 : result.status === 429 ? result.rateLimit?.resetSeconds || 0 : 0,
+				transient ? Math.min(900, 60 * 2 ** (failures - 1)) : 0,
+			);
+
+			httpStatus = result.status;
+
+			if (pause > 0) {
+				retryAt = now + pause * 1000;
+				const latest = await load(REDDIT_POLL_KEY, null);
+
+				if (Number.isFinite(latest?.until) && latest.until > retryAt) {
+					retryAt = latest.until;
+				} else {
+					await save(REDDIT_POLL_KEY, { until: retryAt, status: exhausted || result.status === 429 ? "limited" : "unavailable", failures: transient ? failures : 0, httpStatus });
+				}
+				redditReadWaitUntil = retryAt;
+			} else if (result.ok && cooldown) {
+				const latest = await load(REDDIT_POLL_KEY, null);
+
+				if (!(latest?.until > now)) await save(REDDIT_POLL_KEY, { until: 0, status: "ok", failures: 0, httpStatus });
 			}
 
 			if (result.ok) {
+				if (retryAccess) await save(REDDIT_TIER_KEY, { tier, timestamp: Date.now() });
 				return { json: result.json, tier };
 			}
 
-			const next = redditTierForStatus(result.status, tier);
+			if (result.status === 403 && ["private", "banned", "quarantined", "gold_only"].includes(String(result.json?.reason || "").toLowerCase())) {
+				return unavailable("access");
+			}
+
+			const login = result.status >= 200 && result.status < 300 && !result.json && (result.contentType === "text/html" || /\/login(?:[/?#]|$)/i.test(result.finalUrl || ""));
+			const next = redditTierForStatus(result.status === 401 || login ? 403 : result.status, tier);
 
 			if (next === tier) {
-				return null;
+				return unavailable(result.status === 429 ? "limited" : "unavailable");
 			}
 
 			await save(REDDIT_TIER_KEY, { tier: next, timestamp: Date.now() });
+			redditAccessVersion++;
 			tier = next;
 		}
 
 		if (tier !== "archive" || !archivePath) {
-			return null;
+			return unavailable("access");
 		}
 
 		const archive = await requestWithMeta(
@@ -5568,8 +6107,12 @@ ${
 				.map(redditDiscussion);
 		},
 
-		async frontPage() {
-			const result = await redditFetch("/r/popular.json?limit=100");
+		async frontPage({ force = false } = {}) {
+			const result = await redditFetch("/r/popular.json?limit=100", null, { listing: true, retryAccess: force });
+
+			if (!Array.isArray(result?.json?.data?.children)) {
+				throw new Error("Reddit feed returned no listing");
+			}
 			const posts = (result?.json?.data?.children || []).map(
 				(child) => child.data,
 			);
@@ -5624,13 +6167,13 @@ ${
 						return { ok: true, added: [], remaining: [] };
 					}
 
-					const result = await redditFetch(
+					const result = await runRedditReadAction(() => redditFetch(
 						"/api/morechildren.json?api_type=json&link_id=t3_" +
 							encodeURIComponent(discussion.id) +
 							"&sort=top&children=" +
 							encodeURIComponent(batch.join(",")),
 						null,
-					);
+					));
 
 					if (!result) {
 						return { ok: false, added: [], remaining: ids };
@@ -5947,9 +6490,9 @@ ${
 		},
 
 		async frontPage() {
-			const stories = await lobstersJSON("https://lobste.rs/hottest.json");
+			const stories = await frontPageJSON("https://lobste.rs/hottest.json");
 
-			return (Array.isArray(stories) ? stories : [])
+			return stories
 				.filter((story) => isOffSiteLink(story.url, ["lobste.rs"]))
 				.map(lobstersStory);
 		},
@@ -7405,13 +7948,9 @@ button {
 		},
 
 		async frontPage() {
-			const links = await mastodonJSON(
+			const links = await frontPageJSON(
 				`${MASTODON_INSTANCE}/api/v1/trends/links?limit=40`,
 			);
-
-			if (!Array.isArray(links)) {
-				return [];
-			}
 
 			return links.filter((link) => isOffSiteLink(link?.url)).map(mastodonTrendStory);
 		},
@@ -7470,11 +8009,12 @@ button {
 		},
 
 		async frontPage() {
-			const res = await lemmyJSON(
+			const res = await frontPageJSON(
 				"https://lemmy.world/api/v3/post/list?sort=Active&type_=All&limit=50",
+				"posts",
 			);
 
-			return (res?.posts || [])
+			return res.posts
 				.filter((view) => isOffSiteLink(view.post?.url, [], ["/pictrs/"]))
 				.map(lemmyStory);
 		},
@@ -7888,6 +8428,8 @@ button {
 	const FRONT_PAGE_CACHE_KEY = "HNewhere:frontpage_cache";
 
 	const FRONT_PAGE_TTL = 5 * 60 * 1000;
+	const frontPageLoads = new Map();
+	let frontPageRequestId = 0;
 
 	const TOPICS = [
 		{ id: "world", label: "World" },
@@ -8062,62 +8604,105 @@ button {
 	}
 	// #endregion hnewhere-test-export
 
-	async function fetchFrontPageFeed(feed) {
+	async function frontPageJSON(url, field = "") {
+		const result = await requestWithMeta(url);
+		const listing = field ? result.json?.[field] : result.json;
+
+		if (!result.ok || !Array.isArray(listing)) throw new Error("Feed returned no listing");
+		return result.json;
+	}
+
+	async function fetchFrontPageFeed(feed, force = false) {
 		let stories = [];
 
 		if (feed.kind === "front") {
-			stories = (await getSource(feed.source).frontPage()) || [];
+			stories = await getSource(feed.source).frontPage({ force });
 		} else if (feed.kind === "subreddits") {
-			const result = await redditFetch(`/r/${feed.target}.json?limit=100`);
+			const result = await redditFetch(`/r/${feed.target}.json?limit=100`, null, { listing: true, retryAccess: force });
+
+			if (!Array.isArray(result?.json?.data?.children)) {
+				throw new Error("Reddit feed returned no listing");
+			}
 
 			stories = (result?.json?.data?.children || [])
 				.map((child) => child.data)
 				.filter((post) => post?.id && isOffSiteLink(post.url, REDDIT_SELF_HOSTS))
 				.map(redditStory);
 		} else if (feed.kind === "community") {
-			const res = await lemmyJSON(
+			const res = await frontPageJSON(
 				`https://lemmy.world/api/v3/post/list?community_name=${encodeURIComponent(feed.target)}&sort=Active&type_=All&limit=50`,
+				"posts",
 			);
 
-			stories = (res?.posts || [])
+			stories = res.posts
 				.filter((view) => isOffSiteLink(view.post?.url, [], ["/pictrs/"]))
 				.map(lemmyStory);
 		} else if (feed.kind === "feed") {
-			const res = await bskyJSON(
+			const res = await frontPageJSON(
 				`${BSKY_APPVIEW}/app.bsky.feed.getFeed?feed=${encodeURIComponent(feed.target)}&limit=100`,
+				"feed",
 			);
 
-			stories = bskyFeedStories(res?.feed);
+			stories = bskyFeedStories(res.feed);
 		}
 
+		if (!Array.isArray(stories)) throw new Error("Feed returned no listing");
 		return feed.topic ? stories.map((story) => ({ ...story, topic: feed.topic })) : stories;
 	}
 
 	const FRONT_PAGE_FEED_KEY = "HNewhere:frontpage_feed:";
 
+	async function frontPageFeedResult(feed, force = false) {
+		try {
+			return { stories: await fetchFrontPageFeed(feed, force), status: "ok", attempted: true };
+		} catch (error) {
+			console.warn("Backchannel " + feed.source + " feed failed:", error);
+			return { stories: [], status: error?.feedStatus || "unavailable", attempted: error?.feedAttempted !== false };
+		}
+	}
+
 	async function loadTopicFeed(feed, force) {
+		const request = ++frontPageRequestId;
 		const key = FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`;
 		const cached = await load(key, null);
 
-		if (!force && cached?.stories?.length && Date.now() - cached.timestamp < FRONT_PAGE_TTL) {
-			return cached.stories;
+		if (!force && Array.isArray(cached?.stories) && Date.now() - cached.timestamp < FRONT_PAGE_TTL) {
+			return { stories: cached.stories, status: cached.status || "ok", cached: Boolean(cached.status && cached.status !== "ok" && cached.stories.length), attempted: false };
 		}
 
-		try {
-			const stories = await fetchFrontPageFeed(feed);
+		frontPageLoads.set(key, Math.max(frontPageLoads.get(key) || 0, request));
+		const result = await frontPageFeedResult(feed, force);
+		const stories = result.status === "ok" ? result.stories : cached?.stories || [];
 
-			if (stories.length) {
-				await save(key, { timestamp: Date.now(), stories });
-				return stories;
-			}
-		} catch (e) {
-			console.warn("Backchannel " + feed.source + " topic feed failed:", e);
-		}
+		if (frontPageLoads.get(key) === request) await save(key, { timestamp: Date.now(), stories, status: result.status });
 
-		return cached?.stories || [];
+		return { ...result, stories, cached: result.status !== "ok" && stories.length > 0 };
+	}
+
+	function frontPageFeedStates(feeds, results) {
+		return feeds.map((feed, index) => ({ source: feed.source, topic: feed.topic || "", status: results[index].status, cached: Boolean(results[index].cached), attempted: Boolean(results[index].attempted) }));
+	}
+
+	function frontPageFailureText(feedStates, view = "all") {
+		const failures = feedStates.filter((feed) => feed.status !== "ok" && feed.status !== "window" &&
+			(!view.startsWith("source:") || feed.source === view.slice(7)) &&
+			(!view.startsWith("topic:") || feed.topic === view.slice(6)));
+		const messages = failures.map((feed) => {
+			const name = getSource(feed.source)?.label || feed.source;
+			const message = feed.status === "access"
+				? `${name} isn't allowing access to its feed right now.`
+				: feed.status === "limited"
+					? `${name} requests are temporarily limited. Try syncing again later.`
+					: `${name} is unavailable right now. Try syncing again later.`;
+
+			return message + (feed.cached ? " Showing saved articles." : "");
+		});
+
+		return [...new Set(messages)].join(" ");
 	}
 
 	async function loadFrontPages(options = {}) {
+		const request = ++frontPageRequestId;
 		const settings = options.settings || (await loadSettings());
 		const feeds = frontPageFeeds(
 			settings,
@@ -8125,17 +8710,34 @@ button {
 			enabledSourceIds(settings, registeredSourceIds()),
 		);
 
+		if (usesRedditReadWindow() && !redditReadInitialAttempted && !redditReadBatch && isSidebarVisible() && feeds.some((feed) => feed.source === "reddit")) {
+			redditReadInitialAttempted = true;
+			const [accepted, cooldown] = await Promise.all([load(REDDIT_READ_NOTICE_KEY, false), load(REDDIT_POLL_KEY, null)]);
+
+			if (accepted && !(cooldown?.until > Date.now())) {
+				const ui = sidebarUI;
+
+				runSync(async () => {
+					if (sidebarUI === ui && (await loadSettings()).sources?.reddit) return refreshRedditReadViews(ui);
+				}, { automatic: true }).catch(console.error);
+			}
+			if (!accepted) scheduleRedditReadNotice();
+		}
+
 		if (!feeds.length) {
-			return { rows: [], sources: [], topics: [] };
+			return { rows: [], sources: [], topics: [], attempted: false };
 		}
 
 		if (feeds.some((feed) => feed.topic)) {
-			const lists = await Promise.all(feeds.map((feed) => loadTopicFeed(feed, options.force)));
+			const results = await Promise.all(feeds.map((feed) => loadTopicFeed(feed, options.force)));
+			const lists = results.map((result) => result.stories);
 
 			return {
 				rows: liftMergedRows(mergeStoriesByURL(blendStories(lists.filter((list) => list.length)))),
 				sources: [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))],
 				topics: [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.topic))],
+				feedStates: frontPageFeedStates(feeds, results),
+				attempted: results.some((result) => result.attempted),
 			};
 		}
 
@@ -8144,34 +8746,33 @@ button {
 
 		if (
 			!options.force &&
-			cached?.rows?.length &&
+			Array.isArray(cached?.rows) &&
 			Date.now() - cached.timestamp < FRONT_PAGE_TTL
 		) {
-			return { rows: cached.rows, sources: cached.sources || [], topics: cached.topics || [] };
+			return { rows: cached.rows, sources: cached.sources || [], topics: cached.topics || [], feedStates: cached.feedStates || [], attempted: false };
 		}
 
-		const lists = await Promise.all(
-			feeds.map(async (feed) => {
-				try {
-					return (await getSource(feed.source).frontPage()) || [];
-				} catch (e) {
-					console.warn("Backchannel " + feed.source + " front page failed:", e);
-					return [];
-				}
-			}),
-		);
+		frontPageLoads.set(cacheKey, Math.max(frontPageLoads.get(cacheKey) || 0, request));
+		const results = await Promise.all(feeds.map(async (feed) => {
+			const result = await frontPageFeedResult(feed, options.force);
+
+			if (result.status !== "ok") {
+				result.stories = (cached?.rows || []).flatMap((row) => [row.story, ...(row.also || [])]).filter((story) => story.source === feed.source);
+				result.cached = result.stories.length > 0;
+			}
+
+			return result;
+		}));
+		const lists = results.map((result) => result.stories);
+		const feedStates = frontPageFeedStates(feeds, results);
 
 		const answered = [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))];
 		const topics = [...new Set(feeds.filter((feed, index) => lists[index].length && feed.topic).map((feed) => feed.topic))];
 		const rows = mergeStoriesByURL(blendStories(lists.filter((list) => list.length)));
 
-		if (!rows.length) {
-			return { rows: cached?.rows || [], sources: cached?.sources || [], topics: cached?.topics || [] };
-		}
+		if (frontPageLoads.get(cacheKey) === request) await save(cacheKey, { timestamp: Date.now(), rows, sources: answered, topics, feedStates });
 
-		await save(cacheKey, { timestamp: Date.now(), rows, sources: answered, topics });
-
-		return { rows, sources: answered, topics };
+		return { rows, sources: answered, topics, feedStates, attempted: results.some((result) => result.attempted) };
 	}
 
 	// -------------------------
@@ -10983,34 +11584,70 @@ html[data-backchannel-installed] .chin {
 
 	const TOAST_DISMISS_MS = 5200;
 
-	const TOAST_HTML = `<div id="toast" class="toast" role="status" aria-live="polite"></div>`;
+	const TOAST_HTML = `<div id="toast" class="toast" data-kind="user" role="status" aria-live="polite"></div>`;
 
 	const TOAST_CSS = `
-.toast {
+.toast-viewport {
+	all:initial;
 	position:absolute;
-	top:8px;
+	inset:0;
+	z-index:2147483647;
+	overflow:hidden;
+	pointer-events:none;
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+:host([data-hnewhere-app]) .toast-viewport,
+:host([data-hnewhere-page-mode]) .toast-viewport,
+:host([data-hnewhere-toast]) .toast-viewport {
+	position:fixed;
+}
+
+.toast {
+	--toast-edge:calc(16px + env(safe-area-inset-top, 0px));
+	--toast-away:calc(-100% - var(--toast-edge) - 8px);
+	position:absolute;
+	top:var(--toast-edge);
 	left:50%;
-	transform:translate(-50%,-14px);
+	box-sizing:border-box;
 	width:max-content;
-	max-width:calc(100% - 24px);
-	padding:8px 12px;
-	border-radius:999px;
-	background:var(--accent);
-	color:var(--accent-ink);
+	max-width:min(480px, calc(100% - 32px));
+	padding:5px 10px;
+	border:1px solid rgba(255,255,255,.16);
+	border-radius:7px;
+	background:#1b1b1b;
+	color:#fff;
 	box-shadow:0 4px 14px rgba(0,0,0,.22);
-	font-size:12px;
-	line-height:1.4;
+	font-size:11px;
+	line-height:1.35;
 	text-align:center;
 	opacity:0;
 	visibility:hidden;
 	pointer-events:none;
-	transition:opacity .18s ease, transform .18s ease, visibility .18s;
+	transform:translate(-50%,var(--toast-away)) scale(.97);
+	filter:blur(2px);
+	transition:transform .32s cubic-bezier(.4,0,1,1), opacity .2s ease, filter .25s ease, visibility 0s linear .32s;
+}
+
+.toast[data-kind="user"] {
+	--toast-edge:var(--toast-bottom, calc(16px + env(safe-area-inset-bottom, 0px)));
+	--toast-away:calc(100% + var(--toast-edge) + 8px);
+	top:auto;
+	bottom:var(--toast-edge);
+}
+
+:host(.${DARK_CLASS}) .toast {
+	border-color:rgba(0,0,0,.12);
+	background:#f7f7f7;
+	color:#111;
 }
 
 .toast.is-showing {
 	opacity:1;
 	visibility:visible;
-	transform:translate(-50%,0);
+	transform:translate(-50%,0) scale(1);
+	filter:blur(0);
+	transition:transform .44s cubic-bezier(.16,1,.3,1), opacity .18s ease, filter .28s ease, visibility 0s;
 }
 
 .toast.has-action.is-showing {
@@ -11018,32 +11655,32 @@ html[data-backchannel-installed] .chin {
 }
 
 .toast-trailer {
-	opacity:.65;
+	opacity:.75;
 }
 
 .toast .toast-action {
+	padding:0;
+	border:0;
+	background:none;
 	color:inherit;
-	font-size:inherit;
-	text-decoration-color:currentColor;
-}
-`;
-
-	const PAGE_TOAST_CSS = `
-.toast-layer {
-	all:initial;
-	position:fixed;
-	left:0;
-	right:0;
-	bottom:0;
-	height:0;
-	z-index:2147483647;
-	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+	font:inherit;
+	text-decoration:underline;
+	text-underline-offset:2px;
+	cursor:pointer;
 }
 
-.toast {
-	top:auto;
-	bottom:calc(16px + env(safe-area-inset-bottom, 0px));
-	transform:translate(-50%,14px);
+@media (prefers-reduced-motion: reduce) {
+	.toast {
+		transform:translate(-50%,0);
+		filter:none;
+		transition:opacity .12s ease, visibility 0s linear .12s;
+	}
+
+	.toast.is-showing {
+		transform:translate(-50%,0);
+		filter:none;
+		transition:opacity .12s ease, visibility 0s;
+	}
 }
 `;
 
@@ -11066,7 +11703,7 @@ html[data-backchannel-installed] .chin {
 
 			const shadow = host.attachShadow({ mode: "open" });
 
-			shadow.innerHTML = `<style>${THEME_CSS}${CHROME_CSS}${TOAST_CSS}${PAGE_TOAST_CSS}</style><div class="toast-layer">${TOAST_HTML}</div>`;
+			shadow.innerHTML = `<style>${THEME_CSS}${CHROME_CSS}${TOAST_CSS}</style><div class="toast-viewport">${TOAST_HTML}</div>`;
 			adoptStyles(shadow);
 			document.documentElement.appendChild(host);
 			shadow.getElementById("toast").getBoundingClientRect();
@@ -11082,11 +11719,11 @@ html[data-backchannel-installed] .chin {
 				if (!toast.classList.contains("is-showing") && pageToastHost?.shadowRoot.contains(toast)) {
 					removePageToast();
 				}
-			}, 300);
+			}, 360);
 		}
 	}
 
-	function showToast(message, { persist = false, action = null, page = false } = {}) {
+	function showToast(message, { persist = false, action = null, page = false, kind = "user" } = {}) {
 		if (sidebarUI?.shadow) {
 			removePageToast();
 		}
@@ -11105,6 +11742,13 @@ html[data-backchannel-installed] .chin {
 			return;
 		}
 
+		if (toast.dataset.kind !== kind) {
+			toast.classList.remove("is-showing");
+			toast.style.transition = "none";
+			toast.dataset.kind = kind;
+			toast.getBoundingClientRect();
+			toast.style.removeProperty("transition");
+		}
 		toast.textContent = message;
 		toast.classList.toggle("has-action", Boolean(action));
 		toast.onmouseenter = null;
@@ -11699,7 +12343,7 @@ html[data-backchannel-installed] .chin {
 			itemId,
 			descriptor.action,
 			descriptor.url,
-			() => showToast(`Waiting for sign-in on ${label}…`, { persist: true }),
+			() => showToast(`Waiting for sign-in on ${label}…`, { kind: "system", persist: true }),
 		);
 
 		return (async () => {
@@ -11718,7 +12362,7 @@ html[data-backchannel-installed] .chin {
 						href: result.url,
 					});
 				} else if (isSidebarLevelReason(result?.reason)) {
-					showToast(voteFailureMessage(result, label));
+					showToast(voteFailureMessage(result, label), { kind: "system" });
 				} else {
 					sayVote(container, itemId, voteFailureMessage(result, label));
 				}
@@ -12291,7 +12935,9 @@ html[data-backchannel-installed] .chin {
 		if (on) {
 			browseTab =
 				options.tab ||
-				(queueHasItems
+				(ui.browseHome && frontPageAvailable
+					? "front"
+					: queueHasItems
 					? "queue"
 					: frontPageAvailable
 						? "front"
@@ -12301,7 +12947,12 @@ html[data-backchannel-installed] .chin {
 		}
 
 		const swap = () => {
+			closeBrowseRowMenus(ui.shadow);
 			panel.classList.toggle("browsing", on);
+			if (ui.browseHome) {
+				if (!on) setBrowseSearchOpen(ui, false, { restoreFocus: false, restoreScroll: false });
+				paintBrowseHome(ui);
+			}
 			refreshSidebarSubtitle(ui);
 
 			const picking = Boolean(ui.body?.querySelector(".source-picker"));
@@ -12415,6 +13066,7 @@ html[data-backchannel-installed] .chin {
 		if (appState && !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) {
 			event.preventDefault();
 			openAppStory(story, { focus }).catch(console.error);
+			if (openPanel) revealAppDiscussion();
 			return;
 		}
 
@@ -12442,10 +13094,17 @@ html[data-backchannel-installed] .chin {
 
 	function renderBrowseRow(story, container, rank, options = {}) {
 		const isWriting = story.kind === "comment" || story.kind === "noted";
+		const readerRow = Boolean(appState) || options.readerRow === true;
 		const age = `<span class="item-age">${escapeHTML(timeAgo(story.time))}</span>`;
 		const inPost = story.context
 			? `in ${escapeHTML(story.context)}${story.site ? ` (${escapeHTML(story.site)})` : ""}`
 			: "";
+		const discussions = [story, ...(options.also || [])];
+		const totalComments = discussions.reduce((sum, each) => sum + (each.descendants || 0), 0);
+		const counted = totalComments > 0 && discussions.some((each) => Number.isFinite(each.descendants));
+		const sourceCount = new Set(discussions.map((each) => each.source || "hn")).size;
+		const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}" title="Open discussion">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalComments === 1 ? "comment" : "comments"}${readerRow && sourceCount > 1 ? ` across ${sourceCount} sources` : ""}</a>`;
+		const metadata = [story.site ? escapeHTML(story.site) : "", readerRow && story.time ? age : "", readerRow && counted ? commentTotal : ""].filter(Boolean).join(", ");
 
 		const rowQueueLink = () => `|
 	<button class="browse-queue-link" type="button">queue</button>`;
@@ -12482,25 +13141,10 @@ html[data-backchannel-installed] .chin {
 	<button class="item-action-link browse-delete-note-link" type="button">delete</button>`;
 			}
 
-			const discussions = [story, ...(options.also || [])];
-			const totalComments = discussions.reduce(
-				(sum, each) => sum + (each.descendants || 0),
-				0,
-			);
-			const counted =
-				totalComments > 0 &&
-				discussions.some((each) => Number.isFinite(each.descendants));
-			const totalWord = totalComments === 1 ? "comment" : "comments";
-			const commentTotal = `<a class="browse-comments-total" href="${escapeHTML(story.url)}"
-	title="Go to the page and read what was said about it">${totalComments}<span class="browse-comments-floor" aria-hidden="true">+</span> ${totalWord}</a>`;
-			const sourceCount = new Set(discussions.map((each) => each.source || "hn")).size;
-			const sourcesTotal = `<span class="browse-sources-total">${totalComments}+ ${totalWord}${sourceCount > 1 ? ` across ${sourceCount} sources` : ""}</span>`;
-
-			if (appState) {
+			if (readerRow) {
 				return `${rowQueueLink()}
 	${rowActions()}
-	${rowHideLink()}
-	${counted ? `|\n\t${commentTotal}\n\t${sourcesTotal}` : ""}`.replace(/^\s*\|\s*/, "");
+	${rowHideLink()}`.replace(/^\s*\|\s*/, "");
 			}
 
 			return `${
@@ -12536,17 +13180,17 @@ html[data-backchannel-installed] .chin {
 				? `${rank}.`
 				: ""
 	}</div>
-	${appState && !isWriting ? appRowThumbHTML(story) : ""}
+	${readerRow && !isWriting ? appRowThumbHTML(story) : ""}
 	<div class="browse-main">
 	<div class="story-title">
 	<a class="browse-title-link${isWriting ? " browse-quote" : ""}" href="${escapeHTML(story.url)}">${escapeHTML(story.title)}</a>
-	${story.site && !isWriting ? `<span class="browse-site">(${escapeHTML(story.site)}${appState && story.time ? `, ${age}` : ""})</span>` : ""}
+	${metadata && !isWriting ? `<span class="browse-site">(${metadata})</span>` : ""}
 	</div>
 	<div class="story-meta">
 	${meta}
 	</div>
 	</div>
-	${appState && !isWriting ? `<button class="browse-more" type="button" aria-label="More" aria-haspopup="true">${MORE_ICON}</button>` : ""}
+	${readerRow && !isWriting ? `<button class="browse-more" type="button" aria-label="More" aria-haspopup="menu"${options.readerRow ? ' aria-expanded="false"' : ""}>${MORE_ICON}</button>` : ""}
 	`;
 
 		const more = row.querySelector(".browse-more");
@@ -12554,7 +13198,11 @@ html[data-backchannel-installed] .chin {
 		if (more) {
 			more.onclick = (event) => {
 				event.stopPropagation();
-				openAppRowMenu(row, more);
+				if (appState) {
+					openAppRowMenu(row, more);
+				} else {
+					toggleBrowseRowMenu(row, more, event.detail === 0);
+				}
 			};
 		}
 
@@ -12597,7 +13245,7 @@ html[data-backchannel-installed] .chin {
 			const queuedLabel = options.inQueue ? "unqueue" : "queued";
 			const key = queueKey(story);
 			const paintQueued = (queued) => {
-				queueButton.textContent = queued ? queuedLabel : "queue";
+				setActionLabel(queueButton, queued ? queuedLabel : "queue");
 			};
 
 			if (options.inQueue) {
@@ -12621,7 +13269,7 @@ html[data-backchannel-installed] .chin {
 						: addToQueue(entries, story, Date.now());
 				});
 
-				queueButton.textContent = already ? "queue" : queuedLabel;
+				paintQueued(!already);
 
 				if (already && row.parentElement?.closest("#browse-list") && browseTab === "queue") {
 					row.remove();
@@ -12634,6 +13282,23 @@ html[data-backchannel-installed] .chin {
 
 		row.querySelector(".browse-title-link").onclick = (event) =>
 			openStoryFromRow(story, event);
+
+		if (options.readerRow) {
+			const menu = document.createElement("div");
+
+			menu.className = "browse-row-menu dropdown";
+			menu.setAttribute("role", "menu");
+			menu.setAttribute("aria-label", "Article actions");
+			menu.hidden = true;
+
+			for (const action of row.querySelectorAll(".story-meta button")) {
+				action.setAttribute("role", "menuitem");
+				menu.append(action);
+				setActionLabel(action, action.textContent);
+			}
+
+			row.append(menu);
+		}
 
 		container.appendChild(row);
 		return row;
@@ -12674,6 +13339,11 @@ html[data-backchannel-installed] .chin {
 
 		if (frontTab) {
 			frontTab.hidden = !frontPageAvailable;
+			const allTab = root.querySelector("#browse-tab-all");
+
+			if (allTab) {
+				allTab.hidden = !frontPageAvailable;
+			}
 		}
 
 		if (wordmark) {
@@ -12738,6 +13408,12 @@ html[data-backchannel-installed] .chin {
 	}
 
 	function paintBrowseTab(tab, on, label, widthProperty, hasClass) {
+		if (tab.classList.contains("browse-home-tab")) {
+			tab.hidden = !on;
+			tab.setAttribute("aria-hidden", String(!on));
+			tab.tabIndex = on && tab.getAttribute("aria-selected") === "true" ? 0 : -1;
+			return;
+		}
 		if (on) {
 			tab.textContent = label;
 			tab.style.setProperty(widthProperty, tab.scrollWidth + "px");
@@ -12772,6 +13448,11 @@ html[data-backchannel-installed] .chin {
 			loadCollected(),
 		]);
 		const state = collectionTabState(saved, noted, collected);
+		const badge = tab.querySelector(".rail-badge");
+
+		if (badge) {
+			badge.textContent = state.fresh ? compactCount(state.fresh) : "";
+		}
 
 		notedHasItems = state.has;
 		tab.classList.toggle("has-fresh", state.fresh > 0);
@@ -13858,6 +14539,11 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 		const entries = await loadQueue();
 		const unread = unreadQueueCount(entries);
+		const badge = tab.querySelector(".rail-badge");
+
+		if (badge) {
+			badge.textContent = unread ? compactCount(unread) : "";
+		}
 
 		queueHasItems = entries.length > 0;
 
@@ -14270,7 +14956,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			return;
 		}
 
-		const reload = () => renderQueueView(ui, list);
+		const reload = () => isCurrent() ? ui.browseHome ? renderBrowseView(ui) : renderQueueView(ui, list, isCurrent) : Promise.resolve();
 		let rank = 0;
 
 		list.replaceChildren();
@@ -14288,6 +14974,8 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			const row = renderBrowseRow(entry, list, (rank += 1), {
 				inQueue: true,
 				reload,
+				readerRow: Boolean(ui.browseHome),
+				unreadDot: ui.browseHome ? !entry.readAt : undefined,
 			});
 
 			row.classList.toggle("browse-row-read", Boolean(entry.readAt));
@@ -14296,8 +14984,8 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		refreshSaveControls().catch(console.error);
 
 		refreshQueueEntries(entries).then((refreshed) => {
-			if (refreshed && isBrowsing(ui) && browseTab === "queue") {
-				renderQueueView(ui, list).catch(console.error);
+			if (refreshed && isCurrent() && isBrowsing(ui) && browseTab === "queue") {
+				renderQueueView(ui, list, isCurrent).catch(console.error);
 			}
 		});
 
@@ -14309,7 +14997,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			clear.onclick = async () => {
 				await mutateQueue((queued) => clearReadFromQueue(queued));
 
-				await renderQueueView(ui, list);
+				await reload();
 				refreshQueueCount(ui.shadow);
 				refreshNextUp(ui.shadow);
 			};
@@ -14318,6 +15006,10 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			nav.className = "browse-nav";
 			nav.appendChild(clear);
 			list.appendChild(nav);
+		}
+
+		if (ui.browseHome && isCurrent()) {
+			fillAppRowThumbs(list);
 		}
 	}
 
@@ -14378,71 +15070,452 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		list.replaceChildren(wrap);
 	}
 
-	async function renderFrontPageView(ui, list) {
+	function browseTabContents(label, icon, count = "") {
+		return `<span class="browse-home-tab-title"><span class="browse-home-icon" aria-hidden="true">${icon}</span><span class="browse-home-label">${escapeHTML(label)}</span></span><span class="rail-badge" aria-hidden="true">${count ? compactCount(count) : ""}</span>`;
+	}
+
+	function sidebarHomeChromeHTML() {
+		const tabs = APP_VIEWS.map((view) => `<button id="browse-tab-${view.id === "unread" ? "front" : view.id}" class="browse-tab browse-home-tab${view.id === "unread" ? " is-current" : ""}" data-browse-view="${view.id}" type="button" role="tab" aria-label="${view.label}" aria-selected="${view.id === "unread"}" aria-controls="browse-list" tabindex="${view.id === "unread" ? 0 : -1}"${view.id === "queue" || view.id === "collection" ? " hidden" : ""}>${browseTabContents(view.label, view.icon)}</button>`).join("");
+
+		return `<div class="browse-home-nav-row"><button id="browse-home-search-toggle" type="button" aria-label="Search Backchannel" title="Search Backchannel" aria-expanded="false" aria-controls="browse-home-search-page">${APP_ICON('<circle cx="7" cy="7" r="4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="m10 10 3.5 3.5" stroke="currentColor" stroke-width="1.5"/>')}</button><nav class="browse-tabs browse-home-nav browse-home-scroll" role="tablist" aria-label="Backchannel views">${tabs}</nav></div>
+<div id="browse-home-filters" hidden></div>
+<div id="browse-home-search-page" class="app-search-page" role="dialog" aria-label="Search Backchannel" hidden><div class="app-search-head"><input id="browse-home-search" class="app-search-input" type="search" placeholder="Search Backchannel" aria-label="Search Backchannel" autocomplete="off" autocorrect="off" spellcheck="false"><button id="browse-home-search-close" class="app-search-close" type="button">Cancel</button></div><div id="browse-home-search-results" class="app-search-results"></div></div>`;
+	}
+
+	let browseRowMenuCleanup = null;
+
+	function closeBrowseRowMenus(shadow) {
+		browseRowMenuCleanup?.();
+		browseRowMenuCleanup = null;
+
+		for (const menu of shadow.querySelectorAll(".browse-row-menu")) {
+			menu.hidden = true;
+			menu.parentElement.querySelector(".browse-more")?.setAttribute("aria-expanded", "false");
+		}
+	}
+
+	function toggleBrowseRowMenu(row, opener, keyboard = false) {
+		const menu = row.querySelector(".browse-row-menu");
+		const open = menu.hidden;
+		const shadow = row.getRootNode();
+
+		closeBrowseRowMenus(shadow);
+		menu.hidden = !open;
+		opener.setAttribute("aria-expanded", String(open));
+
+		if (open) {
+			menu.classList.remove("opens-up");
+			const panel = row.getRootNode().querySelector("#panel").getBoundingClientRect();
+
+			menu.classList.toggle("opens-up", menu.getBoundingClientRect().bottom > panel.bottom - 72);
+
+			const outside = (event) => {
+				if (!event.composedPath().includes(menu) && !event.composedPath().includes(opener)) closeBrowseRowMenus(shadow);
+			};
+			const leave = (event) => {
+				if (!menu.contains(event.relatedTarget) && event.relatedTarget !== opener) closeBrowseRowMenus(shadow);
+			};
+			const away = (event) => {
+				if (event.target !== menu) closeBrowseRowMenus(shadow);
+			};
+			const keys = (event) => {
+				if (event.key !== "Escape") return;
+
+				closeBrowseRowMenus(shadow);
+				opener.focus({ preventScroll: true });
+				event.preventDefault();
+				event.stopPropagation();
+			};
+
+			window.addEventListener("pointerdown", outside, true);
+			window.addEventListener("focusin", outside, true);
+			window.addEventListener("keydown", keys, true);
+			window.addEventListener("resize", away);
+			shadow.addEventListener("scroll", away, true);
+			menu.addEventListener("focusout", leave);
+			opener.addEventListener("focusout", leave);
+			browseRowMenuCleanup = () => {
+				window.removeEventListener("pointerdown", outside, true);
+				window.removeEventListener("focusin", outside, true);
+				window.removeEventListener("keydown", keys, true);
+				window.removeEventListener("resize", away);
+				shadow.removeEventListener("scroll", away, true);
+				menu.removeEventListener("focusout", leave);
+				opener.removeEventListener("focusout", leave);
+			};
+			if (keyboard) menu.querySelector("[role=menuitem]")?.focus({ preventScroll: true });
+		}
+	}
+
+	function paintBrowseHome(ui) {
+		const state = ui.browseHome;
+		const view = state.view;
+		const markable = isBrowsing(ui) && !isSubmitting(ui) && !state.searchOpen && appViewIsFrontPage(view);
+
+		ui.shadow.querySelector("#browse-home-mark-read").hidden = !markable;
+		ui.shadow.querySelector("#browse-home-sync").hidden = !markable;
+
+		for (const button of ui.shadow.querySelectorAll(".browse-home-nav [data-browse-view]")) {
+			const matches = button.dataset.browseView === view || (button.dataset.browseView === "all" && (view.startsWith("source:") || view.startsWith("topic:")));
+			const current = matches && !state.searchOpen;
+
+			button.classList.toggle("is-current", current);
+			button.setAttribute("aria-selected", String(current));
+			button.tabIndex = matches ? 0 : -1;
+			if (current) ui.shadow.querySelector("#browse-list").setAttribute("aria-labelledby", button.id);
+		}
+
+		for (const section of ui.shadow.querySelectorAll("[data-filter-group]")) {
+			const visible = !state.searchOpen && appViewIsFrontPage(view) && (section.dataset.filterGroup !== "sources" || view !== "unread");
+
+			section.classList.toggle("is-collapsed", !visible);
+			section.setAttribute("aria-hidden", String(!visible));
+			section.inert = !visible;
+		}
+	}
+
+	function renderBrowseHomeFilters(ui, sourceIds, topicIds, counts, view) {
+		const filters = ui.shadow.querySelector("#browse-home-filters");
+		const focused = filters.contains(ui.shadow.activeElement) ? ui.shadow.activeElement?.dataset.browseView : "";
+		const scrolls = new Map([...filters.querySelectorAll("[data-filter-group]")].map((section) => [section.dataset.filterGroup, section.querySelector(".browse-home-scroll").scrollLeft]));
+
+		for (const [group, label, ids] of [["topics", "Topics", topicIds], ["sources", "Sources", sourceIds]]) {
+			let section = filters.querySelector(`[data-filter-group="${group}"]`);
+
+			if (!ids.length) {
+				section?.remove();
+				continue;
+			}
+
+			if (!section) {
+				section = document.createElement("div");
+				section.className = "browse-home-filter-reveal is-collapsed";
+				section.dataset.filterGroup = group;
+				section.innerHTML = `<section class="browse-home-filter-section">${group === "topics" ? '<h3 class="browse-home-filter-label">Topics</h3>' : ""}<div class="browse-home-scroll" role="group" aria-label="${label}"></div></section>`;
+				filters.append(section);
+			}
+
+			const scroller = section.querySelector(".browse-home-scroll");
+
+			scroller.replaceChildren();
+
+			for (const id of ids) {
+				const key = (group === "topics" ? "topic:" : "source:") + id;
+				const name = appViewLabel(key);
+				const icon = (group === "topics" ? TOPIC_ICONS[id] : APP_SOURCE_ICONS[id]) || `<span class="rail-monogram">${escapeHTML(name.slice(0, 2))}</span>`;
+				const button = document.createElement("button");
+
+				button.type = "button";
+				button.className = "browse-home-tab browse-home-filter";
+				button.dataset.browseView = key;
+				button.setAttribute("aria-pressed", String(view === key));
+				button.innerHTML = browseTabContents(name, icon, counts[group][id]);
+				button.onclick = () => renderBrowseView(ui, { view: ui.browseHome.view === key ? "all" : key }).catch(console.error);
+				scroller.append(button);
+			}
+
+			scroller.scrollLeft = scrolls.get(group) || 0;
+		}
+
+		filters.hidden = !filters.childElementCount;
+		paintBrowseHome(ui);
+		const restore = [...filters.querySelectorAll("[data-browse-view]")].find((button) => button.dataset.browseView === focused);
+
+		if (restore && !restore.closest("[data-filter-group]").inert) {
+			restore.focus({ preventScroll: true });
+			restore.scrollIntoView({ block: "nearest", inline: "nearest" });
+		}
+	}
+
+	function setBrowseSearchOpen(ui, open, { restoreFocus = true, restoreScroll = true } = {}) {
+		const { shadow, browseHome: state } = ui;
+		const show = Boolean(open);
+		const input = shadow.querySelector("#browse-home-search");
+
+		if (Boolean(state.searchOpen) === show) {
+			if (show) input.focus({ preventScroll: true });
+			return;
+		}
+
+		const list = shadow.querySelector("#browse-list");
+		const toggle = shadow.querySelector("#browse-home-search-toggle");
+
+		if (show) state.searchScroll = list.scrollTop;
+		state.searchOpen = show;
+		state.searchSequence = (state.searchSequence || 0) + 1;
+		shadow.querySelector("#browse-view").classList.toggle("is-searching", show);
+		shadow.querySelector("#browse-home-search-page").hidden = !show;
+		toggle.setAttribute("aria-expanded", String(show));
+		toggle.setAttribute("aria-pressed", String(show));
+		paintBrowseHome(ui);
+
+		if (show) {
+			input.value = "";
+			renderBrowseSearch(ui);
+			input.focus({ preventScroll: true });
+		} else {
+			if (restoreScroll) {
+				list.scrollTop = state.searchScroll || 0;
+				const held = list.scrollTop;
+				const sequence = state.sequence;
+				const searchSequence = state.searchSequence;
+
+				Promise.all(shadow.querySelector("#browse-home-filters").getAnimations({ subtree: true }).map((animation) => animation.finished.catch(() => {}))).then(() => {
+					if (!state.searchOpen && state.sequence === sequence && state.searchSequence === searchSequence && list.scrollTop === held) list.scrollTop = state.searchScroll || 0;
+				});
+			}
+			if (restoreFocus) toggle.focus({ preventScroll: true });
+		}
+	}
+
+	function browseSearchEntries(ui) {
+		const { browseHome: state, shadow } = ui;
+		const entries = APP_VIEWS.map((view) => ({ group: "Go to", title: view.label, note: "", keys: view.id === "collection" ? `${view.label} saved` : view.label, run: () => renderBrowseView(ui, { view: view.id }).catch(console.error) }));
+
+		entries.push({ group: "Go to", title: "Settings", note: "", keys: "settings preferences", run: () => openAppSettingsSection("general") });
+		for (const [kind, ids] of [["Topic", state.topicIds || []], ["Source", state.sourceIds || []]]) {
+			for (const id of ids) {
+				const view = kind.toLowerCase() + ":" + id;
+				const label = appViewLabel(view);
+
+				entries.push({ group: "Go to", title: label, note: kind, keys: `${label} ${kind} ${kind}s ${id}`, typed: true, run: () => renderBrowseView(ui, { view }).catch(console.error) });
+			}
+		}
+		for (const row of state.searchRows || state.rows || []) {
+			const story = row.story;
+
+			entries.push({ group: "Articles", title: story.title, note: story.site || "", url: story.url, keys: `${story.title} ${story.site || ""}`, run: () => openStoryFromRow(story, new MouseEvent("click")) });
+		}
+		for (const item of state.searchListIndex || []) {
+			entries.push({ ...item, run: () => openStoryFromRow(item.story, new MouseEvent("click")) });
+		}
+		entries.push(...settingsSearchEntries(shadow, openAppSettingsSection));
+		return entries;
+	}
+
+	function renderBrowseSearch(ui) {
+		if (!ui.browseHome.searchOpen) return;
+
+		renderSearchResults(ui.shadow.querySelector("#browse-home-search-results"), browseSearchEntries(ui), ui.shadow.querySelector("#browse-home-search").value, (entry) => {
+			setBrowseSearchOpen(ui, false);
+			setTimeout(() => entry.run(), 0);
+		});
+	}
+
+	async function openBrowseSearch(ui) {
+		const { browseHome: state } = ui;
+
+		if (state.searchOpen) {
+			ui.shadow.querySelector("#browse-home-search").focus({ preventScroll: true });
+			return;
+		}
+
+		state.searchRows = state.rows?.length ? state.rows : state.searchRows || [];
+		setBrowseSearchOpen(ui, true);
+		const sequence = state.searchSequence;
+		const [queue, documents, hidden, settings, front] = await Promise.all([loadQueue(), loadCollectionDocuments(), loadHiddenStoryKeys(), loadSettings(), state.rows?.length ? null : loadFrontPages()]);
+
+		if (!state.searchOpen || state.searchSequence !== sequence || ui !== sidebarUI) return;
+
+		const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabledSourceIds(settings, registeredSourceIds()));
+
+		state.sourceIds = [...new Set(feeds.map((feed) => feed.source))];
+		state.topicIds = [...new Set(feeds.map((feed) => feed.topic).filter(Boolean))];
+		state.searchRows = (front?.rows || state.rows || []).filter((row) => !isStoryHidden(row.story, hidden));
+		state.searchListIndex = searchListIndex(queue, documents);
+		renderBrowseSearch(ui);
+	}
+
+	async function markBrowseHomeRead(ui) {
+		const state = ui.browseHome;
+		const rows = appViewRows(state.rows || [], state.view, state.seen || {}).filter((row) => rowIsUnread(row, state.seen || {}));
+		const keys = rows.flatMap(rowDiscussionKeys);
+
+		if (!keys.length) {
+			return;
+		}
+
+		const previous = await markManySeen(keys);
+
+		await renderBrowseView(ui);
+		showToast(`Marked ${pluralize(rows.length, "article", "articles")} as read`, { action: { label: "undo", onAct: () => restoreManySeen(previous).then(() => renderBrowseView(ui)).catch(console.error) } });
+	}
+
+	function wireBrowseHome(ui) {
+		const { shadow, browseHome: state } = ui;
+		const list = shadow.querySelector("#browse-list");
+		const search = shadow.querySelector("#browse-home-search");
+		const toggle = shadow.querySelector("#browse-home-search-toggle");
+
+		for (const button of shadow.querySelectorAll(".browse-home-nav [data-browse-view]")) {
+			button.onclick = () => {
+				setBrowseSearchOpen(ui, false, { restoreFocus: false, restoreScroll: false });
+				renderBrowseView(ui, { view: button.dataset.browseView }).catch(console.error);
+			};
+		}
+		shadow.querySelector("#browse-view").addEventListener("keydown", (event) => {
+			if (event.altKey || event.ctrlKey || event.metaKey || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+
+			const scroller = event.target.closest(".browse-home-scroll");
+
+			if (!scroller) return;
+
+			const buttons = [...scroller.querySelectorAll("button:not([hidden])")];
+			const at = buttons.indexOf(event.target.closest("button"));
+			const index = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (at + (event.key === "ArrowLeft" ? -1 : 1) + buttons.length) % buttons.length;
+			const button = buttons[index];
+
+			button.focus({ preventScroll: true });
+			button.click();
+			button.scrollIntoView({ block: "nearest", inline: "nearest" });
+			event.preventDefault();
+			event.stopPropagation();
+		});
+
+		toggle.onclick = () => state.searchOpen ? setBrowseSearchOpen(ui, false) : openBrowseSearch(ui).catch(console.error);
+		search.oninput = () => renderBrowseSearch(ui);
+		shadow.querySelector("#browse-home-search-close").onclick = () => setBrowseSearchOpen(ui, false);
+		shadow.querySelector("#browse-home-search-page").addEventListener("keydown", (event) => {
+			if (event.key !== "Escape") return;
+
+			event.preventDefault();
+			event.stopPropagation();
+			setBrowseSearchOpen(ui, false);
+		});
+		shadow.querySelector("#browse-home-sync").onclick = async (event) => {
+			const button = event.currentTarget;
+
+			button.disabled = true;
+			try {
+				await runSync(() => renderBrowseView(ui, { force: true }));
+			} catch (error) {
+				console.error(error);
+			} finally {
+				button.disabled = false;
+			}
+		};
+		shadow.querySelector("#browse-home-mark-read").onclick = () => markBrowseHomeRead(ui).catch(console.error);
+		list.addEventListener("click", (event) => {
+			if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.target.closest("a, button, input, textarea, .browse-row-menu")) return;
+
+			event.target.closest(".browse-row")?.querySelector(".browse-title-link")?.click();
+		});
+		shadow.addEventListener("click", (event) => {
+			if (!event.target.closest(".browse-row-menu, .browse-more")) closeBrowseRowMenus(shadow);
+		});
+		shadow.addEventListener("keydown", (event) => {
+			const menu = shadow.querySelector(".browse-row-menu:not([hidden])");
+
+			if (!menu) return;
+			if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+				if (!menu.contains(shadow.activeElement) && shadow.activeElement !== menu.parentElement.querySelector(".browse-more")) return;
+
+				const items = [...menu.querySelectorAll("[role=menuitem]:not(:disabled)")];
+				const current = items.indexOf(shadow.activeElement);
+				const index = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (current + (event.key === "ArrowUp" ? -1 : 1) + items.length) % items.length;
+
+				items[index]?.focus();
+				event.preventDefault();
+				event.stopPropagation();
+			}
+		});
+	}
+
+	async function renderFrontPageView(ui, list, options = {}, isCurrent = () => true) {
 		if (!list.childElementCount) {
 			renderBrowseSkeleton(list, "Loading Front Pages…");
 		}
 
-		const requested = browsePage;
-		const [{ rows: allRows, sources, topics }, queued, hiddenKeys] = await Promise.all([
-			loadFrontPages(),
+		const [{ rows: allRows, sources, topics, feedStates = [], attempted = false }, queued, hiddenKeys, seen, settings] = await Promise.all([
+			loadFrontPages({ force: options.force }),
 			loadQueue(),
 			loadHiddenStoryKeys(),
+			load(STORAGE.seen, {}),
+			loadSettings(),
 		]);
 
-		if (browsePage !== requested || browseTab !== "front") {
+		if (attempted && ui.browseHome && ui === sidebarUI && isSidebarVisible() && (isCurrent() || options.force)) {
+			const message = frontPageFailureText(feedStates.filter((feed) => feed.attempted));
+
+			if (message) {
+				showToast(message, { kind: "system" });
+				ui.browseHome.feedNotice = message;
+			} else if (!frontPageFailureText(feedStates) && ui.shadow.querySelector("#toast")?.textContent === ui.browseHome.feedNotice) {
+				showToast("");
+				ui.browseHome.feedNotice = "";
+			}
+		}
+
+		if (!isCurrent() || browseTab !== "front") {
 			return;
 		}
 
 		const queuedKeys = new Set(queued.map(queueKey));
 		const rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
+		const state = ui.browseHome;
+		let view = state?.view || "all";
+		const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabledSourceIds(settings, registeredSourceIds()));
+		const sourceIds = [...new Set(feeds.map((feed) => feed.source))];
+		const topicIds = [...new Set(feeds.map((feed) => feed.topic).filter(Boolean))];
+
+		if ((view.startsWith("source:") && !sourceIds.includes(view.slice(7))) || (view.startsWith("topic:") && !topicIds.includes(view.slice(6)))) {
+			view = "all";
+
+			if (state) {
+				state.view = state.frontView = view;
+			}
+		}
+
+		const shown = appViewRows(rows, view, seen || {});
+		const failureText = frontPageFailureText(feedStates, view);
 
 		setBlendNote(ui, sources, topics);
-
-		if (!allRows.length) {
-			list.textContent = "Could not load Front Pages.";
-			return;
-		}
-
-		if (!rows.length) {
-			list.textContent = "Everything in Front Pages is hidden.";
-			return;
-		}
-
-		const lastPage = Math.max(1, Math.ceil(rows.length / FRONT_PAGE_SIZE));
-		const page = Math.min(requested, lastPage);
-		const start = (page - 1) * FRONT_PAGE_SIZE;
-
-		browsePage = page;
-
 		list.replaceChildren();
-		rows
-			.slice(start, start + FRONT_PAGE_SIZE)
-			.forEach((row, index) =>
-				renderBrowseRow(row.story, list, start + index + 1, {
+
+		if (!shown.length) {
+			const note = document.createElement("div");
+
+			note.className = "browse-empty";
+			note.textContent = failureText ? "No articles available. Try syncing again." : allRows.length && !rows.length ? "Everything in Front Pages is hidden." : view === "unread" ? "All caught up." : "Nothing here right now.";
+			list.append(note);
+		}
+
+		shown.forEach((row, index) => {
+			const element = renderBrowseRow(row.story, list, state ? 0 : index + 1, {
 					also: row.also,
 					queuedKeys,
 					hideable: true,
 					reload: () => renderBrowseView(ui),
-				}),
-			);
+					readerRow: Boolean(state),
+					unreadDot: state ? rowIsUnread(row, seen || {}) : undefined,
+				});
 
-		const cardSettings = await loadSettings();
+			element.classList.toggle("is-unread", rowIsUnread(row, seen || {}));
+		});
 
-		if (cardSettings.frontPageMode === undefined && browseTab === "front") {
-			list.prepend(frontPageCardElement(cardSettings, () => refreshFrontPageConsumers()));
+		if (settings.frontPageMode === undefined) {
+			list.prepend(frontPageCardElement(settings, () => refreshFrontPageConsumers()));
 		}
 
 		refreshSaveControls().catch(console.error);
 
-		renderBrowseNav(
-			list,
-			{ page, nextPage: page < lastPage ? page + 1 : null },
-			(target) => {
-				scrollBrowseToTop(ui);
-				renderBrowseView(ui, { page: target }).catch(console.error);
-			},
-		);
+		if (state) {
+			state.rows = rows;
+			state.seen = seen || {};
+			state.sourceIds = sourceIds;
+			state.topicIds = topicIds;
+			const counts = appViewCounts(rows, state.seen, sourceIds, topicIds);
+
+			for (const id of ["unread", "all"]) {
+				const badge = ui.shadow.querySelector(`[data-browse-view="${id}"] .rail-badge`);
+
+				badge.textContent = counts[id] ? compactCount(counts[id]) : "";
+			}
+
+			renderBrowseHomeFilters(ui, sourceIds, topicIds, counts, view);
+			paintBrowseHome(ui);
+		}
+		return { feedStates };
 	}
 
 	async function renderBrowseView(ui, options = {}) {
@@ -14452,19 +15525,35 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			return;
 		}
 
-		if (Number.isFinite(options.page)) {
-			browsePage = Math.max(1, options.page);
-		}
-
 		if (options.tab) {
 			browseTab = options.tab;
 		}
 
-		for (const tab of ui.shadow.querySelectorAll(".browse-tab")) {
-			const isCurrent = tab.id === "browse-tab-" + (browseTab || "front");
-			tab.classList.toggle("is-current", isCurrent);
-			tab.setAttribute("aria-selected", String(isCurrent));
+		const state = ui.browseHome;
+		let sequence;
+		let outcome;
+
+		if (state) {
+			const previous = state.view;
+
+			state.view = options.view || (browseTab === "front" ? state.frontView : browseTab) || "unread";
+			browseTab = appViewIsFrontPage(state.view) ? "front" : state.view;
+			if (browseTab === "front") state.frontView = state.view;
+			sequence = ++state.sequence;
+			closeBrowseRowMenus(ui.shadow);
+			if (previous !== state.view) {
+				list.scrollTop = 0;
+			}
+			paintBrowseHome(ui);
+		} else {
+			for (const tab of ui.shadow.querySelectorAll(".browse-tab")) {
+				const current = tab.id === "browse-tab-" + (browseTab || "front");
+				tab.classList.toggle("is-current", current);
+				tab.setAttribute("aria-selected", String(current));
+			}
 		}
+
+		const isCurrent = () => !state || (state.sequence === sequence && isBrowsing(ui));
 
 		if (sidebarHasDiscussion) {
 			setWordmarkLocation(ui, "Discussion", { elsewhere: true });
@@ -14474,26 +15563,32 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 		await refreshSubmitAffordance(ui.shadow);
 
-		refreshQueueCount(ui.shadow);
+		if (!isCurrent()) return;
 
-		if (list.dataset.browseTab !== browseTab) {
+		refreshQueueCount(ui.shadow).catch(console.error);
+
+		const view = state?.view || browseTab;
+
+		if (list.dataset.browseTab !== view) {
 			list.replaceChildren();
-			list.dataset.browseTab = browseTab;
+			list.dataset.browseTab = view;
 		}
 
 		if (browseTab === "queue") {
 			setBrowseNote(ui, QUEUE_NOTE);
-			await renderQueueView(ui, list);
-			return;
-		}
-
-		if (browseTab === "collection") {
+			await renderQueueView(ui, list, isCurrent);
+		} else if (browseTab === "collection") {
 			setBrowseNote(ui, COLLECTION_NOTE);
-			await renderCollectionView(ui, list);
-			return;
+			await renderCollectionView(ui, list, isCurrent);
+		} else {
+			outcome = await renderFrontPageView(ui, list, options, isCurrent);
 		}
 
-		await renderFrontPageView(ui, list);
+		if (state && isCurrent()) {
+			fillAppRowThumbs(list);
+			paintBrowseHome(ui);
+		}
+		return outcome;
 	}
 
 	async function revealSidebar() {
@@ -14505,6 +15600,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 		sidebar.style.display = "";
 		showUpdateTips();
+		scheduleRedditReadNotice();
 		await saveSidebarState("open");
 
 		const restoreButton = document.getElementById("hn-restore-button");
@@ -15095,6 +16191,7 @@ ${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</b
 
 			if (settings.frontPageMode !== undefined) {
 				await refreshForSourceChange();
+				scheduleRedditReadNotice();
 				return;
 			}
 
@@ -15396,6 +16493,7 @@ ${frontPageChooserHTML()}
 	const THEME_CSS = `
 :host {
 	--bg:#f6f6ef;
+	--article-bg:#e8e8e1;
 	--text:#000;
 	--header-bg:var(--accent);
 	--header-text:#fff;
@@ -15448,6 +16546,7 @@ ${frontPageChooserHTML()}
 
 :host(.${DARK_CLASS}) {
 	--bg:#1e1e1e;
+	--article-bg:#151515;
 	--text:#dcdcdc;
 	--header-bg:#1b5732;
 	--header-text:#f0fff5;
@@ -18068,6 +19167,8 @@ button.shortcut-key {
 	line-height:1.35;
 }
 
+
+
 .source-line {
 	display:flex;
 	align-items:flex-start;
@@ -19019,6 +20120,7 @@ ${title ? `<span id="app-discussion-sort" class="app-discussion-sort"></span><sp
 <path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
 </svg>
 </button>
+${browse ? `<button id="browse-home-mark-read" type="button" aria-label="Mark all as read" title="Mark all as read" hidden>${APP_MARK_READ_ICON}</button><button id="browse-home-sync" type="button" aria-label="Sync" title="Sync" hidden>${APP_SYNC_ICON}</button>` : ""}
 ${hide ? `<span class="hide-control">
 <button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Disable Backchannel here" title="Disable Backchannel here">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -19133,6 +20235,14 @@ ${settings ? settingsPanelHTML() : ""}
 <div class="manage-table-tools"><button type="button" class="manage-table-add" aria-label="Disable Backchannel on a site or page" title="Disable Backchannel on a site or page">+</button><button type="button" class="manage-table-remove" aria-label="Turn Backchannel back on for the chosen site" title="Turn Backchannel back on for the chosen site" disabled>&minus;</button></div>
 </div>
 </div>
+</div>
+
+<div class="settings-group">
+<label class="settings-option">
+<input id="setting-reader-compact" data-setting="readerCompact" type="checkbox">
+<span>Use compact Discussion controls in Reader</span>
+</label>
+<div class="settings-option-hint">Switch between the article and its discussion instead of showing both at once.</div>
 </div>
 
 <div class="settings-group">
@@ -19302,6 +20412,7 @@ ${frontPageChooserHTML()}
 				"#setting-auto-open-only-from-hn",
 			),
 			keepSidebarSize: shadow.querySelector("#setting-keep-sidebar-size"),
+			readerCompact: shadow.querySelector("#setting-reader-compact"),
 			commentImages: shadow.querySelector("#setting-comment-images"),
 			updateCheck: shadow.querySelector("#setting-update-check"),
 		};
@@ -19810,6 +20921,11 @@ ${frontPageChooserHTML()}
 
 			if (setting === "keepSidebarSize") {
 				applySidebarZoom();
+				return;
+			}
+
+			if (setting === "readerCompact") {
+				setAppCompactMode(settings.readerCompact);
 				return;
 			}
 
@@ -20519,6 +21635,18 @@ ${frontPageChooserHTML()}
 	max-width:none;
 	border-left:0;
 	box-shadow:none;
+}
+
+#panel:not(.page-mode):not(.app-docked) {
+	border-radius:12px 0 0 12px;
+}
+
+#panel:not(.page-mode):not(.app-docked) > header {
+	border-top-left-radius:12px;
+}
+
+#panel:not(.page-mode):not(.app-docked) > #comments {
+	border-bottom-left-radius:12px;
 }
 
 #panel.page-mode > header {
@@ -21967,7 +23095,7 @@ blockquote.comment-quote-redundant {
 }
 
 ${TOAST_CSS}
-${appMode ? APP_CSS : SIDEBAR_SETTINGS_MODAL_CSS}
+${appMode ? APP_CSS : SIDEBAR_SETTINGS_MODAL_CSS + SIDEBAR_HOME_CSS}
 </style>
 
 ${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-docked"' : pageMode ? ' class="page-mode"' : ""}>
@@ -21975,7 +23103,8 @@ ${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-dock
 <div id="resize-handle" aria-hidden="true"></div>
 
 ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMode, settings: !appMode, title: appMode ? "Discussion" : "" })}
-<div class="toast-layer">${appMode ? "" : TOAST_HTML}<div id="compose-dock" class="compose-dock" hidden><button id="compose-dock-close" class="compose-dock-close" type="button" aria-label="Close the composer" title="Close">&times;</button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
+${appMode ? "" : `<div class="toast-viewport">${TOAST_HTML}</div>`}
+<div class="toast-layer"><div id="compose-dock" class="compose-dock" hidden><button id="compose-dock-close" class="compose-dock-close" type="button" aria-label="Close the composer" title="Close">&times;</button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
 <div class="filter-banner-head">
@@ -21984,14 +23113,14 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 <div id="filter-banner-quote" class="filter-banner-quote"></div>
 </div>
 <div id="comments-content">Loading...</div>
-<div id="browse-view" class="browse-view">
-<div class="browse-tabs" role="tablist">
+<div id="browse-view" class="browse-view${appMode ? "" : " browse-home"}">
+${appMode ? `<div class="browse-tabs" role="tablist">
 <button id="browse-tab-front" class="browse-tab is-current" type="button" role="tab">front pages</button>
 <button id="browse-tab-queue" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">queue</button>
 <button id="browse-tab-collection" class="browse-tab is-collapsed" type="button" role="tab" aria-hidden="true" tabindex="-1">collection</button>
-</div>
+</div>` : sidebarHomeChromeHTML()}
 <div id="browse-blend-note" class="browse-blend-note" hidden></div>
-<div id="browse-list"></div>
+<div id="browse-list"${appMode ? "" : ' class="reader-list" role="tabpanel" aria-labelledby="browse-tab-front"'}></div>
 </div>
 <div id="submit-view" class="submit-view"></div>
 <div id="next-up" class="next-up hidden"></div>
@@ -22187,6 +23316,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 
 		host._cleanup = () => {
 			destroyed = true;
+			closeBrowseRowMenus(shadow);
 			clearTimeout(resizeTimer);
 			resizeHandle?.removeEventListener("mousedown", onResizeMouseDown);
 			document.removeEventListener("mousemove", onMouseMove);
@@ -22205,6 +23335,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 
 		if (minimizeButton) {
 			minimizeButton.onclick = async () => {
+				closeBrowseRowMenus(shadow);
 				host.style.display = "none";
 				clearArticleAnnotations();
 				setSettingsOpen(false);
@@ -22238,6 +23369,7 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 			headerSubtitle: shadow.querySelector("#header-subtitle"),
 			filterBanner,
 			filterBannerQuote,
+			browseHome: appMode ? null : { view: "unread", frontView: "unread", sequence: 0, rows: [], seen: {} },
 		};
 
 		const browseToggle = shadow.querySelector("#browse-toggle");
@@ -22250,11 +23382,13 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 				}
 
 				const browsing = isBrowsing(ui);
+				const where = shadow.querySelector(".wordmark-where");
+				const target = browsing ? where && where.clientWidth < where.scrollWidth ? ".wordmark-root, .wordmark-where" : ".wordmark-where" : ".wordmark-root";
 
 				if (
 					event.detail &&
 					shadow.querySelector("#panel")?.classList.contains("has-trail") &&
-					!event.target?.closest?.(browsing ? ".wordmark-where" : ".wordmark-root")
+					!event.target?.closest?.(target)
 				) {
 					return;
 				}
@@ -22285,6 +23419,10 @@ ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMo
 					);
 				};
 			}
+		}
+
+		if (ui.browseHome) {
+			wireBrowseHome(ui);
 		}
 
 		const submitButton = shadow.querySelector("#header-submit");
@@ -25166,7 +26304,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			button.onclick = (event) => {
 				event.preventDefault();
 				event.stopPropagation();
-				onSync();
+				runRedditReadAction(onSync).catch(console.error);
 			};
 			fragment.appendChild(button);
 		}
@@ -25336,6 +26474,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 			const ui = await createSidebar({ pageMode: options.pageMode });
 			sidebarUI = ui;
+			scheduleRedditReadNotice();
 
 			if (generation !== sidebarGeneration) {
 				return;
@@ -29476,8 +30615,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 		activeCommentFilter = filter;
 
-		if (appIsPhone() && options.scroll !== false) {
-			setAppStage("discussion");
+		if (options.scroll !== false) {
+			revealAppDiscussion();
 		}
 
 		const visibleCommentIds = getVisibleCommentIds([...directMatchIds]);
@@ -30483,15 +31622,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			});
 		}
 
-		const controller = annotationController;
-
-		scheduleIdleTask(() => {
-			if (annotationController !== controller) {
-				return;
-			}
-
-			controller.setHeatRegions(buildHeatRegions(renderedComments, articleIndex));
-		});
 	}
 
 	// -------------------------
@@ -30579,9 +31709,92 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	background:var(--surface);
 	color:var(--surface-text);
 	box-shadow:0 24px 64px rgba(0,0,0,.35);
-	font-size:12px;
-	line-height:1.35;
+	font:400 12px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+	letter-spacing:normal;
+	word-spacing:normal;
+	text-transform:none;
 	text-align:left;
+}
+
+#reddit-read-modal {
+	z-index:2147483647;
+	padding:20px;
+}
+
+.reddit-read-dialog.app-settings-dialog {
+	width:min(440px, 100%);
+	height:auto;
+	max-height:100%;
+	overflow-y:auto;
+}
+
+:host(.${DARK_CLASS}) .reddit-read-dialog {
+	background:var(--article-bg);
+}
+
+.reddit-read-content {
+	padding:24px;
+}
+
+.reddit-read-image {
+	display:block;
+	flex:0 0 auto;
+	width:100%;
+	height:auto;
+	max-height:200px;
+	object-fit:cover;
+}
+
+.reddit-read-content h2 {
+	margin:0 0 12px;
+	font-size:20px;
+	font-weight:600;
+	line-height:1.25;
+}
+
+#reddit-read-description {
+	color:var(--muted);
+	font-size:13px;
+	line-height:1.6;
+}
+
+#reddit-read-description p {
+	margin:0;
+}
+
+#reddit-read-description p + p {
+	margin-top:10px;
+}
+
+.reddit-read-actions {
+	display:flex;
+	justify-content:center;
+	padding:0 24px 24px;
+}
+
+.reddit-read-actions button {
+	scroll-margin:6px;
+	padding:9px 12px;
+	border:1px solid var(--surface-border);
+	border-radius:6px;
+	background:var(--surface);
+	color:var(--surface-text);
+	font:inherit;
+	cursor:pointer;
+}
+
+.reddit-read-actions .reddit-read-confirm {
+	min-width:120px;
+	border-color:var(--accent);
+	background:var(--accent);
+	color:var(--bg);
+	font-weight:600;
+}
+
+.reddit-read-dialog button:focus-visible,
+#reddit-read-modal[data-keyboard] button:focus {
+	outline:2px solid var(--accent);
+	outline-offset:3px;
 }
 
 .app-settings-top {
@@ -30930,6 +32143,38 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	margin-top:0;
 }
 
+.source-help-tip {
+	position:fixed;
+	z-index:2147483647;
+	box-sizing:border-box;
+	width:max-content;
+	max-width:min(300px, calc(100vw - 16px));
+	white-space:pre-wrap;
+	overflow-wrap:anywhere;
+	letter-spacing:normal;
+	word-spacing:normal;
+	text-transform:none;
+	transform:none;
+}
+
+.source-help-tip[hidden] {
+	display:none;
+}
+
+.source-help-tip ul {
+	margin:0;
+	padding:0 0 0 14px;
+	list-style:disc outside;
+}
+
+.source-help-tip.is-above::before {
+	top:auto;
+	bottom:-4px;
+	right:var(--arrow, 12px);
+	left:auto;
+	margin-top:0;
+}
+
 #settings-toggle {
 	position:relative;
 }
@@ -30980,6 +32225,627 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 @media (max-width: 700px) {${SETTINGS_MODAL_PHONE_CSS}}
 `;
 
+	const READER_LIST_CSS = `
+.reader-list {
+	--thumb:30px;
+}
+
+.reader-list .browse-row:has(.browse-thumb-wrap) {
+	align-items:flex-start;
+	gap:8px;
+}
+
+.reader-list .browse-row:has(.browse-thumb-wrap) .browse-rank {
+	display:none;
+}
+
+.reader-list .browse-thumb-wrap {
+	display:block;
+	position:relative;
+	flex:0 0 auto;
+	width:var(--thumb);
+	height:var(--thumb);
+	margin-top:2px;
+	border-radius:calc(var(--thumb) * .23);
+	background:var(--hover-tint);
+}
+
+.reader-list .browse-thumb {
+	display:block;
+	width:calc(var(--thumb) * .46);
+	height:calc(var(--thumb) * .46);
+	margin:calc(var(--thumb) * .27);
+	object-fit:contain;
+}
+
+.reader-list .has-preview .browse-thumb {
+	width:100%;
+	height:100%;
+	margin:0;
+	border-radius:inherit;
+	object-fit:cover;
+}
+
+.reader-list .is-generic .browse-thumb {
+	display:none;
+}
+
+.reader-list .is-pending .browse-thumb {
+	opacity:0;
+}
+
+.reader-list .is-generic::before,
+.reader-list .is-pending::before {
+	content:"";
+	position:absolute;
+	inset:calc(var(--thumb) * .27);
+	box-sizing:border-box;
+	border:1.5px solid currentColor;
+	border-radius:3px;
+	background:
+		linear-gradient(currentColor, currentColor) 50% 32% / 56% 1.5px no-repeat,
+		linear-gradient(currentColor, currentColor) 50% 54% / 56% 1.5px no-repeat,
+		linear-gradient(currentColor, currentColor) 50% 76% / 56% 1.5px no-repeat;
+	opacity:.42;
+}
+
+.reader-list .browse-row.is-unread .browse-thumb-wrap::after {
+	content:"";
+	position:absolute;
+	top:-4px;
+	right:-2px;
+	width:9px;
+	height:9px;
+	border-radius:50%;
+	background:var(--accent);
+	box-shadow:0 0 0 1.5px var(--bg, #fff);
+}
+
+.reader-list .browse-site .browse-comments-total {
+	text-decoration:none;
+}
+
+
+`;
+
+	const SEARCH_CSS = `
+.app-search-page {
+	position:absolute;
+	inset:0;
+	z-index:2;
+	display:flex;
+	flex-direction:column;
+	background:var(--bg);
+	color:var(--text);
+}
+
+.app-search-head {
+	display:flex;
+	flex:0 0 auto;
+	align-items:center;
+	gap:8px;
+	height:36px;
+	padding:0 12px;
+	box-sizing:border-box;
+	border-bottom:1px solid var(--border-soft);
+}
+
+.app-search-input {
+	flex:1 1 auto;
+	min-width:0;
+	box-sizing:border-box;
+	height:24px;
+	padding:0 8px;
+	border:0;
+	border-radius:6px;
+	background:var(--hover-tint, rgba(0,0,0,.06));
+	color:inherit;
+	font:inherit;
+	outline:none;
+	-webkit-appearance:none;
+}
+
+.app-search-input:focus-visible {
+	outline:2px solid var(--rail-bg);
+	outline-offset:-1px;
+}
+
+.app-search-close {
+	display:none;
+	flex:0 0 auto;
+	border:0;
+	background:none;
+	font:inherit;
+	cursor:pointer;
+}
+
+.app-search-results {
+	flex:1 1 auto;
+	min-height:0;
+	overflow:auto;
+	padding:2px 6px 16px;
+}
+
+.app-search-group-name {
+	padding:12px 6px 4px;
+	color:var(--meta);
+	font-size:11px;
+	font-weight:600;
+	letter-spacing:.04em;
+	text-transform:uppercase;
+}
+
+.app-search-item {
+	display:flex;
+	flex-direction:column;
+	gap:1px;
+	width:100%;
+	padding:6px;
+	border:0;
+	border-radius:6px;
+	background:none;
+	color:inherit;
+	font:inherit;
+	line-height:1.3;
+	text-align:left;
+	cursor:pointer;
+}
+
+@media (hover: hover) {
+	.app-search-item:hover {
+		background:var(--hover-tint, rgba(0,0,0,.06));
+	}
+}
+
+.app-search-item:focus-visible {
+	outline:2px solid var(--rail-bg);
+	outline-offset:-2px;
+}
+
+.app-search-item-note {
+	color:var(--meta);
+	font-size:11px;
+}
+
+.app-search-item-note:empty {
+	display:none;
+}
+
+`;
+
+	const SIDEBAR_HOME_CSS = `
+${READER_LIST_CSS}
+${SEARCH_CSS}
+
+#panel.browsing:not(.app-docked) #comments {
+	padding:0;
+	overflow:hidden;
+}
+
+#panel.browsing .browse-home {
+	position:relative;
+	display:flex;
+	flex-direction:column;
+	height:100%;
+	min-height:0;
+	font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.browse-home [hidden] {
+	display:none !important;
+}
+
+#browse-home-search-toggle {
+	display:grid;
+	place-items:center;
+	border:0;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+}
+
+#browse-home-search-toggle[aria-expanded="true"] {
+	border-bottom-color:var(--accent);
+	color:var(--text);
+}
+
+#browse-home-mark-read[hidden],
+#browse-home-sync[hidden],
+#panel:not(.browsing) :is(#browse-home-mark-read, #browse-home-sync),
+#panel.submitting :is(#browse-home-mark-read, #browse-home-sync) {
+	display:none;
+}
+
+#browse-home-sync:disabled {
+	opacity:.4;
+	cursor:default;
+}
+
+#browse-home-mark-read svg {
+	width:16px;
+	height:16px;
+}
+
+#browse-home-sync svg {
+	width:22px;
+	height:22px;
+}
+
+#panel > header #hide-site > svg {
+	width:14px;
+	height:14px;
+}
+
+#panel > header .wordmark-tail {
+	overflow:hidden;
+}
+
+.browse-home.is-searching #browse-list {
+	display:none;
+}
+
+.browse-home .app-search-page {
+	--rail-bg:var(--accent);
+	position:relative;
+	inset:auto;
+	flex:1 1 auto;
+	min-height:0;
+}
+
+.browse-home .app-search-head {
+	height:auto;
+	padding:10px 12px;
+}
+
+.browse-home .app-search-input {
+	height:38px;
+	padding:0 10px;
+	font-size:16px;
+}
+
+.browse-home .app-search-close {
+	display:block;
+	color:inherit;
+}
+
+#browse-home-filters {
+	display:flex;
+	flex-direction:column;
+	flex:0 0 auto;
+	min-width:0;
+}
+
+.browse-home-filter-reveal {
+	display:grid;
+	grid-template-rows:1fr;
+	min-width:0;
+	opacity:1;
+	visibility:visible;
+	transform:none;
+	transition:grid-template-rows .18s ease, opacity .18s ease, transform .18s ease, visibility .18s;
+}
+
+.browse-home-filter-reveal.is-collapsed {
+	grid-template-rows:0fr;
+	opacity:0;
+	visibility:hidden;
+	transform:translateY(-6px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.browse-home-filter-reveal {
+		transition:none;
+	}
+}
+
+.browse-home-filter-section {
+	display:flex;
+	align-items:center;
+	min-width:0;
+	min-height:0;
+	overflow:hidden;
+	box-shadow:inset 0 -1px 0 var(--surface-divider);
+}
+
+.browse-home-filter-label {
+	flex:0 0 60px;
+	box-sizing:border-box;
+	margin:0;
+	padding-left:12px;
+	color:var(--meta);
+	font-size:11px;
+	font-weight:500;
+}
+
+.browse-home #browse-blend-note {
+	display:none;
+}
+
+.browse-home #browse-list {
+	--thumb:44px;
+	flex:1 1 auto;
+	min-height:0;
+	padding:0 0 12px;
+	overflow:auto;
+	overscroll-behavior:contain;
+}
+
+.browse-home .browse-row {
+	position:relative;
+	box-sizing:border-box;
+	margin:0;
+	padding:10px 44px 10px 12px;
+	border-bottom:1px solid var(--surface-divider);
+	cursor:pointer;
+}
+
+.browse-home .browse-row:has(.browse-thumb-wrap) {
+	align-items:center;
+	gap:10px;
+}
+
+.browse-home .browse-thumb-wrap {
+	margin-top:0;
+}
+
+.browse-home .browse-title-link {
+	font-size:14px;
+	line-height:1.4;
+	font-weight:500;
+	text-decoration:none;
+}
+
+.browse-home .browse-row:not(.is-unread) .browse-title-link {
+	color:var(--muted);
+}
+
+.browse-home .browse-site {
+	display:block;
+	margin-top:2px;
+	font-size:11px;
+	line-height:1.4;
+	color:var(--meta);
+}
+
+.browse-home .story-meta {
+	font-size:0;
+	line-height:1.4;
+}
+
+.browse-home .browse-more {
+	position:absolute;
+	right:4px;
+	top:50%;
+	transform:translateY(-50%);
+	display:grid;
+	place-items:center;
+	width:36px;
+	height:36px;
+	padding:9px;
+	border:0;
+	border-radius:50%;
+	background:none;
+	color:var(--meta);
+	cursor:pointer;
+}
+
+.browse-home .browse-more svg {
+	width:18px;
+	height:18px;
+}
+
+.browse-row-menu {
+	position:absolute;
+	top:calc(100% - 8px);
+	right:8px;
+	z-index:30;
+	box-sizing:border-box;
+	min-width:150px;
+	max-width:calc(100% - 16px);
+	max-height:240px;
+	overflow:auto;
+	box-shadow:0 4px 18px #0003;
+}
+
+.browse-row-menu.opens-up {
+	top:auto;
+	bottom:calc(100% - 8px);
+}
+
+.browse-row-menu button,
+.browse-row-menu a {
+	display:block;
+	box-sizing:border-box;
+	width:100%;
+	margin:0;
+	padding:8px 12px;
+	border:0;
+	background:none;
+	color:var(--text);
+	font:13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	text-align:left;
+	text-decoration:none;
+	cursor:pointer;
+}
+
+#browse-home-search-toggle:hover,
+.browse-home .browse-more:hover,
+.browse-row-menu :is(button, a):hover,
+.browse-row-menu :is(button, a):focus-visible {
+	background:var(--hover-tint);
+}
+
+.browse-home-nav-row {
+	display:flex;
+	flex:0 0 auto;
+	min-width:0;
+	padding-left:8px;
+	border-bottom:1px solid var(--surface-divider);
+	background:var(--bg);
+	color:var(--text);
+}
+
+#browse-home-search-toggle {
+	flex:0 0 auto;
+	box-sizing:border-box;
+	width:40px;
+	height:36px;
+	padding:9px 12px;
+	border-bottom:2px solid transparent;
+	border-radius:0;
+}
+
+#browse-home-search-toggle svg {
+	width:16px;
+	height:16px;
+}
+
+.browse-home-scroll {
+	box-sizing:border-box;
+	display:flex;
+	flex:1 1 auto;
+	min-width:0;
+	align-items:center;
+	gap:2px;
+	margin:0;
+	padding:0 8px 0 0;
+	overflow-x:auto;
+	scrollbar-width:none;
+	background:var(--bg);
+	color:var(--text);
+	font-family:inherit;
+	font-size:12px;
+}
+
+.browse-home-scroll::-webkit-scrollbar {
+	display:none;
+}
+
+.browse-home .browse-home-tab {
+	display:inline-flex;
+	flex:0 0 auto;
+	align-items:center;
+	justify-content:center;
+	gap:9px;
+	box-sizing:border-box;
+	min-width:40px;
+	min-height:36px;
+	margin:0;
+	padding:9px 12px;
+	border:0;
+	border-bottom:2px solid transparent;
+	background:none;
+	color:inherit;
+	font:inherit;
+	text-decoration:none;
+	white-space:nowrap;
+	cursor:pointer;
+}
+
+.browse-home .browse-home-tab::after {
+	content:none !important;
+	display:none !important;
+}
+
+.browse-home .browse-home-tab.is-current,
+.browse-home .browse-home-filter[aria-pressed="true"] {
+	border-bottom-color:var(--accent);
+	color:var(--text);
+	font-weight:600;
+}
+
+.browse-home-nav :is(#browse-tab-queue, #browse-tab-collection) {
+	margin-left:0;
+	max-width:none;
+	overflow:visible;
+}
+
+.browse-home .browse-home-tab:focus-visible,
+#browse-home-search-toggle:focus-visible {
+	outline:2px solid var(--accent);
+	outline-offset:-4px;
+}
+
+.browse-home .browse-home-tab:hover {
+	background:var(--hover-tint);
+}
+
+.browse-home .rail-badge {
+	flex:0 0 auto;
+	padding:1px 4px;
+	border-radius:8px;
+	background:var(--hover-tint);
+	color:var(--meta);
+	font-size:10px;
+	line-height:14px;
+	text-align:center;
+}
+
+.browse-home .rail-badge:empty {
+	display:none;
+}
+
+.browse-home-label {
+	flex:0 0 auto;
+}
+
+.browse-home-tab-title {
+	display:inline-flex;
+	align-items:center;
+	gap:6px;
+}
+
+.browse-home-icon {
+	display:inline-flex;
+	flex:0 0 16px;
+	align-items:center;
+	justify-content:center;
+	width:16px;
+	height:16px;
+}
+
+.browse-home-icon svg {
+	display:block;
+	width:16px;
+	height:16px;
+}
+
+.browse-home-icon .rail-hn {
+	display:inline-flex;
+	align-items:center;
+	justify-content:center;
+	width:16px;
+	height:14px;
+	border-radius:2px;
+	background:var(--text);
+	color:var(--bg);
+	font:700 8px/1 Verdana, Geneva, sans-serif;
+}
+
+.browse-home-icon .rail-monogram {
+	font:700 10px/1 Verdana, Geneva, sans-serif;
+}
+
+.browse-home .bc-wall {
+	grid-template-columns:repeat(auto-fill, minmax(min(100%, 120px), 1fr));
+}
+
+.browse-home .browse-card {
+	width:100%;
+	max-width:180px;
+	max-height:180px;
+}
+
+.browse-home .browse-empty,
+.browse-home .browse-feed-status,
+.browse-home .front-page-card,
+.browse-home .browse-skeleton,
+.browse-home .bc-wall {
+	margin:0;
+	padding:12px;
+}
+`;
+
 	const APP_CSS = `
 :host {
 	display:block;
@@ -30990,12 +32856,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	--rail-bg:var(--header-bg);
 	--rail-fg:var(--header-text);
 	--open-row:rgba(var(--accent-rgb), .13);
-	--article-bg:#e8e8e1;
 }
 
 :host(.${DARK_CLASS}) {
 	--open-row:rgba(var(--accent-rgb), .22);
-	--article-bg:#151515;
 }
 
 #app {
@@ -31910,107 +33774,7 @@ ${SETTINGS_MODAL_CSS}
 	transition:height .2s ease;
 }
 
-#app-search-page {
-	position:absolute;
-	inset:0;
-	z-index:2;
-	display:flex;
-	flex-direction:column;
-	background:var(--bg);
-	color:var(--text);
-}
-
-.app-search-head {
-	display:flex;
-	flex:0 0 auto;
-	align-items:center;
-	gap:8px;
-	height:36px;
-	padding:0 12px;
-	box-sizing:border-box;
-	border-bottom:1px solid var(--border-soft);
-}
-
-.app-search-input {
-	flex:1 1 auto;
-	min-width:0;
-	box-sizing:border-box;
-	height:24px;
-	padding:0 8px;
-	border:0;
-	border-radius:6px;
-	background:var(--hover-tint, rgba(0,0,0,.06));
-	color:inherit;
-	font:inherit;
-	outline:none;
-	-webkit-appearance:none;
-}
-
-.app-search-input:focus-visible {
-	outline:2px solid var(--rail-bg);
-	outline-offset:-1px;
-}
-
-.app-search-close {
-	display:none;
-	flex:0 0 auto;
-	border:0;
-	background:none;
-	font:inherit;
-	cursor:pointer;
-}
-
-.app-search-results {
-	flex:1 1 auto;
-	min-height:0;
-	overflow:auto;
-	padding:2px 6px 16px;
-}
-
-.app-search-group-name {
-	padding:12px 6px 4px;
-	color:var(--meta);
-	font-size:11px;
-	font-weight:600;
-	letter-spacing:.04em;
-	text-transform:uppercase;
-}
-
-.app-search-item {
-	display:flex;
-	flex-direction:column;
-	gap:1px;
-	width:100%;
-	padding:6px;
-	border:0;
-	border-radius:6px;
-	background:none;
-	color:inherit;
-	font:inherit;
-	line-height:1.3;
-	text-align:left;
-	cursor:pointer;
-}
-
-@media (hover: hover) {
-	.app-search-item:hover {
-		background:var(--hover-tint, rgba(0,0,0,.06));
-	}
-}
-
-.app-search-item:focus-visible {
-	outline:2px solid var(--rail-bg);
-	outline-offset:-2px;
-}
-
-.app-search-item-note {
-	color:var(--meta);
-	font-size:11px;
-}
-
-.app-search-item-note:empty {
-	display:none;
-}
+${SEARCH_CSS}
 
 .app-list-resize {
 	position:absolute;
@@ -32065,75 +33829,7 @@ ${SETTINGS_MODAL_CSS}
 	display:none;
 }
 
-#app-list-body {
-	--thumb:30px;
-}
-
-#app-list-body .browse-row:has(.browse-thumb-wrap) {
-	align-items:flex-start;
-	gap:8px;
-}
-
-#app-list-body .browse-row:has(.browse-thumb-wrap) .browse-rank {
-	display:none;
-}
-
-#app-list-body .browse-thumb-wrap {
-	display:block;
-	position:relative;
-	flex:0 0 auto;
-	width:var(--thumb);
-	height:var(--thumb);
-	margin-top:2px;
-	border-radius:calc(var(--thumb) * .23);
-	background:var(--hover-tint);
-}
-
-#app-list-body .browse-thumb {
-	display:block;
-	width:calc(var(--thumb) * .46);
-	height:calc(var(--thumb) * .46);
-	margin:calc(var(--thumb) * .27);
-	object-fit:contain;
-}
-
-#app-list-body .has-preview .browse-thumb {
-	width:100%;
-	height:100%;
-	margin:0;
-	border-radius:inherit;
-	object-fit:cover;
-}
-
-#app-list-body .is-generic .browse-thumb {
-	display:none;
-}
-
-#app-list-body .is-generic::before {
-	content:"";
-	position:absolute;
-	inset:calc(var(--thumb) * .27);
-	box-sizing:border-box;
-	border:1.5px solid currentColor;
-	border-radius:3px;
-	background:
-		linear-gradient(currentColor, currentColor) 50% 32% / 56% 1.5px no-repeat,
-		linear-gradient(currentColor, currentColor) 50% 54% / 56% 1.5px no-repeat,
-		linear-gradient(currentColor, currentColor) 50% 76% / 56% 1.5px no-repeat;
-	opacity:.42;
-}
-
-#app-list-body .browse-row.is-unread .browse-thumb-wrap::after {
-	content:"";
-	position:absolute;
-	top:-4px;
-	right:-2px;
-	width:9px;
-	height:9px;
-	border-radius:50%;
-	background:var(--accent);
-	box-shadow:0 0 0 1.5px var(--bg, #fff);
-}
+${READER_LIST_CSS}
 
 #app-reading {
 	position:relative;
@@ -32177,6 +33873,14 @@ ${SETTINGS_MODAL_CSS}
 	overflow:auto;
 	overscroll-behavior:contain;
 	background:var(--reader-page, var(--article-bg));
+}
+
+.browse-feed-status {
+	padding:12px 16px;
+	border-bottom:1px solid var(--border-soft);
+	color:var(--meta);
+	font-size:12px;
+	line-height:1.5;
 }
 
 .app-article-image {
@@ -32281,25 +33985,6 @@ ${SETTINGS_MODAL_CSS}
 	bottom:0;
 	height:0;
 	z-index:40;
-}
-
-#app > .toast-layer {
-	position:fixed;
-	left:0;
-	right:0;
-	bottom:0;
-	height:0;
-	z-index:40;
-}
-
-#app > .toast-layer .toast {
-	top:auto;
-	bottom:16px;
-	transform:translate(-50%,14px);
-}
-
-#app > .toast-layer .toast.is-showing {
-	transform:translate(-50%,0);
 }
 
 #header-submit {
@@ -33604,8 +35289,8 @@ header .item-action-link {
 		display:none !important;
 	}
 
-	#app > .toast-layer .toast {
-		bottom:calc(76px + env(safe-area-inset-bottom, 0px));
+	#app > .toast-viewport {
+		--toast-bottom:calc(76px + env(safe-area-inset-bottom, 0px));
 	}
 
 	:host {
@@ -33854,6 +35539,110 @@ header .item-action-link {
 	}
 
 ${SETTINGS_MODAL_PHONE_CSS}
+}
+
+@media (min-width: 701px) {
+	#app.reader-compact #app-reading {
+		flex-direction:row;
+	}
+
+	#app.reader-compact #app-article {
+		flex:1 1 0;
+	}
+
+	#app.reader-compact #panel.app-docked {
+		position:relative;
+		flex:1 1 0;
+		top:auto;
+		left:auto;
+		width:auto !important;
+		max-width:none;
+		border:0;
+	}
+
+	#app.reader-compact[data-reader-stage="article"] #panel.app-docked,
+	#app.reader-compact[data-reader-stage="discussion"] #app-article,
+	#app.reader-compact #app-article .app-pane-middle,
+	#app.reader-compact #app-article > .app-pane-head,
+	#app.reader-compact #app-toggle-discussion,
+	#app.reader-compact #panel #resize-handle {
+		display:none !important;
+	}
+
+	#app.reader-compact.has-story[data-reader-stage="discussion"] #panel.app-docked {
+		display:flex !important;
+	}
+
+	#app.reader-compact #panel.app-docked > header {
+		padding-left:48px;
+	}
+
+	#app.reader-compact #app-bar {
+		display:flex !important;
+		position:absolute;
+		right:12px;
+		bottom:16px;
+		z-index:25;
+		flex-direction:column;
+		align-items:center;
+		gap:8px;
+	}
+
+	#app.reader-compact #app-bar[hidden] {
+		display:none !important;
+	}
+
+	#app.reader-compact #app-toggle-list {
+		position:absolute;
+		top:10px;
+		left:12px;
+		z-index:26;
+		border-radius:12px;
+		background:var(--surface);
+		box-shadow:0 0 0 1px var(--surface-border), 0 2px 8px rgba(0,0,0,.16);
+	}
+
+	#app.reader-compact .app-stack-button {
+		display:flex;
+		position:relative;
+		flex-direction:column;
+		align-items:center;
+		justify-content:center;
+		gap:2px;
+		box-sizing:border-box;
+		width:36px;
+		height:36px;
+		padding:0;
+		border:0;
+		border-radius:18px;
+		font:inherit;
+		cursor:pointer;
+	}
+
+	#app.reader-compact .app-stack-button svg {
+		width:18px;
+		height:18px;
+		fill:currentColor;
+	}
+
+	#app.reader-compact .app-stack-button[hidden] {
+		display:none;
+	}
+
+	#app.reader-compact #app-bar-discussion:has(.rail-badge:not(:empty)) {
+		height:50px;
+	}
+
+	#app.reader-compact #app-bar-discussion .rail-badge {
+		position:static;
+		min-width:0;
+		height:auto;
+		padding:0;
+		background:none;
+		box-shadow:none;
+		color:inherit;
+		font-size:10px;
+	}
 }
 `;
 
@@ -34388,12 +36177,12 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
 <div id="app-list-heading" class="app-list-heading"><span id="app-list-heading-text"></span><button id="app-list-heading-button" type="button" aria-haspopup="menu" aria-expanded="false" hidden></button></div>
 <div id="app-list-tags" class="app-list-tags" role="group" aria-label="Filters" hidden></div>
-<div id="app-list-body"></div>
+<div id="app-list-body" class="reader-list"></div>
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
 ${settingsPanelHTML()}
 ${settingsModalHTML()}
-<div class="toast-layer">${TOAST_HTML}</div>
+<div class="toast-viewport">${TOAST_HTML}</div>
 <div id="app-reading">
 <section id="app-article" aria-label="Article">
 <div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="${escapeHTML(appShortcutTip("front-pages"))}">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Style settings" title="Style settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="${escapeHTML(appShortcutTip("discussion"))}" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
@@ -34457,10 +36246,12 @@ ${settingsModalHTML()}
 		}
 
 		wireApp(ui);
+		setAppCompactMode((await loadSettings()).readerCompact);
 		loadAppShortcuts(shortcuts).catch(console.error);
 		renderAppDiscussionEmpty();
 		watchNoteSelection(await loadSettings());
 		await refreshAppSources();
+		scheduleRedditReadNotice();
 	}
 
 	function wireApp(ui) {
@@ -34554,6 +36345,7 @@ ${settingsModalHTML()}
 		const dropPaneCaret = () => {
 			paneCaret.list = null;
 			paneCaret.discussion = null;
+			appState.compactCaret = null;
 		};
 
 		const paintPaneToggles = () => {
@@ -34561,7 +36353,7 @@ ${settingsModalHTML()}
 			paintAppListToggle();
 
 			if (!appIsPhone()) {
-				shadow.querySelector("#app-bar-discussion").setAttribute("aria-pressed", paneHidden.discussion ? "false" : "true");
+				shadow.querySelector("#app-bar-discussion").setAttribute("aria-pressed", String(appUsesCompactDiscussion() ? appRoot.dataset.readerStage === "discussion" : !paneHidden.discussion));
 			}
 		};
 
@@ -34772,6 +36564,7 @@ ${settingsModalHTML()}
 			}
 		};
 		appState.togglePane = (pane, keyed = false) => setPaneHidden(pane, !paneHidden[pane], true, keyed);
+		appState.showDiscussion = () => setPaneHidden("discussion", false);
 		listToggle.onclick = () => appState.togglePane("list");
 		discussionToggle.onclick = () => appState.togglePane("discussion");
 		document.addEventListener("focusin", dropPaneCaret, true);
@@ -34966,7 +36759,7 @@ ${settingsModalHTML()}
 
 			pullSyncing = true;
 			paintPull(36, "syncing…", true);
-			renderAppList({ force: true })
+			runSync(() => renderAppList({ force: true }))
 				.catch(console.error)
 				.finally(() => {
 					pullSyncing = false;
@@ -34989,10 +36782,10 @@ ${settingsModalHTML()}
 			button.classList.add("is-syncing");
 			button.setAttribute("aria-busy", "true");
 
-			const runs = await Promise.allSettled([
+			const runs = await runSync(() => Promise.allSettled([
 				renderAppList({ force: true }),
 				Promise.resolve(appState?.discussionSync?.()),
-			]);
+			]));
 
 			for (const run of runs) {
 				if (run.status === "rejected") {
@@ -35018,7 +36811,9 @@ ${settingsModalHTML()}
 
 		shadow.querySelector("#app-bar-back").onclick = () => setAppStage("list");
 		shadow.querySelector("#app-bar-discussion").onclick = () => {
-			if (appIsPhone()) {
+			if (appUsesCompactDiscussion()) {
+				setAppCompactStage(appRoot.dataset.readerStage === "discussion" ? "article" : "discussion");
+			} else if (appIsPhone()) {
 				setAppStage(appRoot.dataset.stage === "discussion" ? "article" : "discussion");
 			} else {
 				appState.togglePane("discussion");
@@ -35260,68 +37055,38 @@ ${settingsModalHTML()}
 			nav?.append(credits);
 		}
 
-		if (app) {
-			const helpIn = (event) => event.target?.closest?.(".source-help") || null;
+		const helpIn = (event) => event.target?.closest?.(".source-help") || null;
 
-			content.addEventListener("pointerover", (event) => {
-				const help = helpIn(event);
+		shadow.addEventListener("scroll", () => hideSourceHelpTip(shadow), true);
+		content.addEventListener("pointerover", (event) => {
+			const help = helpIn(event);
 
-				if (help && event.pointerType !== "touch") {
-					showAppTip(help, { phone: true });
-				}
-			});
-			content.addEventListener("pointerout", (event) => {
-				const help = helpIn(event);
+			if (help && event.pointerType !== "touch") showSourceHelpTip(help, shadow);
+		});
+		content.addEventListener("pointerout", (event) => {
+			const help = helpIn(event);
 
-				if (help && !help.contains(event.relatedTarget)) {
-					hideAppTip();
-				}
-			});
-			content.addEventListener("focusin", (event) => {
-				const help = helpIn(event);
+			if (help && !help.contains(event.relatedTarget)) hideSourceHelpTip(shadow);
+		});
+		content.addEventListener("focusin", (event) => {
+			const help = helpIn(event);
 
-				if (help?.matches(":focus-visible")) {
-					showAppTip(help, { phone: true });
-				}
-			});
-			content.addEventListener("focusout", (event) => {
-				if (helpIn(event)) {
-					hideAppTip();
-				}
-			});
-			content.addEventListener(
-				"click",
-				(event) => {
-					const help = helpIn(event);
+			if (help?.matches(":focus-visible")) showSourceHelpTip(help, shadow);
+		});
+		content.addEventListener("focusout", (event) => {
+			if (helpIn(event)) hideSourceHelpTip(shadow);
+		});
+		content.addEventListener("click", (event) => {
+			const help = helpIn(event);
 
-					if (help) {
-						showAppTip(help, { phone: true });
-					}
-				},
-				true,
-			);
-			content.addEventListener("scroll", hideAppTip);
-			modal.addEventListener(
-				"pointerdown",
-				(event) => {
-					if (!helpIn(event)) {
-						hideAppTip();
-					}
-				},
-				true,
-			);
-		} else {
-			for (const help of panel.querySelectorAll(".source-help")) {
-				const tip = document.createElement("span");
-
-				tip.className = "op-pill-tip";
-				tip.setAttribute("aria-hidden", "true");
-				tip.textContent = help.dataset.tip;
-				help.append(tip);
-			}
-		}
+			if (help) showSourceHelpTip(help, shadow);
+		}, true);
+		modal.addEventListener("pointerdown", (event) => {
+			if (!helpIn(event)) hideSourceHelpTip(shadow);
+		}, true);
 
 		const showSection = (section, target = "") => {
+			hideSourceHelpTip(shadow);
 			const tab = tabs.find((each) => each.dataset.settingsSection === section) || tabs[0];
 			const panes = panel.querySelector(".settings-panes");
 
@@ -35358,6 +37123,7 @@ ${settingsModalHTML()}
 		};
 
 		const setOpen = (open) => {
+			hideSourceHelpTip(shadow);
 			if (open === !modal.hidden) {
 				return;
 			}
@@ -35604,7 +37370,7 @@ ${settingsModalHTML()}
 		const preview = appState?.previews?.get(normalizeURL(story.url) || story.url) || "";
 		const source = preview || (host ? `https://${host}/favicon.ico` : "");
 
-		return `<span class="browse-thumb-wrap${preview ? " has-preview" : ""}"><img class="browse-thumb" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-src="${escapeHTML(source)}"></span>`;
+		return `<span class="browse-thumb-wrap is-pending${preview ? " has-preview" : ""}"><img class="browse-thumb" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" data-src="${escapeHTML(source)}"></span>`;
 	}
 
 	function fillAppRowThumbs(list) {
@@ -35614,12 +37380,15 @@ ${settingsModalHTML()}
 			delete image.dataset.src;
 
 			if (!source) {
+				image.parentElement.classList.remove("is-pending");
 				image.parentElement.classList.add("is-generic");
 				continue;
 			}
 
+			image.onload = () => image.parentElement.classList.remove("is-pending");
 			image.onerror = () => {
 				image.removeAttribute("src");
+				image.parentElement.classList.remove("is-pending");
 				image.parentElement.classList.add("is-generic");
 			};
 			image.src = source;
@@ -35986,12 +37755,80 @@ ${settingsModalHTML()}
 		return window.matchMedia("(max-width: 700px)").matches;
 	}
 
+	function appUsesCompactDiscussion() {
+		return Boolean(appState?.readerCompact) && !appIsPhone();
+	}
+
+	function appUsesFloatingControls() {
+		return appUsesCompactDiscussion() || appIsStacked() || appIsPhone();
+	}
+
+	function setAppCompactMode(enabled) {
+		if (!appState) {
+			return;
+		}
+
+		appState.readerCompact = enabled === true;
+		appState.compactCaret = null;
+		const app = appState.ui.shadow.querySelector("#app");
+
+		app.classList.toggle("reader-compact", appState.readerCompact);
+		app.dataset.readerStage = "article";
+		setAppViewMenuOpen(false);
+		paintAppChrome();
+	}
+
+	function setAppCompactStage(stage, { keyed = false } = {}) {
+		if (!appUsesCompactDiscussion() || !appState.open) {
+			return;
+		}
+
+		const shadow = appState.ui.shadow;
+		const app = shadow.querySelector("#app");
+		const caret = appState.compactCaret;
+
+		if (app.dataset.readerStage === stage) {
+			return;
+		}
+
+		if (keyed && stage === "article") {
+			const held = appCaretIn(shadow.querySelector("#panel"));
+
+			held?.field.blur();
+			appState.compactCaret = held;
+		} else {
+			appState.compactCaret = null;
+		}
+
+		app.dataset.readerStage = stage;
+		setAppViewMenuOpen(false);
+		paintAppChrome();
+
+		if (keyed && stage === "discussion" && caret) {
+			appCaretBack(caret);
+		}
+	}
+
+	function revealAppDiscussion() {
+		if (!appState) {
+			return;
+		}
+
+		if (appUsesCompactDiscussion()) {
+			setAppCompactStage("discussion");
+		} else if (appIsPhone()) {
+			setAppStage("discussion");
+		} else {
+			appState.showDiscussion?.();
+		}
+	}
+
 	function appIsStacked() {
-		return window.matchMedia("(max-width: 1335px)").matches && !appIsPhone();
+		return window.matchMedia("(max-width: 1335px)").matches && !appIsPhone() && !appUsesCompactDiscussion();
 	}
 
 	function appViewMenuToggle(shadow) {
-		return shadow?.querySelector(appIsStacked() || appIsPhone() ? "#app-bar-view" : "#app-view-toggle");
+		return shadow?.querySelector(appUsesFloatingControls() ? "#app-bar-view" : "#app-view-toggle");
 	}
 
 	function appLayout() {
@@ -36312,13 +38149,20 @@ ${settingsModalHTML()}
 			delete shadow.querySelector("#app").dataset.scrolling;
 		}
 
-		const home = shadow.querySelector(appIsStacked() ? "#app-article" : "#app");
+		const compact = appUsesCompactDiscussion();
+		const home = shadow.querySelector(compact ? "#app-reading" : appIsStacked() ? "#app-article" : "#app");
+		const listToggle = shadow.querySelector("#app-toggle-list");
+		const listHome = shadow.querySelector(compact ? "#app-reading" : "#app-article > .app-pane-head");
 
-		if (bar.parentElement !== home) {
-			home.insertBefore(bar, appIsStacked() ? null : shadow.querySelector("#app-list"));
+		if (listToggle.parentElement !== listHome) {
+			listHome.insertBefore(listToggle, listHome.firstChild);
 		}
 
-		bar.hidden = appIsStacked() ? !shadow.querySelector("#app").classList.contains("has-story") : stage === "list";
+		if (bar.parentElement !== home) {
+			home.insertBefore(bar, home.id === "app" ? shadow.querySelector("#app-list") : null);
+		}
+
+		bar.hidden = compact || appIsStacked() ? !shadow.querySelector("#app").classList.contains("has-story") : stage === "list";
 		shadow.querySelector("#app-bar-back").hidden = stage === "list";
 		shadow.querySelector("#app-search").hidden = stage !== "list";
 
@@ -36326,7 +38170,7 @@ ${settingsModalHTML()}
 			setAppSearchOpen(false);
 		}
 
-		discussion.setAttribute("aria-pressed", String(appIsPhone() ? stage === "discussion" : !appState.panesHidden.discussion));
+		discussion.setAttribute("aria-pressed", String(compact ? shadow.querySelector("#app").dataset.readerStage === "discussion" : appIsPhone() ? stage === "discussion" : !appState.panesHidden.discussion));
 		discussion.querySelector(".rail-badge").textContent = total ? compactCount(total) : "";
 		paintAppBarActions();
 		paintAppNext();
@@ -36923,6 +38767,31 @@ ${note ? appShortcutNoteHTML(note) : ""}
 		};
 	}
 
+	function settingsSearchEntries(shadow, openSettings) {
+		const entries = [];
+
+		const panel = shadow.querySelector("#settings-panel");
+
+		const seen = new Set();
+
+		for (const field of panel?.querySelectorAll(".settings-field, .appearance-row, .settings-group label") || []) {
+			const label = (field.matches("label") ? field.textContent : field.querySelector(".settings-field-label, .appearance-row-label, label")?.textContent || "").trim().split("\n")[0].trim();
+			const owner = field.closest("[data-app-section]");
+			const section = ["appearance", "sidebar"].includes(owner?.dataset.appSection) ? owner.dataset.appSection : "general";
+
+			if (label && label.length < 80 && !seen.has(label) && !field.closest("#app-view-menu") && !field.closest('[data-pane="shortcuts"]')) {
+				seen.add(label);
+				entries.push({ group: "Settings", title: label, note: { general: "General", appearance: "Appearance", sidebar: "Sidebar" }[section], keys: `${label} settings`, run: () => openSettings(section) });
+			}
+		}
+
+		entries.push({ group: "Settings", title: "Sources", note: "Where comments come from", keys: "sources reddit hacker news bluesky lobsters mastodon lemmy settings", run: () => openSettings("sources") });
+		entries.push({ group: "Settings", title: "Disabled sites", note: "Sidebar", keys: "disabled sites blocked hidden manage settings sidebar", run: () => openSettings("sidebar", "#settings-blocked-section") });
+		entries.push({ group: "Settings", title: "Hidden links", note: "Sources", keys: "hidden links blocked disabled manage settings sources", run: () => openSettings("sources", "#settings-hidden-section") });
+
+		return entries;
+	}
+
 	function appSearchEntries() {
 		const state = appState;
 		const shadow = state.ui.shadow;
@@ -36946,34 +38815,35 @@ ${note ? appShortcutNoteHTML(note) : ""}
 			const story = entry.story;
 
 			if (story?.title) {
-				entries.push({ group: "Articles", title: story.title, note: story.site || "", keys: `${story.title} ${story.site || ""}`, run: () => openAppStory(story, { row: entry }).catch(console.error) });
+				entries.push({ group: "Articles", title: story.title, note: story.site || "", url: story.url, keys: `${story.title} ${story.site || ""}`, run: () => openAppStory(story, { row: entry }).catch(console.error) });
 			}
 		}
 
 		for (const item of state.listIndex) {
-			entries.push({ group: item.group, title: item.title, note: item.note, keys: item.keys || `${item.title} ${item.note}`, run: () => openAppURL(item.url) });
+			entries.push({ group: item.group, key: item.key, url: item.url, title: item.title, note: item.note, keys: item.keys || `${item.title} ${item.note}`, run: () => openAppURL(item.url) });
 		}
 
-		const panel = shadow.querySelector("#settings-panel");
+		entries.push(...settingsSearchEntries(shadow, openAppSettingsSection));
 
-		const seen = new Set();
+		return entries;
+	}
 
-		for (const field of panel?.querySelectorAll(".settings-field, .appearance-row, .settings-group label") || []) {
-			const label = (field.matches("label") ? field.textContent : field.querySelector(".settings-field-label, .appearance-row-label, label")?.textContent || "").trim().split("\n")[0].trim();
-			const owner = field.closest("[data-app-section]");
-			const section = ["appearance", "sidebar"].includes(owner?.dataset.appSection) ? owner.dataset.appSection : "general";
+	function searchListIndex(queue, documents) {
+		const index = [];
 
-			if (label && label.length < 80 && !seen.has(label) && !field.closest("#app-view-menu") && !field.closest('[data-pane="shortcuts"]')) {
-				seen.add(label);
-				entries.push({ group: "Settings", title: label, note: { general: "General", appearance: "Appearance", sidebar: "Sidebar" }[section], keys: `${label} settings`, run: () => openAppSettingsSection(section) });
+		for (const entry of queue) {
+			if (entry.title && entry.url) {
+				index.push({ group: "Queue", key: queueKey(entry), title: entry.title, note: entry.site || "", url: entry.url, story: entry, keys: `${entry.title} ${entry.site || ""} queue` });
 			}
 		}
 
-		entries.push({ group: "Settings", title: "Sources", note: "Where comments come from", keys: "sources reddit hacker news bluesky lobsters mastodon lemmy settings", run: () => openAppSettingsSection("sources") });
-		entries.push({ group: "Settings", title: "Disabled sites", note: "Sidebar", keys: "disabled sites blocked hidden manage settings sidebar", run: () => openAppSettingsSection("sidebar", "#settings-blocked-section") });
-		entries.push({ group: "Settings", title: "Hidden links", note: "Sources", keys: "hidden links blocked disabled manage settings sources", run: () => openAppSettingsSection("sources", "#settings-hidden-section") });
+		for (const doc of documents) {
+			if (doc.title && doc.url) {
+				index.push({ group: "Collection", key: doc.key, title: doc.title, note: doc.site || "", url: doc.url, story: documentStory(doc), keys: `${collectionHaystack(doc)} collection saved` });
+			}
+		}
 
-		return entries;
+		return index;
 	}
 
 	async function indexAppLists() {
@@ -36984,31 +38854,25 @@ ${note ? appShortcutNoteHTML(note) : ""}
 		}
 
 		const [queue, documents] = await Promise.all([loadQueue(), loadCollectionDocuments()]);
-		const index = [];
-
-		for (const entry of queue) {
-			if (entry.title && entry.url) {
-				index.push({ group: "Queue", title: entry.title, note: entry.site || "", url: entry.url, keys: `${entry.title} ${entry.site || ""} queue` });
-			}
-		}
-
-		for (const doc of documents) {
-			if (doc.title && doc.url) {
-				index.push({ group: "Collection", title: doc.title, note: doc.site || "", url: doc.url, keys: `${collectionHaystack(doc)} collection saved` });
-			}
-		}
-
-		state.listIndex = index;
+		state.listIndex = searchListIndex(queue, documents);
 	}
 
 	function renderAppSearch(query) {
 		const shadow = appState?.ui.shadow;
-		const results = shadow?.querySelector("#app-search-results");
 
-		if (!results) {
-			return;
-		}
+		renderSearchResults(shadow?.querySelector("#app-search-results"), appState ? appSearchEntries() : [], query, (entry) => {
+			setAppSearchOpen(false);
+			setTimeout(() => entry.run(), 0);
+		});
+	}
 
+	function renderSearchResults(results, entries, query, onSelect) {
+		if (!results) return;
+
+		const previousItems = [...results.querySelectorAll(".app-search-item")];
+		const focused = results.getRootNode().activeElement;
+		const previous = results.contains(focused) ? focused?.closest(".app-search-item") : null;
+		const heldScroll = results.scrollTop;
 		const needle = String(query || "").trim().toLowerCase();
 		const terms = needle.split(/\s+/).filter(Boolean);
 		const plain = (text) => String(text).split(/\s+/).map(readerKey).filter(Boolean).join(" ");
@@ -37023,7 +38887,7 @@ ${note ? appShortcutNoteHTML(note) : ""}
 
 			return words.every((word) => keys.includes(word));
 		};
-		const found = appSearchEntries().filter((entry) => (needle ? hit(entry) : entry.group === "Go to" && !entry.typed));
+		const found = entries.filter((entry) => (needle ? hit(entry) : entry.group === "Go to" && !entry.typed));
 		const tier = (entry) => {
 			if (!lead || entry.group !== "Go to") {
 				return 3;
@@ -37066,13 +38930,13 @@ ${note ? appShortcutNoteHTML(note) : ""}
 
 					item.type = "button";
 					item.className = "app-search-item";
+					item.dataset.searchKey = JSON.stringify([name, entry.key || entry.url || entry.title, entry.title, entry.note]);
 					item.innerHTML = `<span class="app-search-item-title"></span><span class="app-search-item-note"></span>`;
 					item.querySelector(".app-search-item-title").textContent = entry.title;
 					item.querySelector(".app-search-item-note").textContent = entry.note;
 					item.onclick = (event) => {
 						event.stopPropagation();
-						setAppSearchOpen(false);
-						setTimeout(() => entry.run(), 0);
+						onSelect(entry);
 					};
 					group.append(item);
 				}
@@ -37087,6 +38951,14 @@ ${note ? appShortcutNoteHTML(note) : ""}
 			empty.className = "browse-empty";
 			empty.textContent = "Nothing matches.";
 			results.append(empty);
+		}
+
+		if (previous) {
+			const items = [...results.querySelectorAll(".app-search-item")];
+			const replacement = items.find((item) => item.dataset.searchKey === previous.dataset.searchKey) || items[Math.min(previousItems.indexOf(previous), items.length - 1)] || results.parentElement.querySelector(".app-search-input");
+
+			replacement?.focus({ preventScroll: true });
+			results.scrollTop = heldScroll;
 		}
 	}
 
@@ -37213,6 +39085,7 @@ ${frontPageChooserHTML()}
 		const list = ui.shadow.querySelector("#app-list-body");
 		const view = state.view;
 		const request = ++state.listSeq;
+		let outcome;
 
 		paintAppRail();
 		await paintAppOnboarding();
@@ -37234,7 +39107,7 @@ ${frontPageChooserHTML()}
 				renderBrowseSkeleton(list, "Loading Front Pages…");
 			}
 
-			const [{ rows: allRows }, hiddenKeys, queued, seen] = await Promise.all([
+			const [{ rows: allRows, feedStates = [] }, hiddenKeys, queued, seen] = await Promise.all([
 				loadFrontPages({ force }),
 				loadHiddenStoryKeys(),
 				loadQueue(),
@@ -37245,25 +39118,36 @@ ${frontPageChooserHTML()}
 				return;
 			}
 
+			outcome = { feedStates };
 			state.rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
 			state.rowsByURL = new Map(
 				state.rows.map((row) => [normalizeURL(row.story.url) || row.story.url, row]),
 			);
 			state.seen = seen || {};
 
-			const shown = appViewRows(state.rows, view, state.seen);
+			const shown = view === "unread" && state.open
+				? state.rows.filter((row) => rowIsUnread(row, state.seen) || (normalizeURL(row.story.url) || row.story.url) === state.open.key)
+				: appViewRows(state.rows, view, state.seen);
+			const failureText = frontPageFailureText(feedStates, view);
 			const queuedKeys = new Set(queued.map(queueKey));
 
 			list.replaceChildren();
 
 			if (!shown.length) {
 				renderAppListMessage(
-					!allRows.length
-						? "Could not load Front Pages."
+					failureText || (!allRows.length
+						? feedStates.length && feedStates.every((feed) => feed.status === "ok") ? "Nothing here right now." : "Could not load Front Pages."
 						: view === "unread"
 							? "All caught up."
-							: "Nothing here right now.",
+							: "Nothing here right now."),
 				);
+			} else if (failureText) {
+				const notice = document.createElement("div");
+
+				notice.className = "browse-feed-status";
+				notice.setAttribute("role", "status");
+				notice.textContent = failureText;
+				list.append(notice);
 			}
 
 			for (const row of shown) {
@@ -37295,6 +39179,7 @@ ${frontPageChooserHTML()}
 		state.listView = view;
 		decorateAppRows(list);
 		await paintAppCounts();
+		return request === state.listSeq ? outcome : undefined;
 	}
 
 	function decorateAppRows(list) {
@@ -37396,8 +39281,34 @@ ${frontPageChooserHTML()}
 		}
 
 		state.seen = (await load(STORAGE.seen, {})) || {};
+		const list = state.ui.shadow.querySelector("#app-list-body");
+		const elements = [...list.querySelectorAll(".app-row")];
+		const removing = new Set(state.view === "unread" ? elements.filter((element) => {
+			const row = state.rowsByURL.get(element.dataset.appKey);
 
-		for (const element of state.ui.shadow.querySelectorAll("#app-list-body .app-row")) {
+			return row && element.dataset.appKey !== state.open?.key && !rowIsUnread(row, state.seen);
+		}) : []);
+		const edge = list.getBoundingClientRect().top;
+		const anchor = elements.find((element) => !removing.has(element) && element.getBoundingClientRect().bottom > edge);
+		const before = anchor?.getBoundingClientRect().top;
+		const phoneListHidden = appIsPhone() && (state.ui.shadow.querySelector("#app").dataset.stage !== "list" || state.moving);
+
+		if (phoneListHidden && state.listGeometry && removing.size) {
+			const boxes = [...removing].map((element) => state.listGeometry.get(element)).filter(Boolean);
+			const deltaAbove = (top) => boxes.filter((box) => box.top < top).reduce((sum, box) => sum + box.height, 0);
+
+			state.scrolls.list = Math.max(0, state.scrolls.list - deltaAbove(state.scrolls.list));
+
+			for (const [element, box] of state.listGeometry) {
+				if (removing.has(element)) {
+					state.listGeometry.delete(element);
+				} else {
+					box.top -= deltaAbove(box.top);
+				}
+			}
+		}
+
+		for (const element of elements) {
 			const row = state.rowsByURL.get(element.dataset.appKey);
 			const mark = element.querySelector(".app-unread-mark");
 
@@ -37410,9 +39321,28 @@ ${frontPageChooserHTML()}
 			element.classList.toggle("is-unread", unread);
 			mark.textContent = unread ? "●" : "";
 			mark.title = unread ? "Unread" : "";
+
+			if (removing.has(element)) {
+				element.remove();
+			}
+		}
+
+		if (anchor && list.getClientRects().length && !phoneListHidden) {
+			const delta = anchor.getBoundingClientRect().top - before;
+
+			if (appIsPhone()) {
+				window.scrollBy(0, delta);
+			} else {
+				list.scrollTop += delta;
+			}
+		}
+
+		if (state.view === "unread" && !list.querySelector(".app-row")) {
+			renderAppListMessage("All caught up.");
 		}
 
 		await paintAppCounts();
+		paintAppNext();
 	}
 
 	async function markAppViewRead() {
@@ -37439,7 +39369,7 @@ ${frontPageChooserHTML()}
 			action: {
 				label: "undo",
 				onAct: () => {
-					restoreManySeen(previous).then(refreshAppSeen).catch(console.error);
+					restoreManySeen(previous).then(() => renderAppList()).catch(console.error);
 				},
 			},
 		});
@@ -37463,7 +39393,16 @@ ${frontPageChooserHTML()}
 
 		const opened = { url, key, row: entry };
 
+		if (appIsPhone() && state.ui.shadow.querySelector("#app").dataset.stage === "list" && !state.moving) {
+			state.listGeometry = new Map([...state.ui.shadow.querySelectorAll("#app-list-body .app-row")].map((element) => {
+				const box = element.getBoundingClientRect();
+
+				return [element, { top: box.top + window.scrollY, height: box.height }];
+			}));
+		}
+
 		state.open = opened;
+		setAppCompactStage("article");
 		markCollectedArrival(url)
 			.then((marked) => {
 				if (marked) {
@@ -38521,21 +40460,7 @@ ${frontPageChooserHTML()}
 
 		element.append(head, body);
 		element.addEventListener("click", (event) => {
-			const link = event.target?.closest?.("a[href]");
-
-			if (
-				!link ||
-				event.button !== 0 ||
-				event.metaKey ||
-				event.ctrlKey ||
-				event.shiftKey ||
-				event.altKey
-			) {
-				return;
-			}
-
-			event.preventDefault();
-			openAppURL(link.href);
+			prepareArticleLink(event, article.url, element);
 		});
 
 		appReaderElement()?.remove();
@@ -38918,11 +40843,8 @@ ${frontPageChooserHTML()}
 		}
 
 		if (data.type === "focus-quote") {
+			revealAppDiscussion();
 			applyCommentFilter(String(data.key || ""));
-
-			if (appIsPhone()) {
-				setAppStage("discussion");
-			}
 		}
 	}
 
@@ -39204,12 +41126,17 @@ ${frontPageChooserHTML()}
 						openAppSearch();
 					},
 		"front-pages": () => appShortcutPane("list", "#app-toggle-list"),
-		discussion: () => appShortcutPane("discussion", appIsStacked() ? "#app-bar-discussion" : "#app-toggle-discussion"),
+		discussion: () => appUsesCompactDiscussion()
+			? () => {
+				closeAppMenus();
+				setAppCompactStage(appState.ui.shadow.querySelector("#app").dataset.readerStage === "discussion" ? "article" : "discussion", { keyed: true });
+			}
+			: appIsPhone() ? appShortcutPress("#app-bar-discussion") : appShortcutPane("discussion", appIsStacked() ? "#app-bar-discussion" : "#app-toggle-discussion"),
 		sidebar: () => null,
 		settings: () => appShortcutSettings(),
 		shortcuts: () => appShortcutSettings("shortcuts"),
 		save: () => {
-			const control = appShortcutControl(appIsPhone() || appIsStacked() ? "#app-bar-save" : '#app-article-actions [data-item-action="save"]');
+			const control = appShortcutControl(appUsesFloatingControls() ? "#app-bar-save" : '#app-article-actions [data-item-action="save"]');
 			const button = appState.ui.shadow.querySelector('#app-article-actions [data-item-action="save"]');
 
 			return control && button ? () => submitItemAction(button).catch(console.error) : null;
@@ -39220,7 +41147,7 @@ ${frontPageChooserHTML()}
 		"open-original": () => {
 			const url = appState.open?.url;
 
-			return url && appShortcutControl(appIsPhone() || appIsStacked() ? "#app-bar-open" : "#app-article-open")
+			return url && appShortcutControl(appUsesFloatingControls() ? "#app-bar-open" : "#app-article-open")
 				? () => {
 						rememberAppArrival(url).catch(console.error);
 						window.open(url, "_blank", "noopener");
@@ -39231,6 +41158,7 @@ ${frontPageChooserHTML()}
 	};
 
 	function appShortcutFor(event, mod, shortcuts = appShortcuts) {
+		if (sidebarUI?.shadow?.querySelector("#reddit-read-modal")) return null;
 		const key = appKeyName(event.key);
 		const held = appIsApple() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 
@@ -39330,6 +41258,12 @@ ${frontPageChooserHTML()}
 		}
 
 		const action = appShortcutFor(event, true) || appShortcutFor(event, false);
+
+		if (action?.id === "search" && isSidebarVisible() && sidebarUI?.browseHome && isBrowsing(sidebarUI) && !isSubmitting(sidebarUI) && !isFrameField(event.composedPath()[0]) && sidebarUI.shadow.querySelector("#app-settings-modal")?.hidden) {
+			event.preventDefault();
+			openBrowseSearch(sidebarUI).catch(console.error);
+			return;
+		}
 
 		if (action?.id !== "sidebar" || isFrameField(event.composedPath()[0])) {
 			return;
@@ -39471,6 +41405,69 @@ ${frontPageChooserHTML()}
 		}
 
 		return url.href;
+	}
+
+	function prepareArticleLink(event, here = location.href, root = null) {
+		const link = event.target?.closest?.("a[href]");
+
+		if (root && link?.hasAttribute("download")) {
+			link.target = "_blank";
+			link.relList.add("noopener");
+			return;
+		}
+
+		if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.hasAttribute("download")) return;
+		let target = (link.getAttribute("target") || "").trim().toLowerCase();
+
+		if ((target === "_top" || target === "_parent") && (link.protocol === "http:" || link.protocol === "https:")) {
+			target = "_self";
+			link.target = target;
+		}
+
+		if (root) {
+			const url = new URL(link.href, here);
+			const current = new URL(here);
+
+			if ((!target || target === "_self") && url.origin === current.origin && url.pathname === current.pathname && url.search === current.search) {
+				if (!url.hash && !url.href.endsWith("#")) {
+					link.target = "_blank";
+					link.relList.add("noopener");
+					return;
+				}
+				if (!url.hash) {
+					event.preventDefault();
+					if (appIsPhone()) {
+						window.scrollTo(0, 0);
+					} else {
+						appReaderScroller()?.scrollTo(0, 0);
+					}
+					return;
+				}
+
+				let name;
+				try {
+					name = decodeURIComponent(url.hash.slice(1));
+				} catch {
+					name = url.hash.slice(1);
+				}
+
+				const destination = [...root.querySelectorAll("[data-reader-anchor]")].find((element) => element.dataset.readerAnchor === name);
+
+				if (destination) {
+					event.preventDefault();
+					destination.scrollIntoView();
+				} else {
+					link.target = "_blank";
+					link.relList.add("noopener");
+				}
+				return;
+			}
+		}
+
+		if (frameLinkTarget(event, here)) {
+			link.target = "_blank";
+			link.relList.add("noopener");
+		}
 	}
 
 	function frameVisibility() {
@@ -39685,12 +41682,7 @@ ${frontPageChooserHTML()}
 					return;
 				}
 
-				const url = frameLinkTarget(event);
-
-				if (url) {
-					event.preventDefault();
-					postToApp({ type: "open", url });
-				}
+				prepareArticleLink(event);
 			},
 			true,
 		);
@@ -39755,11 +41747,6 @@ ${frontPageChooserHTML()}
 		annotationController = controller;
 		postToApp({ type: "annotated", groups: groups.map(serializeAnnotationGroup) });
 
-		scheduleIdleTask(() => {
-			if (annotationController === controller) {
-				controller.setHeatRegions(buildHeatRegions(frameComments, index));
-			}
-		});
 	}
 
 	const APP_HELLO_MS = 200;
@@ -40077,6 +42064,15 @@ ${frontPageChooserHTML()}
 			plan.attributes.push(["data-reader", marker]);
 		}
 
+		const anchor = element.getAttribute("id") || (tag === "A" ? element.getAttribute("name") : "") || element.getAttribute("data-reader-anchor");
+
+		if (plan.attributes && anchor && anchor.length <= 512) {
+			plan.attributes.push(["data-reader-anchor", anchor]);
+		} else if ((plan.unwrap || plan.paragraph) && anchor && anchor.length <= 512) {
+			plan.anchor = anchor;
+			plan.anchorTag = READER_BLOCK_WRAPPERS.has(tag) ? "div" : "span";
+		}
+
 		return plan;
 	}
 
@@ -40101,9 +42097,20 @@ ${frontPageChooserHTML()}
 
 		if (tag === "A") {
 			const url = readerURL(element.getAttribute("href"), base);
+			const attributes = [["href", url?.href || ""], ["rel", "noopener noreferrer"]];
+
+			if (element.hasAttribute("download")) {
+				attributes.push(["download", element.getAttribute("download").slice(0, 256)]);
+			}
+
+			const target = element.getAttribute("target");
+
+			if (target && target.length <= 128) {
+				attributes.push(["target", target]);
+			}
 
 			return url
-				? { attributes: [["href", url.href], ["rel", "noopener noreferrer"]] }
+				? { attributes }
 				: { unwrap: true };
 		}
 
@@ -40301,7 +42308,15 @@ ${frontPageChooserHTML()}
 					readerWrapLooseInline(holder, inert);
 				}
 
-				child.replaceWith(holder);
+				if (plan.anchor) {
+					const anchored = inert.createElement(plan.anchorTag);
+
+					anchored.setAttribute("data-reader-anchor", plan.anchor);
+					anchored.append(holder);
+					child.replaceWith(anchored);
+				} else {
+					child.replaceWith(holder);
+				}
 				continue;
 			}
 
@@ -43027,6 +45042,7 @@ ${frontPageChooserHTML()}
 	// -------------------------
 
 	async function init() {
+		if (await dispatchRedditReadWindow()) return;
 		await seedSources();
 		await migrateStorage();
 		await migrateSourceKeys();

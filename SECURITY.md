@@ -61,14 +61,15 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Hypothes.is | `api.hypothes.is` | the URL of each page you visit, to find public annotations on it. No account, signed in or out |
   | *no source enabled* | none | nothing -- the script performs no lookup at all. Kind of weird to use it this way, but no judgements. |
 
-  Ten sit outside that table because they are not lookups:
+  Eleven sit outside that table because they are not lookups:
 
   | Host | When | What it is told |
   | --- | --- | --- |
   | `old.reddit.com` | only when you press vote, reply or submit | the post or comment you are acting on, or the page you submit, in a popup window you can see. Nothing at page load |
+  | `backchnnl.app` | when the Reddit connection notice is shown | a fixed illustration image, requested without a referrer. No article URL or Reddit session is sent |
   | `cdn.jsdelivr.net` | when your manager fetches the script's declared resources, and again from the page itself if it did not | nothing about you -- it is a file download of a fixed, versioned URL |
   | the page you open in the reader on backchnnl.app | only when that page gives no answer from inside its frame | nothing but the request itself: one `GET` without cookies, to read whether it may be framed, whether it is a picture and, if it may not be framed, its text |
-  | the site of each article in the reader's list on backchnnl.app | when the list shows the article, since 1.6.15 | nothing but a request for its icon, `/favicon.ico`, sent without a referrer |
+  | the site of each article in the reader's list on backchnnl.app or the Sidebar's Backchannel view | when the list shows the article, since 1.6.15 in Reader and 1.6.18.1 in the Sidebar | nothing but a request for its icon, `/favicon.ico`, sent without a referrer |
   | wherever a page you open in the reader says its preview image is | once that page has loaded in the reader, since 1.6.15.1 | nothing but the request for the image, sent without a referrer |
   | the site of each page in your Collection | when the Collection shows a card that has no picture or colors kept for its page, since 1.6.17: at most six at a time, and each card once until the page reloads | nothing but the request itself: one `GET` without cookies, to read the page's picture, colors, fonts and icon |
   | wherever a page in your Collection says its picture and icon are | when the Collection shows its card, in the reader or in the Sidebar, since 1.6.17 | nothing but the requests for the images, sent without a referrer |
@@ -174,6 +175,26 @@ Worth stating plainly, because the permissions are broad by necessity:
   already has there. The script never handles either password and never
   posts a session cookie anywhere. Those two are the only sources with write
   access; the rest are read-only.
+- **Safari's Userscripts extension reads Reddit in a temporary window.** Since
+  1.6.18.1, confirming the introduction starts a refresh in a window on
+  `www.reddit.com`, using that site's existing session. Article lists then try
+  automatically on their first load; later refreshes start with Sync.
+  The introduction's dismissal or confirmation is stored locally with the app's
+  data and survives cache cleanup. Pressing Sync or loading more replies can also
+  open the window. Background page discovery opens no window and can use cached
+  content or the existing archive fallback.
+  An internal `/api/me.json` check determines whether sign-in is needed; its
+  account data stays in the Reddit window. Only allowed public feed, post and
+  comment fields return through userscript storage, with rate-limit metadata.
+  Cookies, authorization headers, tokens and Reddit's modhash are never copied
+  to the calling page or its responses. Each read session requires a stored,
+  random code, expires within five minutes, accepts only the supported read
+  endpoints, respects server waits, and stops if Reddit is disabled. The window
+  closes and temporary records are removed when finished. Settings › Sources
+  keeps the explanation under (?). An illustrated notice explains Reddit's
+  access changes and session refreshes, with Continue to start, and a
+  toast confirms successful syncs. Other userscript managers keep their existing
+  transport.
 - **A popup acts only on a request the script stored for it.** Before it
   opens a popup to vote, reply or submit, the script stores what you asked
   for under a one-time code and puts the code in the popup's address. The
@@ -242,8 +263,9 @@ with its address as `<page>`.
 | Hacker News | `GET hacker-news.firebaseio.com/v0/item/<id>` | story and comment ids it already has | No |
 | Hacker News | `GET news.ycombinator.com/item?id=<id>` | a thread id, to read scores and flags | Yes, if you are signed in there |
 | Hacker News (vote, reply, submit) | popup window on `news.ycombinator.com` | the one story or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
-| Reddit | `GET www.reddit.com/search.json?type=link&limit=25&q=<page>` | `<page>` | Yes when signed in. `reddit_session` is `SameSite=None`, so the browser attaches it cross-site. Signed out it carries `loid`, a device id that lasts over a year |
+| Reddit | `GET www.reddit.com/search.json?type=link&limit=25&q=<page>` | `<page>` | May carry Reddit session or device cookies when your browser and userscript manager permit them. A signed-in Reddit tab does not guarantee that these requests share its session |
 | Reddit (fallback) | `GET arctic-shift.photon-reddit.com<path>` | the same lookup, against an archive mirror | No identifier, no session |
+| Reddit (Safari Userscripts reads) | temporary window on `www.reddit.com`, using `GET /api/me.json` internally, then supported listing, lookup, thread and more-replies endpoints | the topics, article address or thread requested by initial article-list loading, Sync or loading more replies, after confirming the introduction; no window for background page discovery | Yes, using the existing Reddit session. Account details stay in the Reddit window; only allowed public fields and rate-limit metadata return |
 | Reddit (vote, reply, submit) | popup window on `old.reddit.com` | the one post or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
 | Bluesky | `GET constellation.microcosm.blue/links/all?target=<page>` | `<page>`, plus a `User-Agent` naming Backchannel and its version | No |
 | Bluesky | `GET constellation.microcosm.blue/xrpc/blue.microcosm.links.getBacklinks?subject=<page>&source=...&limit=100` | `<page>` | No |
@@ -255,7 +277,7 @@ with its address as `<page>`.
 | Lemmy | `GET lemmy.world/api/v3/comment/list?post_id=<id>&type_=All&sort=Top&max_depth=8&limit=300` | a post id it already found | No |
 | Mastodon | `GET www.tootfinder.ch/rest/api/search/<domain>` | `<domain>` only, never the full address | No |
 | Mastodon (front page) | `GET mastodon.social/api/v1/trends/links?limit=40` | nothing about you, only what that instance is linking to | No |
-| Front Pages, by topic | `GET www.reddit.com/r/<subreddits>.json?limit=100` | the subreddits for a topic you picked, never `<page>`. Only while Reddit is on | Yes when signed in, as in the Reddit row |
+| Front Pages, by topic | `GET www.reddit.com/r/<subreddits>.json?limit=100` | the subreddits for a topic you picked, never `<page>`. Only while Reddit is on | Depends on the browser and userscript manager, as in the Reddit row |
 | Front Pages, by topic | `GET news.ycombinator.com/news` | nothing about you. Only for Technology, and only while Hacker News is on | Yes, if you are signed in there |
 | Front Pages, by topic | `GET lemmy.world/api/v3/post/list?community_name=<community>&sort=Active&type_=All&limit=50` | a community for a topic you picked, never `<page>`. Only while Lemmy is on | No |
 | Front Pages, by topic | `GET lobste.rs/hottest.json` | nothing. Only for Technology, and only while Lobsters is on | No |
@@ -267,13 +289,13 @@ with its address as `<page>`.
 | Hacker News (watching) | `GET hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=url&hitsPerPage=0&query=<saved page>&numericFilters=created_at_i><when you saved it>` | the address of a page in your Collection, in two spellings, and when you saved it, to count the stories posted since; only while Hacker News is on | No, and no identifier of any kind |
 | Bluesky (watching) | `GET constellation.microcosm.blue/links/count?target=<saved page>&collection=app.bsky.feed.post&path=.embed.external.uri` | the address of a page in your Collection, plus a `User-Agent` naming Backchannel and its version; only while Bluesky is on | No |
 | Reddit (watching) | `GET arctic-shift.photon-reddit.com/api/posts/search?limit=25&fields=id&url=<saved page>` | the address of a page in your Collection; only while Reddit is on and answering through the archive mirror | No identifier, no session |
-| Reddit (reader) | `GET www.reddit.com/api/info.json?id=t3_<id>`, or the archive mirror's `/api/posts/ids?ids=<id>` | the id of a post the reader listed, when you open its link and the search by address missed that post; only while Reddit is on | Yes when signed in, as in the Reddit row |
+| Reddit (reader) | `GET www.reddit.com/api/info.json?id=t3_<id>`, or the archive mirror's `/api/posts/ids?ids=<id>` | the id of a post the reader listed, when you open its link and the search by address missed that post; only while Reddit is on | Direct requests depend on the browser and userscript manager, as in the Reddit row. Archive requests carry no Reddit session |
 | Bluesky (reader) | `GET public.api.bsky.app/xrpc/app.bsky.feed.getPosts?uris=<post>` | a post a Front Pages feed listed, when you open its link and the search by address missed it; only while Bluesky is on | No, as in the Bluesky row |
 | Lobsters (reader) | `GET lobste.rs/s/<id>.json` | the id of a story the reader listed, when you open its link and the search by domain missed it; only while Lobsters is on | No. Its session cookie, `lobster_trap`, is `SameSite=Lax`, which the browser withholds cross-site |
 | Mastodon (reader) | `GET mastodon.social/api/v1/timelines/link?url=<link>&limit=40` | a link mastodon.social's trends listed, when you open it and the search finds no posts for it; only while Mastodon is on | No. Its session cookie, `_mastodon_session`, is `SameSite=Lax`, which the browser withholds cross-site |
 | Lemmy (reader) | `GET lemmy.world/api/v3/post?id=<id>` | the id of a post the reader listed, when you open its link and the search by address missed it; only while Lemmy is on | No. Its session cookie, `jwt`, is `SameSite=Lax`, which the browser withholds cross-site |
 | backchnnl.app reader, not a source | `GET <the page you opened>`, only when it gives no answer from its frame | nothing but the request itself | No, it is sent without cookies |
-| backchnnl.app reader's list, not a source | `GET <article's site>/favicon.ico`, as an image, one for each article the list shows | nothing but the request itself, with no referrer | Only as far as your browser sends that site's cookies with an image on another site's page; browsers differ |
+| Reader and Sidebar article lists, not a source | `GET <article's site>/favicon.ico`, as an image, one for each article the list shows | nothing but the request itself, with no referrer | Only as far as your browser sends that site's cookies with an image on another site's page; browsers differ |
 | backchnnl.app reader's list, not a source | `GET <the preview image an opened page names>`, as an image, once that page has loaded in the reader | nothing but the request itself, with no referrer | The same: whatever cookies your browser sends with an image on another site's page |
 | Collection, not a source | `GET <a page in your Collection>`, when its card has no picture or colors kept, at most six at a time | nothing but the request itself | No, it is sent without cookies |
 | Collection, not a source | `GET <a saved page's picture>` and `GET <its icon>`, as images, when the Collection shows its card | nothing but the request itself, with no referrer | The same: whatever cookies your browser sends with an image on another site's page |
