@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.18.1
+// @version      1.6.18.2
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -29741,6 +29741,89 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				right: rect.right + origin.left,
 			}));
 	}
+
+	function getClippedPageRectsForRange(range, source = documentSource()) {
+		const host = source.hostFor(range);
+		const origin = source.originFor(host);
+		const clips = new Map();
+		const rects = [];
+
+		const appendTextRects = (node) => {
+			if (!range.intersectsNode(node)) {
+				return;
+			}
+
+			const fragment = node.ownerDocument.createRange();
+			fragment.setStart(node, node === range.startContainer ? range.startOffset : 0);
+			fragment.setEnd(node, node === range.endContainer ? range.endOffset : node.length);
+
+			let clip = clips.get(node.parentElement);
+
+			if (!clip) {
+				clip = { left: -Infinity, top: -Infinity, right: Infinity, bottom: Infinity };
+
+				for (let element = node.parentElement; element && element !== host;) {
+					const style = element.ownerDocument.defaultView.getComputedStyle(element);
+					const next = style.display !== "contents" && (style.position === "absolute" || style.position === "fixed")
+						? element.offsetParent
+						: element.parentElement;
+					const clipX = style.overflowX !== "visible";
+					const clipY = style.overflowY !== "visible";
+
+					if (style.display !== "inline" && style.display !== "contents" && (clipX || clipY)) {
+						const box = element.getBoundingClientRect();
+						const scaleX = box.width / element.offsetWidth || 1;
+						const scaleY = box.height / element.offsetHeight || 1;
+						const left = box.left + element.clientLeft * scaleX + origin.left;
+						const top = box.top + element.clientTop * scaleY + origin.top;
+
+						if (clipX) {
+							clip.left = Math.max(clip.left, left);
+							clip.right = Math.min(clip.right, left + element.clientWidth * scaleX);
+						}
+
+						if (clipY) {
+							clip.top = Math.max(clip.top, top);
+							clip.bottom = Math.min(clip.bottom, top + element.clientHeight * scaleY);
+						}
+					}
+
+					element = next;
+				}
+
+				clips.set(node.parentElement, clip);
+			}
+
+			for (const rect of getPageRectsForRange(fragment, source)) {
+				const left = Math.max(rect.left, clip.left);
+				const top = Math.max(rect.top, clip.top);
+				const right = Math.min(rect.right, clip.right);
+				const bottom = Math.min(rect.top + rect.height, clip.bottom);
+
+				if (right > left && bottom > top) {
+					rects.push({ left, top, right, width: right - left, height: bottom - top });
+				}
+			}
+		};
+
+		const root = range.commonAncestorContainer;
+
+		if (root.nodeType === Node.TEXT_NODE) {
+			appendTextRects(root);
+		} else {
+			const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+
+			for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+				if (range.comparePoint(node, 0) > 0) {
+					break;
+				}
+
+				appendTextRects(node);
+			}
+		}
+
+		return rects;
+	}
 	// #endregion hnewhere-test-export
 
 	function scrollRangeIntoView(range) {
@@ -31195,7 +31278,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			overlay.style.mixBlendMode = dark ? "screen" : "multiply";
 
 			for (const region of heatRegions) {
-				for (const rect of getPageRectsForRange(region.range)) {
+				for (const rect of getClippedPageRectsForRange(region.range, source)) {
 					heatLayer.appendChild(
 						createHighlightRect(rect, {
 							interactive: false,
@@ -31208,7 +31291,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			}
 
 			for (const group of groups) {
-				const rects = getPageRectsForRange(group.range);
+				const rects = getClippedPageRectsForRange(group.range, source);
 
 				if (!rects.length) {
 					continue;
@@ -31322,13 +31405,18 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 		const onFontsSettled = () => scheduleRender();
 
-		const onScroll = () => {
-			if (source.heightFor(overlayHost) !== renderedHeight) {
+		const onScroll = (event) => {
+			const target = event.target;
+			const scrolledText = target?.nodeType === Node.ELEMENT_NODE &&
+				!target.contains(overlay) &&
+				[...groups, ...heatRegions].some(({ range }) => range.intersectsNode(target));
+
+			if (scrolledText || source.heightFor(overlayHost) !== renderedHeight) {
 				scheduleRender();
 			}
 		};
 
-		window.addEventListener("scroll", onScroll, { passive: true });
+		window.addEventListener("scroll", onScroll, { capture: true, passive: true });
 		window.addEventListener("resize", scheduleRender);
 		window.addEventListener("load", scheduleRender, true);
 		document.fonts?.addEventListener?.("loadingdone", onFontsSettled);
@@ -31362,7 +31450,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			},
 			cleanup() {
 				clearTimeout(leaveTimer);
-				window.removeEventListener("scroll", onScroll);
+				window.removeEventListener("scroll", onScroll, { capture: true });
 				window.removeEventListener("resize", scheduleRender);
 				window.removeEventListener("load", scheduleRender, true);
 				document.fonts?.removeEventListener?.("loadingdone", onFontsSettled);

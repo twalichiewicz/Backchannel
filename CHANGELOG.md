@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.18.2] — 2026-11-04
+
+### Fixed
+
+- Annotation highlights follow quoted text inside scrolling articles and stay
+  within the visible article area.
+
 ## [1.6.18.1] — 2026-10-30
 
 ### Added
