@@ -37631,14 +37631,32 @@ ${settingsModalHTML()}
 
 		closeAppRowMenu();
 		menu.setAttribute("aria-label", appViewLabel(appState.view));
-		showAppMenu(menu, button, [{ label: "Mark all as read", run: () => markAppViewRead().catch(console.error) }], { start: true });
+		showAppMenu(
+			menu,
+			button,
+			[
+				{ label: "Sync", run: () => appState?.ui.shadow.querySelector("#app-list-sync")?.onclick?.(new Event("click")) },
+				{ rule: true },
+				{ label: "Mark all as read", run: () => markAppViewRead().catch(console.error) },
+			],
+			{ start: true },
+		);
 		menu.dataset.heading = "1";
 		button.setAttribute("aria-expanded", "true");
 	}
 
 	function showAppMenu(menu, button, items, { start = false } = {}) {
 		menu.replaceChildren(
-			...items.map(({ label, run }) => {
+			...items.map(({ label, run, rule = false }) => {
+				if (rule) {
+					const divider = document.createElement("div");
+
+					divider.className = "dropdown-rule";
+					divider.setAttribute("role", "separator");
+
+					return divider;
+				}
+
 				const item = document.createElement("button");
 
 				item.type = "button";
