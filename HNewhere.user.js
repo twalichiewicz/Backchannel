@@ -31786,7 +31786,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	const APP_LIST_MAX_WIDTH = 480;
 	const APP_SPLIT_MIN = 0.2;
 	const APP_SPLIT_MAX = 0.8;
-	const APP_PULL_TRIGGER = 56;
+	const APP_PULL_TRIGGER = 40;
 	const APP_ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 	const APP_PULL_MAX = 96;
 
@@ -36909,12 +36909,16 @@ ${settingsModalHTML()}
 			}
 
 			pullSyncing = true;
-			paintPull(36, "syncing…", true);
-			runSync(() => renderAppList({ force: true }))
+			paintPull(0, "", true);
+			showToast("Syncing…", { kind: "system", persist: true });
+			syncList()
 				.catch(console.error)
 				.finally(() => {
 					pullSyncing = false;
-					paintPull(0, "", true);
+
+					if (shadow.getElementById("toast")?.textContent === "Syncing…") {
+						showToast("");
+					}
 				});
 		};
 
@@ -36923,7 +36927,7 @@ ${settingsModalHTML()}
 
 		const syncButton = shadow.querySelector("#app-list-sync");
 
-		syncButton.onclick = async () => {
+		const syncList = async () => {
 			const button = syncButton;
 
 			if (button.classList.contains("is-syncing")) {
@@ -36955,6 +36959,8 @@ ${settingsModalHTML()}
 			button.classList.remove("is-syncing");
 			button.removeAttribute("aria-busy");
 		};
+
+		syncButton.onclick = () => syncList();
 
 		shadow.querySelector("#app-article-open").onclick = () => {
 			rememberAppArrival(appState?.open?.url).catch(console.error);
