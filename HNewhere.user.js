@@ -5360,8 +5360,8 @@ ${
 		profileURL: (author) =>
 			"https://news.ycombinator.com/user?id=" + encodeURIComponent(author),
 
-		async discover(url) {
-			return (await findHN(url)).map(algoliaDiscussion);
+		async discover(url, { force = false } = {}) {
+			return (await findHN(url, { force })).map(algoliaDiscussion);
 		},
 
 		async probe(url, context) {
@@ -8065,13 +8065,13 @@ button {
 		});
 	}
 
-	async function discoverAll(urls, settings) {
+	async function discoverAll(urls, settings, { force = false } = {}) {
 		const targets = [...new Set([].concat(urls).filter(Boolean))];
 		const results = await Promise.all(
 			enabledSources(settings).flatMap((source) =>
 				targets.map((target) =>
 					discoverWithCeiling(
-						source.discover(target).catch((e) => {
+						source.discover(target, { force }).catch((e) => {
 							console.error("Backchannel " + source.id + " discovery failed:", e);
 							return [];
 						}),
@@ -8360,14 +8360,14 @@ button {
 		return hit;
 	}
 
-	async function findHN(url) {
+	async function findHN(url, { force = false } = {}) {
 		const target = normalizeURL(url);
 
 		if (!target) {
 			return [];
 		}
 
-		const cached = keptDiscoveries(await load(DISCOVERY_CACHE_KEY, null), Date.now());
+		const cached = force ? {} : keptDiscoveries(await load(DISCOVERY_CACHE_KEY, null), Date.now());
 
 		if (Object.prototype.hasOwnProperty.call(cached, target)) {
 			return [...cached[target].results].sort(compareStoriesByDiscussion);
@@ -23665,6 +23665,12 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		dockedComposeBox(shadow)?._hnewhereDock?.undock();
 	}
 
+	function flushComposerDrafts(root) {
+		return Promise.all(
+			[...(root?.querySelectorAll(".composer-text") || [])].map((field) => field._hnewhereFlushDraft?.()),
+		);
+	}
+
 	function replyTargets(stories = renderedDiscussions || []) {
 		const filtered =
 			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
@@ -24276,14 +24282,30 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			.catch(console.error);
 
 		let saveTimer = 0;
+		let unsaved = false;
+		const saveDraft = () => {
+			unsaved = false;
+			return textarea.value ? save(draftKey, textarea.value) : forget(draftKey);
+		};
 
 		textarea.addEventListener("input", () => {
+			unsaved = true;
 			clearTimeout(saveTimer);
 
 			saveTimer = window.setTimeout(() => {
-				(textarea.value ? save(draftKey, textarea.value) : forget(draftKey)).catch(console.error);
+				saveDraft().catch(console.error);
 			}, 400);
 		});
+
+		textarea._hnewhereFlushDraft = () => {
+			if (!unsaved) {
+				return Promise.resolve();
+			}
+
+			clearTimeout(saveTimer);
+
+			return saveDraft();
+		};
 
 		const setBusy = (busy) => {
 			submitButton.disabled = busy;
@@ -25339,11 +25361,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				stories.map((story) => story.key),
 				Date.now(),
 			),
-			onSync: () => {
-				forgetThreads(stories);
-				setSidebarStage(ui, "comments");
-				return renderDiscussions(stories, ui);
-			},
+			onSync: () => syncDiscussions(ui, stories),
 		});
 
 		liveDiscussions.clear();
@@ -31597,6 +31615,29 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		}
 
 		crossFadeCommentsView(comments, render);
+	}
+
+	async function syncDiscussions(ui, stories) {
+		await flushComposerDrafts(ui.shadow);
+		itemCache.clear();
+		forgetThreads(stories);
+
+		const generation = ++sidebarGeneration;
+
+		setSidebarStage(ui, "discussion");
+
+		const found = await discoverAll(pageAddresses(), await loadSettings(), { force: true });
+
+		if (generation !== sidebarGeneration) {
+			return;
+		}
+
+		setSidebarStage(ui, "comments");
+
+		return renderDiscussions(
+			disambiguateLabels(dedupeDiscussions([...found, ...stories]).sort(compareStoriesByDiscussion)),
+			ui,
+		);
 	}
 
 	async function hideCurrentSite(scope = "page") {
