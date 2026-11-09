@@ -46,6 +46,8 @@
 // @grant        GM.listValues
 // @grant        GM.xmlHttpRequest
 // @grant        GM.getResourceText
+// @grant        GM.openInTab
+// @grant        GM.closeTab
 // @grant        unsafeWindow
 // @resource     pdfjsCore   https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/legacy/build/pdf.min.mjs
 // @resource     pdfjsWorker https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/legacy/build/pdf.worker.min.mjs
@@ -5215,7 +5217,7 @@
 	function sourceHelpHTML(source) {
 		const points = escapeHTML([
 			...sourcePoints(source),
-			...(source.id === "reddit" && usesRedditReadWindow() ? ["Reddit’s access changes mean Backchannel opens a temporary Reddit window whenever your session needs refreshing. Sign in there if asked; it closes automatically when finished."] : []),
+			...(source.id === "reddit" && usesRedditReadWindow() ? ["Reddit’s access changes mean Backchannel refreshes Reddit through a reddit.com tab opened in the background with your Reddit login. If Reddit asks you to sign in, switch to that tab; it closes by itself when finished."] : []),
 		].join("\n"));
 
 		return `<button class="source-help" type="button" aria-label="About ${escapeHTML(source.label)}" aria-description="${points}" data-tip="${points}">?</button>`;
@@ -5520,6 +5522,10 @@ ${
 		try { return GM.info?.scriptHandler === "Userscripts"; } catch { return false; }
 	}
 
+	function usesManagerTabs() {
+		try { return typeof GM.openInTab === "function"; } catch { return false; }
+	}
+
 	function scheduleRedditReadNotice() {
 		if (!usesRedditReadWindow() || redditReadNoticeScheduled || redditReadNoticeShown) return;
 		redditReadNoticeScheduled = true;
@@ -5543,7 +5549,7 @@ ${
 		modal.innerHTML = `<div class="app-settings-dialog reddit-read-dialog" role="dialog" aria-modal="true" aria-labelledby="reddit-read-title" aria-describedby="reddit-read-description" tabindex="-1">
 <img class="reddit-read-image" src="https://backchnnl.app/src/reddit-connection.jpg" width="750" height="499" alt="" referrerpolicy="no-referrer">
 <div class="reddit-read-content"><h2 id="reddit-read-title">Reddit is changing how apps connect</h2>
-<div id="reddit-read-description"><p>Reddit is restricting access for third-party apps and ending RSS feed support. To keep articles and discussions available, Backchannel now connects through your Reddit login.</p><p>Whenever your Reddit session needs refreshing, a temporary Reddit window will open. Sign in there if asked; the window closes automatically when the refresh finishes.</p><p>Choose Continue to start your first refresh.</p></div></div>
+<div id="reddit-read-description"><p>Reddit is restricting access for third-party apps and ending RSS feed support. To keep articles and discussions available, Backchannel now connects through your Reddit login.</p><p>Whenever your Reddit session needs refreshing, Backchannel opens a Reddit tab in the background. Sign in there if asked; the tab closes by itself when the refresh finishes.</p><p>Choose Continue to start your first refresh.</p></div></div>
 <div class="reddit-read-actions"><button class="reddit-read-confirm" type="button">Continue</button></div></div>`;
 		const returnTo = shadow.activeElement;
 		const behind = [...shadow.children].filter((element) => element.tagName !== "STYLE").map((element) => [element, element.inert]);
@@ -5617,7 +5623,7 @@ ${
 					if (Date.now() - reply.ts > 10000) return { error: "window-unavailable" };
 					if (!batch.awaitingLogin) {
 						batch.awaitingLogin = true;
-						showToast("Sign in to Reddit in the temporary window, then press Continue.", { kind: "system", persist: true, action: { label: "Cancel", onAct: () => { batch.cancelled = true; } } });
+						showToast("Sign in to Reddit in the tab that opened, then press Continue.", { kind: "system", persist: true, action: { label: "Cancel", onAct: () => { batch.cancelled = true; } } });
 					}
 				} else if (["ready", "response", "error", "closed"].includes(reply.phase)) {
 					if (batch.awaitingLogin) { batch.awaitingLogin = false; showToast(""); }
@@ -5630,7 +5636,7 @@ ${
 	}
 
 	async function prepareRedditReadBatch(batch) {
-		if (!batch.popup) return { error: "popup-blocked" };
+		if (!batch.popup && !batch.tab) return { error: batch.activated ? "popup-blocked" : "no-gesture" };
 		const settings = await loadSettings();
 		const cooldown = await load(REDDIT_POLL_KEY, null);
 
@@ -5639,7 +5645,14 @@ ${
 
 		await stageBridgePayload(batch.nonce, stage);
 		await indexBridgePayload(batch.nonce);
-		batch.popup.location = "https://www.reddit.com/#" + new URLSearchParams({ backchannel_read: "1", nonce: batch.nonce });
+		const url = "https://www.reddit.com/#" + new URLSearchParams({ backchannel_read: "1", nonce: batch.nonce });
+
+		if (batch.tab) {
+			const opened = await GM.openInTab(url, true);
+
+			if (!opened) return { error: "window-unavailable" };
+			batch.tabId = opened.id;
+		} else batch.popup.location = url;
 		const reply = await waitRedditReadReply(batch, 0, 30000);
 
 		batch.connected = reply.phase === "ready";
@@ -5659,6 +5672,7 @@ ${
 		} finally {
 			await Promise.allSettled([clearBridgePayload(batch.nonce), forget(BRIDGE_RESULT_PREFIX + batch.nonce)]);
 			try { batch.popup?.close(); } catch {}
+			if (batch.tabId != null) { try { await GM.closeTab(batch.tabId); } catch {} }
 			if (redditReadBatch === batch) redditReadBatch = null;
 			if (batch.syncRun === syncRunId && batch.synced && !batch.failed && !batch.cancelled && isSidebarVisible()) showToast("Synced", { kind: "system" });
 		}
@@ -5669,19 +5683,24 @@ ${
 		if (sidebarUI?.shadow?.getElementById("toast")?.textContent === "Synced") showToast("");
 		return runRedditReadAction(async () => {
 			const batch = usesRedditReadWindow() && redditReadSourceOn && !redditReadBatch?.closing ? redditReadBatch : null;
+			const untapped = Boolean(batch && !batch.popup && !batch.tab && !batch.activated);
 			const result = await task();
 			const runs = Array.isArray(result) ? result : [{ status: "fulfilled", value: result }];
 			const feeds = runs.flatMap((run) => run.status === "fulfilled" ? run.value?.feedStates || [] : []);
-			const failed = runs.some((run) => run.status === "rejected") || feeds.some((feed) => feed.status !== "ok");
+			const waiting = untapped ? feeds.filter((feed) => feed.status === "window") : [];
+			const failed = runs.some((run) => run.status === "rejected") || feeds.some((feed) => feed.status !== "ok" && !waiting.includes(feed));
 			const synced = feeds.length > 0 && !failed;
 
-			if (batch) {
+			if (batch && !untapped) {
 				if (synced && runId === syncRunId) {
 					batch.synced = true;
 					batch.syncRun = runId;
 				}
 				batch.failed ||= failed;
-			} else if (synced && runId === syncRunId && isSidebarVisible()) showToast("Synced", { kind: "system" });
+			} else if (runId === syncRunId && isSidebarVisible()) {
+				if (waiting.length && !failed) showToast("Press Sync to refresh Reddit.", { kind: "system", action: { label: "sync", onAct: () => runSync(task, options).catch(console.error) } });
+				else if (synced) showToast("Synced", { kind: "system" });
+			}
 			return result;
 		}, options);
 	}
@@ -5692,13 +5711,15 @@ ${
 
 		if (!batch || batch.closing) {
 			const nonce = crypto.randomUUID().replaceAll("-", "");
-			const popup = window.open("about:blank", REDDIT_READ_SOURCE + "_" + nonce, "width=760,height=680,resizable=yes,scrollbars=yes");
+			const activated = navigator.userActivation?.isActive ?? true;
+			const tab = !automatic && usesManagerTabs();
+			const popup = tab ? null : window.open("about:blank", REDDIT_READ_SOURCE + "_" + nonce, "width=760,height=680,resizable=yes,scrollbars=yes");
 
-			if (!popup && automatic) {
+			if (!popup && !tab && automatic) {
 				return Promise.resolve();
 			}
 
-			batch = { nonce, popup, created: Date.now(), expires: Date.now() + SIGN_IN_TIMEOUT, connected: false, closing: false, cancelled: false, users: 0, sequence: 0, accessVersion: redditAccessVersion };
+			batch = { nonce, popup, tab, activated, created: Date.now(), expires: Date.now() + SIGN_IN_TIMEOUT, connected: false, closing: false, cancelled: false, users: 0, sequence: 0, accessVersion: redditAccessVersion };
 			redditReadBatch = batch;
 			batch.preparing = prepareRedditReadBatch(batch).catch(() => ({ error: "window-unavailable" }));
 		}
@@ -5707,7 +5728,7 @@ ${
 			try {
 				const ready = await batch.preparing;
 
-				if (ready.error && ready.error !== "not-needed" && !batch.reported) {
+				if (ready.error && ready.error !== "not-needed" && ready.error !== "no-gesture" && !batch.reported) {
 					batch.reported = true;
 					showToast(ready.error === "popup-blocked" ? "Allow popups for this site, then press Sync to refresh Reddit." : ready.error === "cancelled" ? "Reddit refresh cancelled." : ready.error === "limited" ? "Reddit requests are temporarily limited. Try syncing again later." : "The Reddit window did not respond. Press Sync to try again.", { kind: "system", page: true });
 				}
@@ -5778,7 +5799,8 @@ ${
 				while (true) {
 					const current = await readBridgePayload(nonce);
 
-					if (!validRedditReadStage(current, nonce) || current.done) { completed = true; break; }
+					if (!validRedditReadStage(current, nonce)) break;
+					if (current.done) { completed = true; break; }
 					if (!(await loadSettings()).sources?.reddit) { await publish({ phase: "error", requestId: current.request?.id || 0, error: "disabled" }); break; }
 					if (paused) {
 						if (Date.now() - lastLoginReport > 1000) { await publish({ phase: "login", requestId: 0 }); lastLoginReport = Date.now(); }
@@ -5840,6 +5862,7 @@ ${
 			} finally {
 				clearBridgeReload(REDDIT_READ_RESUME_KEY);
 				if (completed) await publish({ phase: "closed", requestId: "done" }).catch(() => {});
+				if (typeof GM?.closeTab === "function") { try { await GM.closeTab(); } catch {} }
 				window.close();
 			}
 		};
