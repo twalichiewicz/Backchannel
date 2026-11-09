@@ -16857,6 +16857,11 @@ header {
 	opacity:0;
 }
 
+#comments.comments-arriving > #comments-content {
+	opacity:0;
+	transition:none;
+}
+
 #browse-list {
 	padding-left:8px;
 	transition:opacity .16s ease, transform .16s ease;
@@ -25314,6 +25319,12 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			ui.body.appendChild(kept._hnewhereDock.home());
 		}
 
+		const waiting = document.createElement("div");
+
+		waiting.className = appState ? "browse-empty app-discussion-empty" : "browse-empty";
+		waiting.textContent = "Loading comments…";
+		ui.body.appendChild(waiting);
+
 		setSidebarRestingSubtitle(ui, "");
 
 		const generation = sidebarGeneration;
@@ -25375,6 +25386,17 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		});
 
 		const page = discussionsPageTitle(stories);
+
+		waiting.remove();
+
+		const view = ui.shadow?.querySelector("#comments");
+
+		if (view && !prefersReducedMotion()) {
+			view.classList.add("comments-arriving");
+			requestAnimationFrame(() => {
+				requestAnimationFrame(() => view.classList.remove("comments-arriving"));
+			});
+		}
 
 		const headerElement = renderPageHeader(stories, ui.body, {
 			page,
