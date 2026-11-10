@@ -2,7 +2,8 @@
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
 // @version      1.6.18.3
-// @license      MIT
+// @license      GPL-3.0-or-later
+// @copyright    2026 Thomas Walichiewicz
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @homepageURL  https://github.com/twalichiewicz/Backchannel
