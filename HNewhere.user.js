@@ -35251,7 +35251,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	);
 
 	const APP_SYNC_ICON =
-		'<svg viewBox="-2 -2 20 20" width="20" height="20" aria-hidden="true" focusable="false"><g class="app-sync-spin"><path d="M12.7 6.29A5 5 0 0 0 4.17 4.79M3.3 9.71A5 5 0 0 0 11.83 11.21" fill="none" stroke="currentColor" stroke-width="1.31" stroke-linecap="round"/><path d="M3 7.91L3.4 4.14L6.01 6.33ZM13 8.09L12.6 11.86L9.99 9.67Z" fill="currentColor" stroke="currentColor" stroke-width=".5" stroke-linejoin="round"/></g></svg>';
+		'<svg viewBox="-2 -2 20 20" width="20" height="20" aria-hidden="true" focusable="false"><g class="app-sync-spin"><path d="M12.33 5.5A5 5 0 0 0 4.17 4.79M3.67 10.5A5 5 0 0 0 11.83 11.21" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M3.05 7.31L2.71 3.56L5.63 6.01ZM12.95 8.69L13.29 12.44L10.37 9.99Z" fill="currentColor"/></g></svg>';
 
 	const APP_MARK_READ_ICON =
 		'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="4.55" cy="9.3" r="2.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11.45" cy="9.3" r="2.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M7.01 7.76Q8 6.76 8.99 7.76" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M1.92 8.07L4.15 3.8l0.85 0.6M14.08 8.07L11.85 3.8l-0.85 0.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
