@@ -18,7 +18,9 @@ use to detect updates, so every release bumps it.
 - A discussion keeps its loading line until the comments are ready, then fades
   in, instead of going blank and popping in.
 - Pulling the article list down on a phone releases a sync after a shorter
-  pull, is the same as pressing Sync, and shows its progress as a toast.
+  pull and is the same as pressing Sync. Every sync shows a Syncing… toast
+  while it runs, toasts resize smoothly between messages, and Synced leaves
+  sooner.
 - On Safari, the Reddit refresh runs in a tab the extension opens in the
   background and closes when done, so Sync and a pull no longer switch tabs
   or need a tap. Where no tab can be opened, the sync finishes without Reddit
@@ -26,6 +28,13 @@ use to detect updates, so every release bumps it.
   a tap was blocked.
 - On a phone, Sync sits first in the list heading's menu, above Mark all as
   read.
+
+### Changed
+
+- The installed version shows as an Installed row under General › Updates
+  instead of in the Settings header and sidebar.
+- The compact Discussion controls option is gone from General; Reader shows
+  the article and its discussion as it did without it.
 
 ## [1.6.18.2] — 2026-11-04
 

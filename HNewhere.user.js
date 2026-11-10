@@ -3151,22 +3151,6 @@
 			}
 		})();
 		const target = updateTarget(handler, releases);
-		const credit = root.querySelector(".settings-credits-version");
-
-		if (credit) {
-			credit.textContent = found ? `Update to ${releases[0].version}` : `Backchannel v${SCRIPT_VERSION}`;
-			credit.classList.toggle("is-update", found);
-			credit.setAttribute("href", found ? target.url : REPO_URL);
-
-			if (found) {
-				credit.dataset.url = target.url;
-			} else {
-				delete credit.dataset.url;
-			}
-
-			credit.onclick = (event) => openUpdateTarget(event, credit);
-		}
-
 		const group = root.querySelector(".settings-updates");
 
 		if (!group || group.dataset.checking) {
@@ -18567,6 +18551,10 @@ header > .settings-panel {
 	cursor:default;
 }
 
+.settings-installed {
+	margin-top:10px;
+}
+
 .settings-update-row {
 	display:flex;
 	align-items:center;
@@ -18736,23 +18724,6 @@ header > .settings-panel {
 	margin-top:12px;
 	padding-top:10px;
 	border-top:1px solid var(--surface-divider);
-}
-
-.settings-credits a.is-update {
-	padding:4px 12px;
-	border-radius:999px;
-	background:var(--accent);
-	color:white;
-	font-size:12px;
-	font-weight:600;
-	text-decoration:none;
-}
-
-@media (hover: hover) {
-	.settings-credits a.is-update:hover {
-		color:white;
-		filter:brightness(1.08);
-	}
 }
 
 .settings-option-hint {
@@ -20260,6 +20231,7 @@ ${settings ? settingsPanelHTML() : ""}
 <span>Check for new versions automatically</span>
 </label>
 <div class="settings-option-hint">Once a day, Backchannel will check if there are any available updates.</div>
+<div class="manage-table settings-installed"><div class="manage-row"><span>Installed</span><span>v${escapeHTML(SCRIPT_VERSION)}</span></div></div>
 <div class="settings-update-row">
 <a id="settings-update-install" href="${escapeHTML(UPDATE_SCRIPT_URL)}" target="_blank" rel="noopener noreferrer" role="button" tabindex="-1" aria-hidden="true">Update</a>
 <button id="settings-update-check" type="button"><span class="settings-update-label">Check for updates</span></button>
@@ -20455,7 +20427,6 @@ ${frontPageChooserHTML()}
 </div>
 
 <div class="settings-credits">
-<a class="settings-credits-version" href="${escapeHTML(REPO_URL)}" target="_blank" rel="noopener noreferrer">Backchannel${SCRIPT_VERSION ? " v" + escapeHTML(SCRIPT_VERSION) : ""}</a>
 <a href="${escapeHTML(REPO_URL)}/issues" target="_blank" rel="noopener noreferrer">Report an issue</a>
 </div>
 </div>
@@ -32271,13 +32242,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		margin-inline:auto;
 	}
 
-	.app-settings-version {
-		display:inline !important;
-		margin-left:8px;
-		color:var(--meta);
-		font-size:12px;
-	}
-
 	.app-settings-top a[href$="/issues"] {
 		display:inline-flex;
 		align-items:center;
@@ -34876,8 +34840,7 @@ header .item-action-link {
 #app-list-tags,
 #app-next,
 .browse-more,
-.browse-sources-total,
-.app-settings-version {
+.browse-sources-total {
 	display:none !important;
 }
 
@@ -36234,7 +36197,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		return `
 <div id="app-settings-modal" class="app-settings-modal" hidden>
 <div class="app-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="app-settings-title" tabindex="-1">
-<div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><span class="app-settings-version" hidden></span><span class="app-settings-top-spacer"></span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
+<div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><span class="app-settings-top-spacer"></span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
 <div class="app-settings-body">
 <nav class="app-settings-nav" aria-label="Settings sections">
 <button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
@@ -37115,7 +37078,6 @@ ${settingsModalHTML()}
 		const dialog = modal.querySelector(".app-settings-dialog");
 		const credits = panel.querySelector(".settings-credits");
 		const report = credits?.querySelector('a[href$="/issues"]');
-		const version = modal.querySelector(".app-settings-version");
 		const close = shadow.querySelector("#app-settings-close");
 		const app = shadow.querySelector("#app");
 		const behind = app ? ["#app-rail", "#app-list", "#app-reading"].map((selector) => shadow.querySelector(selector)).filter(Boolean) : [];
@@ -37145,8 +37107,6 @@ ${settingsModalHTML()}
 
 			return stops;
 		};
-
-		version.textContent = SCRIPT_VERSION ? `v${SCRIPT_VERSION}` : "";
 
 		if (report) {
 			report.innerHTML = '<span class="settings-credits-label">Report an issue</span><svg class="settings-credits-mark" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M5.6 6.2a2.4 2.4 0 0 1 4.8 0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><rect x="4.7" y="6.2" width="6.6" height="7.6" rx="3.3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 8.2v5.4M4.7 8.4 2.6 7.2M4.7 10.6H2.4M5 12.6l-2 1.3M11.3 8.4l2.1-1.2M11.3 10.6h2.3M11 12.6l2 1.3M6.3 4.3 5.3 2.8M9.7 4.3l1-1.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -37251,14 +37211,12 @@ ${settingsModalHTML()}
 				if (credits) {
 					if (appIsPhone()) {
 						credits.hidden = true;
-						version.hidden = !version.textContent;
 
 						if (report) {
-							version.after(report);
+							modal.querySelector("#app-settings-title").after(report);
 						}
 					} else {
 						credits.hidden = false;
-						version.hidden = true;
 
 						if (report && report.parentElement !== credits) {
 							credits.prepend(report);
