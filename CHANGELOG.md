@@ -32,7 +32,8 @@ use to detect updates, so every release bumps it.
 ### Changed
 
 - The installed version shows as an Installed row under General › Updates
-  instead of in the Settings header and sidebar.
+  instead of in the Settings header and sidebar, and Updates now comes
+  before Cached data.
 - The compact Discussion controls option is gone from General; Reader shows
   the article and its discussion as it did without it.
 

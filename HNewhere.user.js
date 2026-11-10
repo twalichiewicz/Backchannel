@@ -18555,6 +18555,14 @@ header > .settings-panel {
 	margin-top:10px;
 }
 
+.settings-installed .manage-row > span:first-child {
+	font-weight:600;
+}
+
+.settings-installed .manage-row > span + span {
+	text-align:right;
+}
+
 .settings-update-row {
 	display:flex;
 	align-items:center;
@@ -20383,13 +20391,13 @@ All stored locally.
 </div>
 </div>
 
+${settingsUpdatesHTML()}
+
 <div class="settings-group">
 <div class="sources-subhead">Cached data</div>
 <div class="sources-subhint">Clear temporary data used to find discussions and load Front Pages. Backchannel fetches fresh results when needed, without affecting your Notes, Collection, or settings.</div>
 <button id="settings-cache-clear" type="button">Clear cache</button>
 </div>
-
-${settingsUpdatesHTML()}
 
 <div class="settings-group">
 <button id="settings-manage-sources" class="settings-link-button" type="button" data-pane="sources" data-pane-name="Sources">Sources<span class="settings-link-chevron">&rsaquo;</span></button>
