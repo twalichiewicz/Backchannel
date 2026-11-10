@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.18.3
+// @version      1.6.18.4
 // @license      GPL-3.0-or-later
 // @copyright    2026 Triglavis LLC
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -3215,7 +3215,7 @@
 		}
 
 		const IDLE = "Check for updates";
-		const CHECKING = '<svg class="settings-update-spinner" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.6"/></svg><span class="settings-update-glimmer">Checking…</span>';
+		const CHECKING = '<svg class="settings-update-spinner" viewBox="0 0 12 12" aria-hidden="true"><g class="settings-update-spin"><circle cx="6" cy="6" r="4.6"/></g></svg><span class="settings-update-glimmer">Checking…</span>';
 		const LATEST = '<svg class="settings-update-tick" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.2 6.4 4.8 9 9.8 3.4"/></svg>You’re on the latest version';
 		const FAILED = "Couldn’t reach GitHub";
 		const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -18012,6 +18012,11 @@ header > .settings-panel {
 .settings-update-spinner {
 	width:11px;
 	height:11px;
+}
+
+.settings-update-spin {
+	transform-box:view-box;
+	transform-origin:6px 6px;
 	animation:settings-update-spin .8s linear infinite;
 }
 
@@ -18019,7 +18024,7 @@ header > .settings-panel {
 	fill:none;
 	stroke:var(--meta);
 	stroke-width:1.6;
-	stroke-dasharray:22 10;
+	stroke-dasharray:9 5.45 9 5.45;
 	stroke-linecap:round;
 }
 
@@ -25880,7 +25885,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	}
 
 	async function settleSyncSpin(button) {
-		const spin = button.querySelector(".app-sync-glyph")?.getAnimations?.()[0];
+		const spin = button.querySelector(".app-sync-spin")?.getAnimations?.()[0];
 		const turn = Number(spin?.effect?.getComputedTiming?.().duration) || 0;
 
 		if (spin && turn > 0 && Number.isFinite(spin.currentTime)) {
@@ -30976,9 +30981,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	display:block;
 	width:20px;
 	height:20px;
-	transform-origin:10px 10px;
-	backface-visibility:hidden;
-	-webkit-backface-visibility:hidden;
 }
 
 .app-sync-glyph svg {
@@ -30986,24 +30988,28 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	overflow:visible;
 }
 
-.is-syncing .app-sync-glyph {
+.app-sync-spin {
+	transform-box:view-box;
+	transform-origin:8px 8px;
+}
+
+.is-syncing .app-sync-spin {
 	animation:bc-app-sync-spin .9s linear infinite;
-	will-change:transform;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.is-syncing .app-sync-glyph {
+	.is-syncing .app-sync-spin {
 		animation:bc-app-sync-pulse 1.2s ease-in-out infinite;
 	}
 }
 
 @keyframes bc-app-sync-spin {
 	from {
-		transform:rotate(0deg) translateZ(0);
+		transform:rotate(0deg);
 	}
 
 	to {
-		transform:rotate(-360deg) translateZ(0);
+		transform:rotate(-360deg);
 	}
 }
 
@@ -31808,7 +31814,6 @@ ${SEARCH_CSS}
 #browse-home-sync .app-sync-glyph {
 	width:22px;
 	height:22px;
-	transform-origin:11px 11px;
 }
 
 #browse-home-sync svg {
@@ -35246,7 +35251,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	);
 
 	const APP_SYNC_ICON =
-		'<svg viewBox="-2 -2 20 20" width="20" height="20" aria-hidden="true" focusable="false"><path d="M12.7 6.29A5 5 0 0 0 4.17 4.79M3.3 9.71A5 5 0 0 0 11.83 11.21" fill="none" stroke="currentColor" stroke-width="1.31" stroke-linecap="round"/><path d="M3 7.91L3.4 4.14L6.01 6.33ZM13 8.09L12.6 11.86L9.99 9.67Z" fill="currentColor" stroke="currentColor" stroke-width=".5" stroke-linejoin="round"/></svg>';
+		'<svg viewBox="-2 -2 20 20" width="20" height="20" aria-hidden="true" focusable="false"><g class="app-sync-spin"><path d="M12.7 6.29A5 5 0 0 0 4.17 4.79M3.3 9.71A5 5 0 0 0 11.83 11.21" fill="none" stroke="currentColor" stroke-width="1.31" stroke-linecap="round"/><path d="M3 7.91L3.4 4.14L6.01 6.33ZM13 8.09L12.6 11.86L9.99 9.67Z" fill="currentColor" stroke="currentColor" stroke-width=".5" stroke-linejoin="round"/></g></svg>';
 
 	const APP_MARK_READ_ICON =
 		'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="4.55" cy="9.3" r="2.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11.45" cy="9.3" r="2.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M7.01 7.76Q8 6.76 8.99 7.76" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M1.92 8.07L4.15 3.8l0.85 0.6M14.08 8.07L11.85 3.8l-0.85 0.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
