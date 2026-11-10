@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.18.3] — 2026-11-09
+
+### Fixed
+
+- Sync finds threads submitted and comments posted since the page opened, in
+  the Sidebar and in Reader. Threads from a source that cannot be reached stay
+  listed, and a comment being written survives the refresh.
+- A discussion keeps its loading line until the comments are ready, then fades
+  in, instead of going blank and popping in.
+- Pulling the article list down on a phone releases a sync after a shorter
+  pull and is the same as pressing Sync. Every sync shows a Syncing… toast
+  while it runs, toasts resize smoothly between messages, and Synced leaves
+  sooner.
+- On Safari, the Reddit refresh runs in a tab the extension opens in the
+  background and closes when done, so Sync and a pull no longer switch tabs
+  or need a tap. Where no tab can be opened, the sync finishes without Reddit
+  and offers Sync in its toast; the notice to allow popups appears only when
+  a tap was blocked.
+- On a phone, Sync sits first in the list heading's menu, above Mark all as
+  read.
+
+### Changed
+
+- The installed version shows as an Installed row under General › Updates
+  instead of in the Settings header and sidebar, and Updates now comes
+  before Cached data.
+- The compact Discussion controls option is gone from General; Reader shows
+  the article and its discussion as it did without it.
+
 ## [1.6.18.2] — 2026-11-04
 
 ### Fixed

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.18.2
+// @version      1.6.18.3
 // @license      MIT
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
 // @downloadURL  https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -46,6 +46,8 @@
 // @grant        GM.listValues
 // @grant        GM.xmlHttpRequest
 // @grant        GM.getResourceText
+// @grant        GM.openInTab
+// @grant        GM.closeTab
 // @grant        unsafeWindow
 // @resource     pdfjsCore   https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/legacy/build/pdf.min.mjs
 // @resource     pdfjsWorker https://cdn.jsdelivr.net/npm/pdfjs-dist@6.2.108/legacy/build/pdf.worker.min.mjs
@@ -439,7 +441,6 @@
 		commentSort: "best",
 		newCommentsFirst: false,
 		keepSidebarSize: true,
-		readerCompact: false,
 		commentImages: false,
 		updateCheck: true,
 	};
@@ -3150,22 +3151,6 @@
 			}
 		})();
 		const target = updateTarget(handler, releases);
-		const credit = root.querySelector(".settings-credits-version");
-
-		if (credit) {
-			credit.textContent = found ? `Update to ${releases[0].version}` : `Backchannel v${SCRIPT_VERSION}`;
-			credit.classList.toggle("is-update", found);
-			credit.setAttribute("href", found ? target.url : REPO_URL);
-
-			if (found) {
-				credit.dataset.url = target.url;
-			} else {
-				delete credit.dataset.url;
-			}
-
-			credit.onclick = (event) => openUpdateTarget(event, credit);
-		}
-
 		const group = root.querySelector(".settings-updates");
 
 		if (!group || group.dataset.checking) {
@@ -5215,7 +5200,7 @@
 	function sourceHelpHTML(source) {
 		const points = escapeHTML([
 			...sourcePoints(source),
-			...(source.id === "reddit" && usesRedditReadWindow() ? ["Reddit’s access changes mean Backchannel opens a temporary Reddit window whenever your session needs refreshing. Sign in there if asked; it closes automatically when finished."] : []),
+			...(source.id === "reddit" && usesRedditReadWindow() ? ["Reddit’s access changes mean Backchannel refreshes Reddit through a reddit.com tab opened in the background with your Reddit login. If Reddit asks you to sign in, switch to that tab; it closes by itself when finished."] : []),
 		].join("\n"));
 
 		return `<button class="source-help" type="button" aria-label="About ${escapeHTML(source.label)}" aria-description="${points}" data-tip="${points}">?</button>`;
@@ -5299,7 +5284,6 @@ ${
 
 	// #region hnewhere-test-export
 	const HINTED_SETTINGS = new Set([
-		"readerCompact",
 		"annotations",
 		"pdfReader",
 		"notepad",
@@ -5360,8 +5344,8 @@ ${
 		profileURL: (author) =>
 			"https://news.ycombinator.com/user?id=" + encodeURIComponent(author),
 
-		async discover(url) {
-			return (await findHN(url)).map(algoliaDiscussion);
+		async discover(url, { force = false } = {}) {
+			return (await findHN(url, { force })).map(algoliaDiscussion);
 		},
 
 		async probe(url, context) {
@@ -5520,6 +5504,10 @@ ${
 		try { return GM.info?.scriptHandler === "Userscripts"; } catch { return false; }
 	}
 
+	function usesManagerTabs() {
+		try { return typeof GM.openInTab === "function"; } catch { return false; }
+	}
+
 	function scheduleRedditReadNotice() {
 		if (!usesRedditReadWindow() || redditReadNoticeScheduled || redditReadNoticeShown) return;
 		redditReadNoticeScheduled = true;
@@ -5543,7 +5531,7 @@ ${
 		modal.innerHTML = `<div class="app-settings-dialog reddit-read-dialog" role="dialog" aria-modal="true" aria-labelledby="reddit-read-title" aria-describedby="reddit-read-description" tabindex="-1">
 <img class="reddit-read-image" src="https://backchnnl.app/src/reddit-connection.jpg" width="750" height="499" alt="" referrerpolicy="no-referrer">
 <div class="reddit-read-content"><h2 id="reddit-read-title">Reddit is changing how apps connect</h2>
-<div id="reddit-read-description"><p>Reddit is restricting access for third-party apps and ending RSS feed support. To keep articles and discussions available, Backchannel now connects through your Reddit login.</p><p>Whenever your Reddit session needs refreshing, a temporary Reddit window will open. Sign in there if asked; the window closes automatically when the refresh finishes.</p><p>Choose Continue to start your first refresh.</p></div></div>
+<div id="reddit-read-description"><p>Reddit is restricting access for third-party apps and ending RSS feed support. To keep articles and discussions available, Backchannel now connects through your Reddit login.</p><p>Whenever your Reddit session needs refreshing, Backchannel opens a Reddit tab in the background. Sign in there if asked; the tab closes by itself when the refresh finishes.</p><p>Choose Continue to start your first refresh.</p></div></div>
 <div class="reddit-read-actions"><button class="reddit-read-confirm" type="button">Continue</button></div></div>`;
 		const returnTo = shadow.activeElement;
 		const behind = [...shadow.children].filter((element) => element.tagName !== "STYLE").map((element) => [element, element.inert]);
@@ -5617,7 +5605,7 @@ ${
 					if (Date.now() - reply.ts > 10000) return { error: "window-unavailable" };
 					if (!batch.awaitingLogin) {
 						batch.awaitingLogin = true;
-						showToast("Sign in to Reddit in the temporary window, then press Continue.", { kind: "system", persist: true, action: { label: "Cancel", onAct: () => { batch.cancelled = true; } } });
+						showToast("Sign in to Reddit in the tab that opened, then press Continue.", { kind: "system", persist: true, action: { label: "Cancel", onAct: () => { batch.cancelled = true; } } });
 					}
 				} else if (["ready", "response", "error", "closed"].includes(reply.phase)) {
 					if (batch.awaitingLogin) { batch.awaitingLogin = false; showToast(""); }
@@ -5630,7 +5618,7 @@ ${
 	}
 
 	async function prepareRedditReadBatch(batch) {
-		if (!batch.popup) return { error: "popup-blocked" };
+		if (!batch.popup && !batch.tab) return { error: batch.activated ? "popup-blocked" : "no-gesture" };
 		const settings = await loadSettings();
 		const cooldown = await load(REDDIT_POLL_KEY, null);
 
@@ -5639,7 +5627,14 @@ ${
 
 		await stageBridgePayload(batch.nonce, stage);
 		await indexBridgePayload(batch.nonce);
-		batch.popup.location = "https://www.reddit.com/#" + new URLSearchParams({ backchannel_read: "1", nonce: batch.nonce });
+		const url = "https://www.reddit.com/#" + new URLSearchParams({ backchannel_read: "1", nonce: batch.nonce });
+
+		if (batch.tab) {
+			const opened = await GM.openInTab(url, true);
+
+			if (!opened) return { error: "window-unavailable" };
+			batch.tabId = opened.id;
+		} else batch.popup.location = url;
 		const reply = await waitRedditReadReply(batch, 0, 30000);
 
 		batch.connected = reply.phase === "ready";
@@ -5659,8 +5654,9 @@ ${
 		} finally {
 			await Promise.allSettled([clearBridgePayload(batch.nonce), forget(BRIDGE_RESULT_PREFIX + batch.nonce)]);
 			try { batch.popup?.close(); } catch {}
+			if (batch.tabId != null) { try { await GM.closeTab(batch.tabId); } catch {} }
 			if (redditReadBatch === batch) redditReadBatch = null;
-			if (batch.syncRun === syncRunId && batch.synced && !batch.failed && !batch.cancelled && isSidebarVisible()) showToast("Synced", { kind: "system" });
+			if (batch.syncRun === syncRunId && batch.synced && !batch.failed && !batch.cancelled && isSidebarVisible()) showToast("Synced", { kind: "system", duration: TOAST_BRIEF_MS });
 		}
 	}
 
@@ -5669,19 +5665,24 @@ ${
 		if (sidebarUI?.shadow?.getElementById("toast")?.textContent === "Synced") showToast("");
 		return runRedditReadAction(async () => {
 			const batch = usesRedditReadWindow() && redditReadSourceOn && !redditReadBatch?.closing ? redditReadBatch : null;
+			const untapped = Boolean(batch && !batch.popup && !batch.tab && !batch.activated);
 			const result = await task();
 			const runs = Array.isArray(result) ? result : [{ status: "fulfilled", value: result }];
 			const feeds = runs.flatMap((run) => run.status === "fulfilled" ? run.value?.feedStates || [] : []);
-			const failed = runs.some((run) => run.status === "rejected") || feeds.some((feed) => feed.status !== "ok");
+			const waiting = untapped ? feeds.filter((feed) => feed.status === "window") : [];
+			const failed = runs.some((run) => run.status === "rejected") || feeds.some((feed) => feed.status !== "ok" && !waiting.includes(feed));
 			const synced = feeds.length > 0 && !failed;
 
-			if (batch) {
+			if (batch && !untapped) {
 				if (synced && runId === syncRunId) {
 					batch.synced = true;
 					batch.syncRun = runId;
 				}
 				batch.failed ||= failed;
-			} else if (synced && runId === syncRunId && isSidebarVisible()) showToast("Synced", { kind: "system" });
+			} else if (runId === syncRunId && isSidebarVisible()) {
+				if (waiting.length && !failed) showToast("Press Sync to refresh Reddit.", { kind: "system", action: { label: "sync", onAct: () => runSync(task, options).catch(console.error) } });
+				else if (synced) showToast("Synced", { kind: "system", duration: TOAST_BRIEF_MS });
+			}
 			return result;
 		}, options);
 	}
@@ -5692,13 +5693,15 @@ ${
 
 		if (!batch || batch.closing) {
 			const nonce = crypto.randomUUID().replaceAll("-", "");
-			const popup = window.open("about:blank", REDDIT_READ_SOURCE + "_" + nonce, "width=760,height=680,resizable=yes,scrollbars=yes");
+			const activated = navigator.userActivation?.isActive ?? true;
+			const tab = !automatic && usesManagerTabs();
+			const popup = tab ? null : window.open("about:blank", REDDIT_READ_SOURCE + "_" + nonce, "width=760,height=680,resizable=yes,scrollbars=yes");
 
-			if (!popup && automatic) {
+			if (!popup && !tab && automatic) {
 				return Promise.resolve();
 			}
 
-			batch = { nonce, popup, created: Date.now(), expires: Date.now() + SIGN_IN_TIMEOUT, connected: false, closing: false, cancelled: false, users: 0, sequence: 0, accessVersion: redditAccessVersion };
+			batch = { nonce, popup, tab, activated, created: Date.now(), expires: Date.now() + SIGN_IN_TIMEOUT, connected: false, closing: false, cancelled: false, users: 0, sequence: 0, accessVersion: redditAccessVersion };
 			redditReadBatch = batch;
 			batch.preparing = prepareRedditReadBatch(batch).catch(() => ({ error: "window-unavailable" }));
 		}
@@ -5707,7 +5710,7 @@ ${
 			try {
 				const ready = await batch.preparing;
 
-				if (ready.error && ready.error !== "not-needed" && !batch.reported) {
+				if (ready.error && ready.error !== "not-needed" && ready.error !== "no-gesture" && !batch.reported) {
 					batch.reported = true;
 					showToast(ready.error === "popup-blocked" ? "Allow popups for this site, then press Sync to refresh Reddit." : ready.error === "cancelled" ? "Reddit refresh cancelled." : ready.error === "limited" ? "Reddit requests are temporarily limited. Try syncing again later." : "The Reddit window did not respond. Press Sync to try again.", { kind: "system", page: true });
 				}
@@ -5778,7 +5781,8 @@ ${
 				while (true) {
 					const current = await readBridgePayload(nonce);
 
-					if (!validRedditReadStage(current, nonce) || current.done) { completed = true; break; }
+					if (!validRedditReadStage(current, nonce)) break;
+					if (current.done) { completed = true; break; }
 					if (!(await loadSettings()).sources?.reddit) { await publish({ phase: "error", requestId: current.request?.id || 0, error: "disabled" }); break; }
 					if (paused) {
 						if (Date.now() - lastLoginReport > 1000) { await publish({ phase: "login", requestId: 0 }); lastLoginReport = Date.now(); }
@@ -5840,6 +5844,7 @@ ${
 			} finally {
 				clearBridgeReload(REDDIT_READ_RESUME_KEY);
 				if (completed) await publish({ phase: "closed", requestId: "done" }).catch(() => {});
+				if (typeof GM?.closeTab === "function") { try { await GM.closeTab(); } catch {} }
 				window.close();
 			}
 		};
@@ -8065,13 +8070,13 @@ button {
 		});
 	}
 
-	async function discoverAll(urls, settings) {
+	async function discoverAll(urls, settings, { force = false } = {}) {
 		const targets = [...new Set([].concat(urls).filter(Boolean))];
 		const results = await Promise.all(
 			enabledSources(settings).flatMap((source) =>
 				targets.map((target) =>
 					discoverWithCeiling(
-						source.discover(target).catch((e) => {
+						source.discover(target, { force }).catch((e) => {
 							console.error("Backchannel " + source.id + " discovery failed:", e);
 							return [];
 						}),
@@ -8360,14 +8365,14 @@ button {
 		return hit;
 	}
 
-	async function findHN(url) {
+	async function findHN(url, { force = false } = {}) {
 		const target = normalizeURL(url);
 
 		if (!target) {
 			return [];
 		}
 
-		const cached = keptDiscoveries(await load(DISCOVERY_CACHE_KEY, null), Date.now());
+		const cached = force ? {} : keptDiscoveries(await load(DISCOVERY_CACHE_KEY, null), Date.now());
 
 		if (Object.prototype.hasOwnProperty.call(cached, target)) {
 			return [...cached[target].results].sort(compareStoriesByDiscussion);
@@ -11583,6 +11588,8 @@ html[data-backchannel-installed] .chin {
 	let pageToastHost = null;
 
 	const TOAST_DISMISS_MS = 5200;
+	const TOAST_BRIEF_MS = 1800;
+	let toastSizeTimer = 0;
 
 	const TOAST_HTML = `<div id="toast" class="toast" data-kind="user" role="status" aria-live="polite"></div>`;
 
@@ -11617,6 +11624,7 @@ html[data-backchannel-installed] .chin {
 	border-radius:7px;
 	background:#1b1b1b;
 	color:#fff;
+	--toast-ink:#fff;
 	box-shadow:0 4px 14px rgba(0,0,0,.22);
 	font-size:11px;
 	line-height:1.35;
@@ -11640,6 +11648,7 @@ html[data-backchannel-installed] .chin {
 	border-color:rgba(0,0,0,.12);
 	background:#f7f7f7;
 	color:#111;
+	--toast-ink:#111;
 }
 
 .toast.is-showing {
@@ -11647,7 +11656,25 @@ html[data-backchannel-installed] .chin {
 	visibility:visible;
 	transform:translate(-50%,0) scale(1);
 	filter:blur(0);
-	transition:transform .44s cubic-bezier(.16,1,.3,1), opacity .18s ease, filter .28s ease, visibility 0s;
+	transition:transform .44s cubic-bezier(.16,1,.3,1), opacity .18s ease, filter .28s ease, visibility 0s, width .24s cubic-bezier(.4,0,.2,1), height .24s cubic-bezier(.4,0,.2,1);
+}
+
+.toast-glimmer {
+	background:linear-gradient(90deg, var(--toast-ink) 0%, var(--toast-ink) 35%, color-mix(in srgb, var(--toast-ink) 30%, transparent) 50%, var(--toast-ink) 65%, var(--toast-ink) 100%);
+	background-size:250% 100%;
+	-webkit-background-clip:text;
+	background-clip:text;
+	color:transparent;
+	animation:bc-toast-glimmer 1.3s linear infinite;
+}
+
+@keyframes bc-toast-glimmer {
+	from {
+		background-position:100% 0;
+	}
+	to {
+		background-position:-150% 0;
+	}
 }
 
 .toast.has-action.is-showing {
@@ -11674,6 +11701,12 @@ html[data-backchannel-installed] .chin {
 		transform:translate(-50%,0);
 		filter:none;
 		transition:opacity .12s ease, visibility 0s linear .12s;
+	}
+
+	.toast-glimmer {
+		background:none;
+		color:inherit;
+		animation:none;
 	}
 
 	.toast.is-showing {
@@ -11723,7 +11756,7 @@ html[data-backchannel-installed] .chin {
 		}
 	}
 
-	function showToast(message, { persist = false, action = null, page = false, kind = "user" } = {}) {
+	function showToast(message, { persist = false, action = null, page = false, kind = "user", loading = false, duration = TOAST_DISMISS_MS } = {}) {
 		if (sidebarUI?.shadow) {
 			removePageToast();
 		}
@@ -11749,7 +11782,21 @@ html[data-backchannel-installed] .chin {
 			toast.getBoundingClientRect();
 			toast.style.removeProperty("transition");
 		}
-		toast.textContent = message;
+		const from = toast.classList.contains("is-showing") && toast.dataset.kind === kind && !prefersReducedMotion() ? toast.getBoundingClientRect() : null;
+
+		clearTimeout(toastSizeTimer);
+		toast.style.width = "";
+		toast.style.height = "";
+
+		if (loading) {
+			const glimmer = document.createElement("span");
+
+			glimmer.className = "toast-glimmer";
+			glimmer.textContent = message;
+			toast.replaceChildren(glimmer);
+		} else {
+			toast.textContent = message;
+		}
 		toast.classList.toggle("has-action", Boolean(action));
 		toast.onmouseenter = null;
 		toast.onmouseleave = null;
@@ -11773,19 +11820,37 @@ html[data-backchannel-installed] .chin {
 
 		toast.classList.add("is-showing");
 
+		if (from) {
+			const to = toast.getBoundingClientRect();
+
+			if (Math.round(to.width) !== Math.round(from.width) || Math.round(to.height) !== Math.round(from.height)) {
+				toast.style.transition = "none";
+				toast.style.width = `${from.width}px`;
+				toast.style.height = `${from.height}px`;
+				toast.getBoundingClientRect();
+				toast.style.removeProperty("transition");
+				toast.style.width = `${to.width}px`;
+				toast.style.height = `${to.height}px`;
+				toastSizeTimer = window.setTimeout(() => {
+					toast.style.width = "";
+					toast.style.height = "";
+				}, 260);
+			}
+		}
+
 		if (!persist) {
 			const dismiss = () => {
 				toast.classList.remove("is-showing", "has-action");
 				releasePageToast(toast);
 			};
 
-			toastTimer = window.setTimeout(dismiss, TOAST_DISMISS_MS);
+			toastTimer = window.setTimeout(dismiss, duration);
 
 			if (action) {
 				toast.onmouseenter = () => clearTimeout(toastTimer);
 				toast.onmouseleave = () => {
 					clearTimeout(toastTimer);
-					toastTimer = window.setTimeout(dismiss, TOAST_DISMISS_MS);
+					toastTimer = window.setTimeout(dismiss, duration);
 				};
 			}
 		}
@@ -16857,6 +16922,11 @@ header {
 	opacity:0;
 }
 
+#comments.comments-arriving > #comments-content {
+	opacity:0;
+	transition:none;
+}
+
 #browse-list {
 	padding-left:8px;
 	transition:opacity .16s ease, transform .16s ease;
@@ -18481,6 +18551,18 @@ header > .settings-panel {
 	cursor:default;
 }
 
+.settings-installed {
+	margin-top:10px;
+}
+
+.settings-installed .manage-row > span:first-child {
+	font-weight:600;
+}
+
+.settings-installed .manage-row > span + span {
+	text-align:right;
+}
+
 .settings-update-row {
 	display:flex;
 	align-items:center;
@@ -18650,23 +18732,6 @@ header > .settings-panel {
 	margin-top:12px;
 	padding-top:10px;
 	border-top:1px solid var(--surface-divider);
-}
-
-.settings-credits a.is-update {
-	padding:4px 12px;
-	border-radius:999px;
-	background:var(--accent);
-	color:white;
-	font-size:12px;
-	font-weight:600;
-	text-decoration:none;
-}
-
-@media (hover: hover) {
-	.settings-credits a.is-update:hover {
-		color:white;
-		filter:brightness(1.08);
-	}
 }
 
 .settings-option-hint {
@@ -20174,6 +20239,7 @@ ${settings ? settingsPanelHTML() : ""}
 <span>Check for new versions automatically</span>
 </label>
 <div class="settings-option-hint">Once a day, Backchannel will check if there are any available updates.</div>
+<div class="manage-table settings-installed"><div class="manage-row"><span>Installed</span><span>v${escapeHTML(SCRIPT_VERSION)}</span></div></div>
 <div class="settings-update-row">
 <a id="settings-update-install" href="${escapeHTML(UPDATE_SCRIPT_URL)}" target="_blank" rel="noopener noreferrer" role="button" tabindex="-1" aria-hidden="true">Update</a>
 <button id="settings-update-check" type="button"><span class="settings-update-label">Check for updates</span></button>
@@ -20235,14 +20301,6 @@ ${settings ? settingsPanelHTML() : ""}
 <div class="manage-table-tools"><button type="button" class="manage-table-add" aria-label="Disable Backchannel on a site or page" title="Disable Backchannel on a site or page">+</button><button type="button" class="manage-table-remove" aria-label="Turn Backchannel back on for the chosen site" title="Turn Backchannel back on for the chosen site" disabled>&minus;</button></div>
 </div>
 </div>
-</div>
-
-<div class="settings-group">
-<label class="settings-option">
-<input id="setting-reader-compact" data-setting="readerCompact" type="checkbox">
-<span>Use compact Discussion controls in Reader</span>
-</label>
-<div class="settings-option-hint">Switch between the article and its discussion instead of showing both at once.</div>
 </div>
 
 <div class="settings-group">
@@ -20333,13 +20391,13 @@ All stored locally.
 </div>
 </div>
 
+${settingsUpdatesHTML()}
+
 <div class="settings-group">
 <div class="sources-subhead">Cached data</div>
 <div class="sources-subhint">Clear temporary data used to find discussions and load Front Pages. Backchannel fetches fresh results when needed, without affecting your Notes, Collection, or settings.</div>
 <button id="settings-cache-clear" type="button">Clear cache</button>
 </div>
-
-${settingsUpdatesHTML()}
 
 <div class="settings-group">
 <button id="settings-manage-sources" class="settings-link-button" type="button" data-pane="sources" data-pane-name="Sources">Sources<span class="settings-link-chevron">&rsaquo;</span></button>
@@ -20377,7 +20435,6 @@ ${frontPageChooserHTML()}
 </div>
 
 <div class="settings-credits">
-<a class="settings-credits-version" href="${escapeHTML(REPO_URL)}" target="_blank" rel="noopener noreferrer">Backchannel${SCRIPT_VERSION ? " v" + escapeHTML(SCRIPT_VERSION) : ""}</a>
 <a href="${escapeHTML(REPO_URL)}/issues" target="_blank" rel="noopener noreferrer">Report an issue</a>
 </div>
 </div>
@@ -20412,7 +20469,6 @@ ${frontPageChooserHTML()}
 				"#setting-auto-open-only-from-hn",
 			),
 			keepSidebarSize: shadow.querySelector("#setting-keep-sidebar-size"),
-			readerCompact: shadow.querySelector("#setting-reader-compact"),
 			commentImages: shadow.querySelector("#setting-comment-images"),
 			updateCheck: shadow.querySelector("#setting-update-check"),
 		};
@@ -20921,11 +20977,6 @@ ${frontPageChooserHTML()}
 
 			if (setting === "keepSidebarSize") {
 				applySidebarZoom();
-				return;
-			}
-
-			if (setting === "readerCompact") {
-				setAppCompactMode(settings.readerCompact);
 				return;
 			}
 
@@ -23665,6 +23716,12 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		dockedComposeBox(shadow)?._hnewhereDock?.undock();
 	}
 
+	function flushComposerDrafts(root) {
+		return Promise.all(
+			[...(root?.querySelectorAll(".composer-text") || [])].map((field) => field._hnewhereFlushDraft?.()),
+		);
+	}
+
 	function replyTargets(stories = renderedDiscussions || []) {
 		const filtered =
 			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
@@ -24276,14 +24333,30 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			.catch(console.error);
 
 		let saveTimer = 0;
+		let unsaved = false;
+		const saveDraft = () => {
+			unsaved = false;
+			return textarea.value ? save(draftKey, textarea.value) : forget(draftKey);
+		};
 
 		textarea.addEventListener("input", () => {
+			unsaved = true;
 			clearTimeout(saveTimer);
 
 			saveTimer = window.setTimeout(() => {
-				(textarea.value ? save(draftKey, textarea.value) : forget(draftKey)).catch(console.error);
+				saveDraft().catch(console.error);
 			}, 400);
 		});
+
+		textarea._hnewhereFlushDraft = () => {
+			if (!unsaved) {
+				return Promise.resolve();
+			}
+
+			clearTimeout(saveTimer);
+
+			return saveDraft();
+		};
 
 		const setBusy = (busy) => {
 			submitButton.disabled = busy;
@@ -25292,6 +25365,12 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			ui.body.appendChild(kept._hnewhereDock.home());
 		}
 
+		const waiting = document.createElement("div");
+
+		waiting.className = appState ? "browse-empty app-discussion-empty" : "browse-empty";
+		waiting.textContent = "Loading comments…";
+		ui.body.appendChild(waiting);
+
 		setSidebarRestingSubtitle(ui, "");
 
 		const generation = sidebarGeneration;
@@ -25339,11 +25418,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				stories.map((story) => story.key),
 				Date.now(),
 			),
-			onSync: () => {
-				forgetThreads(stories);
-				setSidebarStage(ui, "comments");
-				return renderDiscussions(stories, ui);
-			},
+			onSync: () => syncDiscussions(ui, stories),
 		});
 
 		liveDiscussions.clear();
@@ -25357,6 +25432,17 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		});
 
 		const page = discussionsPageTitle(stories);
+
+		waiting.remove();
+
+		const view = ui.shadow?.querySelector("#comments");
+
+		if (view && !prefersReducedMotion()) {
+			view.classList.add("comments-arriving");
+			requestAnimationFrame(() => {
+				requestAnimationFrame(() => view.classList.remove("comments-arriving"));
+			});
+		}
 
 		const headerElement = renderPageHeader(stories, ui.body, {
 			page,
@@ -31599,6 +31685,29 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		crossFadeCommentsView(comments, render);
 	}
 
+	async function syncDiscussions(ui, stories) {
+		await flushComposerDrafts(ui.shadow);
+		itemCache.clear();
+		forgetThreads(stories);
+
+		const generation = ++sidebarGeneration;
+
+		setSidebarStage(ui, "discussion");
+
+		const found = await discoverAll(pageAddresses(), await loadSettings(), { force: true });
+
+		if (generation !== sidebarGeneration) {
+			return;
+		}
+
+		setSidebarStage(ui, "comments");
+
+		return renderDiscussions(
+			disambiguateLabels(dedupeDiscussions([...found, ...stories]).sort(compareStoriesByDiscussion)),
+			ui,
+		);
+	}
+
 	async function hideCurrentSite(scope = "page") {
 		const sites = await loadBlockedSites();
 		const entry = scope === "site" ? siteKey() : blockedPageEntry(location.href);
@@ -31723,7 +31832,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	const APP_LIST_MAX_WIDTH = 480;
 	const APP_SPLIT_MIN = 0.2;
 	const APP_SPLIT_MAX = 0.8;
-	const APP_PULL_TRIGGER = 56;
+	const APP_PULL_TRIGGER = 40;
 	const APP_ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 	const APP_PULL_MAX = 96;
 
@@ -32139,13 +32248,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	#app-settings-content > :is(.app-settings-heading, .settings-panel) {
 		max-width:440px;
 		margin-inline:auto;
-	}
-
-	.app-settings-version {
-		display:inline !important;
-		margin-left:8px;
-		color:var(--meta);
-		font-size:12px;
 	}
 
 	.app-settings-top a[href$="/issues"] {
@@ -34746,8 +34848,7 @@ header .item-action-link {
 #app-list-tags,
 #app-next,
 .browse-more,
-.browse-sources-total,
-.app-settings-version {
+.browse-sources-total {
 	display:none !important;
 }
 
@@ -35629,109 +35730,6 @@ header .item-action-link {
 ${SETTINGS_MODAL_PHONE_CSS}
 }
 
-@media (min-width: 701px) {
-	#app.reader-compact #app-reading {
-		flex-direction:row;
-	}
-
-	#app.reader-compact #app-article {
-		flex:1 1 0;
-	}
-
-	#app.reader-compact #panel.app-docked {
-		position:relative;
-		flex:1 1 0;
-		top:auto;
-		left:auto;
-		width:auto !important;
-		max-width:none;
-		border:0;
-	}
-
-	#app.reader-compact[data-reader-stage="article"] #panel.app-docked,
-	#app.reader-compact[data-reader-stage="discussion"] #app-article,
-	#app.reader-compact #app-article .app-pane-middle,
-	#app.reader-compact #app-article > .app-pane-head,
-	#app.reader-compact #app-toggle-discussion,
-	#app.reader-compact #panel #resize-handle {
-		display:none !important;
-	}
-
-	#app.reader-compact.has-story[data-reader-stage="discussion"] #panel.app-docked {
-		display:flex !important;
-	}
-
-	#app.reader-compact #panel.app-docked > header {
-		padding-left:48px;
-	}
-
-	#app.reader-compact #app-bar {
-		display:flex !important;
-		position:absolute;
-		right:12px;
-		bottom:16px;
-		z-index:25;
-		flex-direction:column;
-		align-items:center;
-		gap:8px;
-	}
-
-	#app.reader-compact #app-bar[hidden] {
-		display:none !important;
-	}
-
-	#app.reader-compact #app-toggle-list {
-		position:absolute;
-		top:10px;
-		left:12px;
-		z-index:26;
-		border-radius:12px;
-		background:var(--surface);
-		box-shadow:0 0 0 1px var(--surface-border), 0 2px 8px rgba(0,0,0,.16);
-	}
-
-	#app.reader-compact .app-stack-button {
-		display:flex;
-		position:relative;
-		flex-direction:column;
-		align-items:center;
-		justify-content:center;
-		gap:2px;
-		box-sizing:border-box;
-		width:36px;
-		height:36px;
-		padding:0;
-		border:0;
-		border-radius:18px;
-		font:inherit;
-		cursor:pointer;
-	}
-
-	#app.reader-compact .app-stack-button svg {
-		width:18px;
-		height:18px;
-		fill:currentColor;
-	}
-
-	#app.reader-compact .app-stack-button[hidden] {
-		display:none;
-	}
-
-	#app.reader-compact #app-bar-discussion:has(.rail-badge:not(:empty)) {
-		height:50px;
-	}
-
-	#app.reader-compact #app-bar-discussion .rail-badge {
-		position:static;
-		min-width:0;
-		height:auto;
-		padding:0;
-		background:none;
-		box-shadow:none;
-		color:inherit;
-		font-size:10px;
-	}
-}
 `;
 
 	const READER_CSS = `
@@ -36207,7 +36205,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		return `
 <div id="app-settings-modal" class="app-settings-modal" hidden>
 <div class="app-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="app-settings-title" tabindex="-1">
-<div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><span class="app-settings-version" hidden></span><span class="app-settings-top-spacer"></span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
+<div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><span class="app-settings-top-spacer"></span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
 <div class="app-settings-body">
 <nav class="app-settings-nav" aria-label="Settings sections">
 <button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
@@ -36334,7 +36332,6 @@ ${settingsModalHTML()}
 		}
 
 		wireApp(ui);
-		setAppCompactMode((await loadSettings()).readerCompact);
 		loadAppShortcuts(shortcuts).catch(console.error);
 		renderAppDiscussionEmpty();
 		watchNoteSelection(await loadSettings());
@@ -36433,7 +36430,6 @@ ${settingsModalHTML()}
 		const dropPaneCaret = () => {
 			paneCaret.list = null;
 			paneCaret.discussion = null;
-			appState.compactCaret = null;
 		};
 
 		const paintPaneToggles = () => {
@@ -36441,7 +36437,7 @@ ${settingsModalHTML()}
 			paintAppListToggle();
 
 			if (!appIsPhone()) {
-				shadow.querySelector("#app-bar-discussion").setAttribute("aria-pressed", String(appUsesCompactDiscussion() ? appRoot.dataset.readerStage === "discussion" : !paneHidden.discussion));
+				shadow.querySelector("#app-bar-discussion").setAttribute("aria-pressed", String(!paneHidden.discussion));
 			}
 		};
 
@@ -36846,12 +36842,11 @@ ${settingsModalHTML()}
 			}
 
 			pullSyncing = true;
-			paintPull(36, "syncing…", true);
-			runSync(() => renderAppList({ force: true }))
+			paintPull(0, "", true);
+			syncList()
 				.catch(console.error)
 				.finally(() => {
 					pullSyncing = false;
-					paintPull(0, "", true);
 				});
 		};
 
@@ -36860,7 +36855,7 @@ ${settingsModalHTML()}
 
 		const syncButton = shadow.querySelector("#app-list-sync");
 
-		syncButton.onclick = async () => {
+		const syncList = async () => {
 			const button = syncButton;
 
 			if (button.classList.contains("is-syncing")) {
@@ -36869,11 +36864,16 @@ ${settingsModalHTML()}
 
 			button.classList.add("is-syncing");
 			button.setAttribute("aria-busy", "true");
+			showToast("Syncing…", { kind: "system", persist: true, loading: true });
 
 			const runs = await runSync(() => Promise.allSettled([
 				renderAppList({ force: true }),
 				Promise.resolve(appState?.discussionSync?.()),
 			]));
+
+			if (shadow.getElementById("toast")?.textContent === "Syncing…") {
+				showToast("");
+			}
 
 			for (const run of runs) {
 				if (run.status === "rejected") {
@@ -36893,15 +36893,15 @@ ${settingsModalHTML()}
 			button.removeAttribute("aria-busy");
 		};
 
+		syncButton.onclick = () => syncList();
+
 		shadow.querySelector("#app-article-open").onclick = () => {
 			rememberAppArrival(appState?.open?.url).catch(console.error);
 		};
 
 		shadow.querySelector("#app-bar-back").onclick = () => setAppStage("list");
 		shadow.querySelector("#app-bar-discussion").onclick = () => {
-			if (appUsesCompactDiscussion()) {
-				setAppCompactStage(appRoot.dataset.readerStage === "discussion" ? "article" : "discussion");
-			} else if (appIsPhone()) {
+			if (appIsPhone()) {
 				setAppStage(appRoot.dataset.stage === "discussion" ? "article" : "discussion");
 			} else {
 				appState.togglePane("discussion");
@@ -37086,7 +37086,6 @@ ${settingsModalHTML()}
 		const dialog = modal.querySelector(".app-settings-dialog");
 		const credits = panel.querySelector(".settings-credits");
 		const report = credits?.querySelector('a[href$="/issues"]');
-		const version = modal.querySelector(".app-settings-version");
 		const close = shadow.querySelector("#app-settings-close");
 		const app = shadow.querySelector("#app");
 		const behind = app ? ["#app-rail", "#app-list", "#app-reading"].map((selector) => shadow.querySelector(selector)).filter(Boolean) : [];
@@ -37116,8 +37115,6 @@ ${settingsModalHTML()}
 
 			return stops;
 		};
-
-		version.textContent = SCRIPT_VERSION ? `v${SCRIPT_VERSION}` : "";
 
 		if (report) {
 			report.innerHTML = '<span class="settings-credits-label">Report an issue</span><svg class="settings-credits-mark" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M5.6 6.2a2.4 2.4 0 0 1 4.8 0" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><rect x="4.7" y="6.2" width="6.6" height="7.6" rx="3.3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 8.2v5.4M4.7 8.4 2.6 7.2M4.7 10.6H2.4M5 12.6l-2 1.3M11.3 8.4l2.1-1.2M11.3 10.6h2.3M11 12.6l2 1.3M6.3 4.3 5.3 2.8M9.7 4.3l1-1.5" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -37222,14 +37219,12 @@ ${settingsModalHTML()}
 				if (credits) {
 					if (appIsPhone()) {
 						credits.hidden = true;
-						version.hidden = !version.textContent;
 
 						if (report) {
-							version.after(report);
+							modal.querySelector("#app-settings-title").after(report);
 						}
 					} else {
 						credits.hidden = false;
-						version.hidden = true;
 
 						if (report && report.parentElement !== credits) {
 							credits.prepend(report);
@@ -37562,14 +37557,32 @@ ${settingsModalHTML()}
 
 		closeAppRowMenu();
 		menu.setAttribute("aria-label", appViewLabel(appState.view));
-		showAppMenu(menu, button, [{ label: "Mark all as read", run: () => markAppViewRead().catch(console.error) }], { start: true });
+		showAppMenu(
+			menu,
+			button,
+			[
+				{ label: "Sync", run: () => appState?.ui.shadow.querySelector("#app-list-sync")?.onclick?.(new Event("click")) },
+				{ rule: true },
+				{ label: "Mark all as read", run: () => markAppViewRead().catch(console.error) },
+			],
+			{ start: true },
+		);
 		menu.dataset.heading = "1";
 		button.setAttribute("aria-expanded", "true");
 	}
 
 	function showAppMenu(menu, button, items, { start = false } = {}) {
 		menu.replaceChildren(
-			...items.map(({ label, run }) => {
+			...items.map(({ label, run, rule = false }) => {
+				if (rule) {
+					const divider = document.createElement("div");
+
+					divider.className = "dropdown-rule";
+					divider.setAttribute("role", "separator");
+
+					return divider;
+				}
+
 				const item = document.createElement("button");
 
 				item.type = "button";
@@ -37843,58 +37856,8 @@ ${settingsModalHTML()}
 		return window.matchMedia("(max-width: 700px)").matches;
 	}
 
-	function appUsesCompactDiscussion() {
-		return Boolean(appState?.readerCompact) && !appIsPhone();
-	}
-
 	function appUsesFloatingControls() {
-		return appUsesCompactDiscussion() || appIsStacked() || appIsPhone();
-	}
-
-	function setAppCompactMode(enabled) {
-		if (!appState) {
-			return;
-		}
-
-		appState.readerCompact = enabled === true;
-		appState.compactCaret = null;
-		const app = appState.ui.shadow.querySelector("#app");
-
-		app.classList.toggle("reader-compact", appState.readerCompact);
-		app.dataset.readerStage = "article";
-		setAppViewMenuOpen(false);
-		paintAppChrome();
-	}
-
-	function setAppCompactStage(stage, { keyed = false } = {}) {
-		if (!appUsesCompactDiscussion() || !appState.open) {
-			return;
-		}
-
-		const shadow = appState.ui.shadow;
-		const app = shadow.querySelector("#app");
-		const caret = appState.compactCaret;
-
-		if (app.dataset.readerStage === stage) {
-			return;
-		}
-
-		if (keyed && stage === "article") {
-			const held = appCaretIn(shadow.querySelector("#panel"));
-
-			held?.field.blur();
-			appState.compactCaret = held;
-		} else {
-			appState.compactCaret = null;
-		}
-
-		app.dataset.readerStage = stage;
-		setAppViewMenuOpen(false);
-		paintAppChrome();
-
-		if (keyed && stage === "discussion" && caret) {
-			appCaretBack(caret);
-		}
+		return appIsStacked() || appIsPhone();
 	}
 
 	function revealAppDiscussion() {
@@ -37902,9 +37865,7 @@ ${settingsModalHTML()}
 			return;
 		}
 
-		if (appUsesCompactDiscussion()) {
-			setAppCompactStage("discussion");
-		} else if (appIsPhone()) {
+		if (appIsPhone()) {
 			setAppStage("discussion");
 		} else {
 			appState.showDiscussion?.();
@@ -37912,7 +37873,7 @@ ${settingsModalHTML()}
 	}
 
 	function appIsStacked() {
-		return window.matchMedia("(max-width: 1335px)").matches && !appIsPhone() && !appUsesCompactDiscussion();
+		return window.matchMedia("(max-width: 1335px)").matches && !appIsPhone();
 	}
 
 	function appViewMenuToggle(shadow) {
@@ -38237,10 +38198,9 @@ ${settingsModalHTML()}
 			delete shadow.querySelector("#app").dataset.scrolling;
 		}
 
-		const compact = appUsesCompactDiscussion();
-		const home = shadow.querySelector(compact ? "#app-reading" : appIsStacked() ? "#app-article" : "#app");
+		const home = shadow.querySelector(appIsStacked() ? "#app-article" : "#app");
 		const listToggle = shadow.querySelector("#app-toggle-list");
-		const listHome = shadow.querySelector(compact ? "#app-reading" : "#app-article > .app-pane-head");
+		const listHome = shadow.querySelector("#app-article > .app-pane-head");
 
 		if (listToggle.parentElement !== listHome) {
 			listHome.insertBefore(listToggle, listHome.firstChild);
@@ -38250,7 +38210,7 @@ ${settingsModalHTML()}
 			home.insertBefore(bar, home.id === "app" ? shadow.querySelector("#app-list") : null);
 		}
 
-		bar.hidden = compact || appIsStacked() ? !shadow.querySelector("#app").classList.contains("has-story") : stage === "list";
+		bar.hidden = appIsStacked() ? !shadow.querySelector("#app").classList.contains("has-story") : stage === "list";
 		shadow.querySelector("#app-bar-back").hidden = stage === "list";
 		shadow.querySelector("#app-search").hidden = stage !== "list";
 
@@ -38258,7 +38218,7 @@ ${settingsModalHTML()}
 			setAppSearchOpen(false);
 		}
 
-		discussion.setAttribute("aria-pressed", String(compact ? shadow.querySelector("#app").dataset.readerStage === "discussion" : appIsPhone() ? stage === "discussion" : !appState.panesHidden.discussion));
+		discussion.setAttribute("aria-pressed", String(appIsPhone() ? stage === "discussion" : !appState.panesHidden.discussion));
 		discussion.querySelector(".rail-badge").textContent = total ? compactCount(total) : "";
 		paintAppBarActions();
 		paintAppNext();
@@ -39490,7 +39450,6 @@ ${frontPageChooserHTML()}
 		}
 
 		state.open = opened;
-		setAppCompactStage("article");
 		markCollectedArrival(url)
 			.then((marked) => {
 				if (marked) {
@@ -41214,12 +41173,7 @@ ${frontPageChooserHTML()}
 						openAppSearch();
 					},
 		"front-pages": () => appShortcutPane("list", "#app-toggle-list"),
-		discussion: () => appUsesCompactDiscussion()
-			? () => {
-				closeAppMenus();
-				setAppCompactStage(appState.ui.shadow.querySelector("#app").dataset.readerStage === "discussion" ? "article" : "discussion", { keyed: true });
-			}
-			: appIsPhone() ? appShortcutPress("#app-bar-discussion") : appShortcutPane("discussion", appIsStacked() ? "#app-bar-discussion" : "#app-toggle-discussion"),
+		discussion: () => appIsPhone() ? appShortcutPress("#app-bar-discussion") : appShortcutPane("discussion", appIsStacked() ? "#app-bar-discussion" : "#app-toggle-discussion"),
 		sidebar: () => null,
 		settings: () => appShortcutSettings(),
 		shortcuts: () => appShortcutSettings("shortcuts"),
