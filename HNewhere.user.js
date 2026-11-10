@@ -13231,6 +13231,7 @@ html[data-backchannel-installed] .chin {
 
 			for (const action of row.querySelectorAll(".story-meta button")) {
 				action.setAttribute("role", "menuitem");
+				action.classList.add("dropdown-item");
 				menu.append(action);
 				setActionLabel(action, action.textContent);
 			}
@@ -16198,7 +16199,7 @@ header {
 	display:none;
 }
 
-.dropdown-item {
+.dropdown .dropdown-item {
 	padding:5px 8px;
 	border:0;
 	border-radius:4px;
@@ -16206,17 +16207,19 @@ header {
 	color:var(--surface-text);
 	font:12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	text-align:left;
+	text-decoration:none;
 	white-space:nowrap;
 	cursor:pointer;
 }
 
 @media (hover: hover) {
-	.dropdown-item:hover {
+	.dropdown .dropdown-item:hover {
 		background:var(--hover-tint);
 	}
 }
 
-.dropdown-item:active {
+.dropdown .dropdown-item:active,
+.dropdown .dropdown-item:focus-visible {
 	background:var(--hover-tint);
 }
 
@@ -31990,11 +31993,9 @@ ${SEARCH_CSS}
 	right:8px;
 	z-index:30;
 	box-sizing:border-box;
-	min-width:150px;
 	max-width:calc(100% - 16px);
 	max-height:240px;
 	overflow:auto;
-	box-shadow:0 4px 18px #0003;
 }
 
 .browse-row-menu.opens-up {
@@ -32002,26 +32003,16 @@ ${SEARCH_CSS}
 	bottom:calc(100% - 8px);
 }
 
-.browse-row-menu button,
-.browse-row-menu a {
+.browse-row-menu :is(button, a) {
 	display:block;
 	box-sizing:border-box;
 	width:100%;
 	margin:0;
-	padding:8px 12px;
-	border:0;
-	background:none;
-	color:var(--text);
-	font:13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-	text-align:left;
 	text-decoration:none;
-	cursor:pointer;
 }
 
 #browse-home-search-toggle:hover,
-.browse-home .browse-more:hover,
-.browse-row-menu :is(button, a):hover,
-.browse-row-menu :is(button, a):focus-visible {
+.browse-home .browse-more:hover {
 	background:var(--hover-tint);
 }
 
