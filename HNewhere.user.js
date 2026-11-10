@@ -15219,7 +15219,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		const markable = isBrowsing(ui) && !isSubmitting(ui) && !state.searchOpen && appViewIsFrontPage(view);
 
 		ui.shadow.querySelector("#browse-home-mark-read").hidden = !markable;
-		ui.shadow.querySelector("#browse-home-sync").hidden = !markable;
+		paintSidebarSyncButton(ui);
 
 		for (const button of ui.shadow.querySelectorAll(".browse-home-nav [data-browse-view]")) {
 			const matches = button.dataset.browseView === view || (button.dataset.browseView === "all" && (view.startsWith("source:") || view.startsWith("topic:")));
@@ -15451,14 +15451,27 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		shadow.querySelector("#browse-home-sync").onclick = async (event) => {
 			const button = event.currentTarget;
 
-			button.disabled = true;
+			if (button.classList.contains("is-syncing")) {
+				return;
+			}
+
+			button.classList.add("is-syncing");
+			button.setAttribute("aria-busy", "true");
+			showToast("Syncing…", { kind: "system", persist: true, loading: true });
+
 			try {
-				await runSync(() => renderBrowseView(ui, { force: true }));
+				await runSync(() => (isBrowsing(ui) ? renderBrowseView(ui, { force: true }) : Promise.resolve(ui.syncStatus?.onSync?.())));
 			} catch (error) {
 				console.error(error);
-			} finally {
-				button.disabled = false;
 			}
+
+			if (shadow.getElementById("toast")?.textContent === "Syncing…") {
+				showToast("");
+			}
+
+			await settleSyncSpin(button);
+			button.classList.remove("is-syncing");
+			button.removeAttribute("aria-busy");
 		};
 		shadow.querySelector("#browse-home-mark-read").onclick = () => markBrowseHomeRead(ui).catch(console.error);
 		list.addEventListener("click", (event) => {
@@ -17857,29 +17870,6 @@ header {
 	color:var(--subtitle-stage);
 }
 
-.header-sync-sep {
-	margin:0 .35em;
-	opacity:.5;
-}
-
-.header-sync {
-	border:0;
-	padding:0;
-	margin:0;
-	background:none;
-	color:inherit;
-	font:inherit;
-	cursor:pointer;
-	text-decoration:underline dotted;
-	text-underline-offset:2px;
-}
-
-@media (hover: hover) {
-	.header-sync:hover {
-		text-decoration:underline;
-	}
-}
-
 .wordmark-where-done {
 	animation:hnewhere-crumb-settle .9s ease-out;
 }
@@ -20186,7 +20176,7 @@ ${title ? `<span id="app-discussion-sort" class="app-discussion-sort"></span><sp
 <path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
 </svg>
 </button>
-${browse ? `<button id="browse-home-mark-read" type="button" aria-label="Mark all as read" title="Mark all as read" hidden>${APP_MARK_READ_ICON}</button><button id="browse-home-sync" type="button" aria-label="Sync" title="Sync" hidden>${APP_SYNC_ICON}</button>` : ""}
+${browse ? `<button id="browse-home-mark-read" type="button" aria-label="Mark all as read" title="Mark all as read" hidden>${APP_MARK_READ_ICON}</button><button id="browse-home-sync" type="button" aria-label="Sync" title="Sync" hidden><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button>` : ""}
 ${hide ? `<span class="hide-control">
 <button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Disable Backchannel here" title="Disable Backchannel here">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -26368,33 +26358,13 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		return "updated " + timeAgo(Math.floor(checkedAt / 1000));
 	}
 
-	function syncStatusNode({ checkedAt, onSync }) {
+	function syncStatusNode({ checkedAt }) {
 		const fragment = document.createDocumentFragment();
 		const age = document.createElement("span");
 
 		age.className = "header-sync-age";
 		age.textContent = syncAgeLabel(checkedAt);
 		fragment.appendChild(age);
-
-		if (typeof onSync === "function") {
-			const separator = document.createElement("span");
-
-			separator.className = "header-sync-sep";
-			separator.textContent = "|";
-			fragment.appendChild(separator);
-
-			const button = document.createElement("button");
-
-			button.type = "button";
-			button.className = "header-sync";
-			button.textContent = "sync";
-			button.onclick = (event) => {
-				event.preventDefault();
-				event.stopPropagation();
-				runRedditReadAction(onSync).catch(console.error);
-			};
-			fragment.appendChild(button);
-		}
 
 		return fragment;
 	}
@@ -26518,6 +26488,30 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 		ui.syncStatus = status;
 		refreshSidebarSubtitle(ui);
+		paintSidebarSyncButton(ui);
+	}
+
+	function paintSidebarSyncButton(ui) {
+		const button = ui?.shadow?.querySelector("#browse-home-sync");
+
+		if (!button) {
+			return;
+		}
+
+		const state = ui.browseHome;
+		const browsing = isBrowsing(ui);
+
+		button.hidden = isSubmitting(ui) || Boolean(state?.searchOpen) || (browsing ? !appViewIsFrontPage(state?.view) : typeof ui.syncStatus?.onSync !== "function");
+	}
+
+	async function settleSyncSpin(button) {
+		const spin = button.querySelector(".app-sync-glyph")?.getAnimations?.()[0];
+		const turn = Number(spin?.effect?.getComputedTiming?.().duration) || 0;
+
+		if (spin && turn > 0 && Number.isFinite(spin.currentTime)) {
+			spin.effect.updateTiming({ iterations: Math.max(1, Math.ceil((spin.currentTime + 1) / turn)) });
+			await spin.finished.catch(() => {});
+		}
 	}
 
 	function setSidebarLoadingLabel(ui, text) {
@@ -31862,6 +31856,47 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	display:block;
 }
 
+.app-sync-glyph {
+	display:block;
+	width:20px;
+	height:20px;
+	transform-origin:10px 10px;
+	backface-visibility:hidden;
+	-webkit-backface-visibility:hidden;
+}
+
+.app-sync-glyph svg {
+	display:block;
+	overflow:visible;
+}
+
+.is-syncing .app-sync-glyph {
+	animation:bc-app-sync-spin .9s linear infinite;
+	will-change:transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.is-syncing .app-sync-glyph {
+		animation:bc-app-sync-pulse 1.2s ease-in-out infinite;
+	}
+}
+
+@keyframes bc-app-sync-spin {
+	from {
+		transform:rotate(0deg) translateZ(0);
+	}
+
+	to {
+		transform:rotate(-360deg) translateZ(0);
+	}
+}
+
+@keyframes bc-app-sync-pulse {
+	50% {
+		opacity:.35;
+	}
+}
+
 :host {
 	--icon-fill:#fff;
 	--icon-on:var(--text);
@@ -32645,19 +32680,20 @@ ${SEARCH_CSS}
 
 #browse-home-mark-read[hidden],
 #browse-home-sync[hidden],
-#panel:not(.browsing) :is(#browse-home-mark-read, #browse-home-sync),
+#panel:not(.browsing) #browse-home-mark-read,
 #panel.submitting :is(#browse-home-mark-read, #browse-home-sync) {
 	display:none;
-}
-
-#browse-home-sync:disabled {
-	opacity:.4;
-	cursor:default;
 }
 
 #browse-home-mark-read svg {
 	width:16px;
 	height:16px;
+}
+
+#browse-home-sync .app-sync-glyph {
+	width:22px;
+	height:22px;
+	transform-origin:11px 11px;
 }
 
 #browse-home-sync svg {
@@ -33426,47 +33462,6 @@ ${TIP_CSS}
 }
 
 ${APP_ICON_CSS}
-
-.app-sync-glyph {
-	display:block;
-	width:20px;
-	height:20px;
-	transform-origin:10px 10px;
-	backface-visibility:hidden;
-	-webkit-backface-visibility:hidden;
-}
-
-.app-sync-glyph svg {
-	display:block;
-	overflow:visible;
-}
-
-#app-list-sync.is-syncing .app-sync-glyph {
-	animation:bc-app-sync-spin .9s linear infinite;
-	will-change:transform;
-}
-
-@media (prefers-reduced-motion: reduce) {
-	#app-list-sync.is-syncing .app-sync-glyph {
-		animation:bc-app-sync-pulse 1.2s ease-in-out infinite;
-	}
-}
-
-@keyframes bc-app-sync-spin {
-	from {
-		transform:rotate(0deg) translateZ(0);
-	}
-
-	to {
-		transform:rotate(-360deg) translateZ(0);
-	}
-}
-
-@keyframes bc-app-sync-pulse {
-	50% {
-		opacity:.35;
-	}
-}
 
 #app-list .app-pane-actions {
 	gap:2px;
@@ -36904,14 +36899,7 @@ ${settingsModalHTML()}
 				}
 			}
 
-			const spin = button.querySelector(".app-sync-glyph")?.getAnimations?.()[0];
-			const turn = Number(spin?.effect?.getComputedTiming?.().duration) || 0;
-
-			if (spin && turn > 0 && Number.isFinite(spin.currentTime)) {
-				spin.effect.updateTiming({ iterations: Math.max(1, Math.ceil((spin.currentTime + 1) / turn)) });
-				await spin.finished.catch(() => {});
-			}
-
+			await settleSyncSpin(button);
 			button.classList.remove("is-syncing");
 			button.removeAttribute("aria-busy");
 		};
