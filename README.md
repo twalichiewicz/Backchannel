@@ -119,4 +119,4 @@ manager, and what you see is what users install. Release history is in
 
 ### What's the license on this bad boy?
 
-MIT
+GPL-3.0-or-later

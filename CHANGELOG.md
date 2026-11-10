@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [Unreleased]
+
+### Changed
+
+- Backchannel is now licensed under the GNU General Public License version 3
+  or later, with Triglavis LLC as the copyright holder. Releases through
+  1.6.18.3 remain available under the MIT license.
+
 ## [1.6.18.3] — 2026-11-09
 
 ### Fixed
@@ -2683,6 +2691,7 @@ Releases before 1.4.7 are recorded in the
 commit history. Entries for 1.4.7 through 1.5.3 are summarized from their release
 commits rather than written at the time.
 
+[Unreleased]: https://github.com/twalichiewicz/Backchannel/compare/v1.6.18.3...HEAD
 [1.6.1]: https://github.com/twalichiewicz/Backchannel/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.8...v1.6.0
 [1.5.8]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.7...v1.5.8
