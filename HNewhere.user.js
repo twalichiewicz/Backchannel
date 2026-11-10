@@ -441,7 +441,6 @@
 		commentSort: "best",
 		newCommentsFirst: false,
 		keepSidebarSize: true,
-		readerCompact: false,
 		commentImages: false,
 		updateCheck: true,
 	};
@@ -5301,7 +5300,6 @@ ${
 
 	// #region hnewhere-test-export
 	const HINTED_SETTINGS = new Set([
-		"readerCompact",
 		"annotations",
 		"pdfReader",
 		"notepad",
@@ -20327,14 +20325,6 @@ ${settings ? settingsPanelHTML() : ""}
 
 <div class="settings-group">
 <label class="settings-option">
-<input id="setting-reader-compact" data-setting="readerCompact" type="checkbox">
-<span>Use compact Discussion controls in Reader</span>
-</label>
-<div class="settings-option-hint">Switch between the article and its discussion instead of showing both at once.</div>
-</div>
-
-<div class="settings-group">
-<label class="settings-option">
 <input id="setting-annotations" data-setting="annotations" type="checkbox">
 <span>Enable annotations <span class="op-pill">BETA</span></span>
 </label>
@@ -20500,7 +20490,6 @@ ${frontPageChooserHTML()}
 				"#setting-auto-open-only-from-hn",
 			),
 			keepSidebarSize: shadow.querySelector("#setting-keep-sidebar-size"),
-			readerCompact: shadow.querySelector("#setting-reader-compact"),
 			commentImages: shadow.querySelector("#setting-comment-images"),
 			updateCheck: shadow.querySelector("#setting-update-check"),
 		};
@@ -21009,11 +20998,6 @@ ${frontPageChooserHTML()}
 
 			if (setting === "keepSidebarSize") {
 				applySidebarZoom();
-				return;
-			}
-
-			if (setting === "readerCompact") {
-				setAppCompactMode(settings.readerCompact);
 				return;
 			}
 
@@ -35775,109 +35759,6 @@ header .item-action-link {
 ${SETTINGS_MODAL_PHONE_CSS}
 }
 
-@media (min-width: 701px) {
-	#app.reader-compact #app-reading {
-		flex-direction:row;
-	}
-
-	#app.reader-compact #app-article {
-		flex:1 1 0;
-	}
-
-	#app.reader-compact #panel.app-docked {
-		position:relative;
-		flex:1 1 0;
-		top:auto;
-		left:auto;
-		width:auto !important;
-		max-width:none;
-		border:0;
-	}
-
-	#app.reader-compact[data-reader-stage="article"] #panel.app-docked,
-	#app.reader-compact[data-reader-stage="discussion"] #app-article,
-	#app.reader-compact #app-article .app-pane-middle,
-	#app.reader-compact #app-article > .app-pane-head,
-	#app.reader-compact #app-toggle-discussion,
-	#app.reader-compact #panel #resize-handle {
-		display:none !important;
-	}
-
-	#app.reader-compact.has-story[data-reader-stage="discussion"] #panel.app-docked {
-		display:flex !important;
-	}
-
-	#app.reader-compact #panel.app-docked > header {
-		padding-left:48px;
-	}
-
-	#app.reader-compact #app-bar {
-		display:flex !important;
-		position:absolute;
-		right:12px;
-		bottom:16px;
-		z-index:25;
-		flex-direction:column;
-		align-items:center;
-		gap:8px;
-	}
-
-	#app.reader-compact #app-bar[hidden] {
-		display:none !important;
-	}
-
-	#app.reader-compact #app-toggle-list {
-		position:absolute;
-		top:10px;
-		left:12px;
-		z-index:26;
-		border-radius:12px;
-		background:var(--surface);
-		box-shadow:0 0 0 1px var(--surface-border), 0 2px 8px rgba(0,0,0,.16);
-	}
-
-	#app.reader-compact .app-stack-button {
-		display:flex;
-		position:relative;
-		flex-direction:column;
-		align-items:center;
-		justify-content:center;
-		gap:2px;
-		box-sizing:border-box;
-		width:36px;
-		height:36px;
-		padding:0;
-		border:0;
-		border-radius:18px;
-		font:inherit;
-		cursor:pointer;
-	}
-
-	#app.reader-compact .app-stack-button svg {
-		width:18px;
-		height:18px;
-		fill:currentColor;
-	}
-
-	#app.reader-compact .app-stack-button[hidden] {
-		display:none;
-	}
-
-	#app.reader-compact #app-bar-discussion:has(.rail-badge:not(:empty)) {
-		height:50px;
-	}
-
-	#app.reader-compact #app-bar-discussion .rail-badge {
-		position:static;
-		min-width:0;
-		height:auto;
-		padding:0;
-		background:none;
-		box-shadow:none;
-		color:inherit;
-		font-size:10px;
-	}
-}
 `;
 
 	const READER_CSS = `
@@ -36480,7 +36361,6 @@ ${settingsModalHTML()}
 		}
 
 		wireApp(ui);
-		setAppCompactMode((await loadSettings()).readerCompact);
 		loadAppShortcuts(shortcuts).catch(console.error);
 		renderAppDiscussionEmpty();
 		watchNoteSelection(await loadSettings());
@@ -36579,7 +36459,6 @@ ${settingsModalHTML()}
 		const dropPaneCaret = () => {
 			paneCaret.list = null;
 			paneCaret.discussion = null;
-			appState.compactCaret = null;
 		};
 
 		const paintPaneToggles = () => {
@@ -36587,7 +36466,7 @@ ${settingsModalHTML()}
 			paintAppListToggle();
 
 			if (!appIsPhone()) {
-				shadow.querySelector("#app-bar-discussion").setAttribute("aria-pressed", String(appUsesCompactDiscussion() ? appRoot.dataset.readerStage === "discussion" : !paneHidden.discussion));
+				shadow.querySelector("#app-bar-discussion").setAttribute("aria-pressed", String(!paneHidden.discussion));
 			}
 		};
 
@@ -37051,9 +36930,7 @@ ${settingsModalHTML()}
 
 		shadow.querySelector("#app-bar-back").onclick = () => setAppStage("list");
 		shadow.querySelector("#app-bar-discussion").onclick = () => {
-			if (appUsesCompactDiscussion()) {
-				setAppCompactStage(appRoot.dataset.readerStage === "discussion" ? "article" : "discussion");
-			} else if (appIsPhone()) {
+			if (appIsPhone()) {
 				setAppStage(appRoot.dataset.stage === "discussion" ? "article" : "discussion");
 			} else {
 				appState.togglePane("discussion");
@@ -38013,58 +37890,8 @@ ${settingsModalHTML()}
 		return window.matchMedia("(max-width: 700px)").matches;
 	}
 
-	function appUsesCompactDiscussion() {
-		return Boolean(appState?.readerCompact) && !appIsPhone();
-	}
-
 	function appUsesFloatingControls() {
-		return appUsesCompactDiscussion() || appIsStacked() || appIsPhone();
-	}
-
-	function setAppCompactMode(enabled) {
-		if (!appState) {
-			return;
-		}
-
-		appState.readerCompact = enabled === true;
-		appState.compactCaret = null;
-		const app = appState.ui.shadow.querySelector("#app");
-
-		app.classList.toggle("reader-compact", appState.readerCompact);
-		app.dataset.readerStage = "article";
-		setAppViewMenuOpen(false);
-		paintAppChrome();
-	}
-
-	function setAppCompactStage(stage, { keyed = false } = {}) {
-		if (!appUsesCompactDiscussion() || !appState.open) {
-			return;
-		}
-
-		const shadow = appState.ui.shadow;
-		const app = shadow.querySelector("#app");
-		const caret = appState.compactCaret;
-
-		if (app.dataset.readerStage === stage) {
-			return;
-		}
-
-		if (keyed && stage === "article") {
-			const held = appCaretIn(shadow.querySelector("#panel"));
-
-			held?.field.blur();
-			appState.compactCaret = held;
-		} else {
-			appState.compactCaret = null;
-		}
-
-		app.dataset.readerStage = stage;
-		setAppViewMenuOpen(false);
-		paintAppChrome();
-
-		if (keyed && stage === "discussion" && caret) {
-			appCaretBack(caret);
-		}
+		return appIsStacked() || appIsPhone();
 	}
 
 	function revealAppDiscussion() {
@@ -38072,9 +37899,7 @@ ${settingsModalHTML()}
 			return;
 		}
 
-		if (appUsesCompactDiscussion()) {
-			setAppCompactStage("discussion");
-		} else if (appIsPhone()) {
+		if (appIsPhone()) {
 			setAppStage("discussion");
 		} else {
 			appState.showDiscussion?.();
@@ -38082,7 +37907,7 @@ ${settingsModalHTML()}
 	}
 
 	function appIsStacked() {
-		return window.matchMedia("(max-width: 1335px)").matches && !appIsPhone() && !appUsesCompactDiscussion();
+		return window.matchMedia("(max-width: 1335px)").matches && !appIsPhone();
 	}
 
 	function appViewMenuToggle(shadow) {
@@ -38407,10 +38232,9 @@ ${settingsModalHTML()}
 			delete shadow.querySelector("#app").dataset.scrolling;
 		}
 
-		const compact = appUsesCompactDiscussion();
-		const home = shadow.querySelector(compact ? "#app-reading" : appIsStacked() ? "#app-article" : "#app");
+		const home = shadow.querySelector(appIsStacked() ? "#app-article" : "#app");
 		const listToggle = shadow.querySelector("#app-toggle-list");
-		const listHome = shadow.querySelector(compact ? "#app-reading" : "#app-article > .app-pane-head");
+		const listHome = shadow.querySelector("#app-article > .app-pane-head");
 
 		if (listToggle.parentElement !== listHome) {
 			listHome.insertBefore(listToggle, listHome.firstChild);
@@ -38420,7 +38244,7 @@ ${settingsModalHTML()}
 			home.insertBefore(bar, home.id === "app" ? shadow.querySelector("#app-list") : null);
 		}
 
-		bar.hidden = compact || appIsStacked() ? !shadow.querySelector("#app").classList.contains("has-story") : stage === "list";
+		bar.hidden = appIsStacked() ? !shadow.querySelector("#app").classList.contains("has-story") : stage === "list";
 		shadow.querySelector("#app-bar-back").hidden = stage === "list";
 		shadow.querySelector("#app-search").hidden = stage !== "list";
 
@@ -38428,7 +38252,7 @@ ${settingsModalHTML()}
 			setAppSearchOpen(false);
 		}
 
-		discussion.setAttribute("aria-pressed", String(compact ? shadow.querySelector("#app").dataset.readerStage === "discussion" : appIsPhone() ? stage === "discussion" : !appState.panesHidden.discussion));
+		discussion.setAttribute("aria-pressed", String(appIsPhone() ? stage === "discussion" : !appState.panesHidden.discussion));
 		discussion.querySelector(".rail-badge").textContent = total ? compactCount(total) : "";
 		paintAppBarActions();
 		paintAppNext();
@@ -39660,7 +39484,6 @@ ${frontPageChooserHTML()}
 		}
 
 		state.open = opened;
-		setAppCompactStage("article");
 		markCollectedArrival(url)
 			.then((marked) => {
 				if (marked) {
@@ -41384,12 +41207,7 @@ ${frontPageChooserHTML()}
 						openAppSearch();
 					},
 		"front-pages": () => appShortcutPane("list", "#app-toggle-list"),
-		discussion: () => appUsesCompactDiscussion()
-			? () => {
-				closeAppMenus();
-				setAppCompactStage(appState.ui.shadow.querySelector("#app").dataset.readerStage === "discussion" ? "article" : "discussion", { keyed: true });
-			}
-			: appIsPhone() ? appShortcutPress("#app-bar-discussion") : appShortcutPane("discussion", appIsStacked() ? "#app-bar-discussion" : "#app-toggle-discussion"),
+		discussion: () => appIsPhone() ? appShortcutPress("#app-bar-discussion") : appShortcutPane("discussion", appIsStacked() ? "#app-bar-discussion" : "#app-toggle-discussion"),
 		sidebar: () => null,
 		settings: () => appShortcutSettings(),
 		shortcuts: () => appShortcutSettings("shortcuts"),
