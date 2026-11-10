@@ -31888,6 +31888,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	justify-content:center;
 	box-sizing:border-box;
 	padding:32px;
+	overflow:auto;
+	overscroll-behavior:contain;
 	background:rgba(0,0,0,.45);
 }
 
@@ -32125,6 +32127,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	flex:1 1 auto;
 	min-width:0;
 	overflow-y:auto;
+	overscroll-behavior:contain;
 	padding:12px 18px 16px;
 }
 
@@ -37198,6 +37201,11 @@ ${settingsModalHTML()}
 		modal.addEventListener("pointerdown", (event) => {
 			if (!helpIn(event)) hideSourceHelpTip(shadow);
 		}, true);
+		modal.addEventListener("keydown", (event) => {
+			if (["PageUp", "PageDown", "Home", "End"].includes(event.key) && !event.target?.closest?.(".app-settings-content")) {
+				event.preventDefault();
+			}
+		});
 
 		const showSection = (section, target = "") => {
 			hideSourceHelpTip(shadow);
