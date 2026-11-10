@@ -5674,7 +5674,7 @@ ${
 			try { batch.popup?.close(); } catch {}
 			if (batch.tabId != null) { try { await GM.closeTab(batch.tabId); } catch {} }
 			if (redditReadBatch === batch) redditReadBatch = null;
-			if (batch.syncRun === syncRunId && batch.synced && !batch.failed && !batch.cancelled && isSidebarVisible()) showToast("Synced", { kind: "system" });
+			if (batch.syncRun === syncRunId && batch.synced && !batch.failed && !batch.cancelled && isSidebarVisible()) showToast("Synced", { kind: "system", duration: TOAST_BRIEF_MS });
 		}
 	}
 
@@ -5699,7 +5699,7 @@ ${
 				batch.failed ||= failed;
 			} else if (runId === syncRunId && isSidebarVisible()) {
 				if (waiting.length && !failed) showToast("Press Sync to refresh Reddit.", { kind: "system", action: { label: "sync", onAct: () => runSync(task, options).catch(console.error) } });
-				else if (synced) showToast("Synced", { kind: "system" });
+				else if (synced) showToast("Synced", { kind: "system", duration: TOAST_BRIEF_MS });
 			}
 			return result;
 		}, options);
@@ -11606,6 +11606,8 @@ html[data-backchannel-installed] .chin {
 	let pageToastHost = null;
 
 	const TOAST_DISMISS_MS = 5200;
+	const TOAST_BRIEF_MS = 1800;
+	let toastSizeTimer = 0;
 
 	const TOAST_HTML = `<div id="toast" class="toast" data-kind="user" role="status" aria-live="polite"></div>`;
 
@@ -11640,6 +11642,7 @@ html[data-backchannel-installed] .chin {
 	border-radius:7px;
 	background:#1b1b1b;
 	color:#fff;
+	--toast-ink:#fff;
 	box-shadow:0 4px 14px rgba(0,0,0,.22);
 	font-size:11px;
 	line-height:1.35;
@@ -11663,6 +11666,7 @@ html[data-backchannel-installed] .chin {
 	border-color:rgba(0,0,0,.12);
 	background:#f7f7f7;
 	color:#111;
+	--toast-ink:#111;
 }
 
 .toast.is-showing {
@@ -11670,7 +11674,25 @@ html[data-backchannel-installed] .chin {
 	visibility:visible;
 	transform:translate(-50%,0) scale(1);
 	filter:blur(0);
-	transition:transform .44s cubic-bezier(.16,1,.3,1), opacity .18s ease, filter .28s ease, visibility 0s;
+	transition:transform .44s cubic-bezier(.16,1,.3,1), opacity .18s ease, filter .28s ease, visibility 0s, width .24s cubic-bezier(.4,0,.2,1), height .24s cubic-bezier(.4,0,.2,1);
+}
+
+.toast-glimmer {
+	background:linear-gradient(90deg, var(--toast-ink) 0%, var(--toast-ink) 35%, color-mix(in srgb, var(--toast-ink) 30%, transparent) 50%, var(--toast-ink) 65%, var(--toast-ink) 100%);
+	background-size:250% 100%;
+	-webkit-background-clip:text;
+	background-clip:text;
+	color:transparent;
+	animation:bc-toast-glimmer 1.3s linear infinite;
+}
+
+@keyframes bc-toast-glimmer {
+	from {
+		background-position:100% 0;
+	}
+	to {
+		background-position:-150% 0;
+	}
 }
 
 .toast.has-action.is-showing {
@@ -11697,6 +11719,12 @@ html[data-backchannel-installed] .chin {
 		transform:translate(-50%,0);
 		filter:none;
 		transition:opacity .12s ease, visibility 0s linear .12s;
+	}
+
+	.toast-glimmer {
+		background:none;
+		color:inherit;
+		animation:none;
 	}
 
 	.toast.is-showing {
@@ -11746,7 +11774,7 @@ html[data-backchannel-installed] .chin {
 		}
 	}
 
-	function showToast(message, { persist = false, action = null, page = false, kind = "user" } = {}) {
+	function showToast(message, { persist = false, action = null, page = false, kind = "user", loading = false, duration = TOAST_DISMISS_MS } = {}) {
 		if (sidebarUI?.shadow) {
 			removePageToast();
 		}
@@ -11772,7 +11800,21 @@ html[data-backchannel-installed] .chin {
 			toast.getBoundingClientRect();
 			toast.style.removeProperty("transition");
 		}
-		toast.textContent = message;
+		const from = toast.classList.contains("is-showing") && toast.dataset.kind === kind && !prefersReducedMotion() ? toast.getBoundingClientRect() : null;
+
+		clearTimeout(toastSizeTimer);
+		toast.style.width = "";
+		toast.style.height = "";
+
+		if (loading) {
+			const glimmer = document.createElement("span");
+
+			glimmer.className = "toast-glimmer";
+			glimmer.textContent = message;
+			toast.replaceChildren(glimmer);
+		} else {
+			toast.textContent = message;
+		}
 		toast.classList.toggle("has-action", Boolean(action));
 		toast.onmouseenter = null;
 		toast.onmouseleave = null;
@@ -11796,19 +11838,37 @@ html[data-backchannel-installed] .chin {
 
 		toast.classList.add("is-showing");
 
+		if (from) {
+			const to = toast.getBoundingClientRect();
+
+			if (Math.round(to.width) !== Math.round(from.width) || Math.round(to.height) !== Math.round(from.height)) {
+				toast.style.transition = "none";
+				toast.style.width = `${from.width}px`;
+				toast.style.height = `${from.height}px`;
+				toast.getBoundingClientRect();
+				toast.style.removeProperty("transition");
+				toast.style.width = `${to.width}px`;
+				toast.style.height = `${to.height}px`;
+				toastSizeTimer = window.setTimeout(() => {
+					toast.style.width = "";
+					toast.style.height = "";
+				}, 260);
+			}
+		}
+
 		if (!persist) {
 			const dismiss = () => {
 				toast.classList.remove("is-showing", "has-action");
 				releasePageToast(toast);
 			};
 
-			toastTimer = window.setTimeout(dismiss, TOAST_DISMISS_MS);
+			toastTimer = window.setTimeout(dismiss, duration);
 
 			if (action) {
 				toast.onmouseenter = () => clearTimeout(toastTimer);
 				toast.onmouseleave = () => {
 					clearTimeout(toastTimer);
-					toastTimer = window.setTimeout(dismiss, TOAST_DISMISS_MS);
+					toastTimer = window.setTimeout(dismiss, duration);
 				};
 			}
 		}
@@ -36933,15 +36993,10 @@ ${settingsModalHTML()}
 
 			pullSyncing = true;
 			paintPull(0, "", true);
-			showToast("Syncing…", { kind: "system", persist: true });
 			syncList()
 				.catch(console.error)
 				.finally(() => {
 					pullSyncing = false;
-
-					if (shadow.getElementById("toast")?.textContent === "Syncing…") {
-						showToast("");
-					}
 				});
 		};
 
@@ -36959,11 +37014,16 @@ ${settingsModalHTML()}
 
 			button.classList.add("is-syncing");
 			button.setAttribute("aria-busy", "true");
+			showToast("Syncing…", { kind: "system", persist: true, loading: true });
 
 			const runs = await runSync(() => Promise.allSettled([
 				renderAppList({ force: true }),
 				Promise.resolve(appState?.discussionSync?.()),
 			]));
+
+			if (shadow.getElementById("toast")?.textContent === "Syncing…") {
+				showToast("");
+			}
 
 			for (const run of runs) {
 				if (run.status === "rejected") {
