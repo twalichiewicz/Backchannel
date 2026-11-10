@@ -487,14 +487,9 @@
 	})();
 
 	const ITEM_ACTION_BRIDGE_MESSAGE_SOURCE = "HNewhereVoteBridge";
-	const SUBMIT_BRIDGE_MESSAGE_SOURCE = "HNewhereSubmitBridge";
 	const COMMENT_BRIDGE_MESSAGE_SOURCE = "HNewhereCommentBridge";
 
-	const HN_TITLE_LIMIT = 80;
-	const REDDIT_TITLE_LIMIT = 300;
-
 	const ITEM_ACTION_BRIDGE_STORAGE_KEY = "hnewhere-vote-bridge";
-	const SUBMIT_BRIDGE_STORAGE_KEY = "hnewhere-submit-bridge";
 	const COMMENT_BRIDGE_STORAGE_KEY = "hnewhere-comment-bridge";
 	const RESUME_BRIDGE_STORAGE_KEY = "hnewhere-resume-bridge";
 
@@ -5334,13 +5329,7 @@ ${
 			"Tech, startups and science",
 			"Long, threaded comment sections",
 		],
-		capabilities: { vote: true, reply: true, submit: true },
-
-		submitForm: {
-			titleLimit: HN_TITLE_LIMIT,
-			note: "Leave url blank to submit a question for discussion. If there is no url, text will appear at the top of the thread. If there is a url, text is optional.",
-			newestURL: HN_ORIGIN + "/newest",
-		},
+		capabilities: { vote: true, reply: true },
 
 		profileURL: (author) =>
 			"https://news.ycombinator.com/user?id=" + encodeURIComponent(author),
@@ -6028,22 +6017,7 @@ ${
 			"Communities on almost any topic",
 			"Threaded comments with votes",
 		],
-		capabilities: { vote: true, reply: true, submit: true },
-
-		submitForm: {
-			titleLimit: REDDIT_TITLE_LIMIT,
-			note: "Choose the subreddit you want to post to. Leave url blank to post text instead of a link.",
-			fields: [
-				{
-					id: "subreddit",
-					label: "subreddit",
-					required: true,
-					placeholder: "r/somewhere",
-					spellcheck: false,
-				},
-			],
-			newestURL: "https://www.reddit.com/submit",
-		},
+		capabilities: { vote: true, reply: true },
 
 		profileURL: (author) =>
 			"https://www.reddit.com/user/" + encodeURIComponent(author) + "/",
@@ -6273,7 +6247,7 @@ ${
 			"Posts and replies that link the page",
 			"Short, social commentary",
 		],
-		capabilities: { vote: false, reply: false, submit: false },
+		capabilities: { vote: false, reply: false },
 
 		profileURL: (handle) => "https://bsky.app/profile/" + encodeURIComponent(handle),
 
@@ -6467,7 +6441,7 @@ ${
 			"Programming and computing",
 			"Small, focused comment threads",
 		],
-		capabilities: { vote: false, reply: false, submit: false },
+		capabilities: { vote: false, reply: false },
 
 		profileURL: (user) => "https://lobste.rs/~" + encodeURIComponent(user),
 
@@ -6568,7 +6542,7 @@ ${
 			"Wikipedia articles that link the page",
 			"Background and context, not comments",
 		],
-		capabilities: { vote: false, reply: false, submit: false },
+		capabilities: { vote: false, reply: false },
 
 		profileURL: (author) =>
 			"https://en.wikipedia.org/wiki/User:" + encodeURIComponent(author),
@@ -6700,7 +6674,7 @@ ${
 			"Public annotations on the page",
 			"Notes pinned to passages",
 		],
-		capabilities: { vote: false, reply: false, submit: false },
+		capabilities: { vote: false, reply: false },
 
 		profileURL: (author) =>
 			"https://hypothes.is/users/" + encodeURIComponent(author),
@@ -7889,7 +7863,7 @@ button {
 			"Posts from people who chose to be found",
 			"Federated social replies",
 		],
-		capabilities: { vote: false, reply: false, submit: false },
+		capabilities: { vote: false, reply: false },
 
 		profileURL: (handle) => {
 			const [user, host] = String(handle).split("@");
@@ -7994,7 +7968,7 @@ button {
 			"Federated communities, like Reddit",
 			"Threaded comments with votes",
 		],
-		capabilities: { vote: false, reply: false, submit: false },
+		capabilities: { vote: false, reply: false },
 
 		profileURL: (handle) => "https://lemmy.world/u/" + handle,
 
@@ -9996,7 +9970,7 @@ html[data-backchannel-installed] .chin {
 			background: "#b8b8b8",
 			darkBackground: "#4a4a4a",
 			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
-			title: "No discussion yet — click to submit this page",
+			title: "No discussion yet — click to open Backchannel",
 		},
 		setup: {
 			background: "#b8b8b8",
@@ -10435,10 +10409,6 @@ html[data-backchannel-installed] .chin {
 	}
 	// #endregion hnewhere-test-export
 
-	function suggestedSubmissionTitle() {
-		return pageTitle().slice(0, HN_TITLE_LIMIT);
-	}
-
 	// -------------------------
 	// Popup helpers
 	// -------------------------
@@ -10499,16 +10469,6 @@ html[data-backchannel-installed] .chin {
 		return /^https?:\/\//i.test(url) ? url : null;
 	}
 	// #endregion hnewhere-test-export
-
-	function submitURL(url, title) {
-		return (
-			HN_ORIGIN +
-			"/submitlink?u=" +
-			encodeURIComponent(url) +
-			"&t=" +
-			encodeURIComponent(title)
-		);
-	}
 
 	// -------------------------
 	// Bridge payloads
@@ -10832,14 +10792,6 @@ html[data-backchannel-installed] .chin {
 		}
 
 		return { ...payload, origin: staged.origin, voteURL: staged.voteURL };
-	}
-
-	function bindSubmitStage(payload, staged) {
-		if (staged?.kind !== "submit") {
-			return null;
-		}
-
-		return { ...payload, origin: staged.origin };
 	}
 
 	function bindCommentStage(payload, staged) {
@@ -12900,86 +12852,9 @@ html[data-backchannel-installed] .chin {
 		);
 	}
 
-	function isSubmitting(ui) {
-		return Boolean(
-			ui?.shadow?.querySelector("#panel")?.classList.contains("submitting"),
-		);
-	}
-
 	let discussionScrollTop = 0;
 
 	const VIEW_SWAP_FADE_MS = 160;
-
-	async function setSubmitMode(ui, on) {
-		const panel = ui?.shadow?.querySelector("#panel");
-		const view = ui?.shadow?.querySelector("#submit-view");
-
-		if (!panel || !view) {
-			return;
-		}
-
-		if (!on) {
-			panel.classList.remove("submitting");
-			view.replaceChildren();
-
-			return;
-		}
-
-		const settings = await loadSettings();
-		const targets = submitTargetsFor(settings);
-		const submitTarget = targets[0] ?? null;
-
-		view.innerHTML = submitFormHTML({
-			submitTarget,
-			targets,
-			message: submitTarget ? "" : unsubmittableMessage(settings),
-		});
-
-		panel.classList.add("submitting");
-		setWordmarkLocation(ui, "Submit");
-
-		wireSubmitForm(view, {
-			submitTarget,
-			targets,
-			onCancel: () => {
-				setSubmitMode(ui, false).catch(console.error);
-				setBrowseMode(ui, true);
-			},
-			onSubmit: async (fields, form) => {
-				const target = fields.target || submitTarget;
-				const result = await submitPageThroughBridge(target.id, fields, {
-					onInterim: (data) => {
-						if (data?.reason === "awaiting-reader") {
-							form.setStatus(
-								`Filled in on ${target.label}. Post it in the window that opened.`,
-							);
-						}
-					},
-				});
-
-				if (!result?.ok) {
-					form.setStatus(submitFailureMessage(result, target.label), {
-						error: true,
-					});
-
-					return false;
-				}
-
-				const seeURL = result.permalink || submittedFallbackURL(target);
-
-				form.setStatus(
-					seeURL
-						? `Submitted. <a href="${escapeHTML(seeURL)}" target="_blank" rel="noopener noreferrer">${
-								result.permalink ? "See the discussion" : "See it on " + escapeHTML(target.label)
-							}</a>`
-						: "Submitted.",
-					{ html: true },
-				);
-
-				return true;
-			},
-		});
-	}
 
 	function setBrowseMode(ui, on, options = {}) {
 		const panel = ui?.shadow?.querySelector("#panel");
@@ -13032,9 +12907,6 @@ html[data-backchannel-installed] .chin {
 						? "Back to choosing sources"
 						: "Back to this page's discussion"
 					: browseLabel();
-
-			panel.classList.remove("submitting");
-			ui?.shadow?.querySelector("#submit-view")?.replaceChildren();
 
 			if (!on) {
 				setWordmarkLocation(ui, sidebarHasDiscussion ? "Discussion" : "");
@@ -13376,15 +13248,6 @@ html[data-backchannel-installed] .chin {
 
 	function browseLabel() {
 		return frontPageAvailable ? "Front Pages and your queue" : "Your queue";
-	}
-
-	async function refreshSubmitAffordance(root) {
-		const button = root?.querySelector?.("#header-submit");
-
-		if (button) {
-			button.hidden =
-				!submitTargetFor(await loadSettings()) || sidebarHasDiscussion;
-		}
 	}
 
 	async function refreshBrowseAffordances(root) {
@@ -14762,7 +14625,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			text ||
 			(appState
 				? "No discussion found for this article yet."
-				: "No discussion found for this page yet. Minimize to submit it, or read something else.");
+				: "No discussion found for this page yet.");
 
 		body.appendChild(message);
 
@@ -15216,7 +15079,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 	function paintBrowseHome(ui) {
 		const state = ui.browseHome;
 		const view = state.view;
-		const markable = isBrowsing(ui) && !isSubmitting(ui) && !state.searchOpen && appViewIsFrontPage(view);
+		const markable = isBrowsing(ui) && !state.searchOpen && appViewIsFrontPage(view);
 
 		ui.shadow.querySelector("#browse-home-mark-read").hidden = !markable;
 		paintSidebarSyncButton(ui);
@@ -15640,8 +15503,6 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			setWordmarkLocation(ui, "");
 		}
 
-		await refreshSubmitAffordance(ui.shadow);
-
 		if (!isCurrent()) return;
 
 		refreshQueueCount(ui.shadow).catch(console.error);
@@ -15785,441 +15646,6 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		};
 
 		return button;
-	}
-
-	// -------------------------
-	// Submit-to-HN button
-	// -------------------------
-
-	const openSubmitBridgePopup = createBridgeChannel(
-		SUBMIT_BRIDGE_MESSAGE_SOURCE,
-	);
-
-	function submitTargetsFor(settings) {
-		return enabledSourceIds(settings, registeredSourceIds())
-			.map(getSource)
-			.filter((source) => source?.capabilities.submit);
-	}
-
-	function submitTargetFor(settings) {
-		return submitTargetsFor(settings)[0] ?? null;
-	}
-
-	function submitFormFor(target) {
-		return target?.submitForm || {};
-	}
-
-	function submittedFallbackURL(target) {
-		return submitFormFor(target).newestURL || "";
-	}
-
-	function submitTitleLimit(target) {
-		return submitFormFor(target).titleLimit || HN_TITLE_LIMIT;
-	}
-
-	function submitExtraFields(target) {
-		return submitFormFor(target).fields || [];
-	}
-
-	function unsubmittableMessage(settings) {
-		const enabled = enabledSourceIds(settings, registeredSourceIds())
-			.map((id) => getSource(id)?.label)
-			.filter(Boolean);
-
-		const names =
-			enabled.length > 1
-				? enabled.slice(0, -1).join(", ") + " and " + enabled.at(-1)
-				: enabled[0] || "your sources";
-
-		return `Submitting to ${names} is not supported yet. Turn on a source that accepts submissions in Settings → Sources to post this page.`;
-	}
-
-	const SUBMIT_FORM_CSS = `
-.submit-title {
-	font-weight:600;
-	margin-bottom:8px;
-}
-
-.submit-note {
-	margin-top:8px;
-	color:var(--muted);
-	font-size:11px;
-}
-
-.submit-field + .submit-field {
-	margin-top:8px;
-}
-
-.submit-field label {
-	display:block;
-	color:var(--muted);
-	font-size:10px;
-	font-weight:700;
-	letter-spacing:.04em;
-	text-transform:uppercase;
-	margin-bottom:3px;
-}
-
-.submit-field-head {
-	display:flex;
-	align-items:baseline;
-	justify-content:space-between;
-	gap:8px;
-	margin-bottom:3px;
-}
-
-.submit-field-head label {
-	margin-bottom:0;
-}
-
-.submit-field input,
-.submit-field textarea {
-	width:100%;
-	box-sizing:border-box;
-	font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-	padding:5px 6px;
-	border:1px solid var(--field-border);
-	border-radius:4px;
-	background:var(--field-bg);
-	color:var(--field-text);
-}
-
-.submit-field textarea {
-	min-height:56px;
-	resize:vertical;
-	white-space:pre-wrap;
-}
-
-.submit-field input:focus,
-.submit-field textarea:focus {
-	outline:2px solid rgba(var(--accent-rgb),.4);
-	outline-offset:-1px;
-}
-
-.submit-count {
-	color:var(--meta);
-	font-size:10px;
-	flex:0 0 auto;
-	white-space:nowrap;
-}
-
-.submit-count.over {
-	color:var(--error);
-}
-
-.submit-actions {
-	display:flex;
-	justify-content:flex-end;
-	gap:6px;
-	margin-top:10px;
-}
-
-.submit-actions button {
-	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-	padding:5px 10px;
-	border-radius:4px;
-	cursor:pointer;
-	border:1px solid var(--button-border);
-	background:var(--button-bg);
-	color:var(--button-text);
-}
-
-.submit-actions button.primary {
-	background:var(--accent);
-	border-color:var(--accent);
-	color:white;
-}
-
-.submit-actions button:disabled {
-	opacity:.6;
-	cursor:default;
-}
-
-.submit-status {
-	margin-top:8px;
-	font-size:11px;
-	line-height:1.4;
-}
-
-.submit-status.error {
-	color:var(--error);
-}
-
-.submit-status a {
-	color:var(--link);
-}
-`;
-
-	function submitTargetChooserHTML(submitTarget, targets) {
-		if (targets.length < 2) {
-			return escapeHTML(submitTarget.label);
-		}
-
-		return `<select id="submit-target" class="submit-target" aria-label="Where to submit">${targets
-			.map(
-				(target) =>
-					`<option value="${escapeHTML(target.id)}"${
-						target.id === submitTarget.id ? " selected" : ""
-					}>${escapeHTML(target.label)}</option>`,
-			)
-			.join("")}</select>`;
-	}
-
-	function submitFieldsHTML(submitTarget) {
-		return `${submitExtraFields(submitTarget)
-			.map(
-				(field) => `
-<div class="submit-field">
-<label for="submit-extra-${escapeHTML(field.id)}">${escapeHTML(field.label)}</label>
-<input id="submit-extra-${escapeHTML(field.id)}" class="submit-extra" type="text"
-data-field-id="${escapeHTML(field.id)}"${field.required ? " data-required=\"1\"" : ""}
-spellcheck="${field.spellcheck === false ? "false" : "true"}"
-placeholder="${escapeHTML(field.placeholder || "")}">
-</div>`,
-			)
-			.join("")}
-<div class="submit-field">
-<div class="submit-field-head">
-<label for="submit-title">title</label>
-<span id="submit-count" class="submit-count"></span>
-</div>
-<input id="submit-title" type="text" maxlength="${submitTitleLimit(submitTarget)}" spellcheck="true">
-</div>
-
-<div class="submit-field">
-<label for="submit-url">url</label>
-<input id="submit-url" type="text" spellcheck="false">
-</div>
-
-<div class="submit-field">
-<label for="submit-text">text</label>
-<textarea id="submit-text" rows="3" spellcheck="true"></textarea>
-</div>
-
-<div class="submit-note">
-${escapeHTML(submitFormFor(submitTarget).note || "")}
-</div>`;
-	}
-
-	function submitFormHTML({ submitTarget, targets = [], message = "" }) {
-		return `
-<div class="submit-title">${
-			submitTarget
-				? "Submit to " + submitTargetChooserHTML(submitTarget, targets)
-				: "Submit"
-		}</div>
-${
-	submitTarget
-		? `<div id="submit-fields">${submitFieldsHTML(submitTarget)}</div>`
-		: `
-<div class="submit-note">
-${escapeHTML(message)}
-</div>`
-}
-
-<div class="submit-actions">
-<button id="submit-cancel" type="button">${submitTarget ? "Cancel" : "Close"}</button>
-${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</button>` : ""}
-</div>
-
-<div id="submit-status" class="submit-status hidden" role="status"></div>
-`;
-	}
-
-	function wireSubmitForm(root, { submitTarget, targets = [], onSubmit, onCancel }) {
-		const chooser = root.querySelector("#submit-target");
-
-		if (chooser) {
-			chooser.onchange = () => {
-				const next = targets.find((each) => each.id === chooser.value);
-
-				if (!next) {
-					return;
-				}
-
-				const fields = root.querySelector("#submit-fields");
-
-				if (fields) {
-					fields.innerHTML = submitFieldsHTML(next);
-				}
-
-				wireSubmitForm(root, { submitTarget: next, targets, onSubmit, onCancel });
-			};
-		}
-
-		const titleInput = root.querySelector("#submit-title");
-		const countLabel = root.querySelector("#submit-count");
-		const urlInput = root.querySelector("#submit-url");
-		const textInput = root.querySelector("#submit-text");
-		const extraInputs = [...root.querySelectorAll(".submit-extra")];
-		const goButton = root.querySelector("#submit-go");
-		const cancelButton = root.querySelector("#submit-cancel");
-		const statusLine = root.querySelector("#submit-status");
-
-		const setStatus = (message, { error = false, html = false } = {}) => {
-			statusLine.classList.remove("hidden");
-			statusLine.classList.toggle("error", error);
-
-			if (html) {
-				statusLine.innerHTML = message;
-			} else {
-				statusLine.textContent = message;
-			}
-		};
-
-		if (cancelButton) {
-			cancelButton.onclick = () => onCancel?.();
-		}
-
-		if (!submitTarget) {
-			cancelButton?.focus();
-
-			return { setStatus };
-		}
-
-		titleInput.value = suggestedSubmissionTitle();
-		urlInput.value = pageAddress();
-
-		const missingExtra = () =>
-			extraInputs.some(
-				(input) => input.dataset.required && !input.value.trim(),
-			);
-
-		const updateCount = () => {
-			const remaining = submitTitleLimit(submitTarget) - titleInput.value.length;
-
-			countLabel.textContent = remaining + " left";
-			countLabel.classList.toggle("over", remaining < 0);
-
-			goButton.disabled =
-				!titleInput.value.trim() ||
-				missingExtra() ||
-				(!urlInput.value.trim() && !textInput.value.trim());
-		};
-
-		updateCount();
-		titleInput.addEventListener("input", updateCount);
-		urlInput.addEventListener("input", updateCount);
-		textInput.addEventListener("input", updateCount);
-
-		for (const input of extraInputs) {
-			input.addEventListener("input", updateCount);
-		}
-
-		goButton.onclick = async () => {
-			const title = titleInput.value.trim();
-			const url = urlInput.value.trim();
-			const text = textInput.value;
-			const extra = Object.fromEntries(
-				extraInputs.map((input) => [input.dataset.fieldId, input.value.trim()]),
-			);
-
-			if (!title || missingExtra() || (!url && !text.trim())) {
-				return;
-			}
-
-			goButton.disabled = true;
-			cancelButton.disabled = true;
-			titleInput.disabled = true;
-			urlInput.disabled = true;
-			textInput.disabled = true;
-
-			for (const input of extraInputs) {
-				input.disabled = true;
-			}
-
-			if (chooser) {
-				chooser.disabled = true;
-			}
-			setStatus(`Opening ${submitTarget.label}\u2026`);
-
-			let posted = false;
-
-			try {
-				posted = await onSubmit(
-					{ title, url, text, extra, target: submitTarget },
-					{ setStatus },
-				);
-			} finally {
-				cancelButton.disabled = false;
-
-				if (!posted) {
-					titleInput.disabled = false;
-					urlInput.disabled = false;
-					textInput.disabled = false;
-
-					for (const input of extraInputs) {
-						input.disabled = false;
-					}
-
-					if (chooser) {
-						chooser.disabled = false;
-					}
-
-					updateCount();
-				}
-			}
-		};
-
-		for (const field of [titleInput, urlInput]) {
-			field.addEventListener("keydown", (event) => {
-				if (event.key === "Enter") {
-					event.preventDefault();
-					goButton.click();
-				}
-			});
-		}
-
-		titleInput.focus();
-		titleInput.select();
-
-		return { setStatus };
-	}
-
-	function submitPageThroughBridge(
-		sourceID,
-		{ title, url, text, extra = {} },
-		{ onInterim } = {},
-	) {
-		const bridge = getWriteBridge(sourceID);
-		const action = bridge?.actions?.submit;
-
-		if (!action) {
-			return Promise.resolve({ ok: false, reason: "no-bridge" });
-		}
-
-		const nonce = bridgeNonce();
-		const session = openSubmitBridgePopup(nonce, {
-			origin: bridge.origin,
-			onInterim: onInterim || undefined,
-		});
-
-		if (session.blocked) {
-			return session.result;
-		}
-
-		return (async () => {
-			try {
-				await stageBridgePayload(nonce, {
-					kind: "submit",
-					url,
-					title,
-					text,
-					extra,
-					normalized: url ? normalizeURL(url) : "",
-					origin: location.origin,
-				});
-				await indexBridgePayload(nonce);
-
-				session.navigate(
-					action.url({ url, title, extra }) + "#" + bridgeHash(action, nonce),
-				);
-
-				return await session.result;
-			} finally {
-				await clearBridgePayload(nonce);
-			}
-		})();
 	}
 
 	function renderSourcePicker(ui, target = ui.body) {
@@ -16543,27 +15969,6 @@ ${frontPageChooserHTML()}
 
 		return button;
 	}
-
-	// #region hnewhere-test-export
-	function submitFailureMessage(result, sourceLabel = "Hacker News") {
-		switch (result?.reason) {
-			case "popup-blocked":
-				return "Your browser blocked the popup. Allow popups for this site and try again.";
-			case "timeout":
-				return `${sourceLabel} did not respond in time. Check the popup window.`;
-			case "not-logged-in":
-				return `Log in to ${sourceLabel} in the popup, then try again.`;
-			case "awaiting-reader":
-				return `The ${sourceLabel} window is still open. Post it there, or close it to give up.`;
-			case "dupe":
-				return `${sourceLabel} already has this URL. Reload the page to see the discussion.`;
-			case "no-form":
-				return `Could not find the submission form on ${sourceLabel}.`;
-			default:
-				return result?.message || "Submission did not go through.";
-		}
-	}
-	// #endregion hnewhere-test-export
 
 	// -------------------------
 	// Shared chrome
@@ -17255,11 +16660,6 @@ header {
 	display:none;
 }
 
-#panel.submitting #header-submit {
-	display:none;
-}
-
-#header-submit[hidden],
 #comment-toggle[hidden] {
 	display:none;
 }
@@ -20186,12 +19586,6 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 
 <div class="header-actions">
 ${title ? `<span id="app-discussion-sort" class="app-discussion-sort"></span><span id="app-discussion-meta" class="app-discussion-meta"></span>` : ""}
-<button id="header-submit" type="button" aria-label="Submit this page" title="Submit this page" hidden>
-<svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" focusable="false">
-<path d="M8 12.7V4.2" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round"/>
-<path d="M4.5 7.7 8 4.2l3.5 3.5" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
-</button>
 <button id="comment-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="compose-dock" aria-label="Add a comment" title="Add a comment" hidden>
 <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
@@ -20947,8 +20341,6 @@ ${frontPageChooserHTML()}
 						},
 					}),
 				);
-
-				await refreshSubmitAffordance(shadow);
 
 				await refreshForSourceChange();
 				return;
@@ -21745,33 +21137,10 @@ ${frontPageChooserHTML()}
 
 ${THEME_CSS}
 ${CHROME_CSS}
-${SUBMIT_FORM_CSS}
-
-.submit-view {
-	display:none;
-	transition:opacity .16s ease;
-}
-
-#panel.submitting .submit-view {
-	display:block;
-}
-
-#panel.submitting #comments-content,
-#panel.submitting .browse-view,
-#panel.submitting .filter-banner,
-#panel.submitting .next-up {
-	display:none;
-}
 
 #panel.browsing #comment-toggle,
-#panel.submitting #comment-toggle,
-#panel.browsing #compose-dock,
-#panel.submitting #compose-dock {
+#panel.browsing #compose-dock {
 	display:none;
-}
-
-#comments.views-swapping > .submit-view {
-	opacity:0;
 }
 
 #resize-handle {
@@ -23185,7 +22554,6 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 <div id="browse-blend-note" class="browse-blend-note" hidden></div>
 <div id="browse-list"${appMode ? "" : ' class="reader-list" role="tabpanel" aria-labelledby="browse-tab-front"'}></div>
 </div>
-<div id="submit-view" class="submit-view"></div>
 <div id="next-up" class="next-up hidden"></div>
 </div>
 
@@ -23439,11 +22807,6 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		if (browseToggle) {
 			browseToggle.onclick = (event) => {
-				if (isSubmitting(ui)) {
-					setBrowseMode(ui, true);
-					return;
-				}
-
 				const browsing = isBrowsing(ui);
 				const where = shadow.querySelector(".wordmark-where");
 				const target = browsing ? where && where.clientWidth < where.scrollWidth ? ".wordmark-root, .wordmark-where" : ".wordmark-where" : ".wordmark-root";
@@ -23486,15 +22849,6 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		if (ui.browseHome) {
 			wireBrowseHome(ui);
-		}
-
-		const submitButton = shadow.querySelector("#header-submit");
-
-		if (submitButton) {
-			submitButton.onclick = () => {
-				scrollBrowseToTop(ui);
-				setSubmitMode(ui, true).catch(console.error);
-			};
 		}
 
 		refreshQueueCount(shadow).catch(console.error);
@@ -26522,7 +25876,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		const state = ui.browseHome;
 		const browsing = isBrowsing(ui);
 
-		button.hidden = isSubmitting(ui) || Boolean(state?.searchOpen) || (browsing ? !appViewIsFrontPage(state?.view) : typeof ui.syncStatus?.onSync !== "function");
+		button.hidden = Boolean(state?.searchOpen) || (browsing ? !appViewIsFrontPage(state?.view) : typeof ui.syncStatus?.onSync !== "function");
 	}
 
 	async function settleSyncSpin(button) {
@@ -26642,7 +25996,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			const settings = await loadSettings();
 
 			await renderDiscussions(loaded, ui, { arrival: options.arrival !== false });
-			await refreshSubmitAffordance(ui.shadow);
 
 			if (generation === sidebarGeneration) {
 				if (settings.annotations && shouldShowArticleAnnotations(settings)) {
@@ -26736,144 +26089,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 		await clearBridgePayload(payload.nonce);
 		location.href = target.href;
-		return BRIDGE_NAVIGATED;
-	}
-
-	// -------------------------
-	// HN side: submit bridge
-	// -------------------------
-
-	function findSubmitForm(root) {
-		for (const form of root.querySelectorAll("form")) {
-			if (
-				form.querySelector('input[name="title"]') &&
-				form.querySelector('input[name="url"]')
-			) {
-				return form;
-			}
-		}
-
-		return null;
-	}
-
-	function readSubmitError(root) {
-		const text = (root.body?.textContent || "").toLowerCase();
-
-		if (text.includes("that link has already been submitted")) {
-			return { reason: "dupe" };
-		}
-
-		if (text.includes("please log in") || text.includes("bad login")) {
-			return { reason: "not-logged-in" };
-		}
-
-		if (text.includes("submitting too fast")) {
-			return {
-				reason: "rate-limited",
-				message: "Hacker News is rate limiting submissions. Try again shortly.",
-			};
-		}
-
-		return null;
-	}
-
-	function reportHNSubmit(root) {
-		const payload = takeBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY);
-
-		if (!payload) {
-			return null;
-		}
-
-		if (location.pathname === "/item") {
-			const id = new URLSearchParams(location.search).get("id");
-
-			return {
-				payload,
-				result: {
-					ok: Boolean(id),
-					storyID: id,
-					permalink: id ? commentURL(id) : "",
-					reason: id ? "existing" : "dupe",
-				},
-			};
-		}
-
-		if (location.pathname === "/newest") {
-			const id = findSubmittedStoryID(root, payload.normalized);
-
-			return {
-				payload,
-				result: {
-					ok: true,
-					storyID: id,
-					permalink: id ? commentURL(id) : "",
-					reason: "submitted",
-				},
-			};
-		}
-
-		return {
-			payload,
-			result: {
-				ok: false,
-				...(readSubmitError(root) || { reason: "unknown" }),
-			},
-		};
-	}
-
-	function findSubmittedStoryID(root, normalized) {
-		if (!normalized) {
-			return null;
-		}
-
-		for (const link of root.querySelectorAll(".titleline > a")) {
-			if (normalizeURL(link.href) !== normalized) {
-				continue;
-			}
-
-			const row = link.closest("tr.athing");
-
-			if (row?.id) {
-				return row.id;
-			}
-		}
-
-		return null;
-	}
-
-	function actHNSubmit({ payload, staged, root }) {
-		const form = findSubmitForm(root);
-
-		if (!form) {
-			return { ok: false, reason: "not-logged-in" };
-		}
-
-		const titleInput = form.querySelector('input[name="title"]');
-		const urlInput = form.querySelector('input[name="url"]');
-		const textInput = form.querySelector('textarea[name="text"]');
-
-		if (titleInput && staged?.title) {
-			titleInput.value = staged.title.slice(0, HN_TITLE_LIMIT);
-		}
-
-		if (urlInput) {
-			urlInput.value = staged?.url || "";
-		}
-
-		if (textInput) {
-			textInput.value = staged?.text || "";
-		}
-
-		if (
-			!stageBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY, {
-				...payload,
-				normalized: staged?.normalized || null,
-			})
-		) {
-			return { ok: false, reason: "storage-unavailable" };
-		}
-
-		form.submit();
 		return BRIDGE_NAVIGATED;
 	}
 
@@ -27018,16 +26233,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				voteLinks: loadVoteLinks,
 				act: actHNItemAction,
 				report: reportHNItemAction,
-			},
-			submit: {
-				marker: "hnewhere-submit",
-				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
-				noun: "submission",
-				stagesDraft: true,
-				bindStaged: bindSubmitStage,
-				url: ({ url, title }) => submitURL(url, title),
-				act: actHNSubmit,
-				report: reportHNSubmit,
 			},
 			reply: {
 				marker: "hnewhere-comment",
@@ -27284,16 +26489,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				url: ({ storyID, parentId }) => redditPermalink(storyID, parentId),
 				act: actRedditReply,
 			},
-			submit: {
-				marker: "hnewhere-submit",
-				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
-				noun: "submission",
-				stagesDraft: true,
-				bindStaged: bindSubmitStage,
-				url: ({ url, title, extra }) => redditSubmitURL(url, title, extra),
-				act: actRedditSubmit,
-				report: reportRedditSubmit,
-			},
 		},
 	});
 
@@ -27302,101 +26497,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			.trim()
 			.replace(/^\/?r\//i, "")
 			.replace(/\/+$/, "");
-	}
-
-	function redditSubmitURL(url, title, extra) {
-		const subreddit = normalizeSubredditName(extra?.subreddit);
-		const query =
-			"?url=" + encodeURIComponent(url) + "&title=" + encodeURIComponent(title);
-
-		return (
-			REDDIT_WRITE_ORIGIN +
-			(subreddit ? "/r/" + encodeURIComponent(subreddit) : "") +
-			"/submit" +
-			query
-		);
-	}
-
-	function actRedditSubmit({ payload, staged, root }) {
-		const form =
-			root.querySelector("form#newlink") ||
-			root.querySelector('form[action*="submit"]');
-
-		if (!form) {
-			return {
-				ok: false,
-				reason: root.querySelector('form[action*="login"], #login_login-main')
-					? "not-logged-in"
-					: "no-form",
-			};
-		}
-
-		const titleInput = form.querySelector('textarea[name="title"], input[name="title"]');
-		const urlInput = form.querySelector('input[name="url"]');
-		const textInput = form.querySelector('textarea[name="text"]');
-		const subredditInput = form.querySelector(
-			'input[name="sr"], #sr-autocomplete',
-		);
-
-		if (titleInput && staged?.title) {
-			titleInput.value = staged.title.slice(0, REDDIT_TITLE_LIMIT);
-		}
-
-		if (urlInput) {
-			urlInput.value = staged?.url || "";
-		}
-
-		if (textInput) {
-			textInput.value = staged?.text || "";
-		}
-
-		const subreddit = normalizeSubredditName(staged?.extra?.subreddit);
-
-		if (subredditInput && subreddit) {
-			subredditInput.value = subreddit;
-		}
-
-		if (
-			!stageBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY, {
-				...payload,
-				normalized: staged?.normalized || null,
-			})
-		) {
-			return { ok: false, reason: "storage-unavailable" };
-		}
-
-		return BRIDGE_AWAITING_READER;
-	}
-
-	function reportRedditSubmit(root) {
-		const payload = takeBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY);
-
-		if (!payload) {
-			return null;
-		}
-
-		const posted = /\/comments\//.test(location.pathname);
-
-		if (posted) {
-			return {
-				payload,
-				result: {
-					ok: true,
-					permalink: location.origin + location.pathname,
-					reason: "submitted",
-				},
-			};
-		}
-
-		const error = root.querySelector(".error, .status.error");
-
-		return {
-			payload,
-			result: {
-				ok: false,
-				reason: error?.textContent?.trim() || "unknown",
-			},
-		};
 	}
 
 	function setupHNListener() {
@@ -30682,7 +29782,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		return best ? best.key : null;
 	}
 
-	const OWN_SURFACE_SELECTOR = `[data-hnewhere-annotation-overlay],[data-hnewhere-sidebar],[data-hnewhere-note-composer],[data-hnewhere-note-add],[data-hnewhere-submit-popover]`;
+	const OWN_SURFACE_SELECTOR = `[data-hnewhere-annotation-overlay],[data-hnewhere-sidebar],[data-hnewhere-note-composer],[data-hnewhere-note-add]`;
 
 	function pressableRectsAround(range, source = documentSource()) {
 		const root = nearestElement(range?.commonAncestorContainer);
@@ -31596,10 +30696,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			}
 		}
 
-		document
-			.querySelectorAll("[data-hnewhere-submit-popover]")
-			.forEach((host) => host.remove());
-
 		if (sidebar) {
 			sidebar._cleanup?.();
 			sidebar.remove();
@@ -31681,7 +30777,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				sidebarHasDiscussion = true;
 				setSidebarStage(ui, "comments");
 				await renderDiscussions(discussions, ui);
-				await refreshSubmitAffordance(ui.shadow);
 
 				if (wasPicking) {
 					leaveBrowsing();
@@ -32701,8 +31796,7 @@ ${SEARCH_CSS}
 
 #browse-home-mark-read[hidden],
 #browse-home-sync[hidden],
-#panel:not(.browsing) #browse-home-mark-read,
-#panel.submitting :is(#browse-home-mark-read, #browse-home-sync) {
+#panel:not(.browsing) #browse-home-mark-read {
 	display:none;
 }
 
@@ -34195,10 +33289,6 @@ ${READER_LIST_CSS}
 	bottom:0;
 	height:0;
 	z-index:40;
-}
-
-#header-submit {
-	display:none !important;
 }
 
 .app-discussion-sort {
@@ -39659,7 +38749,6 @@ ${frontPageChooserHTML()}
 			if (!loaded.length) {
 				sidebarHasDiscussion = false;
 				renderNoDiscussion(ui, threads.length ? "Couldn't load what people said about this article." : "");
-				await refreshSubmitAffordance(ui.shadow);
 				return;
 			}
 
@@ -39669,7 +38758,6 @@ ${frontPageChooserHTML()}
 
 			setSidebarStage(ui, "comments");
 			await renderDiscussions(loaded, ui);
-			await refreshSubmitAffordance(ui.shadow);
 			await refreshArticleAnnotations();
 		} catch (error) {
 			console.error(error);
@@ -41351,7 +40439,7 @@ ${frontPageChooserHTML()}
 
 		const action = appShortcutFor(event, true) || appShortcutFor(event, false);
 
-		if (action?.id === "search" && isSidebarVisible() && sidebarUI?.browseHome && isBrowsing(sidebarUI) && !isSubmitting(sidebarUI) && !isFrameField(event.composedPath()[0]) && sidebarUI.shadow.querySelector("#app-settings-modal")?.hidden) {
+		if (action?.id === "search" && isSidebarVisible() && sidebarUI?.browseHome && isBrowsing(sidebarUI) && !isFrameField(event.composedPath()[0]) && sidebarUI.shadow.querySelector("#app-settings-modal")?.hidden) {
 			event.preventDefault();
 			openBrowseSearch(sidebarUI).catch(console.error);
 			return;
