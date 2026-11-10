@@ -36660,6 +36660,8 @@ ${settingsModalHTML()}
 		});
 		paintPaneToggles();
 
+		let phoneStage = null;
+
 		window.matchMedia("(max-width: 700px)").addEventListener("change", () => {
 			setAppSearchOpen(false);
 			settleAppList();
@@ -36667,11 +36669,28 @@ ${settingsModalHTML()}
 			paintAppZoom();
 			setAppSearchOpen(false);
 
-			if (!appIsPhone() && appRoot.dataset.stage !== "list") {
+			const stage = appRoot.dataset.stage || "list";
+
+			if (!appIsPhone() && stage !== "list") {
+				phoneStage = { stage, key: appState?.open?.key };
 				appRoot.dataset.stage = "list";
 			}
 
+			const restore = appIsPhone() && phoneStage?.key && appState?.open?.key === phoneStage.key && appState.article ? phoneStage.stage : "";
+
+			if (appIsPhone()) {
+				phoneStage = null;
+			}
+
+			if (restore) {
+				appRoot.dataset.stage = restore;
+			}
+
 			paintAppChrome();
+
+			if (restore) {
+				restoreAppStageScroll("list", restore);
+			}
 		});
 
 		load(STORAGE.appPanes, null)
@@ -36965,6 +36984,15 @@ ${settingsModalHTML()}
 		};
 
 		window.addEventListener("scroll", noteScrolling, { passive: true });
+		window.addEventListener(
+			"scroll",
+			() => {
+				if (appState && window.innerWidth <= 700 && appRoot.dataset.stage === "article") {
+					appState.scrolls.article = window.scrollY;
+				}
+			},
+			{ passive: true },
+		);
 		shadow.querySelector("#comments")?.addEventListener("scroll", noteScrolling, { passive: true });
 		new ResizeObserver(() => paintAppChrome()).observe(shadow.querySelector("#app-rail"));
 		paintAppChrome();
