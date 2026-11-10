@@ -16757,10 +16757,31 @@ header {
 	border-radius:6px;
 	background:var(--surface);
 	box-shadow:0 6px 18px rgba(0,0,0,.18);
+	opacity:1;
+	transform:translateY(0);
+	transition-property:opacity, transform, display;
+	transition-duration:.12s;
+	transition-timing-function:ease;
+	transition-behavior:allow-discrete;
 }
 
 .dropdown[hidden] {
 	display:none;
+	opacity:0;
+	transform:translateY(-4px);
+}
+
+@starting-style {
+	.dropdown:not([hidden]) {
+		opacity:0;
+		transform:translateY(-4px);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.dropdown {
+		transition:none;
+	}
 }
 
 .dropdown-rule {
@@ -35542,7 +35563,8 @@ header .item-action-link {
 		display:none;
 	}
 
-	#app-list-heading-button:active {
+	#app-list-heading-button:active,
+	#app-list-heading-button[aria-expanded="true"] {
 		background:var(--active-tint);
 	}
 
@@ -35668,7 +35690,8 @@ header .item-action-link {
 		}
 	}
 
-	#app-list-body .browse-more:active {
+	#app-list-body .browse-more:active,
+	#app-list-body .browse-more[aria-expanded="true"] {
 		background:var(--active-tint);
 		color:var(--text);
 	}
@@ -37566,6 +37589,7 @@ ${settingsModalHTML()}
 			}),
 		);
 		menu.dataset.row = row.dataset.storyId || "";
+		button.setAttribute("aria-expanded", "true");
 	}
 
 	function openAppHeadingMenu(button) {
@@ -37646,6 +37670,7 @@ ${settingsModalHTML()}
 		}
 
 		shadow?.querySelector("#app-list-heading-button")?.setAttribute("aria-expanded", "false");
+		shadow?.querySelector('#app-list-body .browse-more[aria-expanded="true"]')?.setAttribute("aria-expanded", "false");
 	}
 
 	function appViewLabel(view) {
