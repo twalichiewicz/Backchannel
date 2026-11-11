@@ -5445,8 +5445,8 @@ ${
 		if (/^\/r\/[a-z0-9_+]+\.json$/i.test(url.pathname)) allowed = only("limit") && limit(100);
 		else if (url.pathname === "/api/info.json") allowed = only("url", "id") && keys.length === 1 && (article(params.get("url")) || /^t3_[a-z0-9]+$/i.test(params.get("id") || ""));
 		else if (url.pathname === "/search.json") allowed = only("type", "limit", "q") && params.get("type") === "link" && limit(25) && params.get("q")?.startsWith("url:") && article(params.get("q").slice(4));
-		else if (/^\/(?:r\/[a-z0-9_]+\/)?comments\/[a-z0-9]+(?:\/[^/?#]+)?\/?\.json$/i.test(url.pathname)) allowed = only("limit", "sort") && limit(500) && (!params.has("sort") || params.get("sort") === "top");
-		else if (url.pathname === "/api/morechildren.json") allowed = only("api_type", "link_id", "sort", "children") && params.get("api_type") === "json" && /^t3_[a-z0-9]+$/i.test(params.get("link_id") || "") && (!params.has("sort") || params.get("sort") === "top") && /^[a-z0-9]+(?:,[a-z0-9]+)*$/i.test(params.get("children") || "") && params.get("children").split(",").length <= 100;
+		else if (/^\/(?:r\/[a-z0-9_]+\/)?comments\/[a-z0-9]+(?:\/[^/?#]+)?\/?\.json$/i.test(url.pathname)) allowed = only("limit", "sort") && limit(500) && (!params.has("sort") || params.get("sort") === "confidence");
+		else if (url.pathname === "/api/morechildren.json") allowed = only("api_type", "link_id", "sort", "children") && params.get("api_type") === "json" && /^t3_[a-z0-9]+$/i.test(params.get("link_id") || "") && (!params.has("sort") || params.get("sort") === "confidence") && /^[a-z0-9]+(?:,[a-z0-9]+)*$/i.test(params.get("children") || "") && params.get("children").split(",").length <= 100;
 		return allowed ? url.pathname + url.search : null;
 	}
 
@@ -6116,7 +6116,7 @@ ${
 		async loadThread(discussion) {
 			const result = await redditFetch(
 				discussion.permalink.replace("https://www.reddit.com", "") +
-					".json?limit=500&sort=top",
+					".json?limit=500&sort=confidence",
 				"/api/comments/search?limit=100&link_id=" +
 					encodeURIComponent(discussion.id),
 			);
@@ -6150,7 +6150,7 @@ ${
 					const result = await runRedditReadAction(() => redditFetch(
 						"/api/morechildren.json?api_type=json&link_id=t3_" +
 							encodeURIComponent(discussion.id) +
-							"&sort=top&children=" +
+							"&sort=confidence&children=" +
 							encodeURIComponent(batch.join(",")),
 						null,
 					));
