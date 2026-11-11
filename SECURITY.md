@@ -47,19 +47,23 @@ Worth stating plainly, because the permissions are broad by necessity:
 
   | Source | Hosts contacted | What they are told |
   | --- | --- | --- |
-  | Hacker News | `hn.algolia.com`, `hacker-news.firebaseio.com`, `news.ycombinator.com` | the URL of each page you visit, with no persistent identifier attached |
-  | Reddit | `www.reddit.com` | the URL of each page you visit. Signed in to Reddit, these requests arrive authenticated as your account; signed out, they carry a long-lived device identifier |
+  | Hacker News | `hn.algolia.com`, `hacker-news.firebaseio.com`, `news.ycombinator.com` | the URL of each page you visit and, for finding equivalent articles, up to three words from its title, with no persistent identifier attached |
+  | Equivalent articles | hosts of candidate pages returned by the Hacker News, Lemmy or Reddit title search | an anonymous browser request without a referrer, to compare article text; cross-origin requests can include the origin of the page being viewed and require the candidate's CORS permission |
+  | Reddit | `www.reddit.com` | the URL of each page you visit and, for finding equivalent articles, up to three words from its title. Signed in to Reddit, these requests arrive authenticated as your account; signed out, they carry a long-lived device identifier |
   | Reddit (fallback) | `arctic-shift.photon-reddit.com` | the URL of each page you visit, with no identifier. Used automatically when reddit.com declines the request |
   | Bluesky (discovery) | `constellation.microcosm.blue` | the URL of each page you visit, with no identifier attached |
   | Bluesky | `public.api.bsky.app` | post identifiers only -- never the URL of the page you are on |
   | Lobsters | `lobste.rs` | the domain of each page you visit -- never the full address. It has no URL search, so the exact match is made here |
   | Wikipedia | `en.wikipedia.org` | the URL of each page you visit, to find the Talk pages citing it, and then those pages' names to read what was said. Signed in to Wikipedia, these requests carry your session; signed out, they carry a device identifier that lasts a year |
-  | Lemmy | `lemmy.world` | the URL of each page you visit, with no account |
+  | Lemmy | `lemmy.world` | the URL of each page you visit and up to three words from its title to find equivalent articles, with no account |
   | Mastodon (discovery) | `www.tootfinder.ch` | the domain of each page you visit -- never the full address. An opt-in index of Mastodon posts, not Mastodon, and it holds only people who chose to be searchable |
   | Mastodon (front page) | `mastodon.social` | what that instance is currently linking to and, when you open one of those links in the reader and the search finds no posts for it, that link's address, to find the posts sharing it |
   | Front Pages, by topic | `www.reddit.com`, `news.ycombinator.com`, `lemmy.world`, `lobste.rs` and `public.api.bsky.app`, each only while that source is on | nothing about the page you are on, only the topics you picked. Signed in to Reddit or Hacker News, those requests arrive as your account |
   | Hypothes.is | `api.hypothes.is` | the URL of each page you visit, to find public annotations on it. No account, signed in or out |
   | *no source enabled* | none | nothing -- the script performs no lookup at all. Kind of weird to use it this way, but no judgements. |
+
+  When an equivalent article address is verified, each enabled source may also
+  receive that address in its normal lookup.
 
   Eleven sit outside that table because they are not lookups:
 
@@ -150,6 +154,18 @@ Worth stating plainly, because the permissions are broad by necessity:
   Before 1.6.15.2 every page had a stored value of its own, named
   `HNewhere:hn_cache:` followed by its address, and none was removed. Since
   1.6.17.2 the daily pass above deletes them.
+- **Equivalent-article checks keep a short-lived cache in the tab's memory.**
+  It holds up to 30 sets of addresses and short article passages, used to
+  recognize a repeat check for five minutes. Entries may remain in memory until
+  replaced, the tab closes, or you clear cached data; they are not saved to
+  userscript storage.
+- **Visited-article fingerprints stay in userscript storage.** To recognize
+  articles you have opened at different addresses, Backchannel keeps up to 100
+  addresses and SHA-256 hashes of short normalized passages, without saving the
+  passages themselves. A record is usable for one hour; expired records are
+  removed during a later identity lookup or the daily storage sweep. Clearing
+  cached data removes them too. Hashes can reveal known text by guessing, so
+  they should still be treated as reading history. Excluded pages are omitted.
 - **The notepad stays on the machine you wrote it on.** Notes live in your
   userscript manager's storage, keyed by page address or, on a PDF, by the
   document's fingerprint. Nothing is uploaded and no source is told they exist.
@@ -182,9 +198,10 @@ Worth stating plainly, because the permissions are broad by necessity:
   and 1.6.18.2 used a popup window. Article lists then try automatically on
   their first load; later refreshes start with Sync, or with a pull on a phone.
   The introduction's dismissal or confirmation is stored locally with the app's
-  data and survives cache cleanup. Pressing Sync or loading more replies can also
-  open the tab. Background page discovery opens no tab and can use cached
-  content or the existing archive fallback.
+  data and survives cache cleanup. Opening a Reddit item in Reader, opening the
+  Sidebar on a page, pressing Sync or loading more replies can also open the tab.
+  Background page discovery opens no tab and can use cached content or the
+  existing archive fallback.
   An internal `/api/me.json` check determines whether sign-in is needed; its
   account data stays in the Reddit tab. Only allowed public feed, post and
   comment fields return through userscript storage, with rate-limit metadata.
@@ -262,12 +279,16 @@ with its address as `<page>`.
 | Source | Request | What it carries | Arrives as you? |
 | --- | --- | --- | --- |
 | Hacker News | `GET hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=url&hitsPerPage=20&query=<page>` | `<page>` | No, and no identifier of any kind |
+| Hacker News (equivalent articles) | `GET hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=title&hitsPerPage=30&query=<title words>` | up to three words from the article's title, only while Hacker News is on | No, and no identifier of any kind |
+| Lemmy (equivalent articles) | `GET lemmy.world/api/v3/search?q=<title words>&type_=Posts&listing_type=All&limit=30` | up to three words from the article's title, only while Lemmy is on | No |
+| Reddit (equivalent articles) | `GET www.reddit.com/search.json?type=link&limit=25&q=title:<title words>` | up to three words from the article's title, only while Reddit is on and a live read is available | Direct requests depend on the browser and userscript manager, as in the Reddit row |
+| Equivalent article comparison | browser `GET` to candidate URLs returned by that title search | the candidate URL; a cross-origin request can include the current page's origin. No referrer, cookies, or redirects; requires CORS for cross-origin responses | No |
 | Hacker News | `GET hacker-news.firebaseio.com/v0/item/<id>` | story and comment ids it already has | No |
 | Hacker News | `GET news.ycombinator.com/item?id=<id>` | a thread id, to read scores and flags | Yes, if you are signed in there |
 | Hacker News (vote, reply, submit) | popup window on `news.ycombinator.com` | the one story or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
 | Reddit | `GET www.reddit.com/search.json?type=link&limit=25&q=<page>` | `<page>` | May carry Reddit session or device cookies when your browser and userscript manager permit them. A signed-in Reddit tab does not guarantee that these requests share its session |
 | Reddit (fallback) | `GET arctic-shift.photon-reddit.com<path>` | the same lookup, against an archive mirror | No identifier, no session |
-| Reddit (Safari Userscripts reads) | a background tab on `www.reddit.com`, opened and closed by the extension, using `GET /api/me.json` internally, then supported listing, lookup, thread and more-replies endpoints | the topics, article address or thread requested by initial article-list loading, Sync, a pull on a phone or loading more replies, after confirming the introduction; no tab for background page discovery | Yes, using the existing Reddit session. Account details stay in the Reddit tab; only allowed public fields and rate-limit metadata return |
+| Reddit (Safari Userscripts reads) | a background tab on `www.reddit.com`, opened and closed by the extension, using `GET /api/me.json` internally, then supported listing, lookup, thread and more-replies endpoints | the topics, article address or thread requested by initial article-list loading, opening a Reddit item or Sidebar, Sync, a pull on a phone or loading more replies, after confirming the introduction; no tab for background page discovery | Yes, using the existing Reddit session. Account details stay in the Reddit tab; only allowed public fields and rate-limit metadata return |
 | Reddit (vote, reply, submit) | popup window on `old.reddit.com` | the one post or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
 | Bluesky | `GET constellation.microcosm.blue/links/all?target=<page>` | `<page>`, plus a `User-Agent` naming Backchannel and its version | No |
 | Bluesky | `GET constellation.microcosm.blue/xrpc/blue.microcosm.links.getBacklinks?subject=<page>&source=...&limit=100` | `<page>` | No |

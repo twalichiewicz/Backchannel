@@ -64,12 +64,17 @@ It runs on every page, so this matters: there's no backend, no analytics, and no
 telemetry. Which hosts it contacts depends on which sources you switch on.
 
 - Hacker News talks to the HN API, Algolia search, and news.ycombinator.com, with
-no persistent identifier attached.
-- Reddit sends the pages you visit to reddit.com, and if you're
+no persistent identifier attached. To find discussions under other addresses,
+Algolia may also receive words from the article title. Backchannel may fetch
+candidate pages without cookies or a referrer to compare their text, where the
+candidate site permits it.
+- Reddit sends the pages you visit and, when searching for equivalent articles,
+up to three words from their titles to reddit.com, and if you're
 signed in to Reddit, those requests arrive as your account. Signed out, they carry a long-lived device identifier
 instead. In Safari's Userscripts extension, live reads happen in a temporary
-Reddit window when your article list loads, you press Sync, or you load more
-replies, using your Reddit login after you confirm the introduction.
+Reddit tab when your article list loads, you open a Reddit item in Reader,
+you open the Sidebar on a page, you press Sync, or you load more replies,
+using your Reddit login after you confirm the introduction.
 Voting and replying go through that same session, and only when you press something.
 - Bluesky sends the pages you visit to Constellation, an independent index of
 Bluesky links, not to Bluesky. Bluesky is asked only about the posts
@@ -85,9 +90,18 @@ searchable, so it finds a slice of the fediverse rather than all of it. The fron
 page asks mastodon.social what it's currently linking to, which tells it nothing
 about you. No account, signed in or out.
 - Lemmy sends the pages you visit to lemmy.world, a large instance whose
-federation reaches across the wider network. No account, signed in or out.
+federation reaches across the wider network. Lemmy may also receive words
+from the article title to find equivalent articles, using the same anonymous
+candidate-page comparisons described above. No account, signed in or out.
 - Hypothes.is sends the pages you visit to its API, to find the public
 annotations people have left on them. No account, signed in or out.
+
+When Backchannel verifies another address for an article, it also searches that
+address across your enabled sources. It can recognize copies you visit within
+an hour using locally stored passage fingerprints. This helps even when an
+external search cannot find a copy; it does not guarantee finding an unvisited
+copy. The cache contains addresses and hashes, not article text, and can be
+cleared in Settings.
 
 Webmail, banking, auth flows, and cloud consoles are excluded outright.
 

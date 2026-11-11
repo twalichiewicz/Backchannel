@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.18.4
+// @version      1.6.18.5
 // @license      GPL-3.0-or-later
 // @copyright    2026 Triglavis LLC
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -5452,7 +5452,11 @@ ${
 
 		if (/^\/r\/[a-z0-9_+]+\.json$/i.test(url.pathname)) allowed = only("limit") && limit(100);
 		else if (url.pathname === "/api/info.json") allowed = only("url", "id") && keys.length === 1 && (article(params.get("url")) || /^t3_[a-z0-9]+$/i.test(params.get("id") || ""));
-		else if (url.pathname === "/search.json") allowed = only("type", "limit", "q") && params.get("type") === "link" && limit(25) && params.get("q")?.startsWith("url:") && article(params.get("q").slice(4));
+		else if (url.pathname === "/search.json") {
+			const query = params.get("q") || "";
+			const title = query.length <= 200 && /^title:[\p{L}\p{N}]{2,}(?: [\p{L}\p{N}]{2,}){2}$/u.test(query);
+			allowed = only("type", "limit", "q") && params.get("type") === "link" && limit(25) && (query.startsWith("url:") && article(query.slice(4)) || title);
+		}
 		else if (/^\/(?:r\/[a-z0-9_]+\/)?comments\/[a-z0-9]+(?:\/[^/?#]+)?\/?\.json$/i.test(url.pathname)) allowed = only("limit", "sort") && limit(500) && (!params.has("sort") || params.get("sort") === "confidence");
 		else if (url.pathname === "/api/morechildren.json") allowed = only("api_type", "link_id", "sort", "children") && params.get("api_type") === "json" && /^t3_[a-z0-9]+$/i.test(params.get("link_id") || "") && (!params.has("sort") || params.get("sort") === "confidence") && /^[a-z0-9]+(?:,[a-z0-9]+)*$/i.test(params.get("children") || "") && params.get("children").split(",").length <= 100;
 		return allowed ? url.pathname + url.search : null;
@@ -5492,6 +5496,8 @@ ${
 	let redditReadWaitUntil = 0;
 	let redditReadNoticeScheduled = false;
 	let redditReadNoticeShown = false;
+	let redditReadNoticeAccepted = false;
+	let redditReadPendingPage = "";
 	let redditReadInitialAttempted = false;
 	let syncRunId = 0;
 	const REDDIT_READ_NOTICE_KEY = "HNewhere:reddit_read_window_notice";
@@ -5540,6 +5546,7 @@ ${
 			modal.remove();
 			for (const [element, inert] of behind) element.inert = inert;
 			if (returnTo?.isConnected) returnTo.focus({ preventScroll: true });
+			redditReadNoticeAccepted = true;
 			return save(REDDIT_READ_NOTICE_KEY, 2);
 		};
 		const confirm = modal.querySelector(".reddit-read-confirm");
@@ -5574,10 +5581,13 @@ ${
 	async function refreshRedditReadViews(ui) {
 		if (appState) {
 			return Promise.allSettled([renderAppList({ force: true }), appState.open ? openAppDiscussion(appState.open.row) : Promise.resolve()]);
+		} else if (redditReadPendingPage && redditReadPendingPage === normalizeURL(pageAddress())) {
+			redditReadPendingPage = "";
+			return refreshRedditPage(ui);
 		} else if (isBrowsing(ui)) {
 			return renderBrowseView(ui, { force: true });
 		} else {
-			const found = await discoverAll(pageAddresses(), await loadSettings());
+			const found = await discoverAll(currentArticleSubject(), await loadSettings());
 
 			if (sidebarUI !== ui) return;
 			if (found.length) {
@@ -5721,6 +5731,21 @@ ${
 				if (!batch.users) await finishRedditReadBatch(batch);
 			}
 		})();
+	}
+
+	function beginRedditDiscussionRead() {
+		let release;
+		let released = false;
+		const ready = new Promise((resolve) => { release = resolve; });
+		const running = runRedditReadAction(async () => {
+			const task = await ready;
+			if (task) return task();
+		});
+		running.catch(console.error);
+		return {
+			run(task) { if (!released) { released = true; release(task); } return running; },
+			cancel() { if (!released) { released = true; release(null); } return running; },
+		};
 	}
 
 	async function requestRedditReadWindow(path, batch) {
@@ -8053,11 +8078,245 @@ button {
 		});
 	}
 
-	async function discoverAll(urls, settings, { force = false } = {}) {
-		const targets = [...new Set([].concat(urls).filter(Boolean))];
-		const results = await Promise.all(
-			enabledSources(settings).flatMap((source) =>
-				targets.map((target) =>
+	// #region hnewhere-test-export
+	function articleMatchText(value) {
+		return String(value || "").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+	}
+
+	function articleMatchRoot(doc) {
+		return doc?.querySelector?.('article, [itemprop="articleBody"], .article-body, .post-content') ||
+			doc?.querySelector?.('main, [role="main"]') || null;
+	}
+
+	function articleMatchSamples(doc) {
+		return articleSamplesFromRoot(articleMatchRoot(doc));
+	}
+
+	function articleSamplesFromRoot(root) {
+		if (!root) return [];
+		return [...root.querySelectorAll("p")]
+			.map((node) => articleMatchText(node.textContent))
+			.filter((text) => text.length >= 120)
+			.map((text) => text.slice(0, 120))
+			.filter((text, index, all) => all.indexOf(text) === index)
+			.slice(0, 12);
+	}
+
+	function articleContentsMatch(samples, doc) {
+		if (samples.length < 2) return false;
+		const text = articleMatchText(articleMatchRoot(doc)?.textContent || "");
+		const count = samples.filter((sample) => text.includes(sample)).length;
+		return articleEvidenceMatches(count, samples.length, articleMatchSamples(doc).length);
+	}
+
+	function articleEvidenceMatches(shared, left, right) {
+		return shared >= 2 && shared >= Math.ceil(Math.max(left, right) / 2);
+	}
+
+	function articleTitleQuery(title) {
+		if (!title || title.length < 15 || title.trim().split(/\s+/).length < 3) return "";
+		const words = articleMatchText(title).split(" ").filter((word) => word.length >= 2 && !/^(the|and|for|with|from|this|that|into|over|under|how|why|what|are|was|its|not|but|has|have|about|after|before|your|our|you|will)$/.test(word));
+		const query = words.length >= 3 ? words.slice(0, 3).join(" ") : "";
+		return query.length <= 194 ? query : "";
+	}
+
+	function articleIdentitySubject({ url = "", canonical = "", discourse = false, addresses = [], title = "", samples = [] } = {}) {
+		const evidence = [];
+		const add = (value, reason) => {
+			const address = String(value || "");
+			if (/^https?:\/\//i.test(address) && !evidence.some((entry) => entry.url === address)) evidence.push({ url: address, evidence: reason });
+		};
+		if (url) {
+			const primary = discourse ? discoursePageURL(url, canonical) : canonicalPageURL(url, canonical);
+			add(primary, primary === url ? "requested" : "canonical");
+			try { if (new URL(primary).pathname !== new URL(url).pathname) add(url, "requested"); } catch {}
+			const original = archivedOriginalURL(url, canonical);
+			if (original && !evidence.some((entry) => sameURL(entry.url, original))) add(original, "archive-original");
+		}
+		for (const address of Array.isArray(addresses) ? addresses : []) add(address, evidence.length ? "provided" : "requested");
+		const passages = (Array.isArray(samples) ? samples : [])
+			.slice(0, 12)
+			.filter((value) => typeof value === "string")
+			.map((value) => articleMatchText(value.slice(0, 1000)))
+			.filter((value) => value.length >= 120)
+			.map((value) => value.slice(0, 120));
+
+		return { addresses: evidence.map((entry) => entry.url), evidence, title: String(title || "").trim().slice(0, 500), samples: [...new Set(passages)] };
+	}
+	// #endregion hnewhere-test-export
+
+	function settleWithin(promise, ms, fallback) {
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => resolve(fallback), ms);
+			promise.then((value) => { clearTimeout(timer); resolve(value); }, () => { clearTimeout(timer); resolve(fallback); });
+		});
+	}
+
+	async function requestComparablePage(url) {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), 2500);
+		try {
+			const response = await fetch(url, {
+				credentials: "omit",
+				mode: "cors",
+				redirect: "error",
+				referrerPolicy: "no-referrer",
+				signal: controller.signal,
+			});
+			const type = response.headers.get("content-type") || "";
+			if (!response.ok || !/html|xhtml/i.test(type) || Number(response.headers.get("content-length")) > 3000000) return "";
+			if (!response.body) return "";
+			const reader = response.body.getReader();
+			const decoder = new TextDecoder();
+			let size = 0;
+			let text = "";
+			for (;;) {
+				const part = await reader.read();
+				if (part.done) break;
+				size += part.value.byteLength;
+				if (size > 3000000) { controller.abort(); return ""; }
+				text += decoder.decode(part.value, { stream: true });
+			}
+			return text + decoder.decode();
+		} catch {
+			return "";
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	const ARTICLE_IDENTITY_PREFIX = "HNewhere:article_identity:";
+	const ARTICLE_IDENTITY_MAX = 100;
+	const ARTICLE_IDENTITY_AGE = 3600000;
+
+	function mergeIdentityAddresses(...groups) {
+		const seen = new Set();
+		return groups.flat().filter((entry) => {
+			const key = normalizeURL(entry.url);
+			if (!key || seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
+	}
+
+	async function observedArticleIdentity(subject) {
+		if (!globalThis.crypto?.subtle) return [];
+		const keys = await listKeys();
+		if (!keys) return [];
+		const digest = async (value) => {
+			const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+			return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+		};
+		try {
+			let fingerprints = await Promise.all(subject.samples.map(digest));
+			const now = Date.now();
+			const records = await Promise.all(keys.filter((key) => key.startsWith(ARTICLE_IDENTITY_PREFIX)).map(async (key) => ({ key, value: await load(key, null) })));
+			const valid = [];
+			const stale = [];
+			for (const record of records) {
+				const { value, key } = record;
+				if (!value || typeof value.url !== "string" || isHiddenSite(value.url) || !Number.isFinite(value.timestamp) || value.timestamp > now || now - value.timestamp >= ARTICLE_IDENTITY_AGE || !Array.isArray(value.fingerprints) || value.fingerprints.length < 2 || value.fingerprints.length > 12 || !value.fingerprints.every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash))) stale.push(key);
+				else valid.push(record);
+			}
+			valid.sort((a, b) => b.value.timestamp - a.value.timestamp);
+			for (const record of valid.splice(ARTICLE_IDENTITY_MAX - Math.min(subject.samples.length >= 2 ? subject.addresses.length : 0, 9))) stale.push(record.key);
+			if (stale.length) await forgetMany(stale);
+			if (fingerprints.length < 2) {
+				const targets = new Set(subject.addresses.map(normalizeURL));
+				fingerprints = valid.find(({ value }) => targets.has(normalizeURL(value.url)))?.value.fingerprints || [];
+			}
+			if (fingerprints.length < 2) return [];
+			const targets = new Set(subject.addresses.map(normalizeURL));
+			const matches = valid.filter(({ value }) => {
+				if (targets.has(normalizeURL(value.url))) return false;
+				const shared = new Set(value.fingerprints.filter((hash) => fingerprints.includes(hash))).size;
+				return articleEvidenceMatches(shared, fingerprints.length, value.fingerprints.length);
+			}).slice(0, 8).map(({ value }) => ({ url: value.url, evidence: "observed-content" }));
+			for (const url of subject.samples.length >= 2 ? subject.addresses.slice(0, 9) : []) {
+				let parsed;
+				try { parsed = new URL(url); } catch { continue; }
+				if (isHiddenSite(url) || parsed.username || parsed.password) continue;
+				const key = ARTICLE_IDENTITY_PREFIX + await digest(normalizeURL(url));
+				await save(key, { url, fingerprints, timestamp: now });
+			}
+			return matches;
+		} catch {
+			return [];
+		}
+	}
+
+	const relatedArticleCache = new Map();
+
+	async function resolveArticleIdentity(subject, { force = false, sources = [] } = {}) {
+		const { addresses: targets, title, samples } = subject;
+		const primary = mergeIdentityAddresses(subject.evidence.map((entry) => ({ ...entry })), await observedArticleIdentity(subject));
+		const incomplete = (reason) => ({ addresses: primary, incomplete: [reason] });
+		if (!sources.length) return incomplete("no-candidate-source");
+		const query = articleTitleQuery(title);
+		if (!query) return incomplete("insufficient-title");
+		const cacheKey = JSON.stringify([sources, targets.map(normalizeURL).sort(), query, samples]);
+		const cached = relatedArticleCache.get(cacheKey);
+		if (!force && cached && Date.now() - cached.timestamp < 300000) return { addresses: mergeIdentityAddresses(primary, cached.aliases.map((entry) => ({ ...entry }))), incomplete: [] };
+
+		const results = await Promise.all(sources.map(async (source) => {
+			const search = source === "lemmy"
+				? lemmyJSON(`https://lemmy.world/api/v3/search?q=${encodeURIComponent(query)}&type_=Posts&listing_type=All&limit=30`)
+				: source === "reddit"
+					? redditFetch("/search.json?type=link&limit=25&q=" + encodeURIComponent("title:" + query), null)
+					: request("https://hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=title&hitsPerPage=30&query=" + encodeURIComponent(query));
+			const result = await settleWithin(search, 2500, null);
+			const hits = source === "lemmy" ? (Array.isArray(result?.posts) ? result.posts.map((view) => view?.post) : null)
+				: source === "reddit" ? (Array.isArray(result?.json?.data?.children) ? result.json.data.children.map((child) => child?.data) : null)
+				: result?.hits;
+			return Array.isArray(hits) ? hits : null;
+		}));
+		if (results.every((hits) => !hits)) return incomplete("candidate-search-unavailable");
+		const seen = new Set(primary.map((entry) => normalizeURL(entry.url)));
+		const candidates = [];
+		const hits = [];
+		for (let i = 0; i < 30; i++) for (const rows of results) if (rows?.[i]) hits.push(rows[i]);
+		for (const hit of hits) {
+			const url = String(hit?.url || "");
+			const key = normalizeURL(url);
+			if (!key || seen.has(key) || isHiddenSite(url)) continue;
+			seen.add(key);
+			candidates.push(url);
+			if (candidates.length >= 8) break;
+		}
+
+		const matches = await Promise.all(candidates.map(async (url) => {
+			const original = archivedOriginalURL(url, "");
+			if (original) return targets.some((target) => sameURL(target, original)) ? { url, evidence: "archive-url" } : null;
+			if (!samples.length && !isArchiveHost(new URL(url).hostname)) return { incomplete: true };
+			const text = await requestComparablePage(url);
+			if (!text) return { incomplete: true };
+			const doc = new DOMParser().parseFromString(text, "text/html");
+			const savedFrom = doc.querySelector('input[name="q"]')?.value || "";
+			const hint = doc.querySelector('link[rel~="canonical" i]')?.getAttribute("href") || doc.querySelector('meta[property="og:url" i]')?.content || "";
+			const recovered = archivedOriginalURL(url, savedFrom) || archivedOriginalURL(url, hint);
+			if (recovered && targets.some((target) => sameURL(target, recovered))) return { url, evidence: "archive-metadata" };
+			if (!samples.length) return { incomplete: true };
+			return articleContentsMatch(samples, doc) ? { url, evidence: "content" } : null;
+		}));
+		const addresses = mergeIdentityAddresses(primary, matches.filter((entry) => entry?.url));
+		const gaps = [];
+		if (results.some((hits) => !hits)) gaps.push("candidate-search-unavailable");
+		if (matches.some((entry) => entry?.incomplete)) gaps.push("candidate-unverifiable");
+		if (!gaps.length) {
+			relatedArticleCache.delete(cacheKey);
+			relatedArticleCache.set(cacheKey, { timestamp: Date.now(), aliases: addresses.slice(primary.length) });
+			while (relatedArticleCache.size > 30) relatedArticleCache.delete(relatedArticleCache.keys().next().value);
+		}
+		return { addresses, incomplete: gaps };
+	}
+
+	async function discoverAll(subject, settings, { force = false } = {}) {
+		const targets = subject.addresses;
+		const sources = enabledSources(settings);
+		const candidateSources = sources.map((source) => source.id).filter((id) => id === "hn" || id === "lemmy" || id === "reddit");
+		const find = (addresses) => Promise.all(
+			sources.flatMap((source) =>
+				addresses.map((target) =>
 					discoverWithCeiling(
 						source.discover(target, { force }).catch((e) => {
 							console.error("Backchannel " + source.id + " discovery failed:", e);
@@ -8068,9 +8327,14 @@ button {
 				),
 			),
 		);
+		const identityRun = resolveArticleIdentity(subject, { force, sources: candidateSources });
+		const [results, identity] = await Promise.all([find(targets), identityRun]);
+		const exact = new Set(targets.map(normalizeURL));
+		const equivalents = identity.addresses.map((entry) => entry.url).filter((url) => !exact.has(normalizeURL(url)));
+		const extra = equivalents.length ? await find(equivalents) : [];
 
 		return disambiguateLabels(
-			dedupeDiscussions(results.flat().filter(Boolean)).sort(
+			dedupeDiscussions([...results, ...extra].flat().filter(Boolean)).sort(
 				compareStoriesByDiscussion,
 			),
 		);
@@ -8088,32 +8352,26 @@ button {
 		const marks = { ...(entry.marks || {}) };
 		let changed = false;
 		let answered = false;
+		const subject = articleIdentitySubject({ url: entry.url, title: entry.title || "" });
+		const identity = await resolveArticleIdentity(subject, { sources: [] });
+		const addresses = identity.addresses.slice(0, 9).map((item) => item.url);
 
 		for (const source of enabledSources(settings)) {
-			if (typeof source.probe !== "function") {
-				continue;
+			if (typeof source.probe !== "function") continue;
+			for (const address of addresses) {
+				const key = sameURL(address, entry.url) ? source.id : source.id + "@" + normalizeURL(address);
+				let result = null;
+				try {
+					result = await source.probe(address, { mark: marks[key], since: entry.addedAt });
+				} catch (error) {
+					console.error("Backchannel " + source.id + " probe failed:", error);
+				}
+				if (!result) continue;
+				answered = true;
+				marks[key] = result.mark;
+				changed = changed || result.changed;
 			}
-
-			let result = null;
-
-			try {
-				result = await source.probe(entry.url, {
-					mark: marks[source.id],
-					since: entry.addedAt,
-				});
-			} catch (error) {
-				console.error("Backchannel " + source.id + " probe failed:", error);
-			}
-
-			if (!result) {
-				continue;
-			}
-
-			answered = true;
-			marks[source.id] = result.mark;
-			changed = changed || result.changed;
 		}
-
 		return { marks, changed, answered };
 	}
 
@@ -8142,7 +8400,7 @@ button {
 			patches.set(entry.key, patch);
 
 			if (changed) {
-				const found = await discoverAll([entry.url], settings);
+				const found = await discoverAll(articleIdentitySubject({ url: entry.url, title: entry.title || "" }), settings);
 
 				if (found.length) {
 					patch.foundAt = now;
@@ -8793,9 +9051,10 @@ button {
 		try {
 			const u = new URL(url);
 			const keysToRemove = [];
+			const host = u.hostname.toLowerCase();
 
 			for (const key of u.searchParams.keys()) {
-				if (isTrackingParam(key)) {
+				if (isTrackingParam(key) || (/(^|\.)nytimes\.com$/.test(host) && /^(smid|unlocked_article_code)$/i.test(key))) {
 					keysToRemove.push(key);
 				}
 			}
@@ -8803,8 +9062,6 @@ button {
 			for (const key of keysToRemove) {
 				u.searchParams.delete(key);
 			}
-
-			const host = u.hostname.toLowerCase();
 
 			return (
 				(HOST_ALIASES.get(host) || host) +
@@ -8855,6 +9112,29 @@ button {
 		}
 
 		return out.href;
+	}
+
+	function discoursePageURL(href, hint) {
+		try {
+			const page = new URL(href);
+			const canonical = new URL(hint, href);
+			const topic = /^(\/t\/(?:[^/]+\/)?\d+)\/?$/.exec(canonical.pathname);
+			const post = /^(\/t\/(?:[^/]+\/)?\d+)\/\d+\/?$/.exec(page.pathname);
+
+			if (
+				!topic ||
+				!post ||
+				page.hostname.toLowerCase() !== canonical.hostname.toLowerCase() ||
+				topic[1] !== post[1]
+			) {
+				return canonicalPageURL(href, hint);
+			}
+
+			page.pathname = canonical.pathname;
+			return canonicalPageURL(page.href, canonical.href);
+		} catch {
+			return canonicalPageURL(href, hint);
+		}
 	}
 
 	const ARCHIVE_HOSTS = new Set([
@@ -8952,6 +9232,7 @@ button {
 					url: String(subject.url),
 					canonical: String(subject.canonical || ""),
 					title: String(subject.title || ""),
+					samples: articleIdentitySubject({ samples: subject.samples }).samples,
 				}
 			: null;
 	}
@@ -8970,6 +9251,12 @@ button {
 			return appSubject.canonical;
 		}
 
+		if (isArchiveHost(location.hostname) && location.hostname.toLowerCase().replace(/^www\./, "") !== "web.archive.org") {
+			const savedFrom = document.querySelector('input[name="q"]')?.value || "";
+
+			if (savedFrom && archivedOriginalURL(pageHref(), savedFrom)) return savedFrom;
+		}
+
 		return (
 			document.querySelector('link[rel~="canonical" i]')?.href ||
 			document.querySelector('meta[property="og:url" i]')?.content ||
@@ -8978,14 +9265,35 @@ button {
 	}
 
 	function pageAddress() {
-		return canonicalPageURL(pageHref(), canonicalHint());
+		return appSubject ? canonicalPageURL(pageHref(), canonicalHint()) : livePageAddress(pageHref());
+	}
+
+	function livePageAddress(href) {
+		const hint = document.querySelector('link[rel~="canonical" i]')?.href ||
+			document.querySelector('meta[property="og:url" i]')?.content || "";
+		const generator = document.querySelector('meta[name="generator" i]')?.content || "";
+
+		return /^discourse(?:\s|$)/i.test(generator)
+			? discoursePageURL(href, hint)
+			: canonicalPageURL(href, hint);
 	}
 
 	function pageAddresses() {
-		const here = pageAddress();
-		const original = archivedOriginalURL(pageHref(), canonicalHint());
+		return pageIdentitySubject().addresses;
+	}
 
-		return original && !sameURL(original, here) ? [here, original] : [here];
+	function pageIdentitySubject() {
+		const generator = !appSubject && document.querySelector('meta[name="generator" i]')?.content || "";
+		return articleIdentitySubject({ url: pageHref(), canonical: canonicalHint(), discourse: /^discourse(?:\s|$)/i.test(generator) });
+	}
+
+	function currentArticleSubject() {
+		const subject = pageIdentitySubject();
+		const detail = articleIdentitySubject({
+			title: appSubject ? appSubject.title : readerTitle(document, pageHref()),
+			samples: appSubject ? appSubject.samples : articleMatchSamples(document),
+		});
+		return { ...subject, title: detail.title, samples: detail.samples };
 	}
 
 	function documentReady() {
@@ -10572,6 +10880,8 @@ html[data-backchannel-installed] .chin {
 				}
 			} else if (value === null) {
 				stale.push(key);
+			} else if (key.startsWith(ARTICLE_IDENTITY_PREFIX)) {
+				if (!Number.isFinite(value?.timestamp) || value.timestamp > now || now - value.timestamp >= ARTICLE_IDENTITY_AGE) stale.push(key);
 			} else if (key.startsWith("HNewhere:comment_draft:")) {
 				if (value === "") {
 					stale.push(key);
@@ -10650,6 +10960,7 @@ html[data-backchannel-installed] .chin {
 				STORAGE.pendingFocus,
 				STORAGE.readOut,
 				STORAGE.last,
+				ARTICLE_IDENTITY_PREFIX,
 			];
 			const values = new Map();
 			const wanted = keys.filter((key) => key.startsWith("HNewhere:") || oldKeys.has(key));
@@ -10704,11 +11015,13 @@ html[data-backchannel-installed] .chin {
 			key.startsWith(FRONT_PAGE_CACHE_KEY) ||
 			key.startsWith(FRONT_PAGE_FEED_KEY) ||
 			key.startsWith(AUTH_PREFIX) ||
-			key.startsWith("HNewhere:hn_cache:")
+			key.startsWith("HNewhere:hn_cache:") ||
+			key.startsWith(ARTICLE_IDENTITY_PREFIX)
 		);
 	}
 
 	async function clearCache() {
+		relatedArticleCache.clear();
 		const listed = await listKeys();
 		const keys = listed
 			? []
@@ -15588,8 +15901,8 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		button.onclick = async () => {
 			if (button._dragController.wasMoved()) return;
 
-			await revealSidebar();
-			await refreshArticleAnnotations();
+			const opening = revealSidebar().then(() => refreshArticleAnnotations());
+			await refreshSidebarFromButton(opening);
 		};
 
 		return button;
@@ -15612,6 +15925,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 	}
 
 	let openRequestedWhileChecking = false;
+	let checkingRedditRead = null;
 
 	function takeRequestedOpen() {
 		const requested = openRequestedWhileChecking;
@@ -15636,6 +15950,28 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			}
 
 			openRequestedWhileChecking = true;
+			if (!usesRedditReadWindow() || !redditReadSourceOn || checkingRedditRead) return;
+			const page = normalizeURL(pageAddress());
+			if (!redditReadNoticeAccepted) {
+				redditReadPendingPage = page;
+				return;
+			}
+			const read = beginRedditDiscussionRead();
+			const held = { page, read, release(opened) {
+				if (!opened) return read.cancel();
+				return read.run(async () => {
+					await opened.opening;
+					if (sidebarUI && normalizeURL(pageAddress()) === page) await refreshRedditPage(sidebarUI);
+				});
+			} };
+			checkingRedditRead = held;
+			const timer = setTimeout(() => held.release(null), 30000);
+			const release = held.release;
+			held.release = (opened) => {
+				const running = release(opened);
+				running.finally(() => { clearTimeout(timer); if (checkingRedditRead === held) checkingRedditRead = null; }).catch(console.error);
+				return running;
+			};
 		};
 
 		startButtonSpinner(button);
@@ -15663,7 +15999,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			}
 
 			destroyFloatingButton(button);
-			openSidebar(stories).catch(console.error);
+			openSidebarFromButton(stories).catch(console.error);
 		};
 
 		return button;
@@ -15985,7 +16321,7 @@ ${frontPageChooserHTML()}
 			if (button._dragController.wasMoved()) return;
 
 			destroyFloatingButton(button);
-			openSidebar([], { browseOnly: true }).catch(console.error);
+			openSidebarFromButton([], { browseOnly: true }).catch(console.error);
 		};
 
 		return button;
@@ -25956,6 +26292,38 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		return openingRun;
 	}
 
+	function openSidebarFromButton(stories, options = {}) {
+		return refreshSidebarFromButton(openSidebar(stories, options));
+	}
+
+	function refreshSidebarFromButton(opening) {
+		if (!usesRedditReadWindow() || !redditReadSourceOn) return opening;
+		const page = normalizeURL(pageAddress());
+		if (!redditReadNoticeAccepted) {
+			redditReadPendingPage = page;
+			return opening;
+		}
+		return beginRedditDiscussionRead().run(async () => {
+			await opening;
+			const ui = sidebarUI;
+			if (ui && normalizeURL(pageAddress()) === page) await refreshRedditPage(ui);
+		});
+	}
+
+	async function refreshRedditPage(ui) {
+		const page = normalizeURL(pageAddress());
+		const generation = sidebarGeneration;
+		if (!isSidebarVisible()) return;
+		const found = await discoverAll(currentArticleSubject(), await loadSettings(), { force: true });
+		if (!found.length || sidebarUI !== ui || generation !== sidebarGeneration || normalizeURL(pageAddress()) !== page) return;
+		const previous = renderedFor === openPageKey() ? renderedDiscussions : [];
+		forgetThreads(previous);
+		sidebarHasDiscussion = true;
+		setBrowseMode(ui, false, { animate: false });
+		await renderDiscussions(disambiguateLabels(dedupeDiscussions([...found, ...previous]).sort(compareStoriesByDiscussion)), ui);
+		if (generation === sidebarGeneration) await refreshArticleAnnotations();
+	}
+
 	async function runOpenSidebar(stories, options = {}) {
 		try {
 			const generation = ++sidebarGeneration;
@@ -30787,7 +31155,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 				setSidebarStage(ui, "discussion");
 
-				const discussions = await discoverAll(pageAddresses(), settings);
+				const discussions = await discoverAll(currentArticleSubject(), settings);
 
 				if (generation !== sidebarGeneration) {
 					return;
@@ -30837,7 +31205,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 		setSidebarStage(ui, "discussion");
 
-		const found = await discoverAll(pageAddresses(), await loadSettings(), { force: true });
+		const found = await discoverAll(currentArticleSubject(), await loadSettings(), { force: true });
 
 		if (generation !== sidebarGeneration) {
 			return;
@@ -38652,24 +39020,32 @@ ${frontPageChooserHTML()}
 
 		markQueueArrival(url).catch(console.error);
 
-		const keys = rowDiscussionKeys(entry);
-		const previousSeen = keys.length ? await markManySeen(keys) : {};
+		const liveReddit = usesRedditReadWindow() && redditReadNoticeAccepted && redditReadSourceOn &&
+			Boolean(navigator.userActivation?.isActive) && [entry.story, ...(entry.also || [])].some((item) => item?.source === "reddit");
+		const liveRead = liveReddit ? beginRedditDiscussionRead() : null;
 
-		if (state.open !== opened) {
-			return;
-		}
+		try {
+			const keys = rowDiscussionKeys(entry);
+			const previousSeen = keys.length ? await markManySeen(keys) : {};
 
-		state.openSeen = previousSeen;
+			if (state.open !== opened) return;
 
-		if (keys.length) {
-			await refreshAppSeen();
+			state.openSeen = previousSeen;
 
-			if (state.open !== opened) {
-				return;
+			if (keys.length) {
+				await refreshAppSeen();
+
+				if (state.open !== opened) return;
 			}
-		}
 
-		await openAppDiscussion(entry, { focus, previousSeen });
+			if (liveRead) {
+				await liveRead.run(() => state.open === opened ? openAppDiscussion(entry, { focus, previousSeen }) : undefined);
+			} else {
+				await openAppDiscussion(entry, { focus, previousSeen });
+			}
+		} finally {
+			if (liveRead) liveRead.cancel();
+		}
 	}
 
 	function openAppURL(url) {
@@ -38764,7 +39140,7 @@ ${frontPageChooserHTML()}
 		try {
 			const settings = await loadSettings();
 			const threads = appRowThreads(row, settings);
-			const found = await discoverAll(pageAddresses(), settings);
+			const found = await discoverAll(currentArticleSubject(), settings);
 			const recovered = await recoverAppRowThreads(threads, found);
 			const loaded = await resolveDiscussions(dedupeDiscussions([...found, ...recovered]));
 
@@ -39684,6 +40060,12 @@ ${frontPageChooserHTML()}
 		scroller.innerHTML = '<slot name="reader"></slot>';
 		pane.appendChild(scroller);
 
+		const samples = articleSamplesFromRoot(body);
+		if (appState?.article === article && appState.open && appSubject && samples.length >= 2 && JSON.stringify(samples) !== JSON.stringify(appSubject.samples)) {
+			setAppSubject({ ...appSubject, samples });
+			refreshAppIdentity(article);
+		}
+
 	}
 
 	function showAppCard(article) {
@@ -39966,18 +40348,31 @@ ${frontPageChooserHTML()}
 		const url = String(data.url || article.url);
 		const title = String(data.title || "").trim();
 		const before = pageAddress();
+		const beforeSamples = JSON.stringify(appSubject?.samples || []);
+		const suppliedSamples = articleIdentitySubject({ samples: data.samples }).samples;
+		const samples = suppliedSamples.length >= 2 ? suppliedSamples : sameURL(url, appSubject?.url || "") ? appSubject?.samples : [];
 
-		setAppSubject({ url, canonical: String(data.canonical || ""), title: title || article.title });
+		setAppSubject({ url, canonical: String(data.canonical || ""), title: title || article.title, samples });
 		noteAppPreview(article.url, data.preview);
 
 		if (data.look) {
 			rememberLook(article.url, data.look).catch(console.error);
 		}
 
-		if (appState.open && !sameURL(pageAddress(), before)) {
+		if (appState.open && (!sameURL(pageAddress(), before) || (appSubject.samples.length >= 2 && JSON.stringify(appSubject.samples) !== beforeSamples))) {
 			appState.open.url = url;
-			openAppDiscussion(appState.open.row).catch(console.error);
+			refreshAppIdentity(article);
 		}
+	}
+
+	function refreshAppIdentity(article) {
+		if (appState?.article !== article || !appState.open) return;
+		const row = appState.open.row;
+		const refresh = () => appState?.article === article && appState.open?.row === row ? openAppDiscussion(row) : undefined;
+		const pending = usesRedditReadWindow() && redditReadBatch && !redditReadBatch.closing
+			? runRedditReadAction(refresh)
+			: Promise.resolve().then(refresh);
+		pending.catch(console.error);
 	}
 
 	function onAppMessage(event) {
@@ -40851,6 +41246,7 @@ ${frontPageChooserHTML()}
 					type: "hi",
 					url: location.href,
 					canonical: canonicalHint(),
+					samples: articleMatchSamples(document),
 					preview: document.querySelector('meta[property="og:image"], meta[name="twitter:image"]')?.getAttribute("content") || "",
 					look: pageLook(document),
 					title: pageTitle(),
@@ -44159,6 +44555,9 @@ ${frontPageChooserHTML()}
 
 	async function teardownForNavigation() {
 		sidebarGeneration++;
+		redditReadPendingPage = "";
+		checkingRedditRead?.release(null);
+		checkingRedditRead = null;
 
 		if (openingRun) {
 			await openingRun.catch(() => {});
@@ -44187,7 +44586,7 @@ ${frontPageChooserHTML()}
 		softNavigationWatched = true;
 
 		let currentHref = location.href;
-		let currentURL = normalizeURL(currentHref);
+		let currentURL = normalizeURL(livePageAddress(currentHref));
 		let timer = null;
 		let queue = Promise.resolve();
 
@@ -44198,7 +44597,7 @@ ${frontPageChooserHTML()}
 
 			currentHref = location.href;
 
-			const nextURL = normalizeURL(currentHref);
+			const nextURL = normalizeURL(livePageAddress(currentHref));
 
 			if (nextURL === currentURL) {
 				return;
@@ -44249,6 +44648,7 @@ ${frontPageChooserHTML()}
 
 	async function init() {
 		if (await dispatchRedditReadWindow()) return;
+		redditReadNoticeAccepted = Boolean(await load(REDDIT_READ_NOTICE_KEY, false));
 		await seedSources();
 		await migrateStorage();
 		await migrateSourceKeys();
@@ -44376,7 +44776,7 @@ ${frontPageChooserHTML()}
 			await forget(STORAGE.last);
 		}
 
-		const found = await discoverAll(pageAddresses(), settings);
+		const found = await discoverAll(currentArticleSubject(), settings);
 
 		scheduleCollectedChecks(settings);
 
@@ -44394,7 +44794,9 @@ ${frontPageChooserHTML()}
 
 			if (requestedOpen || arrivedForComments) {
 				destroyFloatingButton(document.getElementById(BUTTON_PENDING_ID));
-				await openSidebar(stories, { arrival });
+				const opening = openSidebar(stories, { arrival });
+				if (requestedOpen && checkingRedditRead) checkingRedditRead.release({ opening });
+				await opening;
 				return;
 			}
 
@@ -44414,7 +44816,9 @@ ${frontPageChooserHTML()}
 
 		if (requestedOpen || arrivedForComments) {
 			destroyFloatingButton(pendingButton);
-			await openSidebar([], { browseOnly: true });
+			const opening = openSidebar([], { browseOnly: true });
+			if (requestedOpen && checkingRedditRead) checkingRedditRead.release({ opening });
+			await opening;
 			return;
 		}
 
