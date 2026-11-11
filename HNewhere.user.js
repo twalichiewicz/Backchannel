@@ -4717,7 +4717,7 @@
 				entries.push({
 					key,
 					discussionKey: group.discussionKey,
-					position: blendPosition(index, total) / weight,
+					position: (index + 1) / weight,
 					createdAt,
 					unread: isNewComment({ createdAt }, group.seenTime || 0),
 					live,
