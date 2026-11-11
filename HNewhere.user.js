@@ -17614,15 +17614,19 @@ header > .settings-panel {
 	text-transform:uppercase;
 }
 
-.source-menu-option {
-	align-items:center;
+.source-menu-entry {
 	padding:3px 4px;
 	border-radius:4px;
 	cursor:pointer;
 }
 
-.source-menu-option + .source-menu-option {
+.source-menu-entry + .source-menu-entry {
 	margin-top:2px;
+}
+
+.source-menu-option {
+	align-items:center;
+	cursor:pointer;
 }
 
 .source-menu-option input[type="radio"] {
@@ -17680,7 +17684,7 @@ header > .settings-panel {
 }
 
 @media (hover: hover) {
-	.source-menu-option:hover {
+	.source-menu-entry:hover {
 		background:var(--hover-tint);
 	}
 }
@@ -25648,10 +25652,10 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 	function sourceMenuHTML(stories) {
 		const name = `source-menu-${(sourceMenuSeq += 1)}`;
 		const option = (key, about, story = null) => `
-<label class="settings-option source-menu-option"${key ? ` data-discussion-key="${escapeHTML(key)}"` : ""}>${discussionChoiceHTML(
+<div class="source-menu-entry"><label class="settings-option source-menu-option"${key ? ` data-discussion-key="${escapeHTML(key)}"` : ""}>${discussionChoiceHTML(
 			`<input type="radio" name="${name}"${key ? "" : " checked"}>`,
 			{ ...about, count: null },
-		)}</label>${story ? discussionHintHTML(story, about.count) : ""}`;
+		)}</label>${story ? discussionHintHTML(story, about.count) : ""}</div>`;
 
 		return `<div class="source-menu hidden" id="source-menu" role="menu">
 <div class="choice-group">${option("", { label: "All sources" })}</div>
@@ -33499,19 +33503,22 @@ ${READER_LIST_CSS}
 	text-align:left;
 }
 
-#panel.app-docked .app-discussion-meta .source-menu-option {
-	gap:8px;
+#panel.app-docked .app-discussion-meta .source-menu-entry {
 	padding:0;
 	border-radius:0;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu-option {
+	gap:8px;
 	font-size:12px;
 }
 
-#panel.app-docked .app-discussion-meta .source-menu-option + .source-menu-option {
+#panel.app-docked .app-discussion-meta .source-menu-entry + .source-menu-entry {
 	margin-top:8px;
 }
 
 @media (hover: hover) {
-	#panel.app-docked .app-discussion-meta .source-menu-option:hover {
+	#panel.app-docked .app-discussion-meta .source-menu-entry:hover {
 		background:none;
 	}
 }
