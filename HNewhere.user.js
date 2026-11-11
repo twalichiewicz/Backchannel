@@ -36050,14 +36050,18 @@ ${settingsModalHTML()}
 			}
 		};
 		shadow.querySelector("#app-bar-view").onclick = () => setAppViewMenuOpen(shadow.querySelector("#app-view-menu").hidden);
-		shadow.addEventListener("pointerdown", (event) => {
+		const closeRowMenuOutside = (event) => {
 			const path = event.composedPath();
 			const rowMenu = shadow.querySelector("#app-row-menu");
 
 			if (!rowMenu.hidden && !path.includes(rowMenu) && !path.some((node) => node?.classList?.contains("browse-more") || node?.id === "app-list-heading-button")) {
 				closeAppRowMenu();
 			}
-		});
+		};
+
+		shadow.addEventListener("pointerdown", closeRowMenuOutside);
+		shadow.addEventListener("touchstart", closeRowMenuOutside, { passive: true });
+		shadow.addEventListener("click", closeRowMenuOutside, true);
 		shadow.querySelector("#app-bar-open").onclick = () => shadow.querySelector("#app-article-open").click();
 		shadow.querySelector("#app-bar-save").onclick = () => shadow.querySelector('#app-article-actions [data-item-action="save"]')?.click();
 		shadow.querySelector("#app-bar-like").onclick = () => shadow.querySelector("#app-article-actions .app-head-votes:not(.hidden) .app-head-thumb-up")?.click();
@@ -37075,6 +37079,8 @@ ${settingsModalHTML()}
 		if (was === stage || appState.moving) {
 			return;
 		}
+
+		closeAppRowMenu();
 
 		if (appIsPhone() && !prefersReducedMotion()) {
 			moveAppStage(was, stage);
@@ -38591,6 +38597,8 @@ ${frontPageChooserHTML()}
 
 		const key = normalizeURL(url) || url;
 		const entry = row || state.rowsByURL.get(key) || { story, also: [] };
+
+		closeAppRowMenu();
 
 		if (appIsPhone() && state.open?.key === key && state.article && !focus) {
 			setAppStage("article");
