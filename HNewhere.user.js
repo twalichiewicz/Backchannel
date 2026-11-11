@@ -3939,6 +3939,14 @@
 			}
 		}
 
+		const ranked = (a, b) => (byKey.get(b).score ?? 0) - (byKey.get(a).score ?? 0) || byKey.get(a).createdAt - byKey.get(b).createdAt;
+
+		rootKeys.sort(ranked);
+
+		for (const comment of byKey.values()) {
+			comment.replyKeys.sort(ranked);
+		}
+
 		return { rootKeys, byKey, hiddenCount: 0, rootMore: null };
 	}
 
