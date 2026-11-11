@@ -8,13 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
-## [Unreleased]
+## [1.6.18.4] — 2026-11-10
+
+### Fixed
+
+- On a phone, turning the device sideways and back keeps the open article
+  and its place instead of returning to the list.
+- The page no longer scrolls behind the Settings dialog, from the wheel, the
+  trackpad or the page keys.
+- The Check for updates ring and the Sync icon spin about their own centers
+  instead of wobbling.
+- Under Best, Reddit threads are fetched in Reddit's own Best order instead
+  of its Top order, discussions merge rank against rank so a small thread's
+  best comments are not buried beneath a large thread's middle, and a thread
+  served from the Reddit archive lists its comments score first.
+- In the discussions menu, the hover covers a source's comment count line as
+  well.
+- On a phone, Safari's bars take the list's color instead of the frame's
+  green, and the list heading's menu closes on any tap outside it and
+  whenever an article opens.
 
 ### Changed
 
+- The Sidebar's Sync is the header's sync icon on every view, spinning with a
+  Syncing… toast as in Reader; the strip's text sync link is gone.
+- Dropdown buttons stay pressed while their menu is open, and menus fade in
+  and out. The Sidebar's article (…) menu matches the other dropdowns.
+- The sync icon is redrawn with clear space between the arrows and larger,
+  sharper arrowheads.
+- The desktop Reader's article list matches the phone's and the Sidebar's,
+  with the row menu button at the pane head's size in place of the inline
+  links.
 - Backchannel is now licensed under the GNU General Public License version 3
   or later, with Triglavis LLC as the copyright holder. Releases through
   1.6.18.3 remain available under the MIT license.
+
+### Removed
+
+- Submitting a page to Hacker News or Reddit from the Sidebar, and the Submit
+  button in its header.
 
 ## [1.6.18.3] — 2026-11-09
 

@@ -11,8 +11,8 @@ fix ships as a new version that existing installs pick up automatically.
 | 1.6.18     | Yes       |
 | < 1.6.18   | No        |
 
-Your installed version is shown beside the word Settings, at the top of
-Settings.
+Your installed version is shown as the Installed row under Settings › General
+› Updates.
 
 ## Reporting a vulnerability
 
