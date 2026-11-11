@@ -13140,7 +13140,7 @@ html[data-backchannel-installed] .chin {
 	${meta}
 	</div>
 	</div>
-	${readerRow && !isWriting ? `<button class="browse-more" type="button" aria-label="More" aria-haspopup="menu"${options.readerRow ? ' aria-expanded="false"' : ""}>${MORE_ICON}</button>` : ""}
+	${readerRow && !isWriting ? `<button class="browse-more app-head-icon" type="button" aria-label="More" aria-haspopup="menu"${options.readerRow ? ' aria-expanded="false"' : ""}>${MORE_ICON}</button>` : ""}
 	`;
 
 		const more = row.querySelector(".browse-more");
@@ -34213,17 +34213,7 @@ header .item-action-link {
 	position:absolute;
 	top:50%;
 	right:4px;
-	align-items:center;
-	justify-content:center;
-	width:36px;
-	height:36px;
-	margin-top:-18px;
-	padding:0;
-	border:0;
-	border-radius:18px;
-	background:none;
-	color:var(--meta);
-	cursor:pointer;
+	margin-top:-12px;
 	-webkit-tap-highlight-color:transparent;
 }
 
@@ -34285,6 +34275,13 @@ header .item-action-link {
 	#app {
 		grid-template-columns:minmax(0, 1fr);
 		grid-template-rows:minmax(0, 1fr) auto;
+	}
+
+	#app-list-body .browse-more {
+		width:36px;
+		height:36px;
+		margin-top:-18px;
+		border-radius:18px;
 	}
 
 	.app-onboarding {
