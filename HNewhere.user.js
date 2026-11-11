@@ -32364,19 +32364,34 @@ ${SEARCH_CSS}
 	transform:translateY(-50%);
 	display:grid;
 	place-items:center;
-	width:36px;
-	height:36px;
-	padding:9px;
+	width:24px;
+	height:24px;
+	padding:0;
 	border:0;
-	border-radius:50%;
+	border-radius:5px;
 	background:none;
 	color:var(--meta);
 	cursor:pointer;
+	-webkit-tap-highlight-color:transparent;
 }
 
 .browse-home .browse-more svg {
-	width:18px;
-	height:18px;
+	width:16px;
+	height:16px;
+}
+
+@media (max-width: 700px) {
+	.browse-home .browse-more {
+		width:36px;
+		height:36px;
+		border-radius:18px;
+	}
+}
+
+.browse-home .browse-more:active,
+.browse-home .browse-more[aria-expanded="true"] {
+	background:var(--active-tint);
+	color:var(--text);
 }
 
 .browse-row-menu {
@@ -32403,9 +32418,19 @@ ${SEARCH_CSS}
 	text-decoration:none;
 }
 
-#browse-home-search-toggle:hover,
-.browse-home .browse-more:hover {
+#browse-home-search-toggle:hover {
 	background:var(--hover-tint);
+}
+
+@media (hover: hover) {
+	.browse-home .browse-more:hover {
+		background:var(--hover-tint);
+		color:var(--text);
+	}
+
+	.browse-home .browse-more[aria-expanded="true"]:hover {
+		background:linear-gradient(var(--hover-tint), var(--hover-tint)) var(--active-tint);
+	}
 }
 
 .browse-home-nav-row {
@@ -33726,7 +33751,7 @@ ${READER_LIST_CSS}
 	border-radius:2px;
 	background:var(--pressed-fill, none);
 	color:var(--pressed-knock, inherit);
-	font:700 6px/7px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	font:700 8px/9px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 	letter-spacing:0;
 }
 

@@ -20,6 +20,11 @@ use to detect updates, so every release bumps it.
 
 ### Fixed
 
+- The Reader's NEW control is easier to read while keeping its pressed state
+  and unread-comment sorting.
+- The Sidebar's article menu button now matches Reader on desktop and keeps
+  its larger touch size on phones. Its pressed state stays visible while the
+  menu is open.
 - NYT gift links and share links find discussions for the underlying article,
   including when it is read through an archive that identifies the original.
   Archive.today snapshots can identify it through their Saved from field.
