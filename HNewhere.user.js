@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.18.3
+// @version      1.6.18.4
 // @license      GPL-3.0-or-later
 // @copyright    2026 Triglavis LLC
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -487,14 +487,9 @@
 	})();
 
 	const ITEM_ACTION_BRIDGE_MESSAGE_SOURCE = "HNewhereVoteBridge";
-	const SUBMIT_BRIDGE_MESSAGE_SOURCE = "HNewhereSubmitBridge";
 	const COMMENT_BRIDGE_MESSAGE_SOURCE = "HNewhereCommentBridge";
 
-	const HN_TITLE_LIMIT = 80;
-	const REDDIT_TITLE_LIMIT = 300;
-
 	const ITEM_ACTION_BRIDGE_STORAGE_KEY = "hnewhere-vote-bridge";
-	const SUBMIT_BRIDGE_STORAGE_KEY = "hnewhere-submit-bridge";
 	const COMMENT_BRIDGE_STORAGE_KEY = "hnewhere-comment-bridge";
 	const RESUME_BRIDGE_STORAGE_KEY = "hnewhere-resume-bridge";
 
@@ -3220,7 +3215,7 @@
 		}
 
 		const IDLE = "Check for updates";
-		const CHECKING = '<svg class="settings-update-spinner" viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="4.6"/></svg><span class="settings-update-glimmer">Checking…</span>';
+		const CHECKING = '<svg class="settings-update-spinner" viewBox="0 0 12 12" aria-hidden="true"><g class="settings-update-spin"><circle cx="6" cy="6" r="4.6"/></g></svg><span class="settings-update-glimmer">Checking…</span>';
 		const LATEST = '<svg class="settings-update-tick" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.2 6.4 4.8 9 9.8 3.4"/></svg>You’re on the latest version';
 		const FAILED = "Couldn’t reach GitHub";
 		const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -3942,6 +3937,14 @@
 			} else {
 				rootKeys.push(comment.key);
 			}
+		}
+
+		const ranked = (a, b) => (byKey.get(b).score ?? 0) - (byKey.get(a).score ?? 0) || byKey.get(a).createdAt - byKey.get(b).createdAt;
+
+		rootKeys.sort(ranked);
+
+		for (const comment of byKey.values()) {
+			comment.replyKeys.sort(ranked);
 		}
 
 		return { rootKeys, byKey, hiddenCount: 0, rootMore: null };
@@ -4722,7 +4725,7 @@
 				entries.push({
 					key,
 					discussionKey: group.discussionKey,
-					position: blendPosition(index, total) / weight,
+					position: (index + 1) / weight,
 					createdAt,
 					unread: isNewComment({ createdAt }, group.seenTime || 0),
 					live,
@@ -5334,13 +5337,7 @@ ${
 			"Tech, startups and science",
 			"Long, threaded comment sections",
 		],
-		capabilities: { vote: true, reply: true, submit: true },
-
-		submitForm: {
-			titleLimit: HN_TITLE_LIMIT,
-			note: "Leave url blank to submit a question for discussion. If there is no url, text will appear at the top of the thread. If there is a url, text is optional.",
-			newestURL: HN_ORIGIN + "/newest",
-		},
+		capabilities: { vote: true, reply: true },
 
 		profileURL: (author) =>
 			"https://news.ycombinator.com/user?id=" + encodeURIComponent(author),
@@ -5456,8 +5453,8 @@ ${
 		if (/^\/r\/[a-z0-9_+]+\.json$/i.test(url.pathname)) allowed = only("limit") && limit(100);
 		else if (url.pathname === "/api/info.json") allowed = only("url", "id") && keys.length === 1 && (article(params.get("url")) || /^t3_[a-z0-9]+$/i.test(params.get("id") || ""));
 		else if (url.pathname === "/search.json") allowed = only("type", "limit", "q") && params.get("type") === "link" && limit(25) && params.get("q")?.startsWith("url:") && article(params.get("q").slice(4));
-		else if (/^\/(?:r\/[a-z0-9_]+\/)?comments\/[a-z0-9]+(?:\/[^/?#]+)?\/?\.json$/i.test(url.pathname)) allowed = only("limit", "sort") && limit(500) && (!params.has("sort") || params.get("sort") === "top");
-		else if (url.pathname === "/api/morechildren.json") allowed = only("api_type", "link_id", "sort", "children") && params.get("api_type") === "json" && /^t3_[a-z0-9]+$/i.test(params.get("link_id") || "") && (!params.has("sort") || params.get("sort") === "top") && /^[a-z0-9]+(?:,[a-z0-9]+)*$/i.test(params.get("children") || "") && params.get("children").split(",").length <= 100;
+		else if (/^\/(?:r\/[a-z0-9_]+\/)?comments\/[a-z0-9]+(?:\/[^/?#]+)?\/?\.json$/i.test(url.pathname)) allowed = only("limit", "sort") && limit(500) && (!params.has("sort") || params.get("sort") === "confidence");
+		else if (url.pathname === "/api/morechildren.json") allowed = only("api_type", "link_id", "sort", "children") && params.get("api_type") === "json" && /^t3_[a-z0-9]+$/i.test(params.get("link_id") || "") && (!params.has("sort") || params.get("sort") === "confidence") && /^[a-z0-9]+(?:,[a-z0-9]+)*$/i.test(params.get("children") || "") && params.get("children").split(",").length <= 100;
 		return allowed ? url.pathname + url.search : null;
 	}
 
@@ -6028,22 +6025,7 @@ ${
 			"Communities on almost any topic",
 			"Threaded comments with votes",
 		],
-		capabilities: { vote: true, reply: true, submit: true },
-
-		submitForm: {
-			titleLimit: REDDIT_TITLE_LIMIT,
-			note: "Choose the subreddit you want to post to. Leave url blank to post text instead of a link.",
-			fields: [
-				{
-					id: "subreddit",
-					label: "subreddit",
-					required: true,
-					placeholder: "r/somewhere",
-					spellcheck: false,
-				},
-			],
-			newestURL: "https://www.reddit.com/submit",
-		},
+		capabilities: { vote: true, reply: true },
 
 		profileURL: (author) =>
 			"https://www.reddit.com/user/" + encodeURIComponent(author) + "/",
@@ -6142,7 +6124,7 @@ ${
 		async loadThread(discussion) {
 			const result = await redditFetch(
 				discussion.permalink.replace("https://www.reddit.com", "") +
-					".json?limit=500&sort=top",
+					".json?limit=500&sort=confidence",
 				"/api/comments/search?limit=100&link_id=" +
 					encodeURIComponent(discussion.id),
 			);
@@ -6176,7 +6158,7 @@ ${
 					const result = await runRedditReadAction(() => redditFetch(
 						"/api/morechildren.json?api_type=json&link_id=t3_" +
 							encodeURIComponent(discussion.id) +
-							"&sort=top&children=" +
+							"&sort=confidence&children=" +
 							encodeURIComponent(batch.join(",")),
 						null,
 					));
@@ -6273,7 +6255,7 @@ ${
 			"Posts and replies that link the page",
 			"Short, social commentary",
 		],
-		capabilities: { vote: false, reply: false, submit: false },
+		capabilities: { vote: false, reply: false },
 
 		profileURL: (handle) => "https://bsky.app/profile/" + encodeURIComponent(handle),
 
@@ -6467,7 +6449,7 @@ ${
 			"Programming and computing",
 			"Small, focused comment threads",
 		],
-		capabilities: { vote: false, reply: false, submit: false },
+		capabilities: { vote: false, reply: false },
 
 		profileURL: (user) => "https://lobste.rs/~" + encodeURIComponent(user),
 
@@ -6568,7 +6550,7 @@ ${
 			"Wikipedia articles that link the page",
 			"Background and context, not comments",
 		],
-		capabilities: { vote: false, reply: false, submit: false },
+		capabilities: { vote: false, reply: false },
 
 		profileURL: (author) =>
 			"https://en.wikipedia.org/wiki/User:" + encodeURIComponent(author),
@@ -6700,7 +6682,7 @@ ${
 			"Public annotations on the page",
 			"Notes pinned to passages",
 		],
-		capabilities: { vote: false, reply: false, submit: false },
+		capabilities: { vote: false, reply: false },
 
 		profileURL: (author) =>
 			"https://hypothes.is/users/" + encodeURIComponent(author),
@@ -7889,7 +7871,7 @@ button {
 			"Posts from people who chose to be found",
 			"Federated social replies",
 		],
-		capabilities: { vote: false, reply: false, submit: false },
+		capabilities: { vote: false, reply: false },
 
 		profileURL: (handle) => {
 			const [user, host] = String(handle).split("@");
@@ -7994,7 +7976,7 @@ button {
 			"Federated communities, like Reddit",
 			"Threaded comments with votes",
 		],
-		capabilities: { vote: false, reply: false, submit: false },
+		capabilities: { vote: false, reply: false },
 
 		profileURL: (handle) => "https://lemmy.world/u/" + handle,
 
@@ -9686,7 +9668,19 @@ html[data-backchannel-installed] .chin {
 
 	const PAGE_CHROME_KEY = "backchannel:chrome";
 
-	function pageChromeColors() {
+	function pageChromeColors(host) {
+		if (appIsPhone()) {
+			const dark = host.classList.contains(DARK_CLASS);
+			const surface = (on) => {
+				host.classList.toggle(DARK_CLASS, on);
+				return getComputedStyle(host).getPropertyValue("--bg").trim();
+			};
+			const colors = { light: surface(false), dark: surface(true) };
+
+			host.classList.toggle(DARK_CLASS, dark);
+			return colors;
+		}
+
 		const override = accentOverridePalette();
 
 		return override
@@ -9715,7 +9709,7 @@ html[data-backchannel-installed] .chin {
 	}
 
 	function paintPageChrome(host) {
-		const color = getComputedStyle(host).backgroundColor;
+		const color = appIsPhone() ? getComputedStyle(host).getPropertyValue("--bg").trim() : getComputedStyle(host).backgroundColor;
 
 		if (!color || color === "rgba(0, 0, 0, 0)" || color === "transparent") {
 			return;
@@ -9726,7 +9720,7 @@ html[data-backchannel-installed] .chin {
 		document.querySelector('meta[name="theme-color"]')?.setAttribute("content", color);
 
 		try {
-			localStorage.setItem(PAGE_CHROME_KEY, JSON.stringify({ theme: themePreference, ...pageChromeColors() }));
+			localStorage.setItem(PAGE_CHROME_KEY, JSON.stringify({ theme: themePreference, ...pageChromeColors(host) }));
 		} catch {
 		}
 	}
@@ -9996,7 +9990,7 @@ html[data-backchannel-installed] .chin {
 			background: "#b8b8b8",
 			darkBackground: "#4a4a4a",
 			boxShadow: "0 1px 3px rgba(0,0,0,.18)",
-			title: "No discussion yet — click to submit this page",
+			title: "No discussion yet — click to open Backchannel",
 		},
 		setup: {
 			background: "#b8b8b8",
@@ -10435,10 +10429,6 @@ html[data-backchannel-installed] .chin {
 	}
 	// #endregion hnewhere-test-export
 
-	function suggestedSubmissionTitle() {
-		return pageTitle().slice(0, HN_TITLE_LIMIT);
-	}
-
 	// -------------------------
 	// Popup helpers
 	// -------------------------
@@ -10499,16 +10489,6 @@ html[data-backchannel-installed] .chin {
 		return /^https?:\/\//i.test(url) ? url : null;
 	}
 	// #endregion hnewhere-test-export
-
-	function submitURL(url, title) {
-		return (
-			HN_ORIGIN +
-			"/submitlink?u=" +
-			encodeURIComponent(url) +
-			"&t=" +
-			encodeURIComponent(title)
-		);
-	}
 
 	// -------------------------
 	// Bridge payloads
@@ -10832,14 +10812,6 @@ html[data-backchannel-installed] .chin {
 		}
 
 		return { ...payload, origin: staged.origin, voteURL: staged.voteURL };
-	}
-
-	function bindSubmitStage(payload, staged) {
-		if (staged?.kind !== "submit") {
-			return null;
-		}
-
-		return { ...payload, origin: staged.origin };
 	}
 
 	function bindCommentStage(payload, staged) {
@@ -12900,86 +12872,9 @@ html[data-backchannel-installed] .chin {
 		);
 	}
 
-	function isSubmitting(ui) {
-		return Boolean(
-			ui?.shadow?.querySelector("#panel")?.classList.contains("submitting"),
-		);
-	}
-
 	let discussionScrollTop = 0;
 
 	const VIEW_SWAP_FADE_MS = 160;
-
-	async function setSubmitMode(ui, on) {
-		const panel = ui?.shadow?.querySelector("#panel");
-		const view = ui?.shadow?.querySelector("#submit-view");
-
-		if (!panel || !view) {
-			return;
-		}
-
-		if (!on) {
-			panel.classList.remove("submitting");
-			view.replaceChildren();
-
-			return;
-		}
-
-		const settings = await loadSettings();
-		const targets = submitTargetsFor(settings);
-		const submitTarget = targets[0] ?? null;
-
-		view.innerHTML = submitFormHTML({
-			submitTarget,
-			targets,
-			message: submitTarget ? "" : unsubmittableMessage(settings),
-		});
-
-		panel.classList.add("submitting");
-		setWordmarkLocation(ui, "Submit");
-
-		wireSubmitForm(view, {
-			submitTarget,
-			targets,
-			onCancel: () => {
-				setSubmitMode(ui, false).catch(console.error);
-				setBrowseMode(ui, true);
-			},
-			onSubmit: async (fields, form) => {
-				const target = fields.target || submitTarget;
-				const result = await submitPageThroughBridge(target.id, fields, {
-					onInterim: (data) => {
-						if (data?.reason === "awaiting-reader") {
-							form.setStatus(
-								`Filled in on ${target.label}. Post it in the window that opened.`,
-							);
-						}
-					},
-				});
-
-				if (!result?.ok) {
-					form.setStatus(submitFailureMessage(result, target.label), {
-						error: true,
-					});
-
-					return false;
-				}
-
-				const seeURL = result.permalink || submittedFallbackURL(target);
-
-				form.setStatus(
-					seeURL
-						? `Submitted. <a href="${escapeHTML(seeURL)}" target="_blank" rel="noopener noreferrer">${
-								result.permalink ? "See the discussion" : "See it on " + escapeHTML(target.label)
-							}</a>`
-						: "Submitted.",
-					{ html: true },
-				);
-
-				return true;
-			},
-		});
-	}
 
 	function setBrowseMode(ui, on, options = {}) {
 		const panel = ui?.shadow?.querySelector("#panel");
@@ -13032,9 +12927,6 @@ html[data-backchannel-installed] .chin {
 						? "Back to choosing sources"
 						: "Back to this page's discussion"
 					: browseLabel();
-
-			panel.classList.remove("submitting");
-			ui?.shadow?.querySelector("#submit-view")?.replaceChildren();
 
 			if (!on) {
 				setWordmarkLocation(ui, sidebarHasDiscussion ? "Discussion" : "");
@@ -13256,7 +13148,7 @@ html[data-backchannel-installed] .chin {
 	${meta}
 	</div>
 	</div>
-	${readerRow && !isWriting ? `<button class="browse-more" type="button" aria-label="More" aria-haspopup="menu"${options.readerRow ? ' aria-expanded="false"' : ""}>${MORE_ICON}</button>` : ""}
+	${readerRow && !isWriting ? `<button class="browse-more app-head-icon" type="button" aria-label="More" aria-haspopup="menu"${options.readerRow ? ' aria-expanded="false"' : ""}>${MORE_ICON}</button>` : ""}
 	`;
 
 		const more = row.querySelector(".browse-more");
@@ -13359,6 +13251,7 @@ html[data-backchannel-installed] .chin {
 
 			for (const action of row.querySelectorAll(".story-meta button")) {
 				action.setAttribute("role", "menuitem");
+				action.classList.add("dropdown-item");
 				menu.append(action);
 				setActionLabel(action, action.textContent);
 			}
@@ -13376,15 +13269,6 @@ html[data-backchannel-installed] .chin {
 
 	function browseLabel() {
 		return frontPageAvailable ? "Front Pages and your queue" : "Your queue";
-	}
-
-	async function refreshSubmitAffordance(root) {
-		const button = root?.querySelector?.("#header-submit");
-
-		if (button) {
-			button.hidden =
-				!submitTargetFor(await loadSettings()) || sidebarHasDiscussion;
-		}
 	}
 
 	async function refreshBrowseAffordances(root) {
@@ -14762,7 +14646,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			text ||
 			(appState
 				? "No discussion found for this article yet."
-				: "No discussion found for this page yet. Minimize to submit it, or read something else.");
+				: "No discussion found for this page yet.");
 
 		body.appendChild(message);
 
@@ -15216,10 +15100,10 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 	function paintBrowseHome(ui) {
 		const state = ui.browseHome;
 		const view = state.view;
-		const markable = isBrowsing(ui) && !isSubmitting(ui) && !state.searchOpen && appViewIsFrontPage(view);
+		const markable = isBrowsing(ui) && !state.searchOpen && appViewIsFrontPage(view);
 
 		ui.shadow.querySelector("#browse-home-mark-read").hidden = !markable;
-		ui.shadow.querySelector("#browse-home-sync").hidden = !markable;
+		paintSidebarSyncButton(ui);
 
 		for (const button of ui.shadow.querySelectorAll(".browse-home-nav [data-browse-view]")) {
 			const matches = button.dataset.browseView === view || (button.dataset.browseView === "all" && (view.startsWith("source:") || view.startsWith("topic:")));
@@ -15451,14 +15335,27 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		shadow.querySelector("#browse-home-sync").onclick = async (event) => {
 			const button = event.currentTarget;
 
-			button.disabled = true;
+			if (button.classList.contains("is-syncing")) {
+				return;
+			}
+
+			button.classList.add("is-syncing");
+			button.setAttribute("aria-busy", "true");
+			showToast("Syncing…", { kind: "system", persist: true, loading: true });
+
 			try {
-				await runSync(() => renderBrowseView(ui, { force: true }));
+				await runSync(() => (isBrowsing(ui) ? renderBrowseView(ui, { force: true }) : Promise.resolve(ui.syncStatus?.onSync?.())));
 			} catch (error) {
 				console.error(error);
-			} finally {
-				button.disabled = false;
 			}
+
+			if (shadow.getElementById("toast")?.textContent === "Syncing…") {
+				showToast("");
+			}
+
+			await settleSyncSpin(button);
+			button.classList.remove("is-syncing");
+			button.removeAttribute("aria-busy");
 		};
 		shadow.querySelector("#browse-home-mark-read").onclick = () => markBrowseHomeRead(ui).catch(console.error);
 		list.addEventListener("click", (event) => {
@@ -15627,8 +15524,6 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			setWordmarkLocation(ui, "");
 		}
 
-		await refreshSubmitAffordance(ui.shadow);
-
 		if (!isCurrent()) return;
 
 		refreshQueueCount(ui.shadow).catch(console.error);
@@ -15772,441 +15667,6 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		};
 
 		return button;
-	}
-
-	// -------------------------
-	// Submit-to-HN button
-	// -------------------------
-
-	const openSubmitBridgePopup = createBridgeChannel(
-		SUBMIT_BRIDGE_MESSAGE_SOURCE,
-	);
-
-	function submitTargetsFor(settings) {
-		return enabledSourceIds(settings, registeredSourceIds())
-			.map(getSource)
-			.filter((source) => source?.capabilities.submit);
-	}
-
-	function submitTargetFor(settings) {
-		return submitTargetsFor(settings)[0] ?? null;
-	}
-
-	function submitFormFor(target) {
-		return target?.submitForm || {};
-	}
-
-	function submittedFallbackURL(target) {
-		return submitFormFor(target).newestURL || "";
-	}
-
-	function submitTitleLimit(target) {
-		return submitFormFor(target).titleLimit || HN_TITLE_LIMIT;
-	}
-
-	function submitExtraFields(target) {
-		return submitFormFor(target).fields || [];
-	}
-
-	function unsubmittableMessage(settings) {
-		const enabled = enabledSourceIds(settings, registeredSourceIds())
-			.map((id) => getSource(id)?.label)
-			.filter(Boolean);
-
-		const names =
-			enabled.length > 1
-				? enabled.slice(0, -1).join(", ") + " and " + enabled.at(-1)
-				: enabled[0] || "your sources";
-
-		return `Submitting to ${names} is not supported yet. Turn on a source that accepts submissions in Settings → Sources to post this page.`;
-	}
-
-	const SUBMIT_FORM_CSS = `
-.submit-title {
-	font-weight:600;
-	margin-bottom:8px;
-}
-
-.submit-note {
-	margin-top:8px;
-	color:var(--muted);
-	font-size:11px;
-}
-
-.submit-field + .submit-field {
-	margin-top:8px;
-}
-
-.submit-field label {
-	display:block;
-	color:var(--muted);
-	font-size:10px;
-	font-weight:700;
-	letter-spacing:.04em;
-	text-transform:uppercase;
-	margin-bottom:3px;
-}
-
-.submit-field-head {
-	display:flex;
-	align-items:baseline;
-	justify-content:space-between;
-	gap:8px;
-	margin-bottom:3px;
-}
-
-.submit-field-head label {
-	margin-bottom:0;
-}
-
-.submit-field input,
-.submit-field textarea {
-	width:100%;
-	box-sizing:border-box;
-	font:13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-	padding:5px 6px;
-	border:1px solid var(--field-border);
-	border-radius:4px;
-	background:var(--field-bg);
-	color:var(--field-text);
-}
-
-.submit-field textarea {
-	min-height:56px;
-	resize:vertical;
-	white-space:pre-wrap;
-}
-
-.submit-field input:focus,
-.submit-field textarea:focus {
-	outline:2px solid rgba(var(--accent-rgb),.4);
-	outline-offset:-1px;
-}
-
-.submit-count {
-	color:var(--meta);
-	font-size:10px;
-	flex:0 0 auto;
-	white-space:nowrap;
-}
-
-.submit-count.over {
-	color:var(--error);
-}
-
-.submit-actions {
-	display:flex;
-	justify-content:flex-end;
-	gap:6px;
-	margin-top:10px;
-}
-
-.submit-actions button {
-	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-	padding:5px 10px;
-	border-radius:4px;
-	cursor:pointer;
-	border:1px solid var(--button-border);
-	background:var(--button-bg);
-	color:var(--button-text);
-}
-
-.submit-actions button.primary {
-	background:var(--accent);
-	border-color:var(--accent);
-	color:white;
-}
-
-.submit-actions button:disabled {
-	opacity:.6;
-	cursor:default;
-}
-
-.submit-status {
-	margin-top:8px;
-	font-size:11px;
-	line-height:1.4;
-}
-
-.submit-status.error {
-	color:var(--error);
-}
-
-.submit-status a {
-	color:var(--link);
-}
-`;
-
-	function submitTargetChooserHTML(submitTarget, targets) {
-		if (targets.length < 2) {
-			return escapeHTML(submitTarget.label);
-		}
-
-		return `<select id="submit-target" class="submit-target" aria-label="Where to submit">${targets
-			.map(
-				(target) =>
-					`<option value="${escapeHTML(target.id)}"${
-						target.id === submitTarget.id ? " selected" : ""
-					}>${escapeHTML(target.label)}</option>`,
-			)
-			.join("")}</select>`;
-	}
-
-	function submitFieldsHTML(submitTarget) {
-		return `${submitExtraFields(submitTarget)
-			.map(
-				(field) => `
-<div class="submit-field">
-<label for="submit-extra-${escapeHTML(field.id)}">${escapeHTML(field.label)}</label>
-<input id="submit-extra-${escapeHTML(field.id)}" class="submit-extra" type="text"
-data-field-id="${escapeHTML(field.id)}"${field.required ? " data-required=\"1\"" : ""}
-spellcheck="${field.spellcheck === false ? "false" : "true"}"
-placeholder="${escapeHTML(field.placeholder || "")}">
-</div>`,
-			)
-			.join("")}
-<div class="submit-field">
-<div class="submit-field-head">
-<label for="submit-title">title</label>
-<span id="submit-count" class="submit-count"></span>
-</div>
-<input id="submit-title" type="text" maxlength="${submitTitleLimit(submitTarget)}" spellcheck="true">
-</div>
-
-<div class="submit-field">
-<label for="submit-url">url</label>
-<input id="submit-url" type="text" spellcheck="false">
-</div>
-
-<div class="submit-field">
-<label for="submit-text">text</label>
-<textarea id="submit-text" rows="3" spellcheck="true"></textarea>
-</div>
-
-<div class="submit-note">
-${escapeHTML(submitFormFor(submitTarget).note || "")}
-</div>`;
-	}
-
-	function submitFormHTML({ submitTarget, targets = [], message = "" }) {
-		return `
-<div class="submit-title">${
-			submitTarget
-				? "Submit to " + submitTargetChooserHTML(submitTarget, targets)
-				: "Submit"
-		}</div>
-${
-	submitTarget
-		? `<div id="submit-fields">${submitFieldsHTML(submitTarget)}</div>`
-		: `
-<div class="submit-note">
-${escapeHTML(message)}
-</div>`
-}
-
-<div class="submit-actions">
-<button id="submit-cancel" type="button">${submitTarget ? "Cancel" : "Close"}</button>
-${submitTarget ? `<button id="submit-go" type="button" class="primary">Submit</button>` : ""}
-</div>
-
-<div id="submit-status" class="submit-status hidden" role="status"></div>
-`;
-	}
-
-	function wireSubmitForm(root, { submitTarget, targets = [], onSubmit, onCancel }) {
-		const chooser = root.querySelector("#submit-target");
-
-		if (chooser) {
-			chooser.onchange = () => {
-				const next = targets.find((each) => each.id === chooser.value);
-
-				if (!next) {
-					return;
-				}
-
-				const fields = root.querySelector("#submit-fields");
-
-				if (fields) {
-					fields.innerHTML = submitFieldsHTML(next);
-				}
-
-				wireSubmitForm(root, { submitTarget: next, targets, onSubmit, onCancel });
-			};
-		}
-
-		const titleInput = root.querySelector("#submit-title");
-		const countLabel = root.querySelector("#submit-count");
-		const urlInput = root.querySelector("#submit-url");
-		const textInput = root.querySelector("#submit-text");
-		const extraInputs = [...root.querySelectorAll(".submit-extra")];
-		const goButton = root.querySelector("#submit-go");
-		const cancelButton = root.querySelector("#submit-cancel");
-		const statusLine = root.querySelector("#submit-status");
-
-		const setStatus = (message, { error = false, html = false } = {}) => {
-			statusLine.classList.remove("hidden");
-			statusLine.classList.toggle("error", error);
-
-			if (html) {
-				statusLine.innerHTML = message;
-			} else {
-				statusLine.textContent = message;
-			}
-		};
-
-		if (cancelButton) {
-			cancelButton.onclick = () => onCancel?.();
-		}
-
-		if (!submitTarget) {
-			cancelButton?.focus();
-
-			return { setStatus };
-		}
-
-		titleInput.value = suggestedSubmissionTitle();
-		urlInput.value = pageAddress();
-
-		const missingExtra = () =>
-			extraInputs.some(
-				(input) => input.dataset.required && !input.value.trim(),
-			);
-
-		const updateCount = () => {
-			const remaining = submitTitleLimit(submitTarget) - titleInput.value.length;
-
-			countLabel.textContent = remaining + " left";
-			countLabel.classList.toggle("over", remaining < 0);
-
-			goButton.disabled =
-				!titleInput.value.trim() ||
-				missingExtra() ||
-				(!urlInput.value.trim() && !textInput.value.trim());
-		};
-
-		updateCount();
-		titleInput.addEventListener("input", updateCount);
-		urlInput.addEventListener("input", updateCount);
-		textInput.addEventListener("input", updateCount);
-
-		for (const input of extraInputs) {
-			input.addEventListener("input", updateCount);
-		}
-
-		goButton.onclick = async () => {
-			const title = titleInput.value.trim();
-			const url = urlInput.value.trim();
-			const text = textInput.value;
-			const extra = Object.fromEntries(
-				extraInputs.map((input) => [input.dataset.fieldId, input.value.trim()]),
-			);
-
-			if (!title || missingExtra() || (!url && !text.trim())) {
-				return;
-			}
-
-			goButton.disabled = true;
-			cancelButton.disabled = true;
-			titleInput.disabled = true;
-			urlInput.disabled = true;
-			textInput.disabled = true;
-
-			for (const input of extraInputs) {
-				input.disabled = true;
-			}
-
-			if (chooser) {
-				chooser.disabled = true;
-			}
-			setStatus(`Opening ${submitTarget.label}\u2026`);
-
-			let posted = false;
-
-			try {
-				posted = await onSubmit(
-					{ title, url, text, extra, target: submitTarget },
-					{ setStatus },
-				);
-			} finally {
-				cancelButton.disabled = false;
-
-				if (!posted) {
-					titleInput.disabled = false;
-					urlInput.disabled = false;
-					textInput.disabled = false;
-
-					for (const input of extraInputs) {
-						input.disabled = false;
-					}
-
-					if (chooser) {
-						chooser.disabled = false;
-					}
-
-					updateCount();
-				}
-			}
-		};
-
-		for (const field of [titleInput, urlInput]) {
-			field.addEventListener("keydown", (event) => {
-				if (event.key === "Enter") {
-					event.preventDefault();
-					goButton.click();
-				}
-			});
-		}
-
-		titleInput.focus();
-		titleInput.select();
-
-		return { setStatus };
-	}
-
-	function submitPageThroughBridge(
-		sourceID,
-		{ title, url, text, extra = {} },
-		{ onInterim } = {},
-	) {
-		const bridge = getWriteBridge(sourceID);
-		const action = bridge?.actions?.submit;
-
-		if (!action) {
-			return Promise.resolve({ ok: false, reason: "no-bridge" });
-		}
-
-		const nonce = bridgeNonce();
-		const session = openSubmitBridgePopup(nonce, {
-			origin: bridge.origin,
-			onInterim: onInterim || undefined,
-		});
-
-		if (session.blocked) {
-			return session.result;
-		}
-
-		return (async () => {
-			try {
-				await stageBridgePayload(nonce, {
-					kind: "submit",
-					url,
-					title,
-					text,
-					extra,
-					normalized: url ? normalizeURL(url) : "",
-					origin: location.origin,
-				});
-				await indexBridgePayload(nonce);
-
-				session.navigate(
-					action.url({ url, title, extra }) + "#" + bridgeHash(action, nonce),
-				);
-
-				return await session.result;
-			} finally {
-				await clearBridgePayload(nonce);
-			}
-		})();
 	}
 
 	function renderSourcePicker(ui, target = ui.body) {
@@ -16531,27 +15991,6 @@ ${frontPageChooserHTML()}
 		return button;
 	}
 
-	// #region hnewhere-test-export
-	function submitFailureMessage(result, sourceLabel = "Hacker News") {
-		switch (result?.reason) {
-			case "popup-blocked":
-				return "Your browser blocked the popup. Allow popups for this site and try again.";
-			case "timeout":
-				return `${sourceLabel} did not respond in time. Check the popup window.`;
-			case "not-logged-in":
-				return `Log in to ${sourceLabel} in the popup, then try again.`;
-			case "awaiting-reader":
-				return `The ${sourceLabel} window is still open. Post it there, or close it to give up.`;
-			case "dupe":
-				return `${sourceLabel} already has this URL. Reload the page to see the discussion.`;
-			case "no-form":
-				return `Could not find the submission form on ${sourceLabel}.`;
-			default:
-				return result?.message || "Submission did not go through.";
-		}
-	}
-	// #endregion hnewhere-test-export
-
 	// -------------------------
 	// Shared chrome
 	// -------------------------
@@ -16744,10 +16183,31 @@ header {
 	border-radius:6px;
 	background:var(--surface);
 	box-shadow:0 6px 18px rgba(0,0,0,.18);
+	opacity:1;
+	transform:translateY(0);
+	transition-property:opacity, transform, display;
+	transition-duration:.12s;
+	transition-timing-function:ease;
+	transition-behavior:allow-discrete;
 }
 
 .dropdown[hidden] {
 	display:none;
+	opacity:0;
+	transform:translateY(-4px);
+}
+
+@starting-style {
+	.dropdown:not([hidden]) {
+		opacity:0;
+		transform:translateY(-4px);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.dropdown {
+		transition:none;
+	}
 }
 
 .dropdown-rule {
@@ -16759,7 +16219,7 @@ header {
 	display:none;
 }
 
-.dropdown-item {
+.dropdown .dropdown-item {
 	padding:5px 8px;
 	border:0;
 	border-radius:4px;
@@ -16767,17 +16227,19 @@ header {
 	color:var(--surface-text);
 	font:12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	text-align:left;
+	text-decoration:none;
 	white-space:nowrap;
 	cursor:pointer;
 }
 
 @media (hover: hover) {
-	.dropdown-item:hover {
+	.dropdown .dropdown-item:hover {
 		background:var(--hover-tint);
 	}
 }
 
-.dropdown-item:active {
+.dropdown .dropdown-item:active,
+.dropdown .dropdown-item:focus-visible {
 	background:var(--hover-tint);
 }
 
@@ -17221,11 +16683,6 @@ header {
 	display:none;
 }
 
-#panel.submitting #header-submit {
-	display:none;
-}
-
-#header-submit[hidden],
 #comment-toggle[hidden] {
 	display:none;
 }
@@ -17857,29 +17314,6 @@ header {
 	color:var(--subtitle-stage);
 }
 
-.header-sync-sep {
-	margin:0 .35em;
-	opacity:.5;
-}
-
-.header-sync {
-	border:0;
-	padding:0;
-	margin:0;
-	background:none;
-	color:inherit;
-	font:inherit;
-	cursor:pointer;
-	text-decoration:underline dotted;
-	text-underline-offset:2px;
-}
-
-@media (hover: hover) {
-	.header-sync:hover {
-		text-decoration:underline;
-	}
-}
-
 .wordmark-where-done {
 	animation:hnewhere-crumb-settle .9s ease-out;
 }
@@ -18200,15 +17634,19 @@ header > .settings-panel {
 	text-transform:uppercase;
 }
 
-.source-menu-option {
-	align-items:center;
+.source-menu-entry {
 	padding:3px 4px;
 	border-radius:4px;
 	cursor:pointer;
 }
 
-.source-menu-option + .source-menu-option {
+.source-menu-entry + .source-menu-entry {
 	margin-top:2px;
+}
+
+.source-menu-option {
+	align-items:center;
+	cursor:pointer;
 }
 
 .source-menu-option input[type="radio"] {
@@ -18266,7 +17704,7 @@ header > .settings-panel {
 }
 
 @media (hover: hover) {
-	.source-menu-option:hover {
+	.source-menu-entry:hover {
 		background:var(--hover-tint);
 	}
 }
@@ -18601,6 +18039,11 @@ header > .settings-panel {
 .settings-update-spinner {
 	width:11px;
 	height:11px;
+}
+
+.settings-update-spin {
+	transform-box:view-box;
+	transform-origin:6px 6px;
 	animation:settings-update-spin .8s linear infinite;
 }
 
@@ -18608,7 +18051,7 @@ header > .settings-panel {
 	fill:none;
 	stroke:var(--meta);
 	stroke-width:1.6;
-	stroke-dasharray:22 10;
+	stroke-dasharray:9 5.45 9 5.45;
 	stroke-linecap:round;
 }
 
@@ -20175,18 +19618,12 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
 
 <div class="header-actions">
 ${title ? `<span id="app-discussion-sort" class="app-discussion-sort"></span><span id="app-discussion-meta" class="app-discussion-meta"></span>` : ""}
-<button id="header-submit" type="button" aria-label="Submit this page" title="Submit this page" hidden>
-<svg viewBox="0 0 16 16" width="17" height="17" aria-hidden="true" focusable="false">
-<path d="M8 12.7V4.2" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round"/>
-<path d="M4.5 7.7 8 4.2l3.5 3.5" fill="none" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
-</button>
 <button id="comment-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="compose-dock" aria-label="Add a comment" title="Add a comment" hidden>
 <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
 </svg>
 </button>
-${browse ? `<button id="browse-home-mark-read" type="button" aria-label="Mark all as read" title="Mark all as read" hidden>${APP_MARK_READ_ICON}</button><button id="browse-home-sync" type="button" aria-label="Sync" title="Sync" hidden>${APP_SYNC_ICON}</button>` : ""}
+${browse ? `<button id="browse-home-mark-read" type="button" aria-label="Mark all as read" title="Mark all as read" hidden>${APP_MARK_READ_ICON}</button><button id="browse-home-sync" type="button" aria-label="Sync" title="Sync" hidden><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button>` : ""}
 ${hide ? `<span class="hide-control">
 <button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Disable Backchannel here" title="Disable Backchannel here">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
@@ -20936,8 +20373,6 @@ ${frontPageChooserHTML()}
 						},
 					}),
 				);
-
-				await refreshSubmitAffordance(shadow);
 
 				await refreshForSourceChange();
 				return;
@@ -21734,33 +21169,10 @@ ${frontPageChooserHTML()}
 
 ${THEME_CSS}
 ${CHROME_CSS}
-${SUBMIT_FORM_CSS}
-
-.submit-view {
-	display:none;
-	transition:opacity .16s ease;
-}
-
-#panel.submitting .submit-view {
-	display:block;
-}
-
-#panel.submitting #comments-content,
-#panel.submitting .browse-view,
-#panel.submitting .filter-banner,
-#panel.submitting .next-up {
-	display:none;
-}
 
 #panel.browsing #comment-toggle,
-#panel.submitting #comment-toggle,
-#panel.browsing #compose-dock,
-#panel.submitting #compose-dock {
+#panel.browsing #compose-dock {
 	display:none;
-}
-
-#comments.views-swapping > .submit-view {
-	opacity:0;
 }
 
 #resize-handle {
@@ -23174,7 +22586,6 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 <div id="browse-blend-note" class="browse-blend-note" hidden></div>
 <div id="browse-list"${appMode ? "" : ' class="reader-list" role="tabpanel" aria-labelledby="browse-tab-front"'}></div>
 </div>
-<div id="submit-view" class="submit-view"></div>
 <div id="next-up" class="next-up hidden"></div>
 </div>
 
@@ -23428,11 +22839,6 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		if (browseToggle) {
 			browseToggle.onclick = (event) => {
-				if (isSubmitting(ui)) {
-					setBrowseMode(ui, true);
-					return;
-				}
-
 				const browsing = isBrowsing(ui);
 				const where = shadow.querySelector(".wordmark-where");
 				const target = browsing ? where && where.clientWidth < where.scrollWidth ? ".wordmark-root, .wordmark-where" : ".wordmark-where" : ".wordmark-root";
@@ -23475,15 +22881,6 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		if (ui.browseHome) {
 			wireBrowseHome(ui);
-		}
-
-		const submitButton = shadow.querySelector("#header-submit");
-
-		if (submitButton) {
-			submitButton.onclick = () => {
-				scrollBrowseToTop(ui);
-				setSubmitMode(ui, true).catch(console.error);
-			};
 		}
 
 		refreshQueueCount(shadow).catch(console.error);
@@ -26275,10 +25672,10 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 	function sourceMenuHTML(stories) {
 		const name = `source-menu-${(sourceMenuSeq += 1)}`;
 		const option = (key, about, story = null) => `
-<label class="settings-option source-menu-option"${key ? ` data-discussion-key="${escapeHTML(key)}"` : ""}>${discussionChoiceHTML(
+<div class="source-menu-entry"><label class="settings-option source-menu-option"${key ? ` data-discussion-key="${escapeHTML(key)}"` : ""}>${discussionChoiceHTML(
 			`<input type="radio" name="${name}"${key ? "" : " checked"}>`,
 			{ ...about, count: null },
-		)}</label>${story ? discussionHintHTML(story, about.count) : ""}`;
+		)}</label>${story ? discussionHintHTML(story, about.count) : ""}</div>`;
 
 		return `<div class="source-menu hidden" id="source-menu" role="menu">
 <div class="choice-group">${option("", { label: "All sources" })}</div>
@@ -26368,33 +25765,13 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		return "updated " + timeAgo(Math.floor(checkedAt / 1000));
 	}
 
-	function syncStatusNode({ checkedAt, onSync }) {
+	function syncStatusNode({ checkedAt }) {
 		const fragment = document.createDocumentFragment();
 		const age = document.createElement("span");
 
 		age.className = "header-sync-age";
 		age.textContent = syncAgeLabel(checkedAt);
 		fragment.appendChild(age);
-
-		if (typeof onSync === "function") {
-			const separator = document.createElement("span");
-
-			separator.className = "header-sync-sep";
-			separator.textContent = "|";
-			fragment.appendChild(separator);
-
-			const button = document.createElement("button");
-
-			button.type = "button";
-			button.className = "header-sync";
-			button.textContent = "sync";
-			button.onclick = (event) => {
-				event.preventDefault();
-				event.stopPropagation();
-				runRedditReadAction(onSync).catch(console.error);
-			};
-			fragment.appendChild(button);
-		}
 
 		return fragment;
 	}
@@ -26518,6 +25895,30 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 		ui.syncStatus = status;
 		refreshSidebarSubtitle(ui);
+		paintSidebarSyncButton(ui);
+	}
+
+	function paintSidebarSyncButton(ui) {
+		const button = ui?.shadow?.querySelector("#browse-home-sync");
+
+		if (!button) {
+			return;
+		}
+
+		const state = ui.browseHome;
+		const browsing = isBrowsing(ui);
+
+		button.hidden = Boolean(state?.searchOpen) || (browsing ? !appViewIsFrontPage(state?.view) : typeof ui.syncStatus?.onSync !== "function");
+	}
+
+	async function settleSyncSpin(button) {
+		const spin = button.querySelector(".app-sync-spin")?.getAnimations?.()[0];
+		const turn = Number(spin?.effect?.getComputedTiming?.().duration) || 0;
+
+		if (spin && turn > 0 && Number.isFinite(spin.currentTime)) {
+			spin.effect.updateTiming({ iterations: Math.max(1, Math.ceil((spin.currentTime + 1) / turn)) });
+			await spin.finished.catch(() => {});
+		}
 	}
 
 	function setSidebarLoadingLabel(ui, text) {
@@ -26627,7 +26028,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			const settings = await loadSettings();
 
 			await renderDiscussions(loaded, ui, { arrival: options.arrival !== false });
-			await refreshSubmitAffordance(ui.shadow);
 
 			if (generation === sidebarGeneration) {
 				if (settings.annotations && shouldShowArticleAnnotations(settings)) {
@@ -26721,144 +26121,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 		await clearBridgePayload(payload.nonce);
 		location.href = target.href;
-		return BRIDGE_NAVIGATED;
-	}
-
-	// -------------------------
-	// HN side: submit bridge
-	// -------------------------
-
-	function findSubmitForm(root) {
-		for (const form of root.querySelectorAll("form")) {
-			if (
-				form.querySelector('input[name="title"]') &&
-				form.querySelector('input[name="url"]')
-			) {
-				return form;
-			}
-		}
-
-		return null;
-	}
-
-	function readSubmitError(root) {
-		const text = (root.body?.textContent || "").toLowerCase();
-
-		if (text.includes("that link has already been submitted")) {
-			return { reason: "dupe" };
-		}
-
-		if (text.includes("please log in") || text.includes("bad login")) {
-			return { reason: "not-logged-in" };
-		}
-
-		if (text.includes("submitting too fast")) {
-			return {
-				reason: "rate-limited",
-				message: "Hacker News is rate limiting submissions. Try again shortly.",
-			};
-		}
-
-		return null;
-	}
-
-	function reportHNSubmit(root) {
-		const payload = takeBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY);
-
-		if (!payload) {
-			return null;
-		}
-
-		if (location.pathname === "/item") {
-			const id = new URLSearchParams(location.search).get("id");
-
-			return {
-				payload,
-				result: {
-					ok: Boolean(id),
-					storyID: id,
-					permalink: id ? commentURL(id) : "",
-					reason: id ? "existing" : "dupe",
-				},
-			};
-		}
-
-		if (location.pathname === "/newest") {
-			const id = findSubmittedStoryID(root, payload.normalized);
-
-			return {
-				payload,
-				result: {
-					ok: true,
-					storyID: id,
-					permalink: id ? commentURL(id) : "",
-					reason: "submitted",
-				},
-			};
-		}
-
-		return {
-			payload,
-			result: {
-				ok: false,
-				...(readSubmitError(root) || { reason: "unknown" }),
-			},
-		};
-	}
-
-	function findSubmittedStoryID(root, normalized) {
-		if (!normalized) {
-			return null;
-		}
-
-		for (const link of root.querySelectorAll(".titleline > a")) {
-			if (normalizeURL(link.href) !== normalized) {
-				continue;
-			}
-
-			const row = link.closest("tr.athing");
-
-			if (row?.id) {
-				return row.id;
-			}
-		}
-
-		return null;
-	}
-
-	function actHNSubmit({ payload, staged, root }) {
-		const form = findSubmitForm(root);
-
-		if (!form) {
-			return { ok: false, reason: "not-logged-in" };
-		}
-
-		const titleInput = form.querySelector('input[name="title"]');
-		const urlInput = form.querySelector('input[name="url"]');
-		const textInput = form.querySelector('textarea[name="text"]');
-
-		if (titleInput && staged?.title) {
-			titleInput.value = staged.title.slice(0, HN_TITLE_LIMIT);
-		}
-
-		if (urlInput) {
-			urlInput.value = staged?.url || "";
-		}
-
-		if (textInput) {
-			textInput.value = staged?.text || "";
-		}
-
-		if (
-			!stageBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY, {
-				...payload,
-				normalized: staged?.normalized || null,
-			})
-		) {
-			return { ok: false, reason: "storage-unavailable" };
-		}
-
-		form.submit();
 		return BRIDGE_NAVIGATED;
 	}
 
@@ -27003,16 +26265,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				voteLinks: loadVoteLinks,
 				act: actHNItemAction,
 				report: reportHNItemAction,
-			},
-			submit: {
-				marker: "hnewhere-submit",
-				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
-				noun: "submission",
-				stagesDraft: true,
-				bindStaged: bindSubmitStage,
-				url: ({ url, title }) => submitURL(url, title),
-				act: actHNSubmit,
-				report: reportHNSubmit,
 			},
 			reply: {
 				marker: "hnewhere-comment",
@@ -27269,16 +26521,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				url: ({ storyID, parentId }) => redditPermalink(storyID, parentId),
 				act: actRedditReply,
 			},
-			submit: {
-				marker: "hnewhere-submit",
-				messageSource: SUBMIT_BRIDGE_MESSAGE_SOURCE,
-				noun: "submission",
-				stagesDraft: true,
-				bindStaged: bindSubmitStage,
-				url: ({ url, title, extra }) => redditSubmitURL(url, title, extra),
-				act: actRedditSubmit,
-				report: reportRedditSubmit,
-			},
 		},
 	});
 
@@ -27287,101 +26529,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			.trim()
 			.replace(/^\/?r\//i, "")
 			.replace(/\/+$/, "");
-	}
-
-	function redditSubmitURL(url, title, extra) {
-		const subreddit = normalizeSubredditName(extra?.subreddit);
-		const query =
-			"?url=" + encodeURIComponent(url) + "&title=" + encodeURIComponent(title);
-
-		return (
-			REDDIT_WRITE_ORIGIN +
-			(subreddit ? "/r/" + encodeURIComponent(subreddit) : "") +
-			"/submit" +
-			query
-		);
-	}
-
-	function actRedditSubmit({ payload, staged, root }) {
-		const form =
-			root.querySelector("form#newlink") ||
-			root.querySelector('form[action*="submit"]');
-
-		if (!form) {
-			return {
-				ok: false,
-				reason: root.querySelector('form[action*="login"], #login_login-main')
-					? "not-logged-in"
-					: "no-form",
-			};
-		}
-
-		const titleInput = form.querySelector('textarea[name="title"], input[name="title"]');
-		const urlInput = form.querySelector('input[name="url"]');
-		const textInput = form.querySelector('textarea[name="text"]');
-		const subredditInput = form.querySelector(
-			'input[name="sr"], #sr-autocomplete',
-		);
-
-		if (titleInput && staged?.title) {
-			titleInput.value = staged.title.slice(0, REDDIT_TITLE_LIMIT);
-		}
-
-		if (urlInput) {
-			urlInput.value = staged?.url || "";
-		}
-
-		if (textInput) {
-			textInput.value = staged?.text || "";
-		}
-
-		const subreddit = normalizeSubredditName(staged?.extra?.subreddit);
-
-		if (subredditInput && subreddit) {
-			subredditInput.value = subreddit;
-		}
-
-		if (
-			!stageBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY, {
-				...payload,
-				normalized: staged?.normalized || null,
-			})
-		) {
-			return { ok: false, reason: "storage-unavailable" };
-		}
-
-		return BRIDGE_AWAITING_READER;
-	}
-
-	function reportRedditSubmit(root) {
-		const payload = takeBridgeReload(SUBMIT_BRIDGE_STORAGE_KEY);
-
-		if (!payload) {
-			return null;
-		}
-
-		const posted = /\/comments\//.test(location.pathname);
-
-		if (posted) {
-			return {
-				payload,
-				result: {
-					ok: true,
-					permalink: location.origin + location.pathname,
-					reason: "submitted",
-				},
-			};
-		}
-
-		const error = root.querySelector(".error, .status.error");
-
-		return {
-			payload,
-			result: {
-				ok: false,
-				reason: error?.textContent?.trim() || "unknown",
-			},
-		};
 	}
 
 	function setupHNListener() {
@@ -30667,7 +29814,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		return best ? best.key : null;
 	}
 
-	const OWN_SURFACE_SELECTOR = `[data-hnewhere-annotation-overlay],[data-hnewhere-sidebar],[data-hnewhere-note-composer],[data-hnewhere-note-add],[data-hnewhere-submit-popover]`;
+	const OWN_SURFACE_SELECTOR = `[data-hnewhere-annotation-overlay],[data-hnewhere-sidebar],[data-hnewhere-note-composer],[data-hnewhere-note-add]`;
 
 	function pressableRectsAround(range, source = documentSource()) {
 		const root = nearestElement(range?.commonAncestorContainer);
@@ -31581,10 +30728,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			}
 		}
 
-		document
-			.querySelectorAll("[data-hnewhere-submit-popover]")
-			.forEach((host) => host.remove());
-
 		if (sidebar) {
 			sidebar._cleanup?.();
 			sidebar.remove();
@@ -31666,7 +30809,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				sidebarHasDiscussion = true;
 				setSidebarStage(ui, "comments");
 				await renderDiscussions(discussions, ui);
-				await refreshSubmitAffordance(ui.shadow);
 
 				if (wasPicking) {
 					leaveBrowsing();
@@ -31862,6 +31004,48 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	display:block;
 }
 
+.app-sync-glyph {
+	display:block;
+	width:20px;
+	height:20px;
+}
+
+.app-sync-glyph svg {
+	display:block;
+	overflow:visible;
+}
+
+.app-sync-spin {
+	transform-box:view-box;
+	transform-origin:8px 8px;
+}
+
+.is-syncing .app-sync-spin {
+	animation:bc-app-sync-spin .9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.is-syncing .app-sync-spin {
+		animation:bc-app-sync-pulse 1.2s ease-in-out infinite;
+	}
+}
+
+@keyframes bc-app-sync-spin {
+	from {
+		transform:rotate(0deg);
+	}
+
+	to {
+		transform:rotate(-360deg);
+	}
+}
+
+@keyframes bc-app-sync-pulse {
+	50% {
+		opacity:.35;
+	}
+}
+
 :host {
 	--icon-fill:#fff;
 	--icon-on:var(--text);
@@ -31888,6 +31072,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	justify-content:center;
 	box-sizing:border-box;
 	padding:32px;
+	overflow:auto;
+	overscroll-behavior:contain;
 	background:rgba(0,0,0,.45);
 }
 
@@ -32125,6 +31311,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	flex:1 1 auto;
 	min-width:0;
 	overflow-y:auto;
+	overscroll-behavior:contain;
 	padding:12px 18px 16px;
 }
 
@@ -32642,19 +31829,18 @@ ${SEARCH_CSS}
 
 #browse-home-mark-read[hidden],
 #browse-home-sync[hidden],
-#panel:not(.browsing) :is(#browse-home-mark-read, #browse-home-sync),
-#panel.submitting :is(#browse-home-mark-read, #browse-home-sync) {
+#panel:not(.browsing) #browse-home-mark-read {
 	display:none;
-}
-
-#browse-home-sync:disabled {
-	opacity:.4;
-	cursor:default;
 }
 
 #browse-home-mark-read svg {
 	width:16px;
 	height:16px;
+}
+
+#browse-home-sync .app-sync-glyph {
+	width:22px;
+	height:22px;
 }
 
 #browse-home-sync svg {
@@ -32831,11 +32017,9 @@ ${SEARCH_CSS}
 	right:8px;
 	z-index:30;
 	box-sizing:border-box;
-	min-width:150px;
 	max-width:calc(100% - 16px);
 	max-height:240px;
 	overflow:auto;
-	box-shadow:0 4px 18px #0003;
 }
 
 .browse-row-menu.opens-up {
@@ -32843,26 +32027,16 @@ ${SEARCH_CSS}
 	bottom:calc(100% - 8px);
 }
 
-.browse-row-menu button,
-.browse-row-menu a {
+.browse-row-menu :is(button, a) {
 	display:block;
 	box-sizing:border-box;
 	width:100%;
 	margin:0;
-	padding:8px 12px;
-	border:0;
-	background:none;
-	color:var(--text);
-	font:13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-	text-align:left;
 	text-decoration:none;
-	cursor:pointer;
 }
 
 #browse-home-search-toggle:hover,
-.browse-home .browse-more:hover,
-.browse-row-menu :is(button, a):hover,
-.browse-row-menu :is(button, a):focus-visible {
+.browse-home .browse-more:hover {
 	background:var(--hover-tint);
 }
 
@@ -33423,47 +32597,6 @@ ${TIP_CSS}
 }
 
 ${APP_ICON_CSS}
-
-.app-sync-glyph {
-	display:block;
-	width:20px;
-	height:20px;
-	transform-origin:10px 10px;
-	backface-visibility:hidden;
-	-webkit-backface-visibility:hidden;
-}
-
-.app-sync-glyph svg {
-	display:block;
-	overflow:visible;
-}
-
-#app-list-sync.is-syncing .app-sync-glyph {
-	animation:bc-app-sync-spin .9s linear infinite;
-	will-change:transform;
-}
-
-@media (prefers-reduced-motion: reduce) {
-	#app-list-sync.is-syncing .app-sync-glyph {
-		animation:bc-app-sync-pulse 1.2s ease-in-out infinite;
-	}
-}
-
-@keyframes bc-app-sync-spin {
-	from {
-		transform:rotate(0deg) translateZ(0);
-	}
-
-	to {
-		transform:rotate(-360deg) translateZ(0);
-	}
-}
-
-@keyframes bc-app-sync-pulse {
-	50% {
-		opacity:.35;
-	}
-}
 
 #app-list .app-pane-actions {
 	gap:2px;
@@ -34178,10 +33311,6 @@ ${READER_LIST_CSS}
 	z-index:40;
 }
 
-#header-submit {
-	display:none !important;
-}
-
 .app-discussion-sort {
 	display:inline-flex;
 	align-items:center;
@@ -34394,19 +33523,22 @@ ${READER_LIST_CSS}
 	text-align:left;
 }
 
-#panel.app-docked .app-discussion-meta .source-menu-option {
-	gap:8px;
+#panel.app-docked .app-discussion-meta .source-menu-entry {
 	padding:0;
 	border-radius:0;
+}
+
+#panel.app-docked .app-discussion-meta .source-menu-option {
+	gap:8px;
 	font-size:12px;
 }
 
-#panel.app-docked .app-discussion-meta .source-menu-option + .source-menu-option {
+#panel.app-docked .app-discussion-meta .source-menu-entry + .source-menu-entry {
 	margin-top:8px;
 }
 
 @media (hover: hover) {
-	#panel.app-docked .app-discussion-meta .source-menu-option:hover {
+	#panel.app-docked .app-discussion-meta .source-menu-entry:hover {
 		background:none;
 	}
 }
@@ -34844,12 +33976,9 @@ header .item-action-link {
 #app-bar,
 #app-bar-back,
 #app-search,
-#app-row-menu,
 #app-list-heading,
 #app-list-tags,
-#app-next,
-.browse-more,
-.browse-sources-total {
+#app-next {
 	display:none !important;
 }
 
@@ -35071,10 +34200,96 @@ header .item-action-link {
 	}
 }
 
+#app-list-body {
+	--thumb:44px;
+}
+
+#app-list-body .browse-row,
+#app-list-body .browse-row:has(.browse-thumb-wrap) {
+	position:relative;
+	align-items:center;
+	gap:10px;
+	padding:8px 44px 8px 12px;
+}
+
+#app-list-body .browse-thumb-wrap {
+	margin-top:0;
+}
+
+#app-list-body .browse-more {
+	display:flex !important;
+	position:absolute;
+	top:50%;
+	right:4px;
+	margin-top:-12px;
+	-webkit-tap-highlight-color:transparent;
+}
+
+#app-list-body .browse-more svg {
+	width:16px;
+	height:16px;
+}
+
+#app-list-body .browse-more circle {
+	fill:currentColor;
+}
+
+#app-list-body .browse-more:focus-visible {
+	color:var(--text);
+}
+
+@media (hover: hover) {
+	#app-list-body .browse-more:hover {
+		color:var(--text);
+	}
+}
+
+#app-list-body .browse-more:active,
+#app-list-body .browse-more[aria-expanded="true"] {
+	background:var(--active-tint);
+	color:var(--text);
+}
+
+#app-list-body .story-meta .browse-queue-link,
+#app-list-body .story-meta .item-action-link,
+#app-list-body .story-meta .browse-hide-link,
+#app-list-body .story-meta .browse-comments-total {
+	display:none;
+}
+
+#app-list-body .story-meta {
+	font-size:0;
+	line-height:1;
+}
+
+#app-list-body .browse-sources-total {
+	display:inline !important;
+	color:var(--meta);
+	font-size:11px;
+	line-height:1.4;
+}
+
+#app-row-menu {
+	display:flex !important;
+	position:fixed;
+	z-index:30;
+}
+
+#app-row-menu[hidden] {
+	display:none !important;
+}
+
 @media (max-width: 700px) {
 	#app {
 		grid-template-columns:minmax(0, 1fr);
 		grid-template-rows:minmax(0, 1fr) auto;
+	}
+
+	#app-list-body .browse-more {
+		width:36px;
+		height:36px;
+		margin-top:-18px;
+		border-radius:18px;
 	}
 
 	.app-onboarding {
@@ -35544,7 +34759,8 @@ header .item-action-link {
 		display:none;
 	}
 
-	#app-list-heading-button:active {
+	#app-list-heading-button:active,
+	#app-list-heading-button[aria-expanded="true"] {
 		background:var(--active-tint);
 	}
 
@@ -35613,94 +34829,6 @@ header .item-action-link {
 
 	#app[data-searching] #app-rail,
 	#app[data-searching] #app-search {
-		display:none !important;
-	}
-
-	#app-list-body {
-		--thumb:44px;
-	}
-
-	#app-list-body .browse-row,
-	#app-list-body .browse-row:has(.browse-thumb-wrap) {
-		position:relative;
-		align-items:center;
-		gap:10px;
-		padding:8px 44px 8px 12px;
-	}
-
-	#app-list-body .browse-thumb-wrap {
-		margin-top:0;
-	}
-
-	#app-list-body .browse-more {
-		display:flex !important;
-		position:absolute;
-		top:50%;
-		right:4px;
-		align-items:center;
-		justify-content:center;
-		width:36px;
-		height:36px;
-		margin-top:-18px;
-		padding:0;
-		border:0;
-		border-radius:18px;
-		background:none;
-		color:var(--meta);
-		cursor:pointer;
-		-webkit-tap-highlight-color:transparent;
-	}
-
-	#app-list-body .browse-more svg {
-		width:16px;
-		height:16px;
-	}
-
-	#app-list-body .browse-more circle {
-		fill:currentColor;
-	}
-
-	#app-list-body .browse-more:focus-visible {
-		color:var(--text);
-	}
-
-	@media (hover: hover) {
-		#app-list-body .browse-more:hover {
-			color:var(--text);
-		}
-	}
-
-	#app-list-body .browse-more:active {
-		background:var(--active-tint);
-		color:var(--text);
-	}
-
-	#app-list-body .story-meta .browse-queue-link,
-	#app-list-body .story-meta .item-action-link,
-	#app-list-body .story-meta .browse-hide-link,
-	#app-list-body .story-meta .browse-comments-total {
-		display:none;
-	}
-
-	#app-list-body .story-meta {
-		font-size:0;
-		line-height:1;
-	}
-
-	#app-list-body .browse-sources-total {
-		display:inline !important;
-		color:var(--meta);
-		font-size:11px;
-		line-height:1.4;
-	}
-
-	#app-row-menu {
-		display:flex !important;
-		position:fixed;
-		z-index:30;
-	}
-
-	#app-row-menu[hidden] {
 		display:none !important;
 	}
 
@@ -36135,7 +35263,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	);
 
 	const APP_SYNC_ICON =
-		'<svg viewBox="-2 -2 20 20" width="20" height="20" aria-hidden="true" focusable="false"><path d="M12.7 6.29A5 5 0 0 0 4.17 4.79M3.3 9.71A5 5 0 0 0 11.83 11.21" fill="none" stroke="currentColor" stroke-width="1.31" stroke-linecap="round"/><path d="M3 7.91L3.4 4.14L6.01 6.33ZM13 8.09L12.6 11.86L9.99 9.67Z" fill="currentColor" stroke="currentColor" stroke-width=".5" stroke-linejoin="round"/></svg>';
+		'<svg viewBox="-2 -2 20 20" width="20" height="20" aria-hidden="true" focusable="false"><g class="app-sync-spin"><path d="M12.15 5.2A5 5 0 0 0 3.95 5.06M3.85 10.8A5 5 0 0 0 12.05 10.94" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M3.04 8.66L1.69 3.42L6.22 6.71ZM12.96 7.34L14.31 12.58L9.78 9.29Z" fill="currentColor"/></g></svg>';
 
 	const APP_MARK_READ_ICON =
 		'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="4.55" cy="9.3" r="2.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11.45" cy="9.3" r="2.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M7.01 7.76Q8 6.76 8.99 7.76" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M1.92 8.07L4.15 3.8l0.85 0.6M14.08 8.07L11.85 3.8l-0.85 0.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -36660,18 +35788,38 @@ ${settingsModalHTML()}
 		});
 		paintPaneToggles();
 
+		let phoneStage = null;
+
 		window.matchMedia("(max-width: 700px)").addEventListener("change", () => {
 			setAppSearchOpen(false);
 			settleAppList();
 			setAppViewMenuOpen(false);
 			paintAppZoom();
 			setAppSearchOpen(false);
+			reapplyThemes();
 
-			if (!appIsPhone() && appRoot.dataset.stage !== "list") {
+			const stage = appRoot.dataset.stage || "list";
+
+			if (!appIsPhone() && stage !== "list") {
+				phoneStage = { stage, key: appState?.open?.key };
 				appRoot.dataset.stage = "list";
 			}
 
+			const restore = appIsPhone() && phoneStage?.key && appState?.open?.key === phoneStage.key && appState.article ? phoneStage.stage : "";
+
+			if (appIsPhone()) {
+				phoneStage = null;
+			}
+
+			if (restore) {
+				appRoot.dataset.stage = restore;
+			}
+
 			paintAppChrome();
+
+			if (restore) {
+				restoreAppStageScroll("list", restore);
+			}
 		});
 
 		load(STORAGE.appPanes, null)
@@ -36882,14 +36030,7 @@ ${settingsModalHTML()}
 				}
 			}
 
-			const spin = button.querySelector(".app-sync-glyph")?.getAnimations?.()[0];
-			const turn = Number(spin?.effect?.getComputedTiming?.().duration) || 0;
-
-			if (spin && turn > 0 && Number.isFinite(spin.currentTime)) {
-				spin.effect.updateTiming({ iterations: Math.max(1, Math.ceil((spin.currentTime + 1) / turn)) });
-				await spin.finished.catch(() => {});
-			}
-
+			await settleSyncSpin(button);
 			button.classList.remove("is-syncing");
 			button.removeAttribute("aria-busy");
 		};
@@ -36909,14 +36050,18 @@ ${settingsModalHTML()}
 			}
 		};
 		shadow.querySelector("#app-bar-view").onclick = () => setAppViewMenuOpen(shadow.querySelector("#app-view-menu").hidden);
-		shadow.addEventListener("pointerdown", (event) => {
+		const closeRowMenuOutside = (event) => {
 			const path = event.composedPath();
 			const rowMenu = shadow.querySelector("#app-row-menu");
 
 			if (!rowMenu.hidden && !path.includes(rowMenu) && !path.some((node) => node?.classList?.contains("browse-more") || node?.id === "app-list-heading-button")) {
 				closeAppRowMenu();
 			}
-		});
+		};
+
+		shadow.addEventListener("pointerdown", closeRowMenuOutside);
+		shadow.addEventListener("touchstart", closeRowMenuOutside, { passive: true });
+		shadow.addEventListener("click", closeRowMenuOutside, true);
 		shadow.querySelector("#app-bar-open").onclick = () => shadow.querySelector("#app-article-open").click();
 		shadow.querySelector("#app-bar-save").onclick = () => shadow.querySelector('#app-article-actions [data-item-action="save"]')?.click();
 		shadow.querySelector("#app-bar-like").onclick = () => shadow.querySelector("#app-article-actions .app-head-votes:not(.hidden) .app-head-thumb-up")?.click();
@@ -36965,6 +36110,15 @@ ${settingsModalHTML()}
 		};
 
 		window.addEventListener("scroll", noteScrolling, { passive: true });
+		window.addEventListener(
+			"scroll",
+			() => {
+				if (appState && window.innerWidth <= 700 && appRoot.dataset.stage === "article") {
+					appState.scrolls.article = window.scrollY;
+				}
+			},
+			{ passive: true },
+		);
 		shadow.querySelector("#comments")?.addEventListener("scroll", noteScrolling, { passive: true });
 		new ResizeObserver(() => paintAppChrome()).observe(shadow.querySelector("#app-rail"));
 		paintAppChrome();
@@ -37170,6 +36324,11 @@ ${settingsModalHTML()}
 		modal.addEventListener("pointerdown", (event) => {
 			if (!helpIn(event)) hideSourceHelpTip(shadow);
 		}, true);
+		modal.addEventListener("keydown", (event) => {
+			if (["PageUp", "PageDown", "Home", "End"].includes(event.key) && !event.target?.closest?.(".app-settings-content")) {
+				event.preventDefault();
+			}
+		});
 
 		const showSection = (section, target = "") => {
 			hideSourceHelpTip(shadow);
@@ -37542,6 +36701,7 @@ ${settingsModalHTML()}
 			}),
 		);
 		menu.dataset.row = row.dataset.storyId || "";
+		button.setAttribute("aria-expanded", "true");
 	}
 
 	function openAppHeadingMenu(button) {
@@ -37622,6 +36782,7 @@ ${settingsModalHTML()}
 		}
 
 		shadow?.querySelector("#app-list-heading-button")?.setAttribute("aria-expanded", "false");
+		shadow?.querySelector('#app-list-body .browse-more[aria-expanded="true"]')?.setAttribute("aria-expanded", "false");
 	}
 
 	function appViewLabel(view) {
@@ -37918,6 +37079,8 @@ ${settingsModalHTML()}
 		if (was === stage || appState.moving) {
 			return;
 		}
+
+		closeAppRowMenu();
 
 		if (appIsPhone() && !prefersReducedMotion()) {
 			moveAppStage(was, stage);
@@ -39435,6 +38598,8 @@ ${frontPageChooserHTML()}
 		const key = normalizeURL(url) || url;
 		const entry = row || state.rowsByURL.get(key) || { story, also: [] };
 
+		closeAppRowMenu();
+
 		if (appIsPhone() && state.open?.key === key && state.article && !focus) {
 			setAppStage("article");
 			return;
@@ -39610,7 +38775,6 @@ ${frontPageChooserHTML()}
 			if (!loaded.length) {
 				sidebarHasDiscussion = false;
 				renderNoDiscussion(ui, threads.length ? "Couldn't load what people said about this article." : "");
-				await refreshSubmitAffordance(ui.shadow);
 				return;
 			}
 
@@ -39620,7 +38784,6 @@ ${frontPageChooserHTML()}
 
 			setSidebarStage(ui, "comments");
 			await renderDiscussions(loaded, ui);
-			await refreshSubmitAffordance(ui.shadow);
 			await refreshArticleAnnotations();
 		} catch (error) {
 			console.error(error);
@@ -41302,7 +40465,7 @@ ${frontPageChooserHTML()}
 
 		const action = appShortcutFor(event, true) || appShortcutFor(event, false);
 
-		if (action?.id === "search" && isSidebarVisible() && sidebarUI?.browseHome && isBrowsing(sidebarUI) && !isSubmitting(sidebarUI) && !isFrameField(event.composedPath()[0]) && sidebarUI.shadow.querySelector("#app-settings-modal")?.hidden) {
+		if (action?.id === "search" && isSidebarVisible() && sidebarUI?.browseHome && isBrowsing(sidebarUI) && !isFrameField(event.composedPath()[0]) && sidebarUI.shadow.querySelector("#app-settings-modal")?.hidden) {
 			event.preventDefault();
 			openBrowseSearch(sidebarUI).catch(console.error);
 			return;
