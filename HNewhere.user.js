@@ -9660,7 +9660,19 @@ html[data-backchannel-installed] .chin {
 
 	const PAGE_CHROME_KEY = "backchannel:chrome";
 
-	function pageChromeColors() {
+	function pageChromeColors(host) {
+		if (appIsPhone()) {
+			const dark = host.classList.contains(DARK_CLASS);
+			const surface = (on) => {
+				host.classList.toggle(DARK_CLASS, on);
+				return getComputedStyle(host).getPropertyValue("--bg").trim();
+			};
+			const colors = { light: surface(false), dark: surface(true) };
+
+			host.classList.toggle(DARK_CLASS, dark);
+			return colors;
+		}
+
 		const override = accentOverridePalette();
 
 		return override
@@ -9689,7 +9701,7 @@ html[data-backchannel-installed] .chin {
 	}
 
 	function paintPageChrome(host) {
-		const color = getComputedStyle(host).backgroundColor;
+		const color = appIsPhone() ? getComputedStyle(host).getPropertyValue("--bg").trim() : getComputedStyle(host).backgroundColor;
 
 		if (!color || color === "rgba(0, 0, 0, 0)" || color === "transparent") {
 			return;
@@ -9700,7 +9712,7 @@ html[data-backchannel-installed] .chin {
 		document.querySelector('meta[name="theme-color"]')?.setAttribute("content", color);
 
 		try {
-			localStorage.setItem(PAGE_CHROME_KEY, JSON.stringify({ theme: themePreference, ...pageChromeColors() }));
+			localStorage.setItem(PAGE_CHROME_KEY, JSON.stringify({ theme: themePreference, ...pageChromeColors(host) }));
 		} catch {
 		}
 	}
@@ -35782,6 +35794,7 @@ ${settingsModalHTML()}
 			setAppViewMenuOpen(false);
 			paintAppZoom();
 			setAppSearchOpen(false);
+			reapplyThemes();
 
 			const stage = appRoot.dataset.stage || "list";
 
