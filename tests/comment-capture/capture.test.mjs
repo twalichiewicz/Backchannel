@@ -34,6 +34,66 @@ async function assertCaptured(app, fixture) {
 
 const url = STORIES[0].url;
 
+test('recent search queries are reusable and shared between Reader and Sidebar', { timeout: 60000 }, async () => {
+  const app = await launchApp({ sharedStore: true, topHosts: [new URL(url).hostname], settings: { sources: { hn: true }, autoOpenSidebar: true, frontPageMode: 'sources', updateCheck: false } });
+  const recent = (page, root) => page.locator(`${root} .app-search-group`).filter({ has: page.locator('.app-search-group-name', { hasText: /^Recent searches$/ }) });
+  try {
+    await app.page.goto('https://backchnnl.app/');
+    await app.page.locator('#app-rail-search').click();
+    const input = app.page.locator('#app-search-input');
+    await input.fill('fixture story 8');
+    await input.press('Escape');
+    await app.page.locator('#app-rail-search').click();
+    const readerRecent = recent(app.page, '#app-search-results');
+    assert(await waitFor(async () => await readerRecent.locator('.app-search-item').count() === 1, 10000), 'Reader shows the previous query');
+    await readerRecent.locator('.app-search-item').click();
+    assert.equal(await input.inputValue(), 'fixture story 8', 'choosing a recent query restores it without leaving Search');
+    await input.fill('Fixture Story 8');
+    await app.page.locator('#app-search-results .app-search-item').filter({ has: app.page.locator('.app-search-item-title', { hasText: /^Fixture story 8$/ }) }).first().click();
+    await app.page.locator('#app-rail-search').click();
+    await input.fill('settings');
+    await input.press('Escape');
+    await app.page.locator('#app-rail-search').click();
+    assert(await waitFor(async () => (await readerRecent.locator('.app-search-item-title').allTextContents()).join('|') === 'settings|Fixture Story 8', 10000), 'queries are deduplicated and ordered by most recent use');
+    await input.press('Escape');
+
+    const article = await app.context.newPage();
+    await article.goto(url);
+    assert(await waitFor(async () => await article.locator('#browse-toggle .wordmark-root').count() === 1, 15000));
+    await article.locator('#browse-toggle .wordmark-root').click();
+    await article.locator('#browse-home-search-toggle').click();
+    const sidebarRecent = recent(article, '#browse-home-search-results');
+    assert(await waitFor(async () => (await sidebarRecent.locator('.app-search-item-title').allTextContents()).join('|') === 'settings|Fixture Story 8', 10000), 'Sidebar sees the same recent queries');
+    await sidebarRecent.locator('.app-search-item').filter({ hasText: 'Fixture Story 8' }).click();
+    const sidebarInput = article.locator('#browse-home-search');
+    assert.equal(await sidebarInput.inputValue(), 'Fixture Story 8');
+    assert(await waitFor(async () => await article.locator('#browse-home-search-results .app-search-item-title', { hasText: /^Fixture story 8$/ }).count() > 0, 10000), 'a restored query runs the normal search');
+    await sidebarInput.press('Escape');
+    await article.locator('#browse-home-search-toggle').click();
+    assert(await waitFor(async () => (await sidebarRecent.locator('.app-search-item-title').allTextContents()).join('|') === 'Fixture Story 8|settings', 10000));
+    await sidebarRecent.getByRole('button', { name: 'Clear recent searches' }).click();
+    assert.equal(await sidebarRecent.count(), 0, 'recent searches can be cleared');
+    assert(await sidebarInput.evaluate((element) => element.getRootNode().activeElement === element), 'clearing returns keyboard focus to Search');
+    assert(await waitFor(() => Array.isArray(app.store.get('HNewhere:recent_searches')) && app.store.get('HNewhere:recent_searches').length === 0, 5000), 'clearing removes the shared history');
+    await input.press('Escape');
+    await app.page.locator('#app-rail-search').click();
+    assert(await waitFor(async () => await readerRecent.count() === 0, 5000), 'clearing applies to Reader too');
+    await input.fill('persist after reload');
+    await input.press('Escape');
+    await app.page.reload();
+    await app.page.locator('#app-rail-search').click();
+    assert(await waitFor(async () => await readerRecent.locator('.app-search-item-title', { hasText: /^persist after reload$/ }).count() === 1, 10000), 'recent queries persist across reloads');
+    await input.fill('<img src=x>');
+    await input.press('Escape');
+    await app.page.locator('#app-rail-search').click();
+    assert(await waitFor(async () => (await readerRecent.locator('.app-search-item-title').allTextContents()).includes('<img src=x>'), 5000), 'recent queries preserve punctuation as text');
+    assert.equal(await readerRecent.locator('img').count(), 0, 'query text is never interpreted as markup');
+    await readerRecent.getByRole('button', { name: 'Clear recent searches' }).click();
+    assert(await input.evaluate((element) => element.getRootNode().activeElement === element), 'Reader returns focus to Search after clearing');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
 for (const mode of ['Sidebar', 'Reader']) test(`${mode} Sync keeps existing comments and applies changed and new comments in place`, { timeout: 60000 }, async () => {
   const fixture = discussionFixture(url, { rootCount: 12, replyRoots: 2 });
   const response = {

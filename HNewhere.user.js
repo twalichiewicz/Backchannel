@@ -219,6 +219,7 @@
 		readerFont: "HNewhere:reader_font",
 		readOut: "HNewhere:read_out",
 		shortcuts: "HNewhere:shortcuts",
+		recentSearches: "HNewhere:recent_searches",
 		updateCheck: "HNewhere:update_check",
 	};
 
@@ -15705,6 +15706,10 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		const toggle = shadow.querySelector("#browse-home-search-toggle");
 
 		if (show) state.searchScroll = list.scrollTop;
+		else {
+			state.recentSearches = normalizeRecentSearches([input.value, ...(state.recentSearches || [])]);
+			rememberSearchQuery(input.value).catch(console.error);
+		}
 		state.searchOpen = show;
 		state.searchSequence = (state.searchSequence || 0) + 1;
 		shadow.querySelector("#browse-view").classList.toggle("is-searching", show);
@@ -15759,11 +15764,12 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 	function renderBrowseSearch(ui) {
 		if (!ui.browseHome.searchOpen) return;
-
-		renderSearchResults(ui.shadow.querySelector("#browse-home-search-results"), browseSearchEntries(ui), ui.shadow.querySelector("#browse-home-search").value, (entry) => {
+		const input = ui.shadow.querySelector("#browse-home-search");
+		renderSearchResults(ui.shadow.querySelector("#browse-home-search-results"), browseSearchEntries(ui), input.value, (entry) => {
+			if (entry.recentQuery) { input.value = entry.recentQuery; renderBrowseSearch(ui); input.focus({ preventScroll: true }); return; }
 			setBrowseSearchOpen(ui, false);
 			setTimeout(() => entry.run(), 0);
-		});
+		}, { recent: ui.browseHome.recentSearches, onClear: () => { ui.browseHome.recentSearches = []; renderBrowseSearch(ui); input.focus({ preventScroll: true }); clearRecentSearches().catch(console.error); } });
 	}
 
 	async function openBrowseSearch(ui) {
@@ -15777,7 +15783,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		state.searchRows = state.rows?.length ? state.rows : state.searchRows || [];
 		setBrowseSearchOpen(ui, true);
 		const sequence = state.searchSequence;
-		const [queue, documents, hidden, settings, front] = await Promise.all([loadQueue(), loadCollectionDocuments(), loadHiddenStoryKeys(), loadSettings(), state.rows?.length ? null : loadFrontPages()]);
+		const [queue, documents, hidden, settings, front, recent] = await Promise.all([loadQueue(), loadCollectionDocuments(), loadHiddenStoryKeys(), loadSettings(), state.rows?.length ? null : loadFrontPages(), loadRecentSearches()]);
 
 		if (!state.searchOpen || state.searchSequence !== sequence || ui !== sidebarUI) return;
 
@@ -15787,6 +15793,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		state.topicIds = [...new Set(feeds.map((feed) => feed.topic).filter(Boolean))];
 		state.searchRows = (front?.rows || state.rows || []).filter((row) => !isStoryHidden(row.story, hidden));
 		state.searchListIndex = searchListIndex(queue, documents);
+		state.recentSearches = recent;
 		renderBrowseSearch(ui);
 	}
 
@@ -15838,6 +15845,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 		toggle.onclick = () => state.searchOpen ? setBrowseSearchOpen(ui, false) : openBrowseSearch(ui).catch(console.error);
 		search.oninput = () => renderBrowseSearch(ui);
+		search.addEventListener("keydown", (event) => { if (event.key === "Enter") rememberSearchQuery(search.value).catch(console.error); });
 		shadow.querySelector("#browse-home-search-close").onclick = () => setBrowseSearchOpen(ui, false);
 		shadow.querySelector("#browse-home-search-page").addEventListener("keydown", (event) => {
 			if (event.key !== "Escape") return;
@@ -17139,7 +17147,6 @@ header {
 .discussion-skeleton {
 	position:relative;
 	flex:1;
-	opacity:.12;
 }
 
 .discussion-skeleton-base, .discussion-skeleton-wave {
@@ -17147,16 +17154,18 @@ header {
 	flex-direction:column;
 }
 
+.discussion-skeleton-base { opacity:.12; }
+
 .discussion-skeleton-wave {
 	position:absolute;
 	inset:0;
-	opacity:.25;
+	opacity:.38;
 	pointer-events:none;
-	-webkit-mask-image:linear-gradient(135deg, transparent 44%, black 50%, transparent 56%);
-	mask-image:linear-gradient(135deg, transparent 44%, black 50%, transparent 56%);
-	-webkit-mask-size:300% 300%;
-	mask-size:300% 300%;
-	animation:discussion-skeleton-wave 3s linear infinite;
+	-webkit-mask-image:linear-gradient(135deg, transparent 38%, black 50%, transparent 62%);
+	mask-image:linear-gradient(135deg, transparent 38%, black 50%, transparent 62%);
+	-webkit-mask-size:200% 200%;
+	mask-size:200% 200%;
+	animation:discussion-skeleton-wave 2s linear infinite;
 }
 @keyframes discussion-skeleton-wave {
 	from { -webkit-mask-position:100% 100%; mask-position:100% 100%; }
@@ -17167,13 +17176,8 @@ header {
 .discussion-skeleton .comment-vote-slot { cursor:default; }
 .top-level-comments { position:relative; }
 .top-level-comments:has(> .discussion-loading) { min-height:280px; flex:1 0 280px; }
-.top-level-comments > .discussion-loading { position:absolute; inset:0; z-index:1; pointer-events:none; transition:opacity .22s ease; }
-.top-level-comments > .discussion-loading.is-fading { opacity:0; }
-.top-level-comments.discussion-entering > :not(.discussion-loading) { opacity:0; transition:opacity .22s ease; }
-.top-level-comments.discussion-entering.is-visible > :not(.discussion-loading) { opacity:1; }
-.discussion-matrix-reveal { position:absolute; inset:0; z-index:2; overflow:hidden; overflow-anchor:none; pointer-events:none; }
-.discussion-matrix-reveal > * { position:absolute; margin:0; box-sizing:border-box; pointer-events:none; }
-.discussion-reveal-original { opacity:0 !important; }
+.top-level-comments > .discussion-loading { position:absolute; inset:0; z-index:1; background:var(--bg); overflow-anchor:none; pointer-events:none; clip-path:inset(0 0 0 0); transition:clip-path .45s ease; }
+.top-level-comments > .discussion-loading.is-wiping { clip-path:inset(100% 0 0 0); }
 
 .discussion-progress-strip {
 	box-sizing:border-box;
@@ -17215,7 +17219,7 @@ header {
 	.discussion-skeleton-wave { display:none; animation:none; }
 	.discussion-progress-strip { transition:none; }
 	.discussion-progress-label { background:none; color:var(--meta); animation:none; }
-	.top-level-comments > .discussion-loading, .top-level-comments.discussion-entering > :not(.discussion-loading) { transition:none; }
+	.top-level-comments > .discussion-loading { transition:none; }
 }
 
 .browse-row-read {
@@ -25468,80 +25472,22 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 	function discussionSkeleton() {
 		const waiting = document.createElement("div");
 		waiting.className = "discussion-loading";
-		const conversation = [
-			["PretendPigeon", "Did anyone order a discussion? I brought breadcrumbs."],
-			["ImaginaryToaster", "I put it in the queue, next to the bagels."],
-			["FictionalFerret", "The comments are on their way. I gave them a map."],
-			["MakeBelieveMoth", "Excellent. I told them to follow the light."],
-			["TotallyFakeTurnip", "Is this the line for the discussion?"],
-			["PretendPenguin", "Yes, but the line has applied for a longer break."],
-			["ImaginaryOctopus", "I can lend the loading bar a hand. Or eight."],
-			["FictionalFox", "Please save one for the refresh button."],
+		const lines = [
+			"···· ······· ····· ····, ····· ········ ····.",
+			"··· ······ ··· ·····, ··· ······ ·····.",
+			"······ ··· ········ ····· ··· ······· ····.",
+			"·········! ··· ···· ···· ······ ··· ·····.",
+			"·· ···· ··· ···· ··· ··· ··········?",
+			"···, ··· ··· ···· ··· ······· ··· ······.",
+			"·· ··· ···· ··· ······· ··· ····· ····. ·· ·····.",
+			"······ ···· ··· ··· ··· ······· ······.",
 		];
 		const rows = Array.from({ length: 28 }, (_, index) => {
-			const [name, message] = conversation[index % conversation.length];
-			return `<div class="comment${index % 2 ? " is-reply" : ""}">${commentLayoutHTML('<span class="comment-vote-slot comment-vote-slot-empty"></span>', `<div class="meta">${name} · just now | reply | focus | save [–]</div>`, `<div class="comment-content"><div class="text"><p>${escapeHTML(message)}</p></div><div class="children"></div></div>`)}</div>`;
+			const message = lines[index % lines.length];
+			return `<div class="comment${index % 2 ? " is-reply" : ""}">${commentLayoutHTML('<span class="comment-vote-slot comment-vote-slot-empty"></span>', '<div class="meta">········ · ···· ··· | ····· | ····· | ···· [–]</div>', `<div class="comment-content"><div class="text"><p>${message}</p></div><div class="children"></div></div>`)}</div>`;
 		}).join("");
 		waiting.innerHTML = `<div class="discussion-skeleton" aria-hidden="true"><div class="discussion-skeleton-base">${rows}</div><div class="discussion-skeleton-wave">${rows}</div></div>`;
 		return waiting;
-	}
-
-	function animateDiscussionReveal(comments, entries, viewport) {
-		if (!entries.length || !viewport || prefersReducedMotion()) return;
-		const bounds = viewport.getBoundingClientRect();
-		const origin = comments.getBoundingClientRect();
-		const layer = document.createElement("div");
-		layer.className = "discussion-matrix-reveal";
-		layer.setAttribute("aria-hidden", "true");
-		layer.inert = true;
-		const originals = [];
-		const textNodes = [];
-		let remaining = 12000;
-		for (const entry of entries) {
-			const box = entry.element.getBoundingClientRect();
-			if (box.top >= bounds.bottom) break;
-			if (box.bottom <= bounds.top) continue;
-			for (const original of entry.element.querySelectorAll(":scope > .comment-layout > .comment-main > .meta, :scope > .comment-layout > .comment-main > .comment-content > .text")) {
-				const rect = original.getBoundingClientRect();
-				if (!rect.width || rect.bottom <= bounds.top || rect.top >= bounds.bottom) continue;
-				const copy = original.cloneNode(true);
-				copy.removeAttribute("id");
-				for (const node of copy.querySelectorAll("[id]")) node.removeAttribute("id");
-				for (const media of copy.querySelectorAll("img, video, audio, iframe")) media.remove();
-				copy.style.top = `${rect.top - origin.top}px`;
-				copy.style.left = `${rect.left - origin.left}px`;
-				copy.style.width = `${rect.width}px`;
-				const walker = document.createTreeWalker(copy, NodeFilter.SHOW_TEXT);
-				while (walker.nextNode()) {
-					const node = walker.currentNode;
-					if (remaining > 0 && /\S/.test(node.data)) {
-						const length = Math.min(1800, remaining, node.data.length);
-						textNodes.push({ node, chars: Array.from(node.data.slice(0, length)), tail: node.data.slice(length), offset: textNodes.length * 11 });
-						remaining -= length;
-					}
-				}
-				layer.append(copy);
-				originals.push(original);
-			}
-		}
-		if (!textNodes.length) return;
-		comments.append(layer);
-		for (const original of originals) original.classList.add("discussion-reveal-original");
-		let frame = 0;
-		const paint = () => {
-			for (const { node, chars, tail, offset } of textNodes) {
-				node.data = chars.map((char, index) => /\s/.test(char) || (index + offset) % 9 < frame ? char : String.fromCharCode(33 + (index * 7 + offset + frame * 13) % 94)).join("") + tail;
-			}
-		};
-		paint();
-		const timer = window.setInterval(() => {
-			frame++;
-			if (frame >= 9 || !comments.isConnected) {
-				clearInterval(timer);
-				for (const original of originals) original.classList.remove("discussion-reveal-original");
-				layer.remove();
-			} else paint();
-		}, 65);
 	}
 
 	async function renderDiscussions(stories, ui, { arrival = true, onThreadsLoaded = null } = {}) {
@@ -25687,10 +25633,12 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				comments.classList.remove("discussion-entering");
 				return;
 			}
+			const viewport = ui.shadow.querySelector("#comments")?.getBoundingClientRect();
+			const top = waiting.getBoundingClientRect().top;
+			if (viewport) { waiting.style.height = `${Math.max(1, viewport.bottom - Math.max(top, viewport.top))}px`; waiting.style.bottom = "auto"; }
 			requestAnimationFrame(() => {
-				comments.classList.add("is-visible");
-				waiting.classList.add("is-fading");
-				window.setTimeout(() => { waiting.remove(); comments.classList.remove("discussion-entering", "is-visible"); }, 220);
+				waiting.classList.add("is-wiping");
+				window.setTimeout(() => { waiting.remove(); comments.classList.remove("discussion-entering"); }, 450);
 			});
 		};
 		paintAppPinnedDiscussion();
@@ -25777,7 +25725,6 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		const batchSize = 5;
 		let annotatedAt = 0;
-		let animateVisible = !prefersReducedMotion();
 		if (!entries.length) revealComments();
 
 		for (let i = 0; i < entries.length; i += batchSize) {
@@ -25786,7 +25733,6 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			}
 
 			const batch = entries.slice(i, i + batchSize);
-			const renderedStart = renderedComments.length;
 
 			await Promise.all(
 				batch.map((entry) =>
@@ -25812,12 +25758,6 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				);
 			}
 
-			if (animateVisible) {
-				const rendered = renderedComments.slice(renderedStart);
-				const viewport = ui.shadow.querySelector("#comments");
-				if (rendered.length && viewport && rendered[0].element.getBoundingClientRect().top >= viewport.getBoundingClientRect().bottom) animateVisible = false;
-				else animateDiscussionReveal(comments, rendered, viewport);
-			}
 			revealComments();
 
 			if (entries.length > batchSize && !appState && settings.annotations && shouldShowArticleAnnotations(settings) && (i === 0 || performance.now() - annotatedAt >= 1000)) {
@@ -32901,6 +32841,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	text-transform:uppercase;
 }
 
+.app-search-group-head { display:flex; align-items:center; justify-content:space-between; }
+.app-search-clear { border:0; padding:12px 6px 4px; background:none; color:var(--meta); font:inherit; font-size:11px; cursor:pointer; }
+.app-search-clear:focus-visible { outline:2px solid var(--rail-bg); outline-offset:-2px; }
+
 .app-search-item {
 	display:flex;
 	flex-direction:column;
@@ -37259,6 +37203,7 @@ ${settingsModalHTML()}
 		shadow.querySelector("#app-search-close").onclick = () => setAppSearchOpen(false);
 		searchInput.addEventListener("input", () => renderAppSearch(searchInput.value));
 		searchInput.addEventListener("keydown", (event) => {
+			if (event.key === "Enter") rememberSearchQuery(searchInput.value).catch(console.error);
 			if (event.key === "Escape") {
 				event.preventDefault();
 				event.stopPropagation();
@@ -38573,6 +38518,7 @@ ${settingsModalHTML()}
 		}
 
 		const show = Boolean(open);
+		const wasOpen = !page.hidden;
 		const home = shadow.querySelector(appIsPhone() ? "#app" : "#app-list");
 
 		if (show && page.parentElement !== home) {
@@ -38595,6 +38541,10 @@ ${settingsModalHTML()}
 			return;
 		}
 
+		if (wasOpen) {
+			appState.recentSearches = normalizeRecentSearches([input.value, ...(appState.recentSearches || [])]);
+			rememberSearchQuery(input.value).catch(console.error);
+		}
 		input.blur();
 	}
 
@@ -38612,7 +38562,13 @@ ${settingsModalHTML()}
 			return;
 		}
 
-		indexAppLists().catch(console.error).then(() => renderAppSearch(input.value));
+		const state = appState;
+		const sequence = state.searchSequence = (state.searchSequence || 0) + 1;
+		Promise.all([indexAppLists(), loadRecentSearches()]).then(([, recent]) => {
+			if (appState !== state || page.hidden || state.searchSequence !== sequence) return;
+			state.recentSearches = recent;
+			renderAppSearch(input.value);
+		}).catch(console.error);
 		setAppSearchOpen(true);
 	}
 
@@ -39149,6 +39105,42 @@ ${note ? appShortcutNoteHTML(note) : ""}
 		};
 	}
 
+	let recentSearchWrites = Promise.resolve();
+
+	function recentSearchQuery(value) {
+		return typeof value === "string" ? value.trim().replace(/\s+/g, " ").slice(0, 200) : "";
+	}
+
+	function normalizeRecentSearches(value) {
+		const found = new Set();
+		return (Array.isArray(value) ? value : []).map(recentSearchQuery).filter((query) => {
+			const key = query.toLowerCase();
+			if (!key || found.has(key)) return false;
+			found.add(key);
+			return true;
+		}).slice(0, 8);
+	}
+
+	async function loadRecentSearches() {
+		await recentSearchWrites.catch(() => {});
+		return normalizeRecentSearches(await load(STORAGE.recentSearches, []));
+	}
+
+	function rememberSearchQuery(value) {
+		const query = recentSearchQuery(value);
+		if (!query) return Promise.resolve();
+		recentSearchWrites = recentSearchWrites.catch(() => {}).then(async () => {
+			const recent = normalizeRecentSearches(await load(STORAGE.recentSearches, []));
+			await save(STORAGE.recentSearches, [query, ...recent.filter((item) => item.toLowerCase() !== query.toLowerCase())].slice(0, 8));
+		});
+		return recentSearchWrites;
+	}
+
+	function clearRecentSearches() {
+		recentSearchWrites = recentSearchWrites.catch(() => {}).then(() => save(STORAGE.recentSearches, []));
+		return recentSearchWrites;
+	}
+
 	function settingsSearchEntries(shadow, openSettings) {
 		const entries = [];
 
@@ -39241,14 +39233,17 @@ ${note ? appShortcutNoteHTML(note) : ""}
 
 	function renderAppSearch(query) {
 		const shadow = appState?.ui.shadow;
+		const state = appState;
+		const input = shadow?.querySelector("#app-search-input");
 
 		renderSearchResults(shadow?.querySelector("#app-search-results"), appState ? appSearchEntries() : [], query, (entry) => {
+			if (entry.recentQuery && input) { input.value = entry.recentQuery; renderAppSearch(input.value); input.focus({ preventScroll: true }); return; }
 			setAppSearchOpen(false);
 			setTimeout(() => entry.run(), 0);
-		});
+		}, { recent: state?.recentSearches, onClear: () => { if (state) state.recentSearches = []; renderAppSearch(input?.value || ""); input?.focus({ preventScroll: true }); clearRecentSearches().catch(console.error); } });
 	}
 
-	function renderSearchResults(results, entries, query, onSelect) {
+	function renderSearchResults(results, entries, query, onSelect, { recent = [], onClear = null } = {}) {
 		if (!results) return;
 
 		const previousItems = [...results.querySelectorAll(".app-search-item")];
@@ -39286,6 +39281,8 @@ ${note ? appShortcutNoteHTML(note) : ""}
 		const ranked = found.map((entry) => [tier(entry), entry]);
 		const matches = [0, 1, 2, 3].flatMap((rank) => ranked.filter(([at]) => at === rank).map(([, entry]) => entry));
 		const groups = new Map();
+		const history = needle ? [] : normalizeRecentSearches(recent);
+		if (history.length) groups.set("Recent searches", history.map((item) => ({ title: item, note: "", recentQuery: item })));
 
 		for (const entry of matches) {
 			if (!groups.has(entry.group)) {
@@ -39305,7 +39302,18 @@ ${note ? appShortcutNoteHTML(note) : ""}
 				group.className = "app-search-group";
 				heading.className = "app-search-group-name";
 				heading.textContent = name;
-				group.append(heading);
+				if (name === "Recent searches" && onClear) {
+					const head = document.createElement("div");
+					const clear = document.createElement("button");
+					head.className = "app-search-group-head";
+					clear.className = "app-search-clear";
+					clear.type = "button";
+					clear.textContent = "Clear";
+					clear.setAttribute("aria-label", "Clear recent searches");
+					clear.onclick = (event) => { event.stopPropagation(); onClear(); };
+					head.append(heading, clear);
+					group.append(head);
+				} else group.append(heading);
 
 				for (const entry of entries) {
 					const item = document.createElement("button");
