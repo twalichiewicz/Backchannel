@@ -105,6 +105,8 @@ test("the loading skeleton reports completed discussions while slower sources ar
     const loading = app.page.locator('#comments-content .discussion-loading');
     assert(await waitFor(async () => await loading.count() > 0, 10000), "the loading skeleton appears");
     assert(await loading.locator('.discussion-skeleton-comment').count() >= 4, "the skeleton fills the discussion area");
+    const spacing = await loading.locator('.discussion-skeleton-comment').evaluateAll((rows) => rows.slice(0, 8).map((row) => row.getBoundingClientRect().top));
+    assert(spacing.every((top, index) => index === 0 || top - spacing[index - 1] <= 45), 'placeholder comments use a consistent compact rhythm');
     assert.equal(await loading.locator('.discussion-skeleton').evaluate((element) => getComputedStyle(element).opacity), '0.3', 'the placeholders are subdued');
     assert(await loading.locator('.discussion-skeleton-comment .browse-skeleton-bar').evaluateAll((bars) => bars.every((bar) => bar.getBoundingClientRect().height <= 2)), 'all placeholders are fine lines');
     assert.equal(await loading.locator('.discussion-skeleton-heading, .discussion-skeleton-compose').count(), 0, "known content is not replaced with placeholders");
@@ -231,9 +233,11 @@ test("Reader reuses cached comments when selecting and revisiting articles", { t
     assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-story-id="9002"]').count() === 30, 15000));
     const firstRequests = () => app.requests.filter(({ url }) => /hacker-news\.firebaseio\.com\/v0\/item\/(9001|9001\d\d)\.json/.test(url)).length;
     const before = firstRequests();
+    await app.page.locator('#app-list-sync').click();
+    assert(await waitFor(async () => await app.page.locator('#app-list-sync').getAttribute('aria-busy') !== 'true', 15000));
     await first.click();
     assert(await waitFor(async () => await firstComments.count() === 30, 15000), `first article reloads; body: ${(await app.page.locator('#comments-content').textContent()).slice(0, 300)}; errors: ${JSON.stringify(app.errors)}`);
-    assert.equal(firstRequests(), before, 'revisiting a fresh article does not refetch its comments');
+    assert.equal(firstRequests(), before, 'syncing another article does not evict this article’s cached comments');
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();

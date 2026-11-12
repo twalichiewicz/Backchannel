@@ -68,9 +68,9 @@ test('Reader Sync still requests a working Reddit feed after an individual discu
   const post = { id: 'freshpost', url, title: STORIES[0].title, author: 'reader', subreddit: 'news', subreddit_name_prefixed: 'r/news', permalink: '/r/news/comments/freshpost/article/', num_comments: 1, created_utc: now - 3600, score: 100 };
   const comment = { kind: 't1', data: { id: 'freshcomment', body: 'A comment available from the archive', author: 'reader', parent_id: 't3_freshpost', link_id: 't3_freshpost', created_utc: now - 60, replies: '' } };
   const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
-  const seam = 'renderAppList({ force: true }),\n\t\t\t\tPromise.resolve(appState?.discussionSync?.()),';
+  const seam = 'renderAppList({ force: true }).finally(finishFeed),';
   assert(original.includes(seam));
-  const source = original.replace(seam, 'new Promise((resolve) => setTimeout(resolve, 3000)).then(() => renderAppList({ force: true })),\n\t\t\t\tPromise.resolve(appState?.discussionSync?.()),');
+  const source = original.replace(seam, 'new Promise((resolve) => setTimeout(resolve, 3000)).then(() => renderAppList({ force: true })).finally(finishFeed),');
   const app = await launchApp({ source, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com'], settings: { sources: { hn: true, reddit: true }, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
     { match: (path) => path.includes('/api/posts/search'), json: { data: [post] } },
     { match: (path) => path.includes('/api/comments/tree'), json: { data: [comment] } },
@@ -165,7 +165,7 @@ test("the Reddit tab identifies its purpose and closes before local comment rend
 test("Sidebar Sync closes its Reddit tab after requests, before local rendering completes", { timeout: 45000 }, async () => {
   const url = STORIES[0].url;
   const sourceText = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
-  const seam = 'const batchSize = 5;\n\t\tlet annotatedAt = 0;';
+  const seam = 'const lookup = new Map(renderedComments.map((entry) => [entry.discussionKey + "\\0" + entry.id, entry]));';
   assert(sourceText.includes(seam));
   const source = sourceText.replace(seam, `${seam}\n\t\tif (window.__bcSlowRender) await new Promise((resolve) => setTimeout(resolve, 4000));`);
   const now = Math.floor(Date.now() / 1000);
@@ -192,11 +192,83 @@ test("Sidebar Sync closes its Reddit tab after requests, before local rendering 
     await app.page.evaluate(() => { window.__bcSlowRender = true; });
     await app.page.locator('#browse-home-sync').click();
     assert(await waitFor(() => opened.length > 0, 10000), 'sync opens the Reddit tab');
-    assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading').count() === 1, 10000));
-    assert(await waitFor(async () => await app.page.locator('#comments-content .top-level-comments').count() === 1, 15000));
+    assert(await waitFor(async () => /rendering comments/i.test(await app.page.locator('#header-subtitle').textContent()), 15000));
     assert(await waitFor(() => opened.every((page) => page.isClosed()), 2500), 'the tab closes while local rendering is paused');
+    assert.equal(await app.page.locator('#comments-content .discussion-loading').count(), 0, 'sync keeps the existing discussion in view');
+    assert.equal(await app.page.locator('#comments-content .comment[data-comment-id="reddit:archived"]').count(), 1);
     assert.equal(await app.page.locator('#comments-content .comment[data-comment-id="reddit:live"]').count(), 0);
     assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:live"]').count() === 1, 10000));
+    assert.deepEqual(app.errors, []);
+  } finally {
+    await app.browser.close();
+  }
+});
+
+test("Reader Sync closes its Reddit tab after feeds and threads load, before local reconciliation finishes", { timeout: 60000 }, async () => {
+  const url = STORIES[0].url;
+  const sourceText = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
+  const seam = 'const lookup = new Map(renderedComments.map((entry) => [entry.discussionKey + "\\0" + entry.id, entry]));';
+  assert(sourceText.includes(seam));
+  const source = sourceText.replace(seam, `${seam}\n\t\tif (window.__bcSlowRender) await new Promise((resolve) => setTimeout(resolve, 4000));`);
+  const now = Math.floor(Date.now() / 1000);
+  const post = { id: 'freshpost', url, title: STORIES[0].title, author: 'reader', subreddit: 'news', subreddit_name_prefixed: 'r/news', permalink: '/r/news/comments/freshpost/article/', num_comments: 1, created_utc: now - 3600, score: 100 };
+  const comment = (id) => ({ kind: 't1', data: { id, body: `Comment ${id}`, author: 'reader', parent_id: 't3_freshpost', link_id: 't3_freshpost', created_utc: now - 60, replies: '' } });
+  const app = await launchApp({ source, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com'], settings: { sources: { hn: true, reddit: true }, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
+    { match: (path) => path.includes('/api/posts/search'), json: { data: [post] } },
+    { match: (path) => path.includes('/api/comments/tree'), json: { data: [comment('archive')] } },
+  ] });
+  const opened = [];
+  let current = 'initial';
+  app.context.on('page', (page) => { if (page !== app.page) opened.push(page); });
+  await app.context.route('https://www.reddit.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : path.includes('/comments/') ? JSON.stringify([{ data: { children: [{ kind: 't3', data: post }] } }, { data: { children: [comment(current)] } }]) : JSON.stringify({ data: { children: [{ kind: 't3', data: post }] } });
+    await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
+  });
+  try {
+    await app.page.goto('https://backchnnl.app/');
+    await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:initial"]').count() === 1, 20000));
+    assert(await waitFor(() => opened.every((page) => page.isClosed()), 10000));
+    opened.length = 0;
+    current = 'freshsync';
+    await app.page.evaluate(() => { window.__bcSlowRender = true; });
+    await app.page.locator('#app-list-sync').click();
+    assert(await waitFor(() => opened.length > 0, 10000));
+    assert(await waitFor(() => opened.every((page) => page.isClosed()), 12000), 'the tab closes while reconciliation is paused');
+    assert.equal(await app.page.locator('#comments-content .comment[data-comment-id="reddit:initial"]').count(), 1);
+    assert.equal(await app.page.locator('#comments-content .comment[data-comment-id="reddit:freshsync"]').count(), 0);
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:freshsync"]').count() === 1, 12000));
+    assert.deepEqual(app.errors, []);
+  } finally {
+    await app.browser.close();
+  }
+});
+
+for (const mode of ['Sidebar', 'Reader']) test(`${mode} keeps loaded comments when the Reddit connection is first enabled`, { timeout: 45000 }, async () => {
+  const url = STORIES[0].url;
+  const sidebar = mode === 'Sidebar';
+  const now = Math.floor(Date.now() / 1000);
+  const post = { id: 'freshpost', url, title: STORIES[0].title, author: 'reader', subreddit: 'news', subreddit_name_prefixed: 'r/news', permalink: '/r/news/comments/freshpost/article/', num_comments: 1, created_utc: now - 3600, score: 100 };
+  const comment = (id) => ({ kind: 't1', data: { id, body: `Comment ${id}`, author: 'reader', parent_id: 't3_freshpost', link_id: 't3_freshpost', created_utc: now - 60, replies: '' } });
+  const app = await launchApp({ ...(sidebar ? { appHost: new URL(url).hostname } : {}), sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com'], settings: { sources: { hn: !sidebar, reddit: true }, autoOpenSidebar: sidebar, updateCheck: false, frontPageMode: 'sources' }, responses: [
+    { match: (path) => path.includes('/api/posts/search'), json: { data: [post] } },
+    { match: (path) => path.includes('/api/comments/tree'), json: { data: [comment('archived')] } },
+  ] });
+  await app.context.route('https://www.reddit.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : path.includes('/comments/') ? JSON.stringify([{ data: { children: [{ kind: 't3', data: post }] } }, { data: { children: [comment('live')] } }]) : JSON.stringify({ data: { children: [{ kind: 't3', data: post }] } });
+    await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
+  });
+  try {
+    await app.page.goto(sidebar ? url : 'https://backchnnl.app/');
+    if (!sidebar) await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().evaluate((element) => element.click());
+    const archived = app.page.locator('#comments-content .comment[data-comment-id="reddit:archived"]');
+    assert(await waitFor(async () => await archived.count() === 1, 15000));
+    await archived.evaluate((element) => { window.__beforeRedditEnable = element; });
+    await app.page.locator('#reddit-read-modal .reddit-read-confirm').click();
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:live"]').count() === 1, 20000));
+    assert(await archived.evaluate((element) => element === window.__beforeRedditEnable), 'the original comment stays in place');
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();

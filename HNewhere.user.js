@@ -3313,6 +3313,7 @@
 	}
 
 	const itemCache = new Map();
+	const itemLoads = new Map();
 	const voteLinkCache = new Map();
 	const displayAgeCache = new Map();
 	const itemActionRequests = new Map();
@@ -3324,15 +3325,17 @@
 			return itemCache.get(key);
 		}
 
-		const item = await request(
-			"https://hacker-news.firebaseio.com/v0/item/" + id + ".json",
-		);
-
-		if (item) {
-			itemCache.set(key, item);
+		const load = {};
+		itemLoads.set(key, load);
+		try {
+			const item = await request(
+				"https://hacker-news.firebaseio.com/v0/item/" + id + ".json",
+			);
+			if (item && itemLoads.get(key) === load) itemCache.set(key, item);
+			return item;
+		} finally {
+			if (itemLoads.get(key) === load) itemLoads.delete(key);
 		}
-
-		return item;
 	}
 
 	// #region hnewhere-test-export
@@ -5596,7 +5599,7 @@ ${
 
 	async function refreshRedditReadViews(ui, { onThreadsLoaded = null } = {}) {
 		if (appState) {
-			return Promise.allSettled([renderAppList({ force: true }), appState.open ? openAppDiscussion(appState.open.row) : Promise.resolve()]);
+			return syncReaderViews(onThreadsLoaded);
 		} else if (redditReadPendingPage && redditReadPendingPage === normalizeURL(pageAddress())) {
 			redditReadPendingPage = "";
 			return refreshRedditPage(ui, { onThreadsLoaded });
@@ -5608,9 +5611,32 @@ ${
 			if (sidebarUI !== ui) return;
 			if (found.length) {
 				sidebarHasDiscussion = true;
-				await renderDiscussions(found, ui, { onThreadsLoaded });
+				if (canReconcileDiscussion(ui)) await syncDiscussions(ui, renderedDiscussions, onThreadsLoaded, { found });
+				else await renderDiscussions(found, ui, { onThreadsLoaded });
 			} else await ui.syncStatus?.onSync?.(onThreadsLoaded);
 		}
+	}
+
+	function syncReaderViews(onThreadsLoaded = null) {
+		let feedDone = false;
+		let discussionDone = false;
+		let released = false;
+		const finishRead = () => {
+			if (feedDone && discussionDone && !released) { released = true; return onThreadsLoaded?.() || Promise.resolve(); }
+			return Promise.resolve();
+		};
+		const finishFeed = () => { feedDone = true; return finishRead(); };
+		const finishDiscussion = () => { discussionDone = true; return finishRead(); };
+		const state = appState;
+		const discussion = state?.discussionSync
+			? state.discussionSync(finishDiscussion)
+			: state?.open && canReconcileDiscussion(state.ui)
+				? syncDiscussions(state.ui, renderedDiscussions, finishDiscussion)
+				: state?.open ? openAppDiscussion(state.open.row, { onThreadsLoaded: finishDiscussion }) : Promise.resolve();
+		return Promise.allSettled([
+			renderAppList({ force: true }).finally(finishFeed),
+			Promise.resolve(discussion).finally(finishDiscussion),
+		]);
 	}
 
 	function redditReadFailure(reason) {
@@ -5699,8 +5725,12 @@ ${
 
 			if (batch && !untapped) {
 				if (synced && runId === syncRunId) {
-					batch.synced = true;
-					batch.syncRun = runId;
+					if (batch.closing) {
+						if (!batch.failed && !batch.cancelled && isSidebarVisible()) showSyncComplete();
+					} else {
+						batch.synced = true;
+						batch.syncRun = runId;
+					}
 				}
 				batch.failed ||= failed;
 			} else if (runId === syncRunId && isSidebarVisible()) {
@@ -8426,6 +8456,7 @@ button {
 	// #endregion hnewhere-test-export
 
 	const threadCache = new Map();
+	const threadLoads = new Map();
 	const redditPageRefreshes = new Map();
 
 	function freshRedditPage(page) {
@@ -8438,20 +8469,107 @@ button {
 		return true;
 	}
 
-	async function loadThread(story) {
-		const hit = story.local ? null : cachedThread(threadCache, story.key, Date.now());
+	function rememberRedditPage(stories, readers, batch) {
+		const reddit = stories.flatMap((story, index) => story.source === "reddit" ? [{ story, reader: readers[index] }] : []);
+		const refreshed = reddit.filter(({ story, reader }) => !reader.empty && threadCache.get(story.key)?.at >= batch?.created).map(({ story }) => story.key);
+		if (!batch?.connected || batch.cancelled || !refreshed.length || !reddit.every(({ story, reader }) => reader.empty || threadCache.has(story.key))) return;
+		const page = openPageKey();
+		redditPageRefreshes.delete(page);
+		redditPageRefreshes.set(page, { at: Date.now(), keys: refreshed });
+		while (redditPageRefreshes.size > THREAD_CACHE_MAX) redditPageRefreshes.delete(redditPageRefreshes.keys().next().value);
+	}
+
+	async function loadThread(story, { force = false } = {}) {
+		const hit = story.local || force ? null : cachedThread(threadCache, story.key, Date.now());
 
 		if (hit) {
 			return hit.reader;
 		}
 
+		const load = story.local ? null : {};
+		if (load) threadLoads.set(story.key, load);
 		const reader = await loadThreadWithCeiling(story);
 
-		if (!story.local && !reader.empty) {
-			rememberThread(threadCache, story.key, reader, Date.now());
+		if (load && threadLoads.get(story.key) === load) {
+			threadLoads.delete(story.key);
+			if (!reader.empty) rememberThread(threadCache, story.key, reader, Date.now());
 		}
 
 		return reader;
+	}
+
+	function mergeMoreReplies(previous, current, shown, source) {
+		const candidates = [current, previous].filter(Boolean);
+		if (source === "bsky") {
+			const more = candidates[0];
+			if (!more?.ids?.length) return null;
+			const total = Number(more._hnewhereTotal ?? more.count) || 0;
+			const remaining = Math.max(0, total - shown.size);
+			return remaining ? { ...more, count: remaining, _hnewhereTotal: total } : null;
+		}
+		const ids = [...new Set(candidates.flatMap((more) => more.ids || []))];
+		const pending = ids.filter((id) => !shown.has(sourceKey(source, id)));
+		if (!pending.length) return null;
+		const count = Math.max(pending.length, ...candidates.map((more) => Math.max(0, (Number(more.count) || 0) - (ids.length - pending.length))));
+		return { ...candidates[0], ids: pending, count };
+	}
+
+	function snapshotRenderedThread(story, previous) {
+		const base = previous?._hnewhereFresh || previous;
+		const shown = renderedComments.filter((entry) => entry.discussionKey === story.key && entry.comment);
+		if (!shown.length) return previous || null;
+		const byKey = new Map(shown.map((entry) => [entry.id, { ...entry.comment, replyKeys: [...(entry.comment.replyKeys || [])] }]));
+		const roots = [];
+		const times = new Map(previous?.rootTimes || []);
+		for (const entry of shown) {
+			if (entry.parentId && byKey.has(entry.parentId)) {
+				const parent = byKey.get(entry.parentId);
+				if (!parent.replyKeys.includes(entry.id)) parent.replyKeys.push(entry.id);
+			} else if (!entry.parentId) {
+				roots.push(entry.id);
+				times.set(entry.id, entry.time || 0);
+			}
+		}
+		const keys = [...new Set([...(previous?.rootKeys || []), ...roots])];
+		return {
+			_hnewhereFresh: base,
+			rootKeys: keys,
+			rootTimes: times,
+			rootMore: mergeMoreReplies(previous?.rootMore, null, new Set(keys), story.source),
+			incomplete: Boolean(previous?.incomplete),
+			async getComment(key) { return byKey.get(key) || await base?.getComment(key) || null; },
+			async expandMore(ids, parent) { return base?.expandMore ? base.expandMore(ids, parent) : { ok: false, added: [], remaining: ids }; },
+		};
+	}
+
+	function mergeThreadReaders(previous, current, story) {
+		if (!previous) return current;
+		if (!current || current.empty) return { ...previous, incomplete: true, refreshFailed: true };
+		const rootKeys = [...new Set([...(current.rootKeys || []), ...(previous.rootKeys || [])])];
+		const rootTimes = new Map([...(previous.rootTimes || []), ...(current.rootTimes || [])]);
+		return {
+			_hnewhereFresh: current,
+			rootKeys,
+			rootTimes,
+			rootMore: mergeMoreReplies(previous.rootMore, current.rootMore, new Set(rootKeys), story.source),
+			incomplete: Boolean(current.incomplete),
+			refreshIncomplete: Boolean(current.incomplete),
+			async getComment(key) {
+				const fresh = await current.getComment(key);
+				const saved = await previous.getComment(key);
+				if (!fresh || fresh.deleted) return saved || null;
+				if (!saved) return fresh;
+				const replyKeys = [...new Set([...(fresh.replyKeys || []), ...(saved.replyKeys || [])])];
+				return { ...fresh, replyKeys, more: mergeMoreReplies(saved.more, fresh.more, new Set(replyKeys), story.source) };
+			},
+			async expandMore(ids, parent) {
+				if (current.expandMore) {
+					const result = await current.expandMore(ids, parent);
+					if (result.ok) return result;
+				}
+				return previous.expandMore ? previous.expandMore(ids, parent) : { ok: false, added: [], remaining: ids };
+			},
+		};
 	}
 
 	function forgetThreads(stories) {
@@ -16855,11 +16973,11 @@ header {
 	display:flex;
 	flex:1;
 	flex-direction:column;
-	justify-content:space-around;
+	justify-content:flex-start;
 	opacity:.3;
 }
 
-.discussion-skeleton-comment { padding:6px 0 8px 8px; border-left:1px solid var(--meta); }
+.discussion-skeleton-comment { flex:0 0 auto; margin-top:6px; padding:6px 0 8px 8px; border-left:1px solid var(--meta); }
 .discussion-skeleton-comment.is-reply { margin-left:22px; }
 .discussion-skeleton-comment .browse-skeleton-bar { height:2px; border-radius:0; background:var(--text); animation:none; }
 .discussion-skeleton-comment .browse-skeleton-bar:first-child { width:29%; height:1px; background:var(--meta); }
@@ -24252,15 +24370,11 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 	// #endregion hnewhere-test-export
 
 	function reloadDiscussion(ui, stories) {
-		itemCache.clear();
-
 		if (!ui || !stories.length || ui !== sidebarUI || stories !== renderedDiscussions) {
 			return;
 		}
 
-		forgetThreads(stories);
-		setSidebarStage(ui, "comments");
-		renderDiscussions(stories, ui).catch(console.error);
+		syncDiscussions(ui, stories).catch(console.error);
 	}
 
 	function mountFilterBanner(afterElement, ui) {
@@ -24747,7 +24861,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
       <div class="comment-main">
       <div class="meta">
 
-      ${isLocalSource ? "" : authorLinkHTML(comment.source, comment.author, comment.authorName)}
+		${isLocalSource ? "" : `<span class="comment-author">${authorLinkHTML(comment.source, comment.author, comment.authorName)}</span>`}
 
 		${comment.isOP ? `<span class="op-pill">OP</span>` : ""}
 
@@ -24837,6 +24951,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		renderedComments.push({
 			id: comment.key,
+			comment: { ...comment, replyKeys: [...(comment.replyKeys || [])] },
 			source: comment.source,
 			discussionKey: discussion.key,
 			storyID,
@@ -25023,10 +25138,17 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		button.type = "button";
 		button.className = "more-replies";
+		button.dataset.discussionKey = discussion.key;
+		button._hnewhereMoreContext = context;
 		container.appendChild(button);
 
 		const label = () =>
 			`${pluralize(remainingCount, "more reply", "more replies")}`;
+		const applyPendingRefresh = () => {
+			const pendingRefresh = button._hnewherePendingRefresh;
+			delete button._hnewherePendingRefresh;
+			if (pendingRefresh && container.isConnected) syncMoreReplies(pendingRefresh.more, pendingRefresh.thread, container, pendingRefresh.story, pendingRefresh.context);
+		};
 
 		button.textContent = label();
 
@@ -25035,18 +25157,23 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				return;
 			}
 
+			const requestedGeneration = context.generation;
 			button.disabled = true;
 			button.textContent = "loading…";
 
 			const { ok, added, remaining } = await thread.expandMore(pending, context.parentKey);
 
-			if (context.generation !== sidebarGeneration) {
+			if (requestedGeneration !== sidebarGeneration) {
+				button.disabled = false;
+				button.textContent = label();
+				applyPendingRefresh();
 				return;
 			}
 
 			if (!ok) {
 				button.disabled = false;
 				button.textContent = label() + " — try again";
+				applyPendingRefresh();
 				return;
 			}
 
@@ -25065,7 +25192,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				discussion,
 				context.seenTime,
 				context.collapsedKeys,
-				context.generation,
+				requestedGeneration,
 				context.parentKey,
 			);
 
@@ -25075,14 +25202,23 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 			pending = remaining;
 			remainingCount = Math.max(pending.length, remainingCount - added.length);
+			if (context.parentKey) {
+				const parent = renderedComments.find((entry) => entry.discussionKey === discussion.key && entry.id === context.parentKey);
+				if (parent?.comment) {
+					parent.comment.replyKeys = [...new Set([...(parent.comment.replyKeys || []), ...directKeys])];
+					parent.comment.more = pending.length ? { ...more, ids: [...pending], count: remainingCount } : null;
+				}
+			}
 
 			if (!pending.length) {
 				button.remove();
+				applyPendingRefresh();
 				return;
 			}
 
 			button.disabled = false;
 			button.textContent = label() + (added.length ? "" : " — try again");
+			applyPendingRefresh();
 		};
 	}
 
@@ -25133,7 +25269,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 	function discussionSkeleton() {
 		const waiting = document.createElement("div");
 		waiting.className = "discussion-loading";
-		waiting.innerHTML = `<div class="discussion-skeleton" aria-hidden="true">${Array.from({ length: 10 }, (_, index) => `<div class="discussion-skeleton-comment${index % 4 === 1 ? " is-reply" : ""}" style="--skeleton-width:${[76, 61, 83, 69][index % 4]}%"><div class="browse-skeleton-bar"></div><div class="browse-skeleton-bar"></div>${index % 3 === 0 ? '<div class="browse-skeleton-bar"></div>' : ""}</div>`).join("")}</div>`;
+		waiting.innerHTML = `<div class="discussion-skeleton" aria-hidden="true">${Array.from({ length: 40 }, (_, index) => `<div class="discussion-skeleton-comment${index % 4 === 1 ? " is-reply" : ""}" style="--skeleton-width:${[76, 61, 83, 69][index % 4]}%"><div class="browse-skeleton-bar"></div><div class="browse-skeleton-bar"></div>${index % 3 === 0 ? '<div class="browse-skeleton-bar"></div>' : ""}</div>`).join("")}</div>`;
 		return waiting;
 	}
 
@@ -25224,14 +25360,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				}),
 			),
 		);
-		const batch = redditReadBatch;
-		const redditThreads = stories.flatMap((story, index) => story.source === "reddit" ? [{ story, reader: threads[index] }] : []);
-		const refreshedRedditKeys = redditThreads.filter(({ story, reader }) => !reader.empty && threadCache.get(story.key)?.at >= batch?.created).map(({ story }) => story.key);
-		if (generation === sidebarGeneration && run === discussionRenderRun && batch?.connected && !batch.cancelled && refreshedRedditKeys.length && redditThreads.every(({ story, reader }) => reader.empty || threadCache.has(story.key))) {
-			redditPageRefreshes.delete(openPageKey());
-			redditPageRefreshes.set(openPageKey(), { at: Date.now(), keys: refreshedRedditKeys });
-			while (redditPageRefreshes.size > THREAD_CACHE_MAX) redditPageRefreshes.delete(redditPageRefreshes.keys().next().value);
-		}
+		if (generation === sidebarGeneration && run === discussionRenderRun) rememberRedditPage(stories, threads, redditReadBatch);
 		onThreadsLoaded?.()?.catch(console.error);
 		finishDiscussionProgress(progress);
 
@@ -25260,8 +25389,9 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			}
 		});
 
-		const loadStatus = new Map(stories.flatMap((story, index) => threads[index].empty && Number(story.commentCount) > 0
-			? [[story.key, "unavailable"]]
+		const loadStatus = new Map(stories.flatMap((story, index) => threads[index].refreshFailed ? [[story.key, "refresh-failed"]]
+			: threads[index].refreshIncomplete ? [[story.key, "refresh-incomplete"]]
+			: threads[index].empty && Number(story.commentCount) > 0 ? [[story.key, "unavailable"]]
 			: threads[index].incomplete && !threads[index].empty ? [[story.key, "incomplete"]] : []));
 		headerElement.remove();
 		sortRow?.remove();
@@ -26098,7 +26228,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 <div class="source-menu-entry"><label class="settings-option source-menu-option"${key ? ` data-discussion-key="${escapeHTML(key)}"` : ""}>${discussionChoiceHTML(
 			`<input type="radio" name="${name}"${key ? "" : " checked"}>`,
 			{ ...about, count: null },
-		)}</label>${story ? discussionHintHTML(story, about.count) : ""}${story && loadStatus.has(key) ? `<div class="discussion-source-status">${loadStatus.get(key) === "incomplete" ? "Only some comments could be loaded." : "Couldn't load comments."} Use Sync to retry.</div>` : ""}</div>`;
+		)}</label>${story ? discussionHintHTML(story, about.count) : ""}${story && loadStatus.has(key) ? `<div class="discussion-source-status">${loadStatus.get(key) === "refresh-failed" ? "Couldn't refresh comments. Showing previously loaded comments." : loadStatus.get(key) === "refresh-incomplete" ? "Only some comments could be refreshed. Showing previously loaded comments too." : loadStatus.get(key) === "incomplete" ? "Only some comments could be loaded." : "Couldn't load comments."} Use Sync to retry.</div>` : ""}</div>`;
 
 		return `<div class="source-menu hidden" id="source-menu" role="menu">
 <div class="choice-group">${option("", { label: "All sources" })}</div>
@@ -26426,9 +26556,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		const found = await discoverAll(pageAddresses(), await loadSettings(), { force: true });
 		if (!found.length || sidebarUI !== ui || generation !== sidebarGeneration || normalizeURL(pageAddress()) !== page) return;
 		const previous = renderedFor === openPageKey() ? renderedDiscussions : [];
-		forgetThreads(dedupeDiscussions([...found, ...previous]));
 		sidebarHasDiscussion = true;
 		setBrowseMode(ui, false, { animate: false });
+		if (previous.length && canReconcileDiscussion(ui)) return syncDiscussions(ui, previous, onThreadsLoaded, { found });
+		forgetThreads(dedupeDiscussions([...found, ...previous]));
 		await renderDiscussions(disambiguateLabels(dedupeDiscussions([...found, ...previous]).sort(compareStoriesByDiscussion)), ui, { onThreadsLoaded });
 	}
 
@@ -31292,28 +31423,297 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		crossFadeCommentsView(comments, render);
 	}
 
-	async function syncDiscussions(ui, stories, onThreadsLoaded = null) {
-		await flushComposerDrafts(ui.shadow);
-		itemCache.clear();
-		forgetThreads(stories);
+	function updateSyncedComment(rendered, comment, story) {
+		const previous = rendered.comment || {};
+		const textChanged = rendered.textHTML !== comment.bodyHTML;
+		if (textChanged) {
+			rendered.textElement.innerHTML = sanitizeHTML(comment.bodyHTML, { images: commentImagesPreference }) || "";
+			foldQuoteBlocks(rendered.textElement);
+			wrapLooseCommentText(rendered.textElement);
+			rendered.textHTML = comment.bodyHTML;
+		}
+		const meta = rendered.element.querySelector(":scope > .comment-layout > .comment-main > .meta");
+		const author = meta?.querySelector(":scope > .comment-author");
+		if (author && (previous.author !== comment.author || previous.authorName !== comment.authorName)) author.innerHTML = authorLinkHTML(comment.source, comment.author, comment.authorName);
+		const age = meta?.querySelector(":scope > .item-age");
+		if (age && previous.createdAt !== comment.createdAt) age.textContent = timeAgo(comment.createdAt);
+		const save = meta?.querySelector('[data-item-action="save"]');
+		if (save) {
+			if (textChanged) {
+				save.dataset.saveTitle = textExcerpt(comment.bodyHTML, EXCERPT_CHARS);
+				save.dataset.saveText = textExcerpt(comment.bodyHTML, SAVED_TEXT_CHARS);
+			}
+			if (previous.author !== comment.author || previous.authorName !== comment.authorName) save.dataset.saveBy = comment.authorName || comment.author || "";
+			if (previous.createdAt !== comment.createdAt) save.dataset.saveTime = String(comment.createdAt || "");
+		}
+		let badge = meta?.querySelector(":scope > .comment-source");
+		const label = rendered.parentId === null && sidebarSourceKeys.size > 1 && story.label ? (liveDiscussions.has(story.key) ? story.baseLabel || story.label : story.label) : "";
+		if (label && !badge && age) {
+			badge = document.createElement("span");
+			badge.className = "comment-source";
+			age.before(badge, document.createTextNode(" "));
+		}
+		if (badge) {
+			if (label) { if (badge.textContent !== label) badge.textContent = label; }
+			else badge.remove();
+		}
+		const voteSlot = rendered.element.querySelector(":scope > .comment-layout > .comment-vote-slot");
+		voteSlot?.classList.toggle("comment-vote-slot-empty", !renderedSourcesCanVote() || Boolean(comment.local));
+		rendered.author = comment.author;
+		rendered.time = comment.createdAt;
+		if (previous.createdAt !== comment.createdAt) rendered.element.dataset.createdAt = String(comment.createdAt || 0);
+		rendered.comment = { ...comment, replyKeys: [...(comment.replyKeys || [])] };
+	}
 
-		const generation = ++sidebarGeneration;
+	function syncedAnchor(container, keys, index, lookup, discussionKey = "") {
+		for (let next = index + 1; next < keys.length; next++) {
+			const rendered = lookup.get(discussionKey + "\0" + keys[next]);
+			let node = rendered?.element;
+			while (node?.parentElement && node.parentElement !== container) node = node.parentElement;
+			if (node?.parentElement === container) return node;
+		}
+		return [...container.children].find((node) => node.classList.contains("more-replies") && (!discussionKey || node.dataset.discussionKey === discussionKey)) ||
+			[...container.children].find((node) => node.dataset.liveBookend === "close") || null;
+	}
 
-		setSidebarStage(ui, "discussion");
-
-		const found = await discoverAll(pageAddresses(), await loadSettings(), { force: true });
-
-		if (generation !== sidebarGeneration) {
+	function syncMoreReplies(more, thread, container, story, context) {
+		const existing = [...container.children].filter((node) => node.classList.contains("more-replies") && node.dataset.discussionKey === story.key);
+		if (!more && !existing.length) return;
+		if (existing.some((button) => button.disabled)) {
+			for (const button of existing.filter((item) => item.disabled)) button._hnewherePendingRefresh = { more, thread, story, context };
 			return;
 		}
+		for (const button of existing) button.remove();
+		const shown = new Set(renderedComments.filter((entry) => entry.discussionKey === story.key && entry.parentId === context.parentKey).map((entry) => entry.id));
+		mountMoreReplies(mergeMoreReplies(null, more, shown, story.source), thread, container, story, context);
+	}
 
-		setSidebarStage(ui, "comments");
+	async function reconcileSyncedComment(key, thread, story, container, context, anchor = null) {
+		if (context.generation !== sidebarGeneration || context.run !== discussionRenderRun) return;
+		const comment = await thread.getComment(key);
+		if (!comment || comment.deleted || context.generation !== sidebarGeneration || context.run !== discussionRenderRun) return;
+		const indexKey = story.key + "\0" + key;
+		const rendered = context.lookup.get(indexKey);
+		if (!rendered) {
+			const start = renderedComments.length;
+			const holder = document.createElement("div");
+			await renderComment(key, thread, holder, story, context.seenTime, context.collapsedKeys, context.generation, context.parentKey);
+			if (context.generation !== sidebarGeneration || context.run !== discussionRenderRun) return;
+			for (const entry of renderedComments.slice(start)) {
+				if (activeCommentFilter) entry.element.classList.add("comment-filter-hidden");
+				context.lookup.set(entry.discussionKey + "\0" + entry.id, entry);
+			}
+			const added = context.lookup.get(indexKey)?.element;
+			if (added?.parentElement === holder) container.insertBefore(added, anchor?.parentElement === container ? anchor : null);
+			return;
+		}
+		updateSyncedComment(rendered, comment, story);
+		const children = rendered.element.querySelector(":scope > .comment-layout > .comment-main > .comment-content > .children");
+		if (!children) return;
+		const keys = comment.replyKeys || [];
+		for (let index = 0; index < keys.length; index++) {
+			const next = { ...context, parentKey: comment.key };
+			const anchor = context.lookup.has(story.key + "\0" + keys[index]) ? null : syncedAnchor(children, keys, index, context.lookup, story.key);
+			await reconcileSyncedComment(keys[index], thread, story, children, next, anchor);
+		}
+		if (context.generation !== sidebarGeneration || context.run !== discussionRenderRun) return;
+		syncMoreReplies(comment.more, thread, children, story, { seenTime: context.seenTime, collapsedKeys: context.collapsedKeys, generation: context.generation, parentKey: comment.key });
+	}
 
-		return renderDiscussions(
-			disambiguateLabels(dedupeDiscussions([...found, ...stories]).sort(compareStoriesByDiscussion)),
-			ui,
-			{ onThreadsLoaded },
-		);
+	function syncDiscussionHeader(ui, stories, settings, loadStatus) {
+		const body = ui.body;
+		const oldHeader = body.querySelector(":scope > .page-header");
+		const oldSort = body.querySelector(":scope > .page-sort");
+		const filterAtHeader = oldHeader?.nextElementSibling === ui.filterBanner;
+		const header = renderPageHeader(stories, body, { page: discussionsPageTitle(stories), sort: settings.commentSort, loadStatus, onSortChange: () => renderDiscussions(stories, ui) });
+		if (oldHeader) oldHeader.replaceWith(header);
+		else body.prepend(header);
+		if (filterAtHeader) mountFilterBanner(header, ui);
+		const newSort = body.querySelector(":scope > .page-sort:last-child");
+		if (oldSort && newSort) oldSort.replaceWith(newSort);
+		const details = body.querySelector(":scope > .submission-details");
+		if (details) for (const story of stories) {
+			let block = [...details.children].find((node) => node.dataset.discussionKey === story.key);
+			if (!block) {
+				block = renderStory(story, details, { compose: false, title: storyTitle(story, discussionsPageTitle(stories), stories.length > 1), showTitle: true });
+				if (block) { block.classList.add("submission-detail"); block.dataset.discussionKey = story.key; }
+			}
+			const count = block?.querySelector(".story-comment-count");
+			if (count) count.textContent = String(story.commentCount || 0);
+			const title = block?.querySelector(".story-title > a") || block?.querySelector(".story-title");
+			const label = storyTitle(story, discussionsPageTitle(stories), stories.length > 1) || "";
+			if (title && title.textContent.trim() !== label) title.textContent = label;
+			const score = block?.querySelector(".story-score");
+			if (score && story.score != null) { score.textContent = String(story.score); score.dataset.storyScore = String(story.score); }
+		}
+		syncFilterAffordances();
+	}
+
+	function syncDiscussionBookends(comments, entries, settings, lookup) {
+		let open = comments.querySelector(':scope > [data-live-bookend="open"]');
+		let close = comments.querySelector(':scope > [data-live-bookend="close"]');
+		if ((settings.commentSort || "best") !== "best") { open?.remove(); close?.remove(); return; }
+		const live = entries.filter((entry) => entry.live).map((entry) => lookup.get(entry.discussionKey + "\0" + entry.key)?.element).filter(Boolean);
+		const direct = (element) => {
+			let node = element;
+			while (node?.parentElement && node.parentElement !== comments) node = node.parentElement;
+			return node?.parentElement === comments ? node : null;
+		};
+		const nodes = [...new Set(live.map(direct).filter(Boolean))].sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+		if (!nodes.length) { open?.remove(); close?.remove(); return; }
+		open ||= liveBookend("open");
+		close ||= liveBookend("close");
+		if (open.nextSibling !== nodes[0]) comments.insertBefore(open, nodes[0]);
+		const after = nodes[nodes.length - 1].nextSibling;
+		if (after !== close) comments.insertBefore(close, after);
+		syncLiveBookends();
+	}
+
+	function forgetSyncedItems(stories) {
+		const hn = stories.filter((story) => story.source === "hn");
+		const keys = new Set(hn.map((story) => story.key));
+		const forget = (id) => { itemCache.delete(String(id)); itemLoads.delete(String(id)); };
+		for (const story of hn) {
+			forget(story.id);
+			for (const key of threadCache.get(story.key)?.reader?.rootKeys || []) {
+				const parsed = parseSourceKey(key);
+				if (parsed?.source === "hn") forget(parsed.id);
+			}
+		}
+		for (const entry of renderedComments) if (entry.source === "hn" && keys.has(entry.discussionKey)) {
+			const parsed = parseSourceKey(entry.id);
+			if (parsed?.source === "hn") forget(parsed.id);
+			for (const key of entry.comment?.replyKeys || []) {
+				const child = parseSourceKey(key);
+				if (child?.source === "hn") forget(child.id);
+			}
+		}
+	}
+
+	function canReconcileDiscussion(ui) {
+		const comments = ui?.body?.querySelector(":scope > .top-level-comments");
+		return Boolean(comments && renderedFor === openPageKey() && (comments.querySelector(".comment") || !comments.querySelector(":scope > .discussion-loading")));
+	}
+
+	async function syncDiscussions(ui, stories, onThreadsLoaded = null, { found: alreadyFound = null } = {}) {
+		const comments = ui.body.querySelector(":scope > .top-level-comments");
+		const preserve = canReconcileDiscussion(ui);
+		const savedEntries = new Map(stories.map((story) => [story.key, threadCache.get(story.key)]));
+		const saved = new Map(stories.map((story) => [story.key, snapshotRenderedThread(story, savedEntries.get(story.key)?.reader)]));
+		const page = openPageKey();
+		const generation = ++sidebarGeneration;
+		const run = ++discussionRenderRun;
+		const current = () => generation === sidebarGeneration && run === discussionRenderRun && sidebarUI === ui && openPageKey() === page;
+		const sortControls = [...ui.shadow.querySelectorAll("#app-discussion-sort select, #app-discussion-sort button, #comments-content > .page-sort select, #comments-content > .page-sort button")];
+		if (preserve) for (const control of sortControls) control.disabled = true;
+		for (const button of ui.body.querySelectorAll(".more-replies")) if (button._hnewhereMoreContext) button._hnewhereMoreContext.generation = generation;
+		setSidebarStage(ui, "discussion");
+		let progress = null;
+		try {
+			await flushComposerDrafts(ui.shadow);
+			if (!current()) return;
+			const settings = await loadSettings();
+			if (!current()) return;
+			const found = alreadyFound || await discoverAll(pageAddresses(), settings, { force: true });
+			if (!current()) return;
+			const nextStories = disambiguateLabels(dedupeDiscussions([...found, ...stories]).sort(compareStoriesByDiscussion));
+			forgetSyncedItems(nextStories);
+			if (!preserve) {
+				forgetThreads(nextStories);
+				setSidebarStage(ui, "comments");
+				return await renderDiscussions(nextStories, ui, { onThreadsLoaded });
+			}
+			comments.querySelector(":scope > .discussion-loading")?.remove();
+			comments.classList.remove("discussion-entering", "is-visible");
+			for (const story of nextStories) if (!saved.has(story.key)) {
+				const entry = threadCache.get(story.key);
+				savedEntries.set(story.key, entry);
+				saved.set(story.key, snapshotRenderedThread(story, entry?.reader));
+			}
+			progress = startDiscussionProgress(ui);
+			let completed = 0;
+			const updateProgress = () => {
+				if (!current()) return;
+				const text = "loading discussions (" + completed + " of " + nextStories.length + ")…";
+				if (ui.headerSubtitle) setSidebarLoadingLabel(ui, text);
+				else if (progress) progress.querySelector(".discussion-progress-label").textContent = "Loading discussions (" + completed + " of " + nextStories.length + ")…";
+			};
+			updateProgress();
+			const fresh = await Promise.all(nextStories.map((story) => loadThread(story, { force: true }).then((reader) => { completed++; updateProgress(); return reader; })));
+			if (current()) rememberRedditPage(nextStories, fresh, redditReadBatch);
+			onThreadsLoaded?.()?.catch(console.error);
+			finishDiscussionProgress(progress);
+			if (!current()) return;
+			const threads = nextStories.map((story, index) => {
+				const previous = saved.get(story.key);
+				const merged = mergeThreadReaders(previous, fresh[index], story);
+				if (!story.local && merged && !merged.empty) rememberThread(threadCache, story.key, merged, fresh[index].empty ? savedEntries.get(story.key)?.at || ui.syncStatus?.checkedAt || Date.now() : Date.now());
+				return merged;
+			});
+			const loadStatus = new Map(nextStories.flatMap((story, index) => fresh[index].empty && Number(story.commentCount) > 0
+				? [[story.key, saved.get(story.key) ? "refresh-failed" : "unavailable"]]
+				: fresh[index].incomplete && !fresh[index].empty ? [[story.key, saved.get(story.key) ? "refresh-incomplete" : "incomplete"]] : []));
+			renderedDiscussions = nextStories;
+			sidebarSourceKeys.clear();
+			for (const story of nextStories) sidebarSourceKeys.add(story.source);
+			liveDiscussions.clear();
+			const now = Math.floor(Date.now() / 1000);
+			nextStories.forEach((story, index) => { if (!story.local && isDiscussionLive(threads[index], now)) liveDiscussions.set(story.key, story.baseLabel || story.label || ""); });
+			setSidebarLoadingLabel(ui, "rendering comments…");
+			syncDiscussionHeader(ui, nextStories, settings, loadStatus);
+			for (const control of ui.shadow.querySelectorAll("#app-discussion-sort select, #app-discussion-sort button, #comments-content > .page-sort select, #comments-content > .page-sort button")) control.disabled = true;
+			const collapsedKeys = await loadCollapsed();
+			if (!current()) return;
+			const seenTimes = new Map(await Promise.all(nextStories.map(async (story) => [story.key, await visitSeenTime(story.key)])));
+			if (!current()) return;
+			const entries = blendRoots(nextStories.map((story, index) => ({ discussionKey: story.key, rootKeys: threads[index]?.rootKeys || [], story, thread: threads[index], seenTime: seenTimes.get(story.key) || 0 })), { sort: settings.commentSort, arrivedFrom: arrivalSource(), unreadFirst: Boolean(settings.newCommentsFirst) });
+			const lookup = new Map(renderedComments.map((entry) => [entry.discussionKey + "\0" + entry.id, entry]));
+			const source = new Map(nextStories.map((story, index) => [story.key, { story, thread: threads[index] }]));
+			const anchors = new Array(entries.length);
+			let nextRoot = null;
+			for (let index = entries.length - 1; index >= 0; index--) {
+				anchors[index] = nextRoot;
+				let node = lookup.get(entries[index].discussionKey + "\0" + entries[index].key)?.element;
+				while (node?.parentElement && node.parentElement !== comments) node = node.parentElement;
+				if (node?.parentElement === comments) nextRoot = node;
+			}
+			for (let index = 0; index < entries.length; index++) {
+				if (!current()) return;
+				const entry = entries[index];
+				const held = source.get(entry.discussionKey);
+				await reconcileSyncedComment(entry.key, held.thread, held.story, comments, { generation, run, lookup, collapsedKeys, seenTime: seenTimes.get(entry.discussionKey) || 0, parentKey: null }, anchors[index] || syncedAnchor(comments, [], 0, lookup));
+				if (index % 10 === 9) await new Promise(requestAnimationFrame);
+			}
+			if (!current()) return;
+			for (let index = 0; index < nextStories.length; index++) syncMoreReplies(threads[index]?.rootMore, threads[index], comments, nextStories[index], { seenTime: seenTimes.get(nextStories[index].key) || 0, collapsedKeys, generation, parentKey: null });
+			syncDiscussionBookends(comments, entries, settings, lookup);
+			syncNewCommentsFirstControl(ui, entries, settings);
+			reconcileWholeThreads(nextStories, ui);
+			refreshSaveControls().catch(console.error);
+			applyPendingFocus().catch(console.error);
+			await paintCollectionTag(ui, nextStories, seenTimes);
+			if (!current()) return;
+			for (const story of nextStories) { await markSeen(story.key); if (!current()) return; }
+			if (appState) refreshAppSeen().catch(console.error);
+			for (const story of nextStories) if (isSidebarVisible() && getSource(story.source)?.capabilities.vote) {
+				const votes = await loadVoteState(story.source, story.id);
+				if (!current()) return;
+				hydrateVoteControlsForStory(story.id, votes);
+				hydrateDisplayAges(story.id);
+			}
+			if (appState || settings.annotations && shouldShowArticleAnnotations(settings)) await refreshArticleAnnotations();
+			if (!current()) return;
+			if (activeCommentFilter?.type === "discussion") applyDiscussionFilter(activeCommentFilter.key, { animate: false, scroll: false });
+			else if (activeCommentFilter?.type === "comment") applyCommentFocus(activeCommentFilter.id, { animate: false, scroll: false });
+			setSidebarSyncStatus(ui, { checkedAt: threadsCheckedAt(threadCache, nextStories.map((story) => story.key), Date.now()), onSync: (releaseRead) => syncDiscussions(ui, nextStories, releaseRead) });
+		} finally {
+			finishDiscussionProgress(progress);
+			if (current()) {
+				for (const control of sortControls) if (control.isConnected) control.disabled = false;
+				for (const control of ui.shadow.querySelectorAll("#app-discussion-sort select, #app-discussion-sort button, #comments-content > .page-sort select, #comments-content > .page-sort button")) control.disabled = false;
+				clearSidebarStage(ui);
+			}
+		}
 	}
 
 	async function hideCurrentSite(scope = "page") {
@@ -31376,7 +31776,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 		if (!settings.annotations) {
 			clearArticleAnnotations();
-			clearCommentFilter({ animate: false });
+			if (!activeCommentFilter || activeCommentFilter.type === "quote") clearCommentFilter({ animate: false });
 			return;
 		}
 
@@ -31391,7 +31791,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		const groups = buildAnnotationGroups(renderedComments, articleIndex);
 		const redrawing = pdfReaderRedrawing();
 
-		if (!groups.length && !redrawing) {
+		if (!groups.length && !redrawing && (!activeCommentFilter || activeCommentFilter.type === "quote")) {
 			clearCommentFilter({ animate: false });
 		}
 
@@ -36505,10 +36905,7 @@ ${settingsModalHTML()}
 			button.setAttribute("aria-busy", "true");
 			showToast("Syncing…", { kind: "system", persist: true, loading: true });
 
-			const runs = await runSync(() => Promise.allSettled([
-				renderAppList({ force: true }),
-				Promise.resolve(appState?.discussionSync?.()),
-			]));
+			const runs = await runSync((releaseRead) => syncReaderViews(releaseRead));
 
 			if (shadow.getElementById("toast")?.textContent === "Syncing…") {
 				showToast("");
@@ -40643,7 +41040,7 @@ ${frontPageChooserHTML()}
 		const settings = await loadSettings();
 
 		if (!settings.annotations) {
-			clearCommentFilter({ animate: false });
+			if (!activeCommentFilter || activeCommentFilter.type === "quote") clearCommentFilter({ animate: false });
 			return;
 		}
 
