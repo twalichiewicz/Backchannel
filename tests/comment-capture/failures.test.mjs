@@ -104,11 +104,14 @@ test("the loading skeleton reports completed discussions while slower sources ar
     await app.page.goto(url);
     const loading = app.page.locator('#comments-content .discussion-loading');
     assert(await waitFor(async () => await loading.count() > 0, 10000), "the loading skeleton appears");
-    assert(await loading.locator('.discussion-skeleton-comment').count() >= 4, "the skeleton fills the discussion area");
-    const spacing = await loading.locator('.discussion-skeleton-comment').evaluateAll((rows) => rows.slice(0, 8).map((row) => row.getBoundingClientRect().top));
-    assert(spacing.every((top, index) => index === 0 || top - spacing[index - 1] <= 45), 'placeholder comments use a consistent compact rhythm');
+    assert(await loading.locator('.comment .comment-layout .comment-main .text').count() >= 4, "the skeleton uses the real comment layout");
+    const animated = loading.locator('.comment .text').first();
+    const initial = await animated.textContent();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    assert.notEqual(await animated.textContent(), initial, 'the placeholder text changes rapidly');
+    assert.match(await animated.textContent(), /^[\x20-\x7e\n]+$/, 'placeholder text uses printable ASCII');
+    assert((await loading.locator('.comment .meta').allTextContents()).slice(0, 4).every((value, index, items) => index === 0 || value !== items[0]), 'placeholder comments do not all show the same characters');
     assert.equal(await loading.locator('.discussion-skeleton').evaluate((element) => getComputedStyle(element).opacity), '0.3', 'the placeholders are subdued');
-    assert(await loading.locator('.discussion-skeleton-comment .browse-skeleton-bar').evaluateAll((bars) => bars.every((bar) => bar.getBoundingClientRect().height <= 2)), 'all placeholders are fine lines');
     assert.equal(await loading.locator('.discussion-skeleton-heading, .discussion-skeleton-compose').count(), 0, "known content is not replaced with placeholders");
     assert((await app.page.locator('#comments-content .page-header-title').textContent()).length > 0, "the known article title appears immediately");
     const composer = app.page.locator('#comments-content .compose-box');
@@ -151,7 +154,7 @@ test("Reader shows a skeleton and aligned loading hint without a progress bar", 
   try {
     await app.page.goto('https://backchnnl.app/');
     await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
-    assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-skeleton-comment').count() > 0, 3000), "the normal skeleton appears during discovery");
+    assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading .comment .text').count() > 0, 3000), "the normal skeleton appears during discovery");
     assert.match(await app.page.locator('#panel.app-docked > .discussion-progress-strip').textContent(), /checking sources/i, 'the loading hint appears during discovery');
     assert(await app.page.locator('#comment-toggle').isVisible(), 'the comment control is visible while discovery is still pending');
     assert(await app.page.locator('#app-discussion-meta .page-header-disclosure').isVisible(), 'the Sources control is visible while discovery is still pending');
@@ -175,6 +178,7 @@ test("Reader shows a skeleton and aligned loading hint without a progress bar", 
     const title = await app.page.locator('#panel.app-docked > header .header-static-title').boundingBox();
     const label = await strip.locator('.discussion-progress-label').boundingBox();
     assert(Math.abs(title.x - label.x) <= 2, "the hint aligns with the Discussion title");
+    assert.notEqual(await strip.locator('.discussion-progress-label').evaluate((element) => getComputedStyle(element).animationName), 'none', 'the Reader loading hint glimmers');
     const composer = app.page.locator('#panel .compose-box');
     assert.equal(await composer.count(), 1);
     assert.equal(await composer.locator('.composer-text').inputValue(), 'Reader draft while loading', 'the early draft is kept when discovered sources arrive');
@@ -194,7 +198,7 @@ test("Sidebar shows sync in the header while browsing without a duplicate toast"
   const app = await launchApp({ appHost: new URL(url).hostname, sharedStore: true, slowGets, settings: { sources: { hn: true }, autoOpenSidebar: true, frontPageMode: "sources", updateCheck: false } });
   try {
     await app.page.goto(url);
-    assert(await waitFor(async () => await app.page.locator('#comments-content .comment').count() > 0, 15000));
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id]').count() > 0, 15000));
     assert(await waitFor(async () => /updated/i.test(await app.page.locator('#header-subtitle').textContent()), 10000));
     assert(await waitFor(async () => !(await app.page.locator('#header-subtitle').evaluate((element) => element.classList.contains('header-subtitle-visible'))), 3500), "the updated status auto-collapses");
     await app.page.locator('#browse-toggle .wordmark-root').click();
@@ -444,8 +448,8 @@ test("queued discussions get their own timeout instead of expiring before the re
   const app = await launchApp({ source, appHost: new URL(url).hostname, sharedStore: true, handler: "Userscripts", settings: { sources: { hn: false, reddit: true }, autoOpenSidebar: true, updateCheck: false }, values: { "HNewhere:reddit_read_window_notice": 2 }, responses });
   try {
     await app.page.goto(url);
-    await waitFor(async () => await app.page.locator("#comments-content .comment").count() === 4, 15000);
-    assert.equal(await app.page.locator("#comments-content .comment").count(), 4, "queued requests must not time out before starting");
+    await waitFor(async () => await app.page.locator("#comments-content .comment[data-comment-id]").count() === 4, 15000);
+    assert.equal(await app.page.locator("#comments-content .comment[data-comment-id]").count(), 4, "queued requests must not time out before starting");
     assert.equal(app.requests.filter(({ url }) => url.includes("/api/comments/tree")).length, 4);
     assert.deepEqual(app.errors, []);
   } finally {

@@ -30,14 +30,40 @@ test("all 120 omitted roots remain loadable across multiple batches", { timeout:
     await more.waitFor({ timeout: 15000 });
     assert.match(await more.textContent(), /^120 more replies/, "known IDs are not labeled as zero");
     await more.click();
-    assert(await waitFor(async () => await app.page.locator("#comments-content .comment").count() === 101, 15000));
+    assert(await waitFor(async () => await app.page.locator("#comments-content .comment[data-comment-id]").count() === 101, 15000));
     await more.click();
-    assert(await waitFor(async () => await app.page.locator("#comments-content .comment").count() === 121, 15000));
+    assert(await waitFor(async () => await app.page.locator("#comments-content .comment[data-comment-id]").count() === 121, 15000));
     assert.equal(await app.page.locator('#comments-content .comment[data-comment-id="reddit:extra119"]').count(), 1);
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();
   }
+});
+
+test('expanded replies remain available to another page using the shared discussion', { timeout: 45000 }, async () => {
+  const root = comment('root', 't3_fixture0', 'First comment');
+  const ids = Array.from({ length: 101 }, (_, index) => `extra${index}`);
+  const initial = [root, { kind: 'more', data: { children: ids, count: ids.length } }];
+  const expanded = [root, ...ids.map((id) => comment(id, 't3_fixture0', `Shared expanded reply ${id}`))];
+  const app = await openArchive(initial, expanded, { handler: 'Tampermonkey' });
+  try {
+    const more = app.page.locator('#comments-content .more-replies');
+    await more.waitFor({ timeout: 15000 });
+    await more.click();
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:extra99"]').count() === 1, 10000));
+    assert(await waitFor(() => Boolean(app.store.get('HNewhere:thread_cache:reddit:fixture0')?.comments?.['reddit:extra99']), 5000), 'expanded comments are published to the shared discussion');
+    const other = await app.context.newPage();
+    await other.goto(url);
+    assert(await waitFor(async () => await other.locator('#comments-content .comment[data-comment-id="reddit:extra99"]').count() === 1, 10000));
+    const remaining = other.locator('#comments-content .more-replies');
+    assert.match(await remaining.textContent(), /^1 more reply/, 'only the remaining reply is offered');
+    await remaining.click();
+    assert(await waitFor(async () => await other.locator('#comments-content .comment[data-comment-id="reddit:extra100"]').count() === 1, 10000));
+    await other.locator('#comment-sort').selectOption('newest');
+    assert(await waitFor(async () => await other.locator('#comments-content .discussion-loading').count() === 0 && await other.locator('#comments-content .comment[data-comment-id]').count() === 102, 15000), 'sorting keeps all replies expanded from the shared cache');
+    assert.equal(await remaining.count(), 0, 'already loaded replies are not offered again');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
 });
 
 test("sync preserves already expanded replies and keeps the remaining replies loadable", { timeout: 45000 }, async () => {
@@ -50,13 +76,13 @@ test("sync preserves already expanded replies and keeps the remaining replies lo
     const more = app.page.locator('#comments-content .more-replies');
     await more.waitFor({ timeout: 15000 });
     await more.click();
-    assert(await waitFor(async () => await app.page.locator('#comments-content .comment').count() === 101, 15000));
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id]').count() === 101, 15000));
     await app.page.locator('#browse-home-sync').click();
     assert(await waitFor(async () => await app.page.locator('#browse-home-sync').getAttribute('aria-busy') !== 'true', 15000));
-    assert.equal(await app.page.locator('#comments-content .comment').count(), 101, 'expanded comments remain visible after sync');
+    assert.equal(await app.page.locator('#comments-content .comment[data-comment-id]').count(), 101, 'expanded comments remain visible after sync');
     assert.match(await more.textContent(), /^20 more replies/, 'only the remaining replies are offered');
     await more.click();
-    assert(await waitFor(async () => await app.page.locator('#comments-content .comment').count() === 121, 15000));
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id]').count() === 121, 15000));
     assert.equal(await app.page.locator('#comments-content .comment[data-comment-id="reddit:extra119"]').count(), 1);
     assert.deepEqual(app.errors, []);
   } finally {
@@ -79,7 +105,7 @@ test("a reply expansion interrupted by sync remains retryable", { timeout: 45000
     assert(await waitFor(async () => await app.page.locator('#browse-home-sync').getAttribute('aria-busy') !== 'true', 15000));
     assert(await waitFor(async () => await more.count() === 1 && !(await more.isDisabled()), 10000), 'the interrupted expansion can be retried');
     await more.click();
-    assert(await waitFor(async () => await app.page.locator('#comments-content .comment').count() === 3, 15000));
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id]').count() === 3, 15000));
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();
@@ -111,12 +137,12 @@ test("sync keeps expanded Bluesky replies without restoring an exhausted more bu
     const sync = app.page.locator('#browse-home-sync');
     await sync.click();
     assert(await waitFor(async () => await sync.getAttribute('aria-busy') !== 'true', 15000));
-    assert.equal(await app.page.locator('#comments-content .comment').count(), 12);
+    assert.equal(await app.page.locator('#comments-content .comment[data-comment-id]').count(), 12);
     assert.equal(await more.count(), 0, 'an already expanded reply is not offered a second time');
     await app.page.locator('#comment-sort').selectOption('newest');
     assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading').count() === 1, 5000));
     assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading').count() === 0, 15000));
-    assert(await waitFor(async () => await app.page.locator('#comments-content .comment').count() === 12, 15000));
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id]').count() === 12, 15000));
     assert.equal(await more.count(), 0, 'sorting does not restore the exhausted button');
     assert.deepEqual(app.errors, []);
   } finally {
@@ -137,7 +163,7 @@ test("expanding an archived reply preserves its nested descendants", { timeout: 
     assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:grandchild"]').count() === 1, 15000));
     const root = app.page.locator('#comments-content .comment[data-comment-id="reddit:root"]');
     assert.equal(await root.locator('.comment[data-comment-id="reddit:grandchild"]').count(), 1);
-    assert.equal(await app.page.locator("#comments-content .comment").count(), 3);
+    assert.equal(await app.page.locator("#comments-content .comment[data-comment-id]").count(), 3);
     assert(app.requests.some(({ url }) => url.includes("/api/comments/tree") && new URL(url).searchParams.get("parent_id") === "t1_root"));
     assert.deepEqual(app.errors, []);
   } finally {

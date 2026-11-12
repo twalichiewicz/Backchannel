@@ -3,12 +3,103 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { launchApp, STORIES, waitFor } from "./harness.mjs";
 
+test('a slow Reddit discussion does not serialize unrelated discussion requests', { timeout: 30000 }, async () => {
+  const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
+  const seam = '\tfunction beginRedditDiscussionRead() {';
+  assert(original.includes(seam));
+  const source = original.replace(seam, `\twindow.__parallelRedditProbe = () => runRedditReadAction(async (release) => {\n\t\tconst results = await Promise.all(['alpha', 'beta', 'gamma', 'delta'].map((name) => redditFetch('/r/' + name + '.json?limit=100', null, { listing: true })));\n\t\tawait release();\n\t\treturn results.length;\n\t});\n${seam}`);
+  const url = STORIES[0].url;
+  const app = await launchApp({ source, appHost: new URL(url).hostname, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com'], settings: { sources: { hn: false, reddit: true }, updateCheck: false }, values: { 'HNewhere:reddit_read_window_notice': 2 } });
+  let active = 0;
+  let maximum = 0;
+  await app.context.route('https://www.reddit.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.startsWith('/r/')) { active++; maximum = Math.max(maximum, active); await new Promise((resolve) => setTimeout(resolve, 900)); active--; }
+    const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : JSON.stringify({ data: { children: [] } });
+    await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
+  });
+  try {
+    await app.page.goto(url);
+    assert(await waitFor(async () => await app.page.locator('#hn-submit-button').count() === 1, 12000));
+    assert.equal(await app.page.evaluate(() => window.__parallelRedditProbe()), 4);
+    assert(maximum > 1, `independent requests should run concurrently in the one Reddit tab; maximum was ${maximum}`);
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
+test('concurrent Reader and Sidebar syncs share one Reddit refresh', { timeout: 60000 }, async () => {
+  const url = STORIES[0].url;
+  const now = Math.floor(Date.now() / 1000);
+  const post = { id: 'freshpost', url, title: STORIES[0].title, author: 'reader', subreddit: 'news', subreddit_name_prefixed: 'r/news', permalink: '/r/news/comments/freshpost/article/', num_comments: 1, created_utc: now - 3600, score: 100 };
+  const comment = { kind: 't1', data: { id: 'freshcomment', body: 'A shared live comment', author: 'reader', parent_id: 't3_freshpost', link_id: 't3_freshpost', created_utc: now - 60, replies: '' } };
+  const app = await launchApp({ sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com', new URL(url).hostname], settings: { sources: { hn: true, reddit: true }, autoOpenSidebar: true, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
+    { match: (path) => path.includes('/api/posts/search'), json: { data: [post] } },
+    { match: (path) => path.includes('/api/comments/tree'), json: { data: [comment] } },
+  ] });
+  const opened = [];
+  const requests = [];
+  let slow = false;
+  let latest = 'A freshly synced shared comment';
+  app.context.on('page', (page) => { opened.push(page); });
+  await app.context.route('https://www.reddit.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (slow) requests.push(path);
+    if (slow && path !== '/') await new Promise((resolve) => setTimeout(resolve, 1200));
+    const updated = slow ? { ...comment, data: { ...comment.data, body: latest } } : comment;
+    const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : path.includes('/comments/') ? JSON.stringify([{ data: { children: [{ kind: 't3', data: post }] } }, { data: { children: [updated] } }]) : JSON.stringify({ data: { children: [{ kind: 't3', data: post }] } });
+    await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
+  });
+  try {
+    await app.page.goto('https://backchnnl.app/');
+    await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:freshcomment"]').count() === 1, 20000));
+    assert(await waitFor(() => opened.every((page) => page.isClosed()), 10000));
+    assert(await waitFor(() => app.store.get('HNewhere:reddit_shared_refresh')?.state === 'done', 10000), 'the Reader refresh finishes');
+    assert(await waitFor(() => app.store.has('HNewhere:reddit_page_cache:framed.example.com/gc'), 10000), 'the refreshed discussion is shared');
+    const sharedBeforeArticle = app.store.get('HNewhere:reddit_page_cache:framed.example.com/gc');
+    const article = await app.context.newPage();
+    await article.goto(url);
+    assert(await waitFor(async () => await article.locator('#comments-content .comment[data-comment-id="reddit:freshcomment"]').count() === 1, 20000));
+    assert(await waitFor(() => opened.filter((page) => page !== article).every((page) => page.isClosed()), 10000));
+    const earlierTabs = opened.filter((page) => page !== article).length;
+    const priorRefresh = app.store.get('HNewhere:reddit_shared_refresh');
+    await article.locator('#minimize').click();
+    await article.locator('#hn-restore-button').click();
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    assert.equal(opened.filter((page) => page !== article).length, earlierTabs, `reopening Sidebar reuses the Reader refresh without another Reddit tab: ${JSON.stringify(sharedBeforeArticle)}; ${JSON.stringify(priorRefresh)} => ${JSON.stringify(app.store.get('HNewhere:reddit_shared_refresh'))}`);
+    opened.length = 0;
+    slow = true;
+    await app.page.locator('#app-list-sync').click();
+    assert(await waitFor(() => opened.length > 0, 5000));
+    await article.locator('#browse-home-sync').click();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    assert.equal(opened.length, 1, 'concurrent refreshes must not open separate Reddit tabs');
+    assert(await waitFor(() => opened.every((page) => page.isClosed()), 30000), 'the shared refresh closes its tab');
+    assert(await waitFor(async () => /A freshly synced shared comment/.test(await article.locator('#comments-content').textContent()), 15000), 'Sidebar receives the refreshed comment');
+    assert.match(await app.page.locator('#comments-content').textContent(), /A freshly synced shared comment/, 'Reader receives the refreshed comment');
+    assert.equal(requests.filter((path) => path.includes('/comments/')).length, 1, 'the two views share the same Reddit discussion request');
+    assert(await waitFor(() => app.store.get('HNewhere:reddit_shared_refresh')?.state === 'done', 10000));
+    assert(await waitFor(async () => await app.page.locator('#app-list-sync').getAttribute('aria-busy') !== 'true', 10000), 'the first Sync has finished');
+    latest = 'A later shared refresh';
+    await app.page.locator('#app-list-sync').click();
+    assert(await waitFor(async () => /A later shared refresh/.test(await app.page.locator('#comments-content').textContent()), 20000));
+    assert(await waitFor(() => opened.length === 2 && opened.every((page) => page.isClosed()), 15000));
+    assert(await waitFor(() => app.store.get('HNewhere:reddit_shared_refresh')?.state === 'done', 10000));
+    await article.locator('#browse-home-sync').click();
+    assert(await waitFor(async () => /A later shared refresh/.test(await article.locator('#comments-content').textContent()), 15000), 'a later Sidebar sync picks up the Reader refresh');
+    assert.equal(opened.length, 2, 'a second view does not open Reddit after the first has just synced');
+    assert.equal(requests.filter((path) => path.includes('/comments/')).length, 2, 'the later refresh is also downloaded only once');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
 for (const tabs of [true, false]) test(`Sidebar recovers live Reddit comments with ${tabs ? 'manager tabs' : 'a popup'} when the archive has none`, { timeout: 45000 }, async () => {
   const url = STORIES[0].url;
+  const source = tabs ? `Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true });\n${await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8')}` : undefined;
   const now = Math.floor(Date.now() / 1000);
   const post = { id: 'freshpost', url, title: STORIES[0].title, author: 'reader', subreddit: 'news', subreddit_name_prefixed: 'r/news', permalink: '/r/news/comments/freshpost/article/', num_comments: 2, created_utc: now - 3600, score: 100 };
   const comment = { kind: 't1', data: { id: 'freshcomment', body: 'A live comment missing from the archive', author: 'reader', parent_id: 't3_freshpost', link_id: 't3_freshpost', created_utc: now - 60, replies: '' } };
-  const app = await launchApp({ appHost: new URL(url).hostname, sharedStore: true, handler: 'Userscripts', tabs, topHosts: ['www.reddit.com'], settings: { sources: { hn: false, reddit: true }, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
+  const app = await launchApp({ source, appHost: new URL(url).hostname, sharedStore: true, handler: 'Userscripts', tabs, topHosts: ['www.reddit.com'], settings: { sources: { hn: false, reddit: true }, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
     { match: (path) => path.includes('/api/posts/search'), json: { data: [{ ...post, num_comments: 0 }] } },
     { match: (path) => path.includes('/api/comments/tree'), json: { data: [] } },
   ] });
@@ -68,7 +159,7 @@ test('Reader Sync still requests a working Reddit feed after an individual discu
   const post = { id: 'freshpost', url, title: STORIES[0].title, author: 'reader', subreddit: 'news', subreddit_name_prefixed: 'r/news', permalink: '/r/news/comments/freshpost/article/', num_comments: 1, created_utc: now - 3600, score: 100 };
   const comment = { kind: 't1', data: { id: 'freshcomment', body: 'A comment available from the archive', author: 'reader', parent_id: 't3_freshpost', link_id: 't3_freshpost', created_utc: now - 60, replies: '' } };
   const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
-  const seam = 'renderAppList({ force: true }).finally(finishFeed),';
+  const seam = 'renderAppList({ force: !sharedRefreshSince }).finally(finishFeed),';
   assert(original.includes(seam));
   const source = original.replace(seam, 'new Promise((resolve) => setTimeout(resolve, 3000)).then(() => renderAppList({ force: true })).finally(finishFeed),');
   const app = await launchApp({ source, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com'], settings: { sources: { hn: true, reddit: true }, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
@@ -144,7 +235,9 @@ test("the Reddit tab identifies its purpose and closes before local comment rend
     assert(await waitFor(async () => opened.some((page) => !page.isClosed()) && /Backchannel/i.test(await opened.find((page) => !page.isClosed()).title()), 5000), 'the tab title explains that Backchannel is using Reddit');
     const redditTab = opened.find((page) => !page.isClosed());
     const firstTitle = await redditTab.title();
-    assert.match(firstTitle, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, 'the title uses a Braille spinner');
+    assert.match(firstTitle, /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Backchannel/, 'the Braille spinner leads the title');
+    await redditTab.evaluate(() => { document.title = 'Reddit'; });
+    assert(await waitFor(async () => /Backchannel/.test(await redditTab.title()), 1000), 'Reddit cannot replace the refresh title');
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.notEqual(await redditTab.title(), firstTitle, 'the tab title animates while the refresh is active');
     assert(await waitFor(async () => await app.page.locator('#comments-content .top-level-comments').count() === 1, 15000), 'local rendering has started');

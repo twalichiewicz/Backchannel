@@ -1,7 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { launchApp, STORIES, waitFor } from "./harness.mjs";
 import { discussionFixture } from "./fixtures.mjs";
+
+test('Backchannel starts on a page without randomUUID', { timeout: 30000 }, async () => {
+  const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
+  const source = `Object.defineProperty(crypto, 'randomUUID', { value: undefined, configurable: true });\n${original}`;
+  const url = 'http://insecure.example.com/post';
+  const app = await launchApp({ source, appHost: 'insecure.example.com', sharedStore: true, settings: { sources: { hn: true }, autoOpenSidebar: true, updateCheck: false } });
+  try {
+    await app.page.goto(url);
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-story-id="9007"]').count() === 3, 15000), 'discussion loading works without the secure-context UUID API');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
 
 async function assertCaptured(app, fixture) {
   const selector = '#comments-content .comment[data-story-id="fixture0"]';
@@ -452,6 +465,45 @@ test("Reader feed discoveries remain available on the article in Sidebar", { tim
   } finally {
     await app.browser.close();
   }
+});
+
+test('Reader recovers other exact discussions already present in shared feeds', { timeout: 30000 }, async () => {
+  const story = { source: 'lemmy', id: 321, url, title: STORIES[0].title, descendants: 1 };
+  const postView = { post: { id: 321, url, name: STORIES[0].title, creator_id: 1, published: new Date().toISOString() }, community: { name: 'technology', actor_id: 'https://lemmy.world/c/technology' }, creator: { id: 1, name: 'reader' }, counts: { comments: 1 } };
+  const comment = { comment: { id: 99, content: 'A discussion from another shared feed', path: '0.99', published: new Date().toISOString() }, creator: { id: 2, name: 'reader' }, counts: { score: 1 } };
+  const app = await launchApp({ sharedStore: true, settings: { sources: { hn: true, lemmy: true }, frontPageMode: 'sources', updateCheck: false }, responses: [
+    { match: (path) => path.includes('/api/v3/search'), json: { posts: [] } },
+    { match: (path) => path.includes('/api/v3/post?id=321'), json: { post_view: postView } },
+    { match: (path) => path.includes('/api/v3/comment/list?post_id=321'), json: { comments: [comment] } },
+  ] });
+  try {
+    await app.page.goto('https://backchnnl.app/');
+    const link = app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first();
+    assert(await waitFor(async () => await link.count() > 0, 10000));
+    await app.page.evaluate(async (story) => {
+      await window.__gmStore('set', 'HNewhere:frontpage_cache:hn,lemmy', { timestamp: Date.now(), rows: [{ story, also: [] }], sources: ['hn', 'lemmy'] });
+    }, story);
+    await link.click();
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="lemmy:99"]').count() === 1, 12000), 'Reader includes an exact article discussion from another cached feed');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
+test('Sidebar reuses comments loaded by Reader in another tab', { timeout: 45000 }, async () => {
+  const app = await launchApp({ sharedStore: true, topHosts: [new URL(url).hostname], settings: { sources: { hn: true }, autoOpenSidebar: true, frontPageMode: 'sources', updateCheck: false } });
+  try {
+    await app.page.goto('https://backchnnl.app/');
+    await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-story-id="9001"]').count() === 30, 15000));
+    assert(await waitFor(() => app.store.has('HNewhere:thread_cache:hn:9001'), 10000), 'the loaded discussion is available to other pages');
+    const itemRequests = () => app.requests.filter(({ url: requested }) => /hacker-news\.firebaseio\.com\/v0\/item\/(9001|9001\d\d)\.json/.test(requested)).length;
+    const before = itemRequests();
+    const article = await app.context.newPage();
+    await article.goto(url);
+    assert(await waitFor(async () => await article.locator('#comments-content .comment[data-story-id="9001"]').count() === 30, 15000));
+    assert.equal(itemRequests(), before, 'the second view reads the existing discussion instead of downloading it again');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
 });
 
 test("a cached Bluesky post is not recovered if it no longer links the article", { timeout: 30000 }, async () => {
