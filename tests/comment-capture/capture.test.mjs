@@ -264,7 +264,8 @@ for (const mode of ['Sidebar', 'Reader']) test(`${mode} Sync keeps the current r
     await button.click();
     assert(await waitFor(async () => await button.getAttribute('aria-busy') !== 'true', 20000));
     assert.equal(await app.page.locator('#comments-content .comment[data-comment-id="reddit:newabove"]').count(), 1);
-    assert(Math.abs(await offset() - before) <= 8, 'the comment being read stays at the same position');
+    const after = await offset();
+    assert(Math.abs(after - before) <= 8, `the comment being read stays at the same position (${before} to ${after})`);
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();

@@ -3,6 +3,37 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { launchApp, STORIES, waitFor } from "./harness.mjs";
 
+test('the Reddit title advances when background timers run once per spinner cycle', { timeout: 30000 }, async () => {
+  const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
+  const seam = 'const titleTimer = window.setInterval(tickTitle, 200);';
+  assert(original.includes(seam));
+  const source = original.replace(seam, 'const titleTimer = window.setInterval(tickTitle, 2000);');
+  const url = STORIES[0].url;
+  const app = await launchApp({ source, appHost: new URL(url).hostname, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com'], settings: { sources: { hn: false, reddit: true }, updateCheck: false }, values: { 'HNewhere:reddit_read_window_notice': 2 } });
+  const opened = [];
+  app.context.on('page', (page) => opened.push(page));
+  await app.context.route('https://www.reddit.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/me.json') await new Promise((resolve) => setTimeout(resolve, 8000));
+    const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : JSON.stringify({ data: { children: [] } });
+    await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
+  });
+  try {
+    await app.page.goto(url);
+    await app.page.locator('#hn-submit-button').click();
+    assert(await waitFor(async () => opened.length && /Backchannel/.test(await opened[0].title()), 5000));
+    const tab = opened[0];
+    const first = await tab.title();
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    const second = await tab.title();
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const third = await tab.title();
+    assert.notEqual(second, first, 'the spinner advances on the first throttled callback');
+    assert.notEqual(third, second, 'the spinner keeps moving through subsequent callbacks');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
 test('a slow Reddit discussion does not serialize unrelated discussion requests', { timeout: 30000 }, async () => {
   const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
   const seam = '\tfunction beginRedditDiscussionRead() {';

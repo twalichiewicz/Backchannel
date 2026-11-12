@@ -5922,14 +5922,15 @@ ${
 			let paused = false;
 			let authenticated = false;
 			let lastLoginReport = 0;
-			const titleStarted = Date.now();
+			let titleFrame = 0;
 			const titleFrames = ["⠋", "⠏", "⠇", "⠧", "⠦", "⠴", "⠼", "⠸", "⠹", "⠙"];
 			const paintTitle = () => {
-				const title = paused ? "Sign in to Reddit — Backchannel" : (prefersReducedMotion() ? "" : titleFrames[Math.floor((Date.now() - titleStarted) / 200) % titleFrames.length] + " ") + "Backchannel is refreshing Reddit";
+				const title = paused ? "Sign in to Reddit — Backchannel" : (prefersReducedMotion() ? "" : titleFrames[titleFrame] + " ") + "Backchannel is refreshing Reddit";
 				if (document.title !== title) document.title = title;
 			};
+			const tickTitle = () => { titleFrame = (titleFrame + 1) % titleFrames.length; paintTitle(); };
 			paintTitle();
-			const titleTimer = window.setInterval(paintTitle, 200);
+			const titleTimer = window.setInterval(tickTitle, 200);
 			const titleObserver = new MutationObserver(paintTitle);
 			if (document.head) titleObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
 			const fetchJSON = async (path) => {
@@ -17136,21 +17137,43 @@ header {
 }
 
 .discussion-skeleton {
-	display:flex;
+	position:relative;
 	flex:1;
-	flex-direction:column;
-	justify-content:flex-start;
-	opacity:.3;
+	opacity:.12;
 }
 
+.discussion-skeleton-base, .discussion-skeleton-wave {
+	display:flex;
+	flex-direction:column;
+}
+
+.discussion-skeleton-wave {
+	position:absolute;
+	inset:0;
+	opacity:.25;
+	pointer-events:none;
+	-webkit-mask-image:linear-gradient(135deg, transparent 44%, black 50%, transparent 56%);
+	mask-image:linear-gradient(135deg, transparent 44%, black 50%, transparent 56%);
+	-webkit-mask-size:300% 300%;
+	mask-size:300% 300%;
+	animation:discussion-skeleton-wave 3s linear infinite;
+}
+@keyframes discussion-skeleton-wave {
+	from { -webkit-mask-position:100% 100%; mask-position:100% 100%; }
+	to { -webkit-mask-position:0 0; mask-position:0 0; }
+}
 .discussion-skeleton .comment { flex:0 0 auto; }
 .discussion-skeleton .comment.is-reply { margin-left:22px; }
 .discussion-skeleton .comment-vote-slot { cursor:default; }
-.top-level-comments:has(> .discussion-loading) { position:relative; min-height:280px; flex:1 0 280px; }
+.top-level-comments { position:relative; }
+.top-level-comments:has(> .discussion-loading) { min-height:280px; flex:1 0 280px; }
 .top-level-comments > .discussion-loading { position:absolute; inset:0; z-index:1; pointer-events:none; transition:opacity .22s ease; }
 .top-level-comments > .discussion-loading.is-fading { opacity:0; }
 .top-level-comments.discussion-entering > :not(.discussion-loading) { opacity:0; transition:opacity .22s ease; }
 .top-level-comments.discussion-entering.is-visible > :not(.discussion-loading) { opacity:1; }
+.discussion-matrix-reveal { position:absolute; inset:0; z-index:2; overflow:hidden; overflow-anchor:none; pointer-events:none; }
+.discussion-matrix-reveal > * { position:absolute; margin:0; box-sizing:border-box; pointer-events:none; }
+.discussion-reveal-original { opacity:0 !important; }
 
 .discussion-progress-strip {
 	box-sizing:border-box;
@@ -17189,6 +17212,7 @@ header {
 	to { background-position:-150% 0; }
 }
 @media (prefers-reduced-motion: reduce) {
+	.discussion-skeleton-wave { display:none; animation:none; }
 	.discussion-progress-strip { transition:none; }
 	.discussion-progress-label { background:none; color:var(--meta); animation:none; }
 	.top-level-comments > .discussion-loading, .top-level-comments.discussion-entering > :not(.discussion-loading) { transition:none; }
@@ -25444,17 +25468,80 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 	function discussionSkeleton() {
 		const waiting = document.createElement("div");
 		waiting.className = "discussion-loading";
-		waiting.innerHTML = `<div class="discussion-skeleton" aria-hidden="true">${Array.from({ length: 28 }, (_, index) => `<div class="comment${index % 4 === 1 ? " is-reply" : ""}">${commentLayoutHTML('<span class="comment-vote-slot comment-vote-slot-empty"></span>', '<div class="meta">abcdefgh ijkl mnop qrst uvwx yzab</div>', `<div class="comment-content"><div class="text">${"abcdefgh ".repeat([5, 7, 4, 9][index % 4]).trim()}</div><div class="children"></div></div>`)}</div>`).join("")}</div>`;
-		if (!prefersReducedMotion()) {
-			const nodes = [...waiting.querySelectorAll(".meta, .text")].map((element) => [element, element.textContent]);
-			let frame = 0;
-			const timer = window.setInterval(() => {
-				if (!waiting.isConnected) { clearInterval(timer); return; }
-				frame++;
-				for (const [row, [element, text]] of nodes.entries()) element.textContent = [...text].map((char, index) => char === " " ? char : String.fromCharCode(33 + (char.charCodeAt(0) + frame * 13 + index * 7 + row * 17) % 94)).join("");
-			}, 65);
-		}
+		const conversation = [
+			["PretendPigeon", "Did anyone order a discussion? I brought breadcrumbs."],
+			["ImaginaryToaster", "I put it in the queue, next to the bagels."],
+			["FictionalFerret", "The comments are on their way. I gave them a map."],
+			["MakeBelieveMoth", "Excellent. I told them to follow the light."],
+			["TotallyFakeTurnip", "Is this the line for the discussion?"],
+			["PretendPenguin", "Yes, but the line has applied for a longer break."],
+			["ImaginaryOctopus", "I can lend the loading bar a hand. Or eight."],
+			["FictionalFox", "Please save one for the refresh button."],
+		];
+		const rows = Array.from({ length: 28 }, (_, index) => {
+			const [name, message] = conversation[index % conversation.length];
+			return `<div class="comment${index % 2 ? " is-reply" : ""}">${commentLayoutHTML('<span class="comment-vote-slot comment-vote-slot-empty"></span>', `<div class="meta">${name} · just now | reply | focus | save [–]</div>`, `<div class="comment-content"><div class="text"><p>${escapeHTML(message)}</p></div><div class="children"></div></div>`)}</div>`;
+		}).join("");
+		waiting.innerHTML = `<div class="discussion-skeleton" aria-hidden="true"><div class="discussion-skeleton-base">${rows}</div><div class="discussion-skeleton-wave">${rows}</div></div>`;
 		return waiting;
+	}
+
+	function animateDiscussionReveal(comments, entries, viewport) {
+		if (!entries.length || !viewport || prefersReducedMotion()) return;
+		const bounds = viewport.getBoundingClientRect();
+		const origin = comments.getBoundingClientRect();
+		const layer = document.createElement("div");
+		layer.className = "discussion-matrix-reveal";
+		layer.setAttribute("aria-hidden", "true");
+		layer.inert = true;
+		const originals = [];
+		const textNodes = [];
+		let remaining = 12000;
+		for (const entry of entries) {
+			const box = entry.element.getBoundingClientRect();
+			if (box.top >= bounds.bottom) break;
+			if (box.bottom <= bounds.top) continue;
+			for (const original of entry.element.querySelectorAll(":scope > .comment-layout > .comment-main > .meta, :scope > .comment-layout > .comment-main > .comment-content > .text")) {
+				const rect = original.getBoundingClientRect();
+				if (!rect.width || rect.bottom <= bounds.top || rect.top >= bounds.bottom) continue;
+				const copy = original.cloneNode(true);
+				copy.removeAttribute("id");
+				for (const node of copy.querySelectorAll("[id]")) node.removeAttribute("id");
+				for (const media of copy.querySelectorAll("img, video, audio, iframe")) media.remove();
+				copy.style.top = `${rect.top - origin.top}px`;
+				copy.style.left = `${rect.left - origin.left}px`;
+				copy.style.width = `${rect.width}px`;
+				const walker = document.createTreeWalker(copy, NodeFilter.SHOW_TEXT);
+				while (walker.nextNode()) {
+					const node = walker.currentNode;
+					if (remaining > 0 && /\S/.test(node.data)) {
+						const length = Math.min(1800, remaining, node.data.length);
+						textNodes.push({ node, chars: Array.from(node.data.slice(0, length)), tail: node.data.slice(length), offset: textNodes.length * 11 });
+						remaining -= length;
+					}
+				}
+				layer.append(copy);
+				originals.push(original);
+			}
+		}
+		if (!textNodes.length) return;
+		comments.append(layer);
+		for (const original of originals) original.classList.add("discussion-reveal-original");
+		let frame = 0;
+		const paint = () => {
+			for (const { node, chars, tail, offset } of textNodes) {
+				node.data = chars.map((char, index) => /\s/.test(char) || (index + offset) % 9 < frame ? char : String.fromCharCode(33 + (index * 7 + offset + frame * 13) % 94)).join("") + tail;
+			}
+		};
+		paint();
+		const timer = window.setInterval(() => {
+			frame++;
+			if (frame >= 9 || !comments.isConnected) {
+				clearInterval(timer);
+				for (const original of originals) original.classList.remove("discussion-reveal-original");
+				layer.remove();
+			} else paint();
+		}, 65);
 	}
 
 	async function renderDiscussions(stories, ui, { arrival = true, onThreadsLoaded = null } = {}) {
@@ -25690,6 +25777,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		const batchSize = 5;
 		let annotatedAt = 0;
+		let animateVisible = !prefersReducedMotion();
 		if (!entries.length) revealComments();
 
 		for (let i = 0; i < entries.length; i += batchSize) {
@@ -25698,6 +25786,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			}
 
 			const batch = entries.slice(i, i + batchSize);
+			const renderedStart = renderedComments.length;
 
 			await Promise.all(
 				batch.map((entry) =>
@@ -25723,6 +25812,12 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				);
 			}
 
+			if (animateVisible) {
+				const rendered = renderedComments.slice(renderedStart);
+				const viewport = ui.shadow.querySelector("#comments");
+				if (rendered.length && viewport && rendered[0].element.getBoundingClientRect().top >= viewport.getBoundingClientRect().bottom) animateVisible = false;
+				else animateDiscussionReveal(comments, rendered, viewport);
+			}
 			revealComments();
 
 			if (entries.length > batchSize && !appState && settings.annotations && shouldShowArticleAnnotations(settings) && (i === 0 || performance.now() - annotatedAt >= 1000)) {

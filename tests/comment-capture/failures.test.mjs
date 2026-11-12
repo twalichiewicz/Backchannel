@@ -105,13 +105,16 @@ test("the loading skeleton reports completed discussions while slower sources ar
     const loading = app.page.locator('#comments-content .discussion-loading');
     assert(await waitFor(async () => await loading.count() > 0, 10000), "the loading skeleton appears");
     assert(await loading.locator('.comment .comment-layout .comment-main .text').count() >= 4, "the skeleton uses the real comment layout");
-    const animated = loading.locator('.comment .text').first();
-    const initial = await animated.textContent();
+    const placeholder = loading.locator('.discussion-skeleton-base .comment .text').first();
+    assert.equal(await placeholder.count(), 1, 'the placeholder conversation has a base layer');
+    const initial = await placeholder.textContent();
     await new Promise((resolve) => setTimeout(resolve, 250));
-    assert.notEqual(await animated.textContent(), initial, 'the placeholder text changes rapidly');
-    assert.match(await animated.textContent(), /^[\x20-\x7e\n]+$/, 'placeholder text uses printable ASCII');
-    assert((await loading.locator('.comment .meta').allTextContents()).slice(0, 4).every((value, index, items) => index === 0 || value !== items[0]), 'placeholder comments do not all show the same characters');
-    assert.equal(await loading.locator('.discussion-skeleton').evaluate((element) => getComputedStyle(element).opacity), '0.3', 'the placeholders are subdued');
+    assert.equal(await placeholder.textContent(), initial, 'placeholder conversations remain readable');
+    assert.match(await loading.locator('.discussion-skeleton-base').textContent(), /PretendPigeon.*ImaginaryToaster/s, 'the placeholder uses obviously fictional names');
+    assert.equal(await loading.locator('.discussion-skeleton').evaluate((element) => getComputedStyle(element).opacity), '0.12', 'the placeholders are very subdued');
+    const wave = loading.locator('.discussion-skeleton-wave');
+    assert.equal(await wave.count(), 1, 'one glimmer crosses the whole conversation');
+    assert.notEqual(await wave.evaluate((element) => getComputedStyle(element).animationName), 'none', 'the shared wave moves');
     assert.equal(await loading.locator('.discussion-skeleton-heading, .discussion-skeleton-compose').count(), 0, "known content is not replaced with placeholders");
     assert((await app.page.locator('#comments-content .page-header-title').textContent()).length > 0, "the known article title appears immediately");
     const composer = app.page.locator('#comments-content .compose-box');
@@ -125,7 +128,19 @@ test("the loading skeleton reports completed discussions while slower sources ar
     assert.equal(await loading.locator('[role="progressbar"]').count(), 0, "Sidebar does not duplicate the status in its body");
     const subtitle = app.page.locator('#header-subtitle');
     assert(await waitFor(async () => /loading discussions \([1-5] of 6\)/i.test(await subtitle.textContent()), 10000), "header progress advances while discussions remain");
+    const matrix = app.page.locator('#comments-content .discussion-matrix-reveal');
+    assert(await waitFor(async () => await matrix.count() > 0, 15000), 'the real comments appear through a Matrix-style reveal');
+    const real = app.page.locator('#comments-content .comment[data-comment-id="reddit:root0"] .text').first();
+    assert.match(await real.textContent(), /Root comment 0/, 'the actual comment text stays intact during animation');
+    const realMarkup = await real.innerHTML();
+    const animated = matrix.locator('.text').first();
+    const firstFrame = await animated.textContent();
+    assert.notEqual(firstFrame, await real.textContent(), 'only the visual copy uses changing characters');
     assert(await waitFor(async () => await loading.filter({ has: app.page.locator('.discussion-skeleton') }).evaluateAll((elements) => elements.some((element) => element.classList.contains('is-fading'))), 15000), 'the skeleton fades out as comments appear');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.notEqual(await animated.textContent(), firstFrame, 'the visual copy resolves through changing characters');
+    assert.equal(await real.innerHTML(), realMarkup, 'the real comment markup remains untouched');
+    assert(await waitFor(async () => await matrix.count() === 0, 5000), 'the visual copies are removed after revealing the original comments');
     assert(await waitFor(async () => await loading.count() === 0, 15000), "the skeleton is removed after loading");
     assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-story-id="fixture0"]').count() === 140, 10000), "all comments render after loading");
     assert(await waitFor(async () => !/loading discussions|rendering comments|annotating link/i.test(await subtitle.textContent()), 10000), "the header stops reporting loading after rendering");
@@ -136,6 +151,32 @@ test("the loading skeleton reports completed discussions while slower sources ar
   } finally {
     await app.browser.close();
   }
+});
+
+for (const sidebar of [true, false]) test(`${sidebar ? 'Sidebar' : 'Reader'} respects reduced motion during discussion loading`, { timeout: 45000 }, async () => {
+  const fixture = discussionFixture(url);
+  const app = await launchApp({ ...(sidebar ? { appHost: new URL(url).hostname } : {}), sharedStore: true, handler: 'Tampermonkey', settings: { sources: { hn: !sidebar, reddit: true }, autoOpenSidebar: sidebar, frontPageMode: 'sources', updateCheck: false }, values: { 'HNewhere:reddit_tier': { tier: 'archive', timestamp: Date.now() } }, responses: [
+    { match: (path) => path.includes('/api/posts/search'), delay: 500, json: { data: fixture.posts } },
+    ...fixture.posts.map((post) => ({ match: (path) => path.includes('/api/comments/tree') && new URL(path).searchParams.get('link_id') === `t3_${post.id}`, delay: 350, json: { data: fixture.trees.get(post.id) } })),
+    ...fixture.responses,
+  ] });
+  try {
+    await app.page.emulateMedia({ reducedMotion: 'reduce' });
+    await app.page.goto(sidebar ? url : 'https://backchnnl.app/');
+    if (!sidebar) await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
+    const wave = app.page.locator('#comments-content .discussion-skeleton-wave');
+    assert(await waitFor(async () => await wave.count() === 1, 10000));
+    assert.equal(await wave.evaluate((element) => getComputedStyle(element).animationName), 'none', 'the placeholder wave stops');
+    await app.page.evaluate(() => {
+      window.__matrixRevealSeen = false;
+      const root = [...document.querySelectorAll('*')].map((node) => node.shadowRoot).find((shadow) => shadow?.querySelector('#comments-content'));
+      new MutationObserver((records) => { if (records.some((record) => [...record.addedNodes].some((node) => node.nodeType === Node.ELEMENT_NODE && (node.matches('.discussion-matrix-reveal') || node.querySelector('.discussion-matrix-reveal'))))) window.__matrixRevealSeen = true; }).observe(root, { childList: true, subtree: true });
+    });
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:root0"]').count() === 1, 15000));
+    assert.equal(await app.page.locator('#comments-content .discussion-matrix-reveal').count(), 0, 'real comments appear without the Matrix effect');
+    assert.equal(await app.page.evaluate(() => window.__matrixRevealSeen), false, 'no animated visual copies were created');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
 });
 
 test("Reader shows a skeleton and aligned loading hint without a progress bar", { timeout: 45000 }, async () => {
@@ -184,6 +225,10 @@ test("Reader shows a skeleton and aligned loading hint without a progress bar", 
     assert.equal(await composer.locator('.composer-text').inputValue(), 'Reader draft while loading', 'the early draft is kept when discovered sources arrive');
     assert(await composer.locator('.compose-send-note').isDisabled());
     assert(await composer.locator('.compose-send-comment').isDisabled());
+    const matrix = app.page.locator('#comments-content .discussion-matrix-reveal');
+    assert(await waitFor(async () => await matrix.count() > 0, 20000), 'Reader reveals real comments with the Matrix effect');
+    assert(await app.page.locator('#comments-content .comment[data-comment-id] .text').first().textContent(), 'the real comment text remains available');
+    assert(await waitFor(async () => await matrix.count() === 0, 5000), 'Reader removes the visual copies after the reveal');
     assert(await waitFor(async () => await strip.count() === 0, 20000), "progress slides away when requests finish");
     assert(await waitFor(async () => !(await composer.locator('.compose-send-comment').isDisabled()), 15000));
     assert.equal(await composer.locator('.composer-text').inputValue(), 'Reader draft while loading');
