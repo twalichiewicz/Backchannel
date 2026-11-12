@@ -33,6 +33,35 @@ for (const tabs of [true, false]) test(`Sidebar recovers live Reddit comments wi
   }
 });
 
+for (const tabs of [true, false]) test(`opening while discovery is running renders live comments once with ${tabs ? 'manager tabs' : 'a popup'}`, { timeout: 45000 }, async () => {
+  const url = STORIES[0].url;
+  const now = Math.floor(Date.now() / 1000);
+  const post = { id: 'freshpost', url, title: STORIES[0].title, author: 'reader', subreddit: 'news', subreddit_name_prefixed: 'r/news', permalink: '/r/news/comments/freshpost/article/', num_comments: 1, created_utc: now - 3600, score: 100 };
+  const comment = { kind: 't1', data: { id: 'freshcomment', body: 'A single live render', author: 'reader', parent_id: 't3_freshpost', link_id: 't3_freshpost', created_utc: now - 60, replies: '' } };
+  const app = await launchApp({ appHost: new URL(url).hostname, sharedStore: true, handler: 'Userscripts', tabs, topHosts: ['www.reddit.com'], settings: { sources: { hn: false, reddit: true }, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
+    { match: (path) => path.includes('/api/posts/search'), delay: 1000, json: { data: [post] } },
+    { match: (path) => path.includes('/api/comments/tree'), json: { data: [] } },
+  ] });
+  const opened = [];
+  app.context.on('page', (page) => { if (page !== app.page) opened.push(page); });
+  await app.context.route('https://www.reddit.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : path.includes('/comments/') ? JSON.stringify([{ data: { children: [{ kind: 't3', data: post }] } }, { data: { children: [comment] } }]) : JSON.stringify({ data: { children: [{ kind: 't3', data: post }] } });
+    await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
+  });
+  try {
+    await app.page.goto(url);
+    await app.page.locator('#hn-checking-button').click();
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:freshcomment"]').count() === 1, 20000));
+    assert(await waitFor(() => opened.length === 1 && opened[0].isClosed(), 5000), 'the one Reddit session closes');
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    assert.equal(opened.length, 1, 'discovery does not schedule a second Reddit session');
+    assert.deepEqual(app.errors, []);
+  } finally {
+    await app.browser.close();
+  }
+});
+
 test("the Reddit tab identifies its purpose and closes before local comment rendering finishes", { timeout: 45000 }, async () => {
   const url = STORIES[0].url;
   const sourceText = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
@@ -124,7 +153,7 @@ test("Sidebar Sync closes its Reddit tab after requests, before local rendering 
   }
 });
 
-test("opening a known discussion does not keep Reddit open during its initial local render", { timeout: 45000 }, async () => {
+test("opening a known discussion fetches live comments once and reuses them on reopen", { timeout: 45000 }, async () => {
   const url = STORIES[0].url;
   const sourceText = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
   const seam = 'const batchSize = 5;\n\t\tlet annotatedAt = 0;';
@@ -154,9 +183,17 @@ test("opening a known discussion does not keep Reddit open during its initial lo
     assert(await waitFor(async () => await button.count() === 1, 15000));
     await button.click();
     assert(await waitFor(async () => await app.page.locator('#comments-content .top-level-comments').count() === 1, 10000));
-    assert.equal(opened.length, 0, 'the background tab is not opened before its Reddit work can start');
-    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:live"]').count() === 1, 15000), 'the live refresh still happens after the initial render');
-    assert(await waitFor(() => opened.length > 0 && opened.every((page) => page.isClosed()), 10000));
+    assert(await waitFor(() => opened.length === 1 && opened.every((page) => page.isClosed()), 2500), 'the Reddit tab closes while local rendering is paused');
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:live"]').count() === 1, 15000), 'the initial render uses the live discussion');
+    assert.equal(opened.length, 1, 'opening does not repeat the Reddit refresh after rendering');
+    const commentNode = app.page.locator('#comments-content .comment[data-comment-id="reddit:live"]');
+    await commentNode.evaluate((element) => { element.dataset.cacheSentinel = 'retained'; });
+    const tabCount = opened.length;
+    await app.page.locator('#minimize').click();
+    await app.page.locator('#hn-restore-button').click();
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    assert.equal(opened.length, tabCount, 'reopening a fresh discussion does not start another Reddit session');
+    assert.equal(await commentNode.getAttribute('data-cache-sentinel'), 'retained', 'reopening keeps the already rendered discussion');
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();

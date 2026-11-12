@@ -190,11 +190,17 @@ test("Sidebar shows quote annotations while a large discussion is still renderin
   const app = await launchApp({ appHost: new URL(url).hostname, sharedStore: true, handler: "Userscripts", settings: { sources: { hn: false, reddit: true }, autoOpenSidebar: true, annotations: true, updateCheck: false }, values: { "HNewhere:reddit_read_window_notice": 2 }, responses: fixture.responses });
   try {
     await app.page.goto(url);
+    await app.page.waitForSelector('#header-subtitle');
+    await app.page.locator('#header-subtitle').evaluate((element) => {
+      window.__discussionStatuses = [element.textContent];
+      new MutationObserver(() => window.__discussionStatuses.push(element.textContent)).observe(element, { childList: true, characterData: true, subtree: true });
+    });
     const comments = app.page.locator('#comments-content .comment[data-story-id="fixture0"]');
     assert(await waitFor(async () => await app.page.locator('[data-hnewhere-annotation-overlay] [title="Show the comments quoting this"]').count() > 0, 60000), "a quote highlight appears on the article");
     assert((await comments.count()) < 1600, "annotations should not wait for every comment to render");
     assert.doesNotMatch(await app.page.locator('#header-subtitle').textContent(), /loading discussions/i, "the header identifies rendering after requests finish");
     assert(await waitFor(async () => await comments.count() === 1600, 60000), "rendering still completes");
+    assert(!(await app.page.evaluate(() => window.__discussionStatuses)).some((text) => /annotating link|loading votes/i.test(text)), 'rendering and annotations use one stable status');
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();

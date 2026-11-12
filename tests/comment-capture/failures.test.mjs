@@ -124,7 +124,7 @@ test("the loading skeleton reports completed discussions while slower sources ar
   }
 });
 
-test("Reader shows a header-sized progress strip and the real disabled composer during loading", { timeout: 45000 }, async () => {
+test("Reader shows a skeleton and aligned loading hint without a progress bar", { timeout: 45000 }, async () => {
   const fixture = discussionFixture(url);
   const app = await launchApp({
     sharedStore: true,
@@ -132,6 +132,7 @@ test("Reader shows a header-sized progress strip and the real disabled composer 
     settings: { sources: { hn: true, reddit: true }, frontPageMode: "sources", updateCheck: false },
     values: { "HNewhere:reddit_tier": { tier: "archive", timestamp: Date.now() } },
     responses: [
+      { match: (path) => path.includes('/api/posts/search'), delay: 800, json: { data: fixture.posts } },
       ...fixture.posts.map((post) => ({ match: (path) => path.includes('/api/comments/tree') && new URL(path).searchParams.get('link_id') === `t3_${post.id}`, delay: 600, json: { data: fixture.trees.get(post.id) } })),
       ...fixture.responses,
     ],
@@ -139,16 +140,21 @@ test("Reader shows a header-sized progress strip and the real disabled composer 
   try {
     await app.page.goto('https://backchnnl.app/');
     await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
+    assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-skeleton-comment').count() > 0, 3000), "the normal skeleton appears during discovery");
+    assert.doesNotMatch(await app.page.locator('#comments-content').textContent(), /Finding what people said/);
     const strip = app.page.locator('#panel.app-docked > .discussion-progress-strip');
     assert(await waitFor(async () => await strip.count() === 1, 10000), "progress appears directly below the Discussion header");
-    assert(await waitFor(async () => (await strip.boundingBox())?.height > 30, 3000));
+    assert(await waitFor(async () => (await strip.boundingBox())?.height >= 35, 3000));
     const head = await app.page.locator('#panel.app-docked > header').boundingBox();
     const progress = await strip.boundingBox();
     assert(Math.abs(progress.height - head.height) <= 2, "progress and header have the same height");
     assert(Math.abs(progress.y - (head.y + head.height)) <= 2, "progress is attached to the header");
     const font = await strip.evaluate((element) => getComputedStyle(element).fontSize);
-    const headerFont = await app.page.locator('#panel.app-docked > header').evaluate((element) => getComputedStyle(element).fontSize);
-    assert.equal(font, headerFont, "progress uses the header's font size");
+    assert.equal(font, '11px', "the hint uses the smaller hint text size");
+    assert.equal(await strip.locator('.discussion-progress-track, [role="progressbar"]').count(), 0, "there is no visual progress bar");
+    const title = await app.page.locator('#panel.app-docked > header .header-static-title').boundingBox();
+    const label = await strip.locator('.discussion-progress-label').boundingBox();
+    assert(Math.abs(title.x - label.x) <= 2, "the hint aligns with the Discussion title");
     const composer = app.page.locator('#panel .compose-box');
     assert.equal(await composer.count(), 1);
     await app.page.locator('#comment-toggle').click();
@@ -170,6 +176,8 @@ test("Sidebar shows sync in the header while browsing without a duplicate toast"
   try {
     await app.page.goto(url);
     assert(await waitFor(async () => await app.page.locator('#comments-content .comment').count() > 0, 15000));
+    assert(await waitFor(async () => /updated/i.test(await app.page.locator('#header-subtitle').textContent()), 10000));
+    assert(await waitFor(async () => !(await app.page.locator('#header-subtitle').evaluate((element) => element.classList.contains('header-subtitle-visible'))), 3500), "the updated status auto-collapses");
     await app.page.locator('#browse-toggle .wordmark-root').click();
     assert(await waitFor(async () => await app.page.locator('#panel.browsing').count() === 1, 10000));
     const button = app.page.locator('#browse-home-sync');
@@ -180,6 +188,95 @@ test("Sidebar shows sync in the header while browsing without a duplicate toast"
     assert.doesNotMatch(await app.page.locator('#toast').textContent(), /syncing/i, "sync is not announced twice");
     assert(await waitFor(async () => await button.getAttribute('aria-busy') !== 'true', 10000), "sync completes");
     assert.doesNotMatch(await app.page.locator('#header-subtitle').textContent(), /syncing/i, "the status clears after sync");
+    assert.deepEqual(app.errors, []);
+  } finally {
+    await app.browser.close();
+  }
+});
+
+test("Reader reuses cached comments when selecting and revisiting articles", { timeout: 45000 }, async () => {
+  const app = await launchApp({ sharedStore: true, settings: { sources: { hn: true }, frontPageMode: "sources", updateCheck: false } });
+  try {
+    await app.page.goto('https://backchnnl.app/');
+    await app.page.locator('#app-rail [data-app-view="all"]').click();
+    const first = app.page.locator(`#app-list-body .browse-title-link[href="${STORIES[0].url}"]`).first();
+    const second = app.page.locator(`#app-list-body .browse-title-link[href="${STORIES[1].url}"]`).first();
+    await first.click();
+    const firstComments = app.page.locator('#comments-content .comment[data-story-id="9001"]');
+    assert(await waitFor(async () => await firstComments.count() === 30, 15000), 'first article loads');
+    await firstComments.first().evaluate((element) => { element.dataset.cacheSentinel = 'retained'; });
+    await first.click();
+    assert.equal(await firstComments.first().getAttribute('data-cache-sentinel'), 'retained', 'selecting the current article preserves its rendered discussion');
+    await second.click();
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-story-id="9002"]').count() === 30, 15000));
+    const firstRequests = () => app.requests.filter(({ url }) => /hacker-news\.firebaseio\.com\/v0\/item\/(9001|9001\d\d)\.json/.test(url)).length;
+    const before = firstRequests();
+    await first.click();
+    assert(await waitFor(async () => await firstComments.count() === 30, 15000), `first article reloads; body: ${(await app.page.locator('#comments-content').textContent()).slice(0, 300)}; errors: ${JSON.stringify(app.errors)}`);
+    assert.equal(firstRequests(), before, 'revisiting a fresh article does not refetch its comments');
+    assert.deepEqual(app.errors, []);
+  } finally {
+    await app.browser.close();
+  }
+});
+
+test("Reader caches an article with more than twenty discussions", { timeout: 45000 }, async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const posts = Array.from({ length: 25 }, (_, index) => ({ id: `cache${index}`, url, title: STORIES[0].title, author: 'reader', subreddit: `source${index}`, subreddit_name_prefixed: `r/source${index}`, permalink: `/r/source${index}/comments/cache${index}/article/`, num_comments: 1, created_utc: now - 3600, score: 10 }));
+  const app = await launchApp({
+    sharedStore: true, handler: 'Tampermonkey',
+    settings: { sources: { hn: true, reddit: true }, frontPageMode: 'sources', updateCheck: false },
+    values: { 'HNewhere:reddit_tier': { tier: 'archive', timestamp: Date.now() } },
+    responses: [
+      { match: (path) => path.includes('/api/posts/search'), json: { data: posts } },
+      ...posts.map((post) => ({ match: (path) => path.includes('/api/comments/tree') && new URL(path).searchParams.get('link_id') === `t3_${post.id}`, json: { data: [{ kind: 't1', data: { id: `${post.id}comment`, body: `Comment for ${post.id}`, author: 'reader', parent_id: `t3_${post.id}`, link_id: `t3_${post.id}`, created_utc: now - 60, replies: '' } }] } })),
+    ],
+  });
+  try {
+    await app.page.goto('https://backchnnl.app/');
+    await app.page.locator('#app-rail [data-app-view="all"]').click();
+    const first = app.page.locator(`#app-list-body .browse-title-link[href="${STORIES[0].url}"]`).first();
+    const second = app.page.locator(`#app-list-body .browse-title-link[href="${STORIES[1].url}"]`).first();
+    await first.click();
+    const comments = app.page.locator('#comments-content .comment[data-comment-id^="reddit:cache"]');
+    assert(await waitFor(async () => await comments.count() === 25, 15000), 'all discussions load');
+    await second.click();
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-story-id="9002"]').count() === 30, 15000));
+    const treeRequests = () => app.requests.filter(({ url }) => url.includes('/api/comments/tree')).length;
+    const before = treeRequests();
+    assert.equal(before, 25);
+    await first.click();
+    assert(await waitFor(async () => await comments.count() === 25, 15000), 'all cached discussions return');
+    assert.equal(treeRequests(), before, 'revisiting does not refetch discussions evicted by a small cache');
+    assert.deepEqual(app.errors, []);
+  } finally {
+    await app.browser.close();
+  }
+});
+
+test("background discussion rendering cannot replace the browsing Sync status", { timeout: 45000 }, async () => {
+  const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
+  const seam = 'setSidebarLoadingLabel(ui, "rendering comments…");';
+  assert(original.includes(seam));
+  const source = original.replace(seam, `await new Promise((resolve) => setTimeout(resolve, 1500));\n\t\t${seam}`);
+  const slowGets = { key: 'HNewhere:settings', ms: 1800, armed: false };
+  const app = await launchApp({ source, appHost: new URL(url).hostname, sharedStore: true, slowGets, settings: { sources: { hn: true }, autoOpenSidebar: true, frontPageMode: 'sources', updateCheck: false } });
+  try {
+    await app.page.goto(url);
+    assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading').count() === 1, 10000));
+    await app.page.locator('#browse-toggle .wordmark-root').click();
+    assert(await waitFor(async () => await app.page.locator('#panel.browsing').count() === 1, 5000));
+    const subtitle = app.page.locator('#header-subtitle');
+    await subtitle.evaluate((element) => {
+      window.__browseStatuses = [];
+      new MutationObserver(() => window.__browseStatuses.push(element.textContent)).observe(element, { childList: true, characterData: true, subtree: true });
+    });
+    slowGets.armed = true;
+    const button = app.page.locator('#browse-home-sync');
+    await button.click();
+    assert(await waitFor(async () => /syncing/i.test(await subtitle.textContent()), 3000));
+    assert(await waitFor(async () => await button.getAttribute('aria-busy') !== 'true', 12000));
+    assert(!(await app.page.evaluate(() => window.__browseStatuses)).some((text) => /rendering comments|annotating link|loading discussions/i.test(text)), 'background discussion statuses stay hidden while browsing');
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();
