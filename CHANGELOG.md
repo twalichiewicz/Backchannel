@@ -12,6 +12,15 @@ use to detect updates, so every release bumps it.
 
 ### Fixed
 
+- Reddit's archive fallback loads the discussion tree instead of stopping at
+  100 comments. Additional archived replies can be opened, and the Sidebar and
+  Reader show when the archive has fewer comments than the reported total.
+- Large or deeply nested Reddit discussions no longer prevent other discussions
+  from loading. Failed or partial discussion loads are identified, and a failed
+  request for more replies stays available to retry.
+- Readable Reddit comments stay visible when their authors have deleted their
+  accounts, and queued Reddit discussions no longer time out before their own
+  requests start.
 - The Reader's NEW control is easier to read while keeping its pressed state
   and unread-comment sorting.
 - The Sidebar's article menu button now matches Reader on desktop and keeps

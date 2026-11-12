@@ -3791,7 +3791,7 @@
 			score: data.score ?? null,
 			createdAt: data.created_utc ?? 0,
 			isOP: Boolean(data.is_submitter),
-			deleted: data.author === "[deleted]" && !data.body_html,
+			deleted: data.author === "[deleted]" && !data.body_html && (!data.body || /^\[(?:deleted|removed)\]$/i.test(String(data.body).trim())),
 			replyKeys: [],
 		};
 	}
@@ -3899,11 +3899,10 @@
 
 					hiddenCount += record.count;
 
-					if (parent) {
-						parent.more = record;
-					} else {
-						rootMore = record;
-					}
+					const previous = parent ? parent.more : rootMore;
+					const merged = previous ? { ids: [...new Set([...previous.ids, ...record.ids])], count: previous.count + record.count } : record;
+					if (parent) parent.more = merged;
+					else rootMore = merged;
 
 					continue;
 				}
@@ -5480,7 +5479,7 @@ ${
 		let nodes = 0;
 		let size = 0;
 		const visit = (item, depth = 0) => {
-			if (++nodes > 20000 || depth > 40) throw new Error("Reddit response is too large");
+			if (++nodes > 20000 || depth > 128) throw new Error("Reddit response is too large");
 			if (typeof item === "string") {
 				size += item.length;
 				if (size > 2000000) throw new Error("Reddit response is too large");
@@ -5867,7 +5866,7 @@ ${
 								response = await fetchJSON(path);
 								response = (await loadSettings()).sources?.reddit ? { ...response, json: publicRedditJSON(response.json) } : redditReadFailure("disabled");
 							}
-							catch { response = { ok: false, status: 0, json: null, rateLimit: null }; }
+							catch (error) { response = error?.message === "Reddit response is too large" ? redditReadFailure("response-too-large") : { ok: false, status: 0, json: null, rateLimit: null }; }
 							previous = request.id;
 							await publish({ phase: "response", requestId: request.id, response });
 						}
@@ -5903,14 +5902,25 @@ ${
 		return "loid";
 	}
 
-	function redditFetch(path, archivePath, { listing = false, retryAccess = false } = {}) {
+	function redditFetch(path, archivePath, { listing = false, retryAccess = false, archiveFallbackPath = "", onStart = null } = {}) {
 		const accessVersion = redditAccessVersion;
 		const readBatch = usesRedditReadWindow() && redditReadBatch?.connected ? redditReadBatch : null;
-		const key = JSON.stringify([path, archivePath || "", listing, retryAccess, accessVersion, readBatch?.nonce || ""]);
+		const key = JSON.stringify([path, archivePath || "", archiveFallbackPath, listing, retryAccess, accessVersion, readBatch?.nonce || ""]);
 
-		if (redditRequests.has(key)) return redditRequests.get(key);
+		if (redditRequests.has(key)) {
+			const existing = redditRequests.get(key);
+			if (onStart) existing.started.then(onStart);
+			return existing;
+		}
 
-		const turn = redditRequestQueue.then(() => fetchReddit(path, archivePath, { listing, retryAccess, accessVersion, readBatch }));
+		let markStarted;
+		const started = new Promise((resolve) => { markStarted = resolve; });
+		const turn = redditRequestQueue.then(() => {
+			markStarted();
+			return fetchReddit(path, archivePath, { listing, retryAccess, accessVersion, readBatch, archiveFallbackPath });
+		});
+		turn.started = started;
+		if (onStart) started.then(onStart);
 		const done = () => redditRequests.delete(key);
 
 		redditRequests.set(key, turn);
@@ -5918,7 +5928,7 @@ ${
 		return turn;
 	}
 
-	async function fetchReddit(path, archivePath, { listing, retryAccess, accessVersion, readBatch }) {
+	async function fetchReddit(path, archivePath, { listing, retryAccess, accessVersion, readBatch, archiveFallbackPath }) {
 		const windowTransport = usesRedditReadWindow();
 		const connected = windowTransport && readBatch?.connected && !readBatch.cancelled && !readBatch.closing;
 		let tier = retryAccess && accessVersion === redditAccessVersion || connected && readBatch.accessVersion === redditAccessVersion ? "loid" : await redditTier();
@@ -5961,54 +5971,58 @@ ${
 			attempted = true;
 			const result = windowTransport ? await requestRedditReadWindow(path, readBatch) : await requestWithMeta("https://www.reddit.com" + path);
 
-			if (result.localFailure) { attempted = false; return unavailable("window"); }
-			const now = Date.now();
-			const exhausted = result.rateLimit?.remaining < REDDIT_RATE_FLOOR;
-			const transient = result.status === 0 || result.status === 429 || result.status >= 500;
-			const failures = Math.min(5, Math.max(0, Number(cooldown?.failures) || 0) + 1);
-			const pause = Math.max(
-				result.retryAfterSeconds || 0,
-				exhausted ? result.rateLimit.resetSeconds || 600 : result.status === 429 ? result.rateLimit?.resetSeconds || 0 : 0,
-				transient ? Math.min(900, 60 * 2 ** (failures - 1)) : 0,
-			);
+			if (result.localFailure === "response-too-large" && archivePath) {
+				tier = "archive";
+			} else if (result.localFailure) { attempted = false; return unavailable("window"); }
+			if (tier !== "archive") {
+				const now = Date.now();
+				const exhausted = result.rateLimit?.remaining < REDDIT_RATE_FLOOR;
+				const transient = result.status === 0 || result.status === 429 || result.status >= 500;
+				const failures = Math.min(5, Math.max(0, Number(cooldown?.failures) || 0) + 1);
+				const pause = Math.max(
+					result.retryAfterSeconds || 0,
+					exhausted ? result.rateLimit.resetSeconds || 600 : result.status === 429 ? result.rateLimit?.resetSeconds || 0 : 0,
+					transient ? Math.min(900, 60 * 2 ** (failures - 1)) : 0,
+				);
 
-			httpStatus = result.status;
+				httpStatus = result.status;
 
-			if (pause > 0) {
-				retryAt = now + pause * 1000;
-				const latest = await load(REDDIT_POLL_KEY, null);
+				if (pause > 0) {
+					retryAt = now + pause * 1000;
+					const latest = await load(REDDIT_POLL_KEY, null);
 
-				if (Number.isFinite(latest?.until) && latest.until > retryAt) {
-					retryAt = latest.until;
-				} else {
-					await save(REDDIT_POLL_KEY, { until: retryAt, status: exhausted || result.status === 429 ? "limited" : "unavailable", failures: transient ? failures : 0, httpStatus });
+					if (Number.isFinite(latest?.until) && latest.until > retryAt) {
+						retryAt = latest.until;
+					} else {
+						await save(REDDIT_POLL_KEY, { until: retryAt, status: exhausted || result.status === 429 ? "limited" : "unavailable", failures: transient ? failures : 0, httpStatus });
+					}
+					redditReadWaitUntil = retryAt;
+				} else if (result.ok && cooldown) {
+					const latest = await load(REDDIT_POLL_KEY, null);
+
+					if (!(latest?.until > now)) await save(REDDIT_POLL_KEY, { until: 0, status: "ok", failures: 0, httpStatus });
 				}
-				redditReadWaitUntil = retryAt;
-			} else if (result.ok && cooldown) {
-				const latest = await load(REDDIT_POLL_KEY, null);
 
-				if (!(latest?.until > now)) await save(REDDIT_POLL_KEY, { until: 0, status: "ok", failures: 0, httpStatus });
+				if (result.ok) {
+					if (retryAccess) await save(REDDIT_TIER_KEY, { tier, timestamp: Date.now() });
+					return { json: result.json, tier };
+				}
+
+				if (result.status === 403 && ["private", "banned", "quarantined", "gold_only"].includes(String(result.json?.reason || "").toLowerCase())) {
+					return unavailable("access");
+				}
+
+				const login = result.status >= 200 && result.status < 300 && !result.json && (result.contentType === "text/html" || /\/login(?:[/?#]|$)/i.test(result.finalUrl || ""));
+				const next = redditTierForStatus(result.status === 401 || login ? 403 : result.status, tier);
+
+				if (next === tier) {
+					return unavailable(result.status === 429 ? "limited" : "unavailable");
+				}
+
+				await save(REDDIT_TIER_KEY, { tier: next, timestamp: Date.now() });
+				redditAccessVersion++;
+				tier = next;
 			}
-
-			if (result.ok) {
-				if (retryAccess) await save(REDDIT_TIER_KEY, { tier, timestamp: Date.now() });
-				return { json: result.json, tier };
-			}
-
-			if (result.status === 403 && ["private", "banned", "quarantined", "gold_only"].includes(String(result.json?.reason || "").toLowerCase())) {
-				return unavailable("access");
-			}
-
-			const login = result.status >= 200 && result.status < 300 && !result.json && (result.contentType === "text/html" || /\/login(?:[/?#]|$)/i.test(result.finalUrl || ""));
-			const next = redditTierForStatus(result.status === 401 || login ? 403 : result.status, tier);
-
-			if (next === tier) {
-				return unavailable(result.status === 429 ? "limited" : "unavailable");
-			}
-
-			await save(REDDIT_TIER_KEY, { tier: next, timestamp: Date.now() });
-			redditAccessVersion++;
-			tier = next;
 		}
 
 		if (tier !== "archive" || !archivePath) {
@@ -6019,7 +6033,11 @@ ${
 			"https://arctic-shift.photon-reddit.com" + archivePath,
 		);
 
-		if (!archive.ok) {
+		if (!archive.ok || archiveFallbackPath && !Array.isArray(archive.json?.data)) {
+			if (archiveFallbackPath && archive.status !== 403 && archive.status !== 429) {
+				const fallback = await requestWithMeta("https://arctic-shift.photon-reddit.com" + archiveFallbackPath);
+				if (fallback.ok) return { json: fallback.json, tier: "archive-search" };
+			}
 			const next = redditTierForStatus(archive.status, "archive");
 
 			if (next !== "archive") {
@@ -6158,24 +6176,30 @@ ${
 			return posts.filter((post) => post?.id === story.id).map(redditDiscussion);
 		},
 
-		async loadThread(discussion) {
+		async loadThread(discussion, { onStart = null } = {}) {
+			const archiveTree = "/api/comments/tree?link_id=" + encodeURIComponent("t3_" + discussion.id) + "&limit=2500&start_breadth=2500&start_depth=64";
 			const result = await redditFetch(
 				discussion.permalink.replace("https://www.reddit.com", "") +
 					".json?limit=500&sort=confidence",
-				"/api/comments/search?limit=100&link_id=" +
-					encodeURIComponent(discussion.id),
+				archiveTree,
+				{ archiveFallbackPath: "/api/comments/search?limit=100&link_id=" + encodeURIComponent(discussion.id), onStart },
 			);
 
 			if (!result) {
 				return emptyThreadReader();
 			}
 
-			const index =
-				result.tier === "archive"
-					? redditThreadIndexFromFlat(result.json?.data || [], discussion)
-					: redditThreadIndex(result.json, discussion);
+			const archived = result.tier === "archive" || result.tier === "archive-search";
+			const index = result.tier === "archive-search"
+				? redditThreadIndexFromFlat(result.json?.data || [], discussion)
+				: redditThreadIndex(result.tier === "archive" ? [null, { data: { children: result.json?.data || [] } }] : result.json, discussion);
+			const shown = new Set(index.byKey.keys());
+			const unexpandable = (more) => Number(more?.count) > 0 && !more?.ids?.length;
 
 			return {
+				empty: !index.rootKeys.length && !index.rootMore && Number(discussion.commentCount) > 0,
+				incomplete: result.tier === "archive-search" || unexpandable(index.rootMore) || [...index.byKey.values()].some((comment) => unexpandable(comment.more)),
+				archiveCount: archived && Number(discussion.commentCount) > index.byKey.size + index.hiddenCount ? index.byKey.size : null,
 				rootKeys: index.rootKeys,
 				rootTimes: new Map(
 					index.rootKeys.map((key) => [key, index.byKey.get(key)?.createdAt || 0]),
@@ -6185,11 +6209,23 @@ ${
 					return index.byKey.get(key) || null;
 				},
 
-				async expandMore(ids) {
+				async expandMore(ids, parentKey = null) {
 					const batch = ids.slice(0, 100);
 
 					if (!batch.length) {
 						return { ok: true, added: [], remaining: [] };
+					}
+					if (archived) {
+						const parent = parentKey?.startsWith("reddit:") ? "&parent_id=" + encodeURIComponent("t1_" + parentKey.slice(7)) : "";
+						const page = await requestWithMeta("https://arctic-shift.photon-reddit.com/api/comments/tree?link_id=" + encodeURIComponent("t3_" + discussion.id) + parent + "&limit=25000&start_breadth=25000&start_depth=64");
+						if (!page.ok || !Array.isArray(page.json?.data)) return { ok: false, added: [], remaining: ids };
+						const expanded = redditThreadIndex([null, { data: { children: page.json.data } }], discussion);
+						const missing = batch.filter((id) => !expanded.byKey.has(sourceKey("reddit", id)));
+						if (missing.length) return { ok: false, added: [], remaining: ids };
+						const added = batch.map((id) => expanded.byKey.get(sourceKey("reddit", id))).filter((comment) => comment && !shown.has(comment.key));
+						for (const comment of added) shown.add(comment.key);
+						for (const [key, comment] of expanded.byKey) if (!index.byKey.has(key)) index.byKey.set(key, comment);
+						return { ok: true, added, remaining: ids.slice(100) };
 					}
 
 					const result = await runRedditReadAction(() => redditFetch(
@@ -6204,8 +6240,11 @@ ${
 						return { ok: false, added: [], remaining: ids };
 					}
 
-					const things = result?.json?.json?.data?.things || [];
+					const payload = result?.json?.json;
+					const things = payload?.data?.things;
+					if (!Array.isArray(things) || payload?.errors != null && (!Array.isArray(payload.errors) || payload.errors.length)) return { ok: false, added: [], remaining: ids };
 					const added = [];
+					const extra = [];
 
 					for (const node of things) {
 						if (node.kind !== "t1" || !node.data?.id) {
@@ -6227,7 +6266,22 @@ ${
 						}
 					}
 
-					return { ok: true, added, remaining: ids.slice(100) };
+					for (const node of things) {
+						if (node.kind !== "more" || !Array.isArray(node.data?.children)) continue;
+						const rawParent = String(node.data.parent_id || "");
+						const key = rawParent.startsWith("t1_") ? sourceKey("reddit", rawParent.slice(3)) : null;
+						if (key === parentKey) {
+							extra.push(...node.data.children);
+						} else {
+							const parent = key && index.byKey.get(key);
+							if (!parent) continue;
+							const previous = parent.more;
+							parent.more = { ids: [...new Set([...(previous?.ids || []), ...node.data.children])], count: (previous?.count || 0) + (node.data.count ?? node.data.children.length) };
+						}
+					}
+
+					const received = new Set(added.map((comment) => String(comment.id)));
+					return { ok: true, added, remaining: [...new Set([...batch.filter((id) => !received.has(String(id))), ...ids.slice(100), ...extra])] };
 				},
 			};
 		},
@@ -8354,20 +8408,35 @@ button {
 
 	function loadThreadWithCeiling(story) {
 		return new Promise((resolve) => {
-			const timer = setTimeout(() => {
+			let settled = false;
+			let timer = null;
+			let queueTimer = null;
+			const finish = (reader) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				clearTimeout(queueTimer);
+				resolve(reader);
+			};
+			const timeout = () => {
 				console.warn("Backchannel " + story.source + " comments timed out");
-				resolve(emptyThreadReader());
-			}, THREAD_CEILING_MS);
+				finish(emptyThreadReader());
+			};
+			const start = () => {
+				if (settled || timer) return;
+				clearTimeout(queueTimer);
+				timer = setTimeout(timeout, THREAD_CEILING_MS);
+			};
+			if (story.source === "reddit") queueTimer = setTimeout(timeout, Math.max(THREAD_CEILING_MS * 6, 120000));
+			else start();
 
-			Promise.resolve(getSource(story.source).loadThread(story)).then(
+			Promise.resolve(getSource(story.source).loadThread(story, { onStart: start })).then(
 				(reader) => {
-					clearTimeout(timer);
-					resolve(reader || emptyThreadReader());
+					finish(reader || emptyThreadReader());
 				},
 				(error) => {
-					clearTimeout(timer);
 					console.error("Backchannel " + story.source + " comments failed:", error);
-					resolve(emptyThreadReader());
+					finish(emptyThreadReader());
 				},
 			);
 		});
@@ -17921,6 +17990,13 @@ header > .settings-panel {
 	opacity:.7;
 }
 
+.discussion-load-warning {
+	padding:8px 12px;
+	color:var(--meta);
+	font-size:12px;
+	line-height:1.5;
+}
+
 @media (hover: hover) {
 	.more-replies:hover:not(:disabled) {
 		text-decoration:underline;
@@ -24772,7 +24848,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		}
 
 		let pending = more.ids;
-		let remainingCount = more.count;
+		let remainingCount = Math.max(more.ids.length, Number(more.count) || 0);
 
 		const button = document.createElement("button");
 
@@ -24793,7 +24869,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			button.disabled = true;
 			button.textContent = "loading…";
 
-			const { ok, added, remaining } = await thread.expandMore(pending);
+			const { ok, added, remaining } = await thread.expandMore(pending, context.parentKey);
 
 			if (context.generation !== sidebarGeneration) {
 				return;
@@ -24829,15 +24905,15 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			ensureVoteControlsLoaded().catch(console.error);
 
 			pending = remaining;
-			remainingCount = Math.max(0, remainingCount - added.length);
+			remainingCount = Math.max(pending.length, remainingCount - added.length);
 
-			if (!pending.length || !added.length) {
+			if (!pending.length) {
 				button.remove();
 				return;
 			}
 
 			button.disabled = false;
-			button.textContent = label();
+			button.textContent = label() + (added.length ? "" : " — try again");
 		};
 	}
 
@@ -24966,6 +25042,19 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		});
 
 		mountFilterBanner(headerElement, ui);
+		const unavailable = stories.filter((story, index) => threads[index].empty && Number(story.commentCount) > 0);
+		const incomplete = stories.filter((story, index) => threads[index].incomplete && !threads[index].empty);
+		const archiveCounts = stories.flatMap((story, index) => Number.isInteger(threads[index].archiveCount) && !threads[index].empty && !threads[index].incomplete
+			? [(story.label || story.source || "Discussion") + ": the archive returned " + threads[index].archiveCount.toLocaleString() + " comments; the reported total may include newer, removed or unavailable comments."]
+			: []);
+		if (unavailable.length || incomplete.length || archiveCounts.length) {
+			const warning = document.createElement("div");
+			const names = (rows) => joinNames([...new Set(rows.map((story) => story.label || story.source || "discussion"))]);
+			warning.className = "discussion-load-warning";
+			warning.setAttribute("role", "status");
+			warning.textContent = [unavailable.length ? "Couldn't load comments from " + names(unavailable) + "." : "", incomplete.length ? "Only some comments from " + names(incomplete) + " could be loaded." : "", ...archiveCounts, unavailable.length || incomplete.length ? "Use Sync to retry." : ""].filter(Boolean).join(" ");
+			ui.body.appendChild(warning);
+		}
 
 		sidebarSourceKeys.clear();
 

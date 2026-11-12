@@ -49,7 +49,7 @@ Worth stating plainly, because the permissions are broad by necessity:
   | --- | --- | --- |
   | Hacker News | `hn.algolia.com`, `hacker-news.firebaseio.com`, `news.ycombinator.com` | the URL of each page you visit, with no persistent identifier attached |
   | Reddit | `www.reddit.com` | the URL of each page you visit. Signed in to Reddit, these requests arrive authenticated as your account; signed out, they carry a long-lived device identifier |
-  | Reddit (fallback) | `arctic-shift.photon-reddit.com` | the URL of each page you visit, with no identifier. Used automatically when reddit.com declines the request |
+  | Reddit (fallback) | `arctic-shift.photon-reddit.com` | the URL of each page you visit, and post or parent-comment identifiers when loading discussions, with no identifier attached. Used automatically when reddit.com declines a request or a response is too large to transfer |
   | Bluesky (discovery) | `constellation.microcosm.blue` | the URL of each page you visit, with no identifier attached |
   | Bluesky | `public.api.bsky.app` | post identifiers only -- never the URL of the page you are on |
   | Lobsters | `lobste.rs` | the domain of each page you visit -- never the full address. It has no URL search, so the exact match is made here |
@@ -268,6 +268,7 @@ with its address as `<page>`.
 | Hacker News (vote, reply, submit) | popup window on `news.ycombinator.com` | the one story or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
 | Reddit | `GET www.reddit.com/search.json?type=link&limit=25&q=<page>` | `<page>` | May carry Reddit session or device cookies when your browser and userscript manager permit them. A signed-in Reddit tab does not guarantee that these requests share its session |
 | Reddit (fallback) | `GET arctic-shift.photon-reddit.com<path>` | the same lookup, against an archive mirror | No identifier, no session |
+| Reddit (archived comments) | `GET arctic-shift.photon-reddit.com/api/comments/tree?link_id=<post>&...`, optionally with `parent_id=<comment>` | the post identifier and, when expanding a reply branch, its parent comment identifier | No identifier, no session |
 | Reddit (Safari Userscripts reads) | a background tab on `www.reddit.com`, opened and closed by the extension, using `GET /api/me.json` internally, then supported listing, lookup, thread and more-replies endpoints | the topics, article address or thread requested by initial article-list loading, opening an article or Sidebar, Sync, a pull on a phone or loading more replies, after confirming the introduction; no tab for background page discovery | Yes, using the existing Reddit session. Account details stay in the Reddit tab; only allowed public fields and rate-limit metadata return |
 | Reddit (vote, reply, submit) | popup window on `old.reddit.com` | the one post or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
 | Bluesky | `GET constellation.microcosm.blue/links/all?target=<page>` | `<page>`, plus a `User-Agent` naming Backchannel and its version | No |
