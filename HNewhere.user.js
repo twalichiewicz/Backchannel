@@ -5678,7 +5678,7 @@ ${
 			? state.discussionSync(finishDiscussion)
 			: state?.open && canReconcileDiscussion(state.ui)
 				? syncDiscussions(state.ui, renderedDiscussions, finishDiscussion)
-				: state?.open ? openAppDiscussion(state.open.row, { onThreadsLoaded: finishDiscussion, force: true }) : Promise.resolve();
+				: state?.open ? openAppDiscussion(state.open.row, { onThreadsLoaded: finishDiscussion, force: !sharedRefreshSince }) : Promise.resolve();
 		return Promise.allSettled([
 			renderAppList({ force: !sharedRefreshSince }).finally(finishFeed),
 			Promise.resolve(discussion).finally(finishDiscussion),
