@@ -173,7 +173,7 @@ test('recent search queries are reusable and shared between Reader and Sidebar',
 
 test('mobile Reader syncs the discussion from the Sources menu', { timeout: 45000 }, async () => {
   const fixture = discussionFixture(url, { rootCount: 1, replyRoots: 0 });
-  const tree = fixture.responses.find((response) => response.match('https://arctic-shift.photon-reddit.com/api/comments/tree?link_id=t3_fixture0'));
+  const tree = fixture.responses.find((response) => response.match('https://fixture/api/comments/tree?link_id=t3_fixture0'));
   const app = await launchApp({ viewport: { width: 390, height: 844 }, hasTouch: true, sharedStore: true, handler: 'Tampermonkey', settings: { sources: { hn: true, reddit: true }, frontPageMode: 'sources', updateCheck: false }, values: { 'HNewhere:reddit_tier': { tier: 'archive', timestamp: Date.now() } }, responses: fixture.responses });
   try {
     await app.page.goto('https://backchnnl.app/');
