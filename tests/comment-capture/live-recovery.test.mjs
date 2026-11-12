@@ -401,7 +401,7 @@ test("Reader Sync closes its Reddit tab after feeds and threads load, before loc
   const comment = (id) => ({ kind: 't1', data: { id, body: `Comment ${id}`, author: 'reader', parent_id: 't3_freshpost', link_id: 't3_freshpost', created_utc: now - 60, replies: '' } });
   const app = await launchApp({ source, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com'], settings: { sources: { hn: true, reddit: true }, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
     { match: (path) => path.includes('/api/posts/search'), json: { data: [post] } },
-    { match: (path) => path.includes('/api/comments/tree'), json: { data: [comment('archive')] } },
+    { match: (path) => path.includes('/api/comments/tree'), json: { data: [comment('initial')] } },
   ] });
   const opened = [];
   let current = 'initial';
@@ -413,7 +413,8 @@ test("Reader Sync closes its Reddit tab after feeds and threads load, before loc
   });
   try {
     await app.page.goto('https://backchnnl.app/');
-    await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
+    assert(await waitFor(() => app.store.get('HNewhere:reddit_shared_refresh')?.state === 'done', 15000), 'the initial feed refresh finishes');
+    await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().evaluate((element) => element.click());
     assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:initial"]').count() === 1, 20000));
     assert(await waitFor(() => opened.every((page) => page.isClosed()), 10000));
     assert(await waitFor(() => app.store.get('HNewhere:reddit_shared_refresh')?.state === 'done', 10000), 'the initial refresh finishes before starting another');
