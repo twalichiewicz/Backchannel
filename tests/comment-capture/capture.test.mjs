@@ -14,8 +14,7 @@ async function assertCaptured(app, fixture) {
   const root = app.page.locator('#comments-content .comment[data-comment-id="reddit:root0"]');
   assert.equal(await root.locator('.children .comment[data-comment-id="reddit:reply0x0"]').count(), 1, "replies stay under their parent");
   assert((await root.textContent()).includes("Root comment 0"), "readable text survives a deleted account");
-  const warning = await app.page.locator("#comments-content .discussion-load-warning").textContent();
-  assert.match(warning, /archive returned 140 comments/i, "a larger reported total is explained");
+  assert.equal(await app.page.locator("#comments-content .discussion-load-warning").count(), 0, "a reported count mismatch alone should not warn the user");
   assert(app.requests.some(({ url }) => url.includes("/api/comments/tree") && new URL(url).searchParams.get("link_id") === "t3_fixture0"), "the complete archive tree is requested");
   assert.deepEqual(app.errors, [], "no uncaught browser errors");
 }

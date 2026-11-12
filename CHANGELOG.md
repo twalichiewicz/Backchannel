@@ -13,8 +13,7 @@ use to detect updates, so every release bumps it.
 ### Fixed
 
 - Reddit's archive fallback loads the discussion tree instead of stopping at
-  100 comments. Additional archived replies can be opened, and the Sidebar and
-  Reader show when the archive has fewer comments than the reported total.
+  100 comments. Additional archived replies can be opened.
 - Large or deeply nested Reddit discussions no longer prevent other discussions
   from loading. Failed or partial discussion loads are identified, and a failed
   request for more replies stays available to retry.

@@ -6199,7 +6199,6 @@ ${
 			return {
 				empty: !index.rootKeys.length && !index.rootMore && Number(discussion.commentCount) > 0,
 				incomplete: result.tier === "archive-search" || unexpandable(index.rootMore) || [...index.byKey.values()].some((comment) => unexpandable(comment.more)),
-				archiveCount: archived && Number(discussion.commentCount) > index.byKey.size + index.hiddenCount ? index.byKey.size : null,
 				rootKeys: index.rootKeys,
 				rootTimes: new Map(
 					index.rootKeys.map((key) => [key, index.byKey.get(key)?.createdAt || 0]),
@@ -25044,15 +25043,12 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		mountFilterBanner(headerElement, ui);
 		const unavailable = stories.filter((story, index) => threads[index].empty && Number(story.commentCount) > 0);
 		const incomplete = stories.filter((story, index) => threads[index].incomplete && !threads[index].empty);
-		const archiveCounts = stories.flatMap((story, index) => Number.isInteger(threads[index].archiveCount) && !threads[index].empty && !threads[index].incomplete
-			? [(story.label || story.source || "Discussion") + ": the archive returned " + threads[index].archiveCount.toLocaleString() + " comments; the reported total may include newer, removed or unavailable comments."]
-			: []);
-		if (unavailable.length || incomplete.length || archiveCounts.length) {
+		if (unavailable.length || incomplete.length) {
 			const warning = document.createElement("div");
 			const names = (rows) => joinNames([...new Set(rows.map((story) => story.label || story.source || "discussion"))]);
 			warning.className = "discussion-load-warning";
 			warning.setAttribute("role", "status");
-			warning.textContent = [unavailable.length ? "Couldn't load comments from " + names(unavailable) + "." : "", incomplete.length ? "Only some comments from " + names(incomplete) + " could be loaded." : "", ...archiveCounts, unavailable.length || incomplete.length ? "Use Sync to retry." : ""].filter(Boolean).join(" ");
+			warning.textContent = [unavailable.length ? "Couldn't load comments from " + names(unavailable) + "." : "", incomplete.length ? "Only some comments from " + names(incomplete) + " could be loaded." : "", "Use Sync to retry."].filter(Boolean).join(" ");
 			ui.body.appendChild(warning);
 		}
 
