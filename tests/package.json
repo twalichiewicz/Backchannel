@@ -1,0 +1,13 @@
+{
+  "name": "hnewhere-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node run.mjs && node comment-capture/run.mjs",
+    "test:capture": "node comment-capture/run.mjs",
+    "test:slow": "node run.mjs --all && node comment-capture/run.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}

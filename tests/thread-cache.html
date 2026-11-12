@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Backchannel thread cache tests</title>
+<style>
+body { font: 13px/1.5 ui-monospace, monospace; margin: 2rem; }
+.pass { color: #197a19; }
+.fail { color: #c00; font-weight: bold; }
+#summary { font-size: 16px; font-weight: bold; margin-bottom: 1rem; }
+</style>
+</head>
+<body>
+<div id="summary">running…</div>
+<pre id="out"></pre>
+<script type="module">
+const MARK_OPEN = "// #region hnewhere-test-export";
+const MARK_CLOSE = "// #endregion hnewhere-test-export";
+
+const EXPORTS = ["cachedThread", "rememberThread", "threadsCheckedAt", "THREAD_TTL", "THREAD_CACHE_MAX"];
+
+function extractRegions(source) {
+	const parts = [];
+	let cursor = 0;
+
+	for (;;) {
+		const open = source.indexOf(MARK_OPEN, cursor);
+		if (open < 0) break;
+		const close = source.indexOf(MARK_CLOSE, open);
+		if (close < 0) throw new Error("unclosed hnewhere-test-export region");
+		parts.push(source.slice(open + MARK_OPEN.length, close));
+		cursor = close + MARK_CLOSE.length;
+	}
+
+	if (!parts.length) throw new Error("no hnewhere-test-export regions found");
+	return parts.join("\n");
+}
+
+const source = await (await fetch("../HNewhere.user.js", { cache: "no-store" })).text();
+const H = new Function(`${extractRegions(source)}\nreturn {${EXPORTS.join(",")}};`)();
+
+let passed = 0;
+let failed = 0;
+const lines = [];
+
+function test(name, fn) {
+	try {
+		fn();
+		passed += 1;
+		lines.push(`<span class="pass">PASS</span>  ${name}`);
+	} catch (error) {
+		failed += 1;
+		lines.push(`<span class="fail">FAIL</span>  ${name}\n        ${error.message}`);
+	}
+}
+
+function assertEqual(actual, expected, message) {
+	if (actual !== expected) {
+		throw new Error(`${message || ""} expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+	}
+}
+
+// A thread reader is reused for THREAD_TTL from when it was fetched, the
+// THREAD_CACHE_MAX most recently used are kept, and nothing is stored: the
+// cache is a Map that dies with the document.
+
+test("a fresh entry is returned and moved to the newest slot", () => {
+	const cache = new Map();
+	H.rememberThread(cache, "hn:1", { rootKeys: ["a"] }, 1000);
+	H.rememberThread(cache, "hn:2", { rootKeys: ["b"] }, 1001);
+	const hit = H.cachedThread(cache, "hn:1", 2000);
+	assertEqual(hit.reader.rootKeys[0], "a");
+	assertEqual([...cache.keys()].join(","), "hn:2,hn:1");
+});
+
+test("an entry at or past the TTL is dropped on read", () => {
+	const cache = new Map();
+	H.rememberThread(cache, "hn:1", { rootKeys: [] }, 1000);
+	assertEqual(H.cachedThread(cache, "hn:1", 1000 + H.THREAD_TTL - 1) !== null, true, "just inside:");
+	assertEqual(H.cachedThread(cache, "hn:1", 1000 + H.THREAD_TTL), null, "at the TTL:");
+	assertEqual(cache.size, 0, "and it is gone:");
+	assertEqual(H.cachedThread(cache, "never", 0), null);
+});
+
+test("remembering past the cap evicts the oldest", () => {
+	const cache = new Map();
+	for (let i = 0; i < H.THREAD_CACHE_MAX + 2; i += 1) {
+		H.rememberThread(cache, "k" + i, {}, i);
+	}
+	assertEqual(cache.size, H.THREAD_CACHE_MAX);
+	assertEqual(cache.has("k0"), false);
+	assertEqual(cache.has("k1"), false);
+	assertEqual(cache.has("k2"), true);
+});
+
+test("a hit refreshes recency, so it survives the next eviction", () => {
+	const cache = new Map();
+	for (let i = 0; i < H.THREAD_CACHE_MAX; i += 1) {
+		H.rememberThread(cache, "k" + i, {}, i);
+	}
+	H.cachedThread(cache, "k0", 100);
+	H.rememberThread(cache, "new", {}, 101);
+	assertEqual(cache.has("k0"), true, "the hit was kept:");
+	assertEqual(cache.has("k1"), false, "the untouched oldest went:");
+});
+
+test("checkedAt is the oldest of the rendered discussions, or now when none is cached", () => {
+	const cache = new Map();
+	H.rememberThread(cache, "a", {}, 500);
+	H.rememberThread(cache, "b", {}, 900);
+	assertEqual(H.threadsCheckedAt(cache, ["a", "b", "c"], 1000), 500);
+	assertEqual(H.threadsCheckedAt(cache, ["c"], 1000), 1000);
+	assertEqual(H.threadsCheckedAt(cache, [], 1000), 1000);
+});
+
+document.getElementById("summary").innerHTML = failed
+	? `<span class="fail">${failed} FAILED</span>, ${passed} passed`
+	: `<span class="pass">all ${passed} passed</span>`;
+document.getElementById("out").innerHTML = lines.join("\n");
+</script>
+</body>
+</html>

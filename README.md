@@ -118,6 +118,22 @@ build step or dependencies: edit `HNewhere.user.js`, load it in your userscript
 manager, and what you see is what users install. Release history is in
 [CHANGELOG.md](CHANGELOG.md).
 
+The regression tests use Node.js 20 or newer and Playwright. From the repository
+root, run:
+
+```sh
+cd tests
+npm ci
+npx playwright install chromium webkit
+npm test
+```
+
+The checked-in tests exercise comment and discussion capture with synthetic
+sources in Chromium and WebKit. GitHub Actions runs them on pushes and pull
+requests. Additional local HTML tests run too when present; `npm run test:slow`
+includes the slow ones. To run only the comment-capture checks, use
+`npm run test:capture`.
+
 ### What's the license on this bad boy?
 
 GPL-3.0-or-later

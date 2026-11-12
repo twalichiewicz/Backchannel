@@ -1,6 +1,12 @@
-# Local test harness and fixtures. Not shipped to users and not published --
+# Most test fixtures and probes remain local. The core regression suite is tracked;
 # HNewhere.user.js is the only file the install URL serves.
-tests/
+tests/*
+!tests/package.json
+!tests/package-lock.json
+!tests/run.mjs
+!tests/thread-cache.html
+!tests/comment-capture/
+tests/comment-capture/node_modules/
 
 # Design specs and implementation plans. Working notes, kept locally.
 docs/
