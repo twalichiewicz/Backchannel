@@ -155,21 +155,24 @@ Worth stating plainly, because the permissions are broad by necessity:
   `HNewhere:hn_cache:` followed by its address, and none was removed. Since
   1.6.17.2 the daily pass above deletes them.
 - **Equivalent-article checks keep a short-lived cache in the tab's memory.**
-  It holds up to 30 sets of addresses and short article passages, used to
-  recognize a repeat check for five minutes. Entries may remain in memory until
+  It holds up to 30 sets of addresses, headlines, and extracted article content,
+  used to recognize a repeat check for five minutes. Entries may remain in memory until
   replaced, the tab closes, or you clear cached data; they are not saved to
   userscript storage.
 - **Visited-article fingerprints stay in userscript storage.** To recognize
   articles you have opened at different addresses, Backchannel keeps up to 100
-  addresses, SHA-256 hashes and lengths of short normalized passages, without
-  saving the passages themselves. A record is usable for one hour; expired
-  records are removed during a later identity lookup or the daily storage sweep. Clearing
+  addresses, SHA-256 hashes of headlines and normalized content or media
+  references, and content lengths, without saving the text itself. A record is
+  usable for one hour; expired records are removed during a later identity lookup
+  or the daily storage sweep. Clearing
   cached data removes them too. Hashes can reveal known text by guessing, so
   they should still be treated as reading history. Excluded pages are omitted.
   When a page is in your Collection, up to eight verified alternate addresses
-  are also kept with its saved entry so later checks can find activity after
-  fingerprints expire. Clearing cached data leaves those saved Collection addresses intact;
-  removing the entry removes them with it.
+  and a SHA-256 content signature are also kept with its saved entry so later
+  checks can find activity after fingerprints expire. Current pages must match
+  that signature before the saved addresses are used for their lookup. Clearing
+  cached data leaves those saved Collection addresses intact; removing the entry
+  removes them with it.
 - **The notepad stays on the machine you wrote it on.** Notes live in your
   userscript manager's storage, keyed by page address or, on a PDF, by the
   document's fingerprint. Nothing is uploaded and no source is told they exist.

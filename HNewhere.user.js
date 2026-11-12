@@ -8083,37 +8083,136 @@ button {
 		return String(value || "").normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 	}
 
+	function articleEvidenceText(value) {
+		return String(value || "").normalize("NFC").replace(/\s+/gu, " ").trim();
+	}
+
 	function articleMatchRoot(doc) {
-		return doc?.querySelector?.('article, [itemprop="articleBody"], .article-body, .post-content') ||
-			doc?.querySelector?.('main, [role="main"]') || null;
+		if (!doc?.querySelectorAll) return null;
+		const regions = [...doc.querySelectorAll('[itemprop="articleBody"], .article-body, .post-content, .article-main')];
+		const leaves = regions.filter((region) => !regions.some((other) => other !== region && region.contains(other)));
+		if (leaves.length) return leaves.length === 1 ? leaves[0] : null;
+		const articles = [...doc.querySelectorAll("article")];
+		if (articles.length) return articles.length === 1 ? articles[0] : null;
+		const mains = [...doc.querySelectorAll('main, [role="main"]')];
+		return mains.length === 1 ? mains[0] : null;
 	}
 
-	function articleMatchSamples(doc) {
-		return articleSamplesFromRoot(articleMatchRoot(doc));
+	function articleMatchSamples(doc, baseURL = doc?.URL || "") {
+		return articleSamplesFromRoot(articleMatchRoot(doc), baseURL);
 	}
 
-	function articleSamplesFromRoot(root) {
-		if (!root) return [];
-		const passages = [...root.querySelectorAll("p")]
-			.map((node) => articleMatchText(node.textContent))
-			.filter((text) => text.length >= 8)
-			.filter((text, index, all) => all.indexOf(text) === index);
-		return [...passages.filter((text) => text.length >= 120), ...passages.filter((text) => text.length < 120)]
-			.map((text) => text.slice(0, 120))
-			.filter((text, index, all) => all.indexOf(text) === index)
-			.slice(0, 12);
+	function articleMediaEvidence(node, baseURL) {
+		const encode = (value) => {
+			const encoded = Array.from(new TextEncoder().encode(value), (byte) => byte.toString(16).padStart(2, "0")).join("");
+			return encoded.length <= 7960 ? "backchannelmedia " + encoded : null;
+		};
+		if (node.tagName.toLowerCase() === "svg") {
+			if (node.querySelector("script, foreignObject, image, animate, animateTransform, set")) return null;
+			const references = [];
+			for (const use of node.querySelectorAll("use")) {
+				const href = use.getAttribute("href") || use.getAttribute("xlink:href") || "";
+				if (!href || href.startsWith("#")) return null;
+				let address;
+				try { address = new URL(href, baseURL || undefined); } catch { return null; }
+				if (!/^https?:$/.test(address.protocol) || address.username || address.password) return null;
+				references.push(address.href);
+			}
+			return encode(JSON.stringify(["svg", node.outerHTML, references]));
+		}
+		if (node.tagName !== "IMG" && !(node.tagName === "SOURCE" && node.closest("picture"))) return null;
+		const sources = ["src", "data-src", "srcset", "data-srcset"].map((name) => node.getAttribute(name) || "");
+		if (!sources.some(Boolean) || sources.some((value) => value.length > 3000 || /\bdata:/i.test(value))) return null;
+		const resolved = [];
+		for (let i = 0; i < sources.length; i++) {
+			const value = sources[i];
+			if (!value) { resolved.push(""); continue; }
+			const items = i < 2 ? [value] : value.split(",");
+			const parts = [];
+			for (const item of items) {
+				const tokens = item.trim().split(/\s+/);
+				if (!tokens[0] || tokens.length > (i < 2 ? 1 : 2)) return null;
+				let address;
+				try { address = new URL(tokens[0], baseURL || undefined); } catch { return null; }
+				if (!/^https?:$/.test(address.protocol) || address.username || address.password) return null;
+				parts.push(address.href + (tokens[1] ? " " + tokens[1] : ""));
+			}
+			resolved.push(parts.join(","));
+		}
+		return encode(JSON.stringify([node.tagName.toLowerCase(), ...resolved, node.getAttribute("alt") || "", node.getAttribute("media") || "", node.getAttribute("type") || ""]));
 	}
 
-	function articleContentsMatch(samples, doc) {
-		if (samples.length < 2) return false;
-		const text = articleMatchText(articleMatchRoot(doc)?.textContent || "");
-		const matched = samples.filter((sample) => text.includes(sample));
-		return articleEvidenceMatches(matched.length, samples.length, articleMatchSamples(doc).length, matched.reduce((total, sample) => total + sample.length, 0));
+	function articleSamplesFromRoot(root, baseURL = root?.ownerDocument?.URL || "") {
+		if (!root?.ownerDocument?.createTreeWalker) return [];
+		const passages = [];
+		const walker = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+		const blocks = 'p, h2, h3, li, blockquote, div, section, td, th, pre, article, main, [role="main"]';
+		const excluded = 'script, style, noscript, template, h1, [hidden], [aria-hidden="true"]';
+		let block = null;
+		let content = "";
+		let size = 0;
+		const flush = () => {
+			const text = articleEvidenceText(content);
+			content = "";
+			if (!text || /^this article is republished from [\p{L}\p{N} ]{1,60} under a creative commons licen[cs]e read the original article$/u.test(articleMatchText(text))) return true;
+			if (text.length > 2000 || passages.length >= 64 || size + text.length > 64000) return false;
+			size += text.length;
+			passages.push(text);
+			return true;
+		};
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+			const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+			const hidden = element?.closest(excluded);
+			if (hidden && root.contains(hidden)) continue;
+			if (node.nodeType === Node.ELEMENT_NODE) {
+				if (!node.matches("img, source, video, audio, iframe, canvas, object, embed, svg")) continue;
+				if (!flush()) return [];
+				const media = articleMediaEvidence(node, baseURL);
+				if (media === null || (media && (passages.length >= 64 || size + media.length > 64000))) return [];
+				if (media) { passages.push(media); size += media.length; }
+				block = null;
+				continue;
+			}
+			const parent = node.parentElement;
+			const nearest = parent?.closest(blocks);
+			const current = nearest && root.contains(nearest) ? nearest : root;
+			if (current !== block) {
+				if (!flush()) return [];
+				block = current;
+			}
+			content += node.nodeValue || "";
+			if (content.length > 8000) return [];
+		}
+		return flush() ? passages : [];
 	}
 
-	function articleEvidenceMatches(shared, left, right, characters) {
-		const total = Math.max(left, right);
-		return characters >= 240 && shared >= (total > 2 ? 3 : 2) && shared * 3 >= total * 2;
+	function articleComparableTitle(value) {
+		const title = articleEvidenceText(value);
+		const words = title.match(/[\p{L}\p{N}]+/gu) || [];
+		return title.length >= 20 && words.filter((word) => word.length >= 3).length >= 3 ? title : "";
+	}
+
+	function articleDocumentTitle(doc) {
+		if (!doc?.querySelectorAll) return "";
+		const headings = [...doc.querySelectorAll("h1")].filter((heading) => !heading.closest('aside, nav, footer, [hidden], [aria-hidden="true"]'));
+		if (headings.length > 1) return "";
+		return String(headings[0]?.textContent || doc.querySelector('meta[property="og:title"]')?.getAttribute("content") || doc.title || "").trim();
+	}
+
+	function articleHasEvidence(samples) {
+		const text = samples.filter((sample) => !sample.startsWith("backchannelmedia "));
+		return text.length >= 3 && new Set(text).size >= 3 && text.reduce((total, sample) => total + sample.length, 0) >= 600;
+	}
+
+	function articleContentsMatch(samples, doc, title, baseURL = doc?.URL || "") {
+		const expectedTitle = articleComparableTitle(title);
+		if (!expectedTitle || expectedTitle !== articleComparableTitle(articleDocumentTitle(doc))) return false;
+		const other = articleMatchSamples(doc, baseURL);
+		return articleHasEvidence(samples) && articleHasEvidence(other) && articleEvidenceMatches(samples, other);
+	}
+
+	function articleEvidenceMatches(left, right) {
+		return left.length === right.length && left.every((sample, index) => sample === right[index]);
 	}
 
 	function articleTitleQuery(title) {
@@ -8123,7 +8222,7 @@ button {
 		return query.length <= 194 ? query : "";
 	}
 
-	function articleIdentitySubject({ url = "", canonical = "", discourse = false, addresses = [], title = "", samples = [] } = {}) {
+	function articleIdentitySubject({ url = "", canonical = "", discourse = false, addresses = [], title = "", matchTitle = null, samples = [] } = {}) {
 		const evidence = [];
 		const add = (value, reason) => {
 			const address = String(value || "");
@@ -8137,14 +8236,12 @@ button {
 			if (original && !evidence.some((entry) => sameURL(entry.url, original))) add(original, "archive-original");
 		}
 		for (const address of Array.isArray(addresses) ? addresses : []) add(address, evidence.length ? "provided" : "requested");
-		const passages = (Array.isArray(samples) ? samples : [])
-			.slice(0, 12)
-			.filter((value) => typeof value === "string")
-			.map((value) => articleMatchText(value.slice(0, 1000)))
-			.filter((value) => value.length >= 8)
-			.map((value) => value.slice(0, 120));
+		const valid = (value) => typeof value === "string" && value.length <= (value.startsWith("backchannelmedia ") ? 8000 : 2000);
+		const supplied = Array.isArray(samples) && samples.length <= 64 && samples.every(valid) && samples.reduce((sum, value) => sum + value.length, 0) <= 64000 ? samples : [];
+		const normalized = supplied.map(articleEvidenceText);
+		const passages = normalized.every(valid) && normalized.reduce((sum, value) => sum + value.length, 0) <= 64000 ? normalized.filter(Boolean) : [];
 
-		return { addresses: evidence.map((entry) => entry.url), evidence, title: String(title || "").trim().slice(0, 500), samples: [...new Set(passages)] };
+		return { addresses: evidence.map((entry) => entry.url), evidence, title: String(title || "").trim().slice(0, 500), matchTitle: String(matchTitle === null ? title || "" : matchTitle || "").trim().slice(0, 500), samples: passages };
 	}
 	// #endregion hnewhere-test-export
 
@@ -8188,6 +8285,7 @@ button {
 		}
 	}
 
+	const ARTICLE_IDENTITY_VERSION = 2;
 	const ARTICLE_IDENTITY_PREFIX = "HNewhere:article_identity:";
 	const ARTICLE_IDENTITY_EPOCH_KEY = "HNewhere:identity_epoch";
 	const ARTICLE_IDENTITY_MAX = 100;
@@ -8212,11 +8310,25 @@ button {
 		}
 	}
 
-	async function rememberCollectedIdentity(addresses) {
+	function collectedIdentityList(entry) {
+		return /^[a-f0-9]{64}$/.test(entry?.identitySignatureV2 || "") && Array.isArray(entry?.identityAddressesV2) ? entry.identityAddressesV2 : [];
+	}
+
+	async function articleIdentitySignature(subject) {
+		const title = articleComparableTitle(subject.matchTitle);
+		if (!globalThis.crypto?.subtle || !title || !articleHasEvidence(subject.samples)) return "";
+		try {
+			const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify([title, subject.samples])));
+			return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+		} catch { return ""; }
+	}
+
+	async function rememberCollectedIdentity(addresses, signature) {
+		if (!signature) return;
 		const unique = [...new Map(addresses.filter(safeIdentityAddress).map((url) => [normalizeURL(url), url])).values()];
 		if (unique.length < 2) return;
 		const keys = new Set(unique.map(normalizeURL));
-		const overlaps = (entry) => [entry?.url, ...(Array.isArray(entry?.identityAddresses) ? entry.identityAddresses : [])].some((url) => keys.has(normalizeURL(url)));
+		const overlaps = (entry) => [entry?.url, ...(entry?.identitySignatureV2 === signature ? collectedIdentityList(entry) : [])].some((url) => keys.has(normalizeURL(url)));
 		const current = await load(STORAGE.collected, []);
 		if (!Array.isArray(current) || !current.some(overlaps)) return;
 		await mutateCollected((entries) => {
@@ -8224,23 +8336,25 @@ button {
 			const next = entries.map((entry) => {
 				if (!overlaps(entry)) return entry;
 				const own = normalizeURL(entry.url);
-				const previous = Array.isArray(entry.identityAddresses) ? entry.identityAddresses : [];
+				const previous = entry.identitySignatureV2 === signature ? collectedIdentityList(entry) : [];
 				const aliases = [...new Map([...previous, ...unique].filter((url) => safeIdentityAddress(url) && normalizeURL(url) !== own).map((url) => [normalizeURL(url), url])).values()].slice(0, 8);
-				if (JSON.stringify(previous) === JSON.stringify(aliases)) return entry;
+				if (entry.identitySignatureV2 === signature && JSON.stringify(previous) === JSON.stringify(aliases)) return entry;
 				changed = true;
-				return { ...entry, identityAddresses: aliases };
+				return { ...entry, identityAddressesV2: aliases, identitySignatureV2: signature };
 			});
 			return changed ? next : undefined;
 		}).catch(console.error);
 	}
 
-	async function collectedIdentityAddresses(addresses) {
+	async function collectedIdentityAddresses(addresses, signature) {
+		if (!signature) return [];
 		const keys = new Set(addresses.map(normalizeURL));
 		const entries = await load(STORAGE.collected, []);
 		if (!Array.isArray(entries)) return [];
 		const matches = [];
 		for (const entry of entries) {
-			const known = [entry?.url, ...(Array.isArray(entry?.identityAddresses) ? entry.identityAddresses : [])].filter(safeIdentityAddress);
+			if (entry?.identitySignatureV2 !== signature) continue;
+			const known = [entry?.url, ...collectedIdentityList(entry)].filter(safeIdentityAddress);
 			if (!known.some((url) => keys.has(normalizeURL(url)))) continue;
 			for (const url of known) matches.push({ url, evidence: "collection" });
 		}
@@ -8258,40 +8372,33 @@ button {
 		try {
 			const epoch = String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0"));
 			let fingerprints = await Promise.all(subject.samples.map(digest));
-			let lengths = subject.samples.map((sample) => sample.length);
+			let titleHash = articleComparableTitle(subject.matchTitle) ? await digest(articleComparableTitle(subject.matchTitle)) : "";
+			let lengths = subject.samples.map((sample) => sample.startsWith("backchannelmedia ") ? 0 : sample.length);
 			const now = Date.now();
 			const records = await Promise.all(keys.filter((key) => key.startsWith(ARTICLE_IDENTITY_PREFIX)).map(async (key) => ({ key, value: await load(key, null) })));
 			const valid = [];
 			const stale = [];
 			for (const record of records) {
 				const { value, key } = record;
-				if (!value || String(value.epoch || "0") !== epoch || typeof value.url !== "string" || isHiddenSite(value.url) || !Number.isFinite(value.timestamp) || value.timestamp > now || now - value.timestamp >= ARTICLE_IDENTITY_AGE || !Array.isArray(value.fingerprints) || value.fingerprints.length < 2 || value.fingerprints.length > 12 || !value.fingerprints.every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)) || (value.lengths !== undefined && (!Array.isArray(value.lengths) || value.lengths.length !== value.fingerprints.length || !value.lengths.every((length) => Number.isInteger(length) && length >= 8 && length <= 120)))) stale.push(key);
+				if (!value || value.version !== ARTICLE_IDENTITY_VERSION || String(value.epoch || "0") !== epoch || typeof value.url !== "string" || isHiddenSite(value.url) || !Number.isFinite(value.timestamp) || value.timestamp > now || now - value.timestamp >= ARTICLE_IDENTITY_AGE || !Array.isArray(value.fingerprints) || !/^([a-f0-9]{64})$/.test(value.titleHash || "") || value.fingerprints.length < 3 || value.fingerprints.length > 64 || !value.fingerprints.every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)) || (!Array.isArray(value.lengths) || value.lengths.length !== value.fingerprints.length || !value.lengths.every((length) => Number.isInteger(length) && length >= 0 && length <= 2000) || value.lengths.reduce((sum, length) => sum + length, 0) < 600)) stale.push(key);
 				else valid.push(record);
 			}
 			valid.sort((a, b) => b.value.timestamp - a.value.timestamp);
-			for (const record of valid.splice(ARTICLE_IDENTITY_MAX - Math.min(subject.samples.length >= 2 ? subject.addresses.length : 0, 9))) stale.push(record.key);
+			for (const record of valid.splice(ARTICLE_IDENTITY_MAX - Math.min(subject.samples.length >= 3 ? subject.addresses.length : 0, 9))) stale.push(record.key);
 			if (String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) !== epoch) return [];
 			if (stale.length) await forgetMany(stale);
-			if (fingerprints.length < 2) {
-				const targets = new Set(subject.addresses.map(normalizeURL));
-				const stored = valid.find(({ value }) => targets.has(normalizeURL(value.url)))?.value;
-				fingerprints = stored?.fingerprints || [];
-				lengths = stored?.lengths || fingerprints.map(() => 120);
-			}
-			if (fingerprints.length < 2) return [];
+			if (!titleHash || fingerprints.length < 3 || new Set(fingerprints.filter((_, index) => lengths[index] > 0)).size < 3 || lengths.reduce((sum, length) => sum + length, 0) < 600) return [];
 			const targets = new Set(subject.addresses.map(normalizeURL));
 			const matches = valid.filter(({ value }) => {
 				if (targets.has(normalizeURL(value.url))) return false;
-				const shared = [...new Set(value.fingerprints.filter((hash) => fingerprints.includes(hash)))];
-				const characters = shared.reduce((sum, hash) => sum + lengths[fingerprints.indexOf(hash)], 0);
-				return articleEvidenceMatches(shared.length, fingerprints.length, value.fingerprints.length, characters);
+				return value.titleHash === titleHash && articleEvidenceMatches(fingerprints, value.fingerprints);
 			}).slice(0, 8).map(({ value }) => ({ url: value.url, evidence: "observed-content" }));
-			for (const url of subject.samples.length >= 2 ? subject.addresses.slice(0, 9) : []) {
+			for (const url of subject.samples.length >= 3 ? subject.addresses.slice(0, 9) : []) {
 				let parsed;
 				try { parsed = new URL(url); } catch { continue; }
 				if (isHiddenSite(url) || parsed.username || parsed.password) continue;
-				const key = ARTICLE_IDENTITY_PREFIX + epoch + ":" + await digest(normalizeURL(url));
-				await save(key, { url, fingerprints, lengths, timestamp: now, epoch });
+				const key = ARTICLE_IDENTITY_PREFIX + epoch + ":" + ARTICLE_IDENTITY_VERSION + ":" + await digest(normalizeURL(url));
+				await save(key, { url, fingerprints, lengths, titleHash, timestamp: now, epoch, version: ARTICLE_IDENTITY_VERSION });
 				if (String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) !== epoch) await forgetMany([key]);
 			}
 			return String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) === epoch ? matches : [];
@@ -8305,18 +8412,19 @@ button {
 	async function resolveArticleIdentity(subject, { force = false, sources = [] } = {}) {
 		const { addresses: targets, title, samples } = subject;
 		const epoch = String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0"));
+		const signature = await articleIdentitySignature(subject);
 		let primary = mergeIdentityAddresses(subject.evidence.map((entry) => ({ ...entry })), await observedArticleIdentity(subject));
-		if (primary.length > 1 && String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) === epoch) await rememberCollectedIdentity(primary.map((entry) => entry.url));
-		primary = mergeIdentityAddresses(primary, await collectedIdentityAddresses(primary.map((entry) => entry.url)));
+		if (primary.length > 1 && String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) === epoch) await rememberCollectedIdentity(primary.map((entry) => entry.url), signature);
+		primary = mergeIdentityAddresses(primary, await collectedIdentityAddresses(primary.map((entry) => entry.url), signature));
 		const incomplete = (reason) => ({ addresses: primary, incomplete: [reason] });
 		if (!sources.length) return incomplete("no-candidate-source");
 		const query = articleTitleQuery(title);
 		if (!query) return incomplete("insufficient-title");
-		const cacheKey = JSON.stringify([sources, targets.map(normalizeURL).sort(), query, samples]);
+		const cacheKey = JSON.stringify([sources, targets.map(normalizeURL).sort(), query, subject.matchTitle, samples]);
 		const cached = relatedArticleCache.get(cacheKey);
 		if (!force && cached && cached.epoch === epoch && Date.now() - cached.timestamp < 300000) {
 			const addresses = mergeIdentityAddresses(primary, cached.aliases.map((entry) => ({ ...entry })));
-			if (addresses.length > 1 && String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) === epoch) await rememberCollectedIdentity(addresses.map((entry) => entry.url));
+			if (addresses.length > 1 && String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) === epoch) await rememberCollectedIdentity(addresses.map((entry) => entry.url), signature);
 			return { addresses, incomplete: [] };
 		}
 
@@ -8349,7 +8457,7 @@ button {
 		const matches = await Promise.all(candidates.map(async (url) => {
 			const original = archivedOriginalURL(url, "");
 			if (original) return targets.some((target) => sameURL(target, original)) ? { url, evidence: "archive-url" } : null;
-			if (!samples.length && !isArchiveHost(new URL(url).hostname)) return { incomplete: true };
+			if ((!articleHasEvidence(samples) || !articleComparableTitle(subject.matchTitle)) && !isArchiveHost(new URL(url).hostname)) return { incomplete: true };
 			const text = await requestComparablePage(url);
 			if (!text) return { incomplete: true };
 			const doc = new DOMParser().parseFromString(text, "text/html");
@@ -8357,11 +8465,11 @@ button {
 			const hint = doc.querySelector('link[rel~="canonical" i]')?.getAttribute("href") || doc.querySelector('meta[property="og:url" i]')?.content || "";
 			const recovered = archivedOriginalURL(url, savedFrom) || archivedOriginalURL(url, hint);
 			if (recovered && targets.some((target) => sameURL(target, recovered))) return { url, evidence: "archive-metadata" };
-			if (!samples.length) return { incomplete: true };
-			return articleContentsMatch(samples, doc) ? { url, evidence: "content" } : null;
+			if (!articleHasEvidence(samples) || !articleHasEvidence(articleMatchSamples(doc, url)) || !articleComparableTitle(subject.matchTitle) || !articleComparableTitle(articleDocumentTitle(doc))) return { incomplete: true };
+			return articleContentsMatch(samples, doc, subject.matchTitle, url) ? { url, evidence: "content" } : null;
 		}));
 		const addresses = mergeIdentityAddresses(primary, matches.filter((entry) => entry?.url));
-		if (addresses.length > 1 && String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) === epoch) await rememberCollectedIdentity(addresses.map((entry) => entry.url));
+		if (addresses.length > 1 && String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) === epoch) await rememberCollectedIdentity(addresses.map((entry) => entry.url), signature);
 		const gaps = [];
 		if (results.some((hits) => !hits)) gaps.push("candidate-search-unavailable");
 		if (matches.some((entry) => entry?.incomplete)) gaps.push("candidate-unverifiable");
@@ -8416,7 +8524,7 @@ button {
 		let changed = false;
 		let answered = false;
 		const newCandidates = [];
-		const subject = articleIdentitySubject({ url: entry.url, title: entry.title || "", addresses: entry.identityAddresses || [] });
+		const subject = articleIdentitySubject({ url: entry.url, title: entry.title || "", addresses: collectedIdentityList(entry) });
 		const identity = await resolveArticleIdentity(subject, { sources: [] });
 		const addresses = identity.addresses.slice(0, 9).map((item) => item.url);
 
@@ -9303,6 +9411,7 @@ button {
 					url: String(subject.url),
 					canonical: String(subject.canonical || ""),
 					title: String(subject.title || ""),
+					matchTitle: String(subject.matchTitle || ""),
 					samples: articleIdentitySubject({ samples: subject.samples }).samples,
 				}
 			: null;
@@ -9362,9 +9471,10 @@ button {
 		const subject = pageIdentitySubject();
 		const detail = articleIdentitySubject({
 			title: appSubject ? appSubject.title : readerTitle(document, pageHref()),
+			matchTitle: appSubject ? appSubject.matchTitle : articleDocumentTitle(document),
 			samples: appSubject ? appSubject.samples : articleMatchSamples(document),
 		});
-		return { ...subject, title: detail.title, samples: detail.samples };
+		return { ...subject, title: detail.title, matchTitle: detail.matchTitle, samples: detail.samples };
 	}
 
 	function documentReady() {
@@ -40157,9 +40267,9 @@ ${frontPageChooserHTML()}
 		scroller.innerHTML = '<slot name="reader"></slot>';
 		pane.appendChild(scroller);
 
-		const samples = articleSamplesFromRoot(body);
+		const samples = articleSamplesFromRoot(body, article.url);
 		if (appState?.article === article && appState.open && appSubject && samples.length >= 2 && JSON.stringify(samples) !== JSON.stringify(appSubject.samples)) {
-			setAppSubject({ ...appSubject, samples });
+			setAppSubject({ ...appSubject, matchTitle: reader.title, samples });
 			refreshAppIdentity(article);
 		}
 
@@ -40446,17 +40556,18 @@ ${frontPageChooserHTML()}
 		const title = String(data.title || "").trim();
 		const before = pageAddress();
 		const beforeSamples = JSON.stringify(appSubject?.samples || []);
+		const beforeMatchTitle = appSubject?.matchTitle || "";
 		const suppliedSamples = articleIdentitySubject({ samples: data.samples }).samples;
 		const samples = suppliedSamples.length >= 2 ? suppliedSamples : sameURL(url, appSubject?.url || "") ? appSubject?.samples : [];
 
-		setAppSubject({ url, canonical: String(data.canonical || ""), title: title || article.title, samples });
+		setAppSubject({ url, canonical: String(data.canonical || ""), title: title || article.title, matchTitle: String(data.matchTitle || ""), samples });
 		noteAppPreview(article.url, data.preview);
 
 		if (data.look) {
 			rememberLook(article.url, data.look).catch(console.error);
 		}
 
-		if (appState.open && (!sameURL(pageAddress(), before) || (appSubject.samples.length >= 2 && JSON.stringify(appSubject.samples) !== beforeSamples))) {
+		if (appState.open && (!sameURL(pageAddress(), before) || (appSubject.samples.length >= 2 && (JSON.stringify(appSubject.samples) !== beforeSamples || appSubject.matchTitle !== beforeMatchTitle)))) {
 			appState.open.url = url;
 			refreshAppIdentity(article);
 		}
@@ -41344,6 +41455,7 @@ ${frontPageChooserHTML()}
 					url: location.href,
 					canonical: canonicalHint(),
 					samples: articleMatchSamples(document),
+					matchTitle: articleDocumentTitle(document),
 					preview: document.querySelector('meta[property="og:image"], meta[name="twitter:image"]')?.getAttribute("content") || "",
 					look: pageLook(document),
 					title: pageTitle(),

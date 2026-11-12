@@ -13,15 +13,19 @@ use to detect updates, so every release bumps it.
 ### Changed
 
 - Discussion lookup can find matching articles submitted under different URLs
-  when an archive address identifies the original or both pages expose matching
-  passages. Verified addresses are searched across enabled sources, including
+  when an archive address identifies the original or both pages expose the same
+  descriptive headline and complete comparable content. Verified addresses are
+  searched across enabled sources, including
   addresses recognized from locally stored fingerprints of recently visited
   copies. Reader and Collection checks use the same article identity.
 
 ### Fixed
 
-- Matching articles now considers shorter passages as well, so shared publisher
-  notices alone are less likely to join unrelated discussions.
+- Article matching requires agreement across the extracted content, rather than
+  just shared passages. Changed headlines, incomplete pages, and uncheckable
+  media can keep equivalent copies apart, avoiding uncertain associations.
+- Cached and saved article associations are tied to the content that established
+  them, so a changed page does not reuse a stale match in its own lookup.
 - Collection keeps verified alternate addresses for future checks and detects
   new discussions when an address is first recognized, retrying if its lookup
   cannot be completed.
