@@ -25,7 +25,7 @@ for (const mode of ["partial", "empty", "rate-limit"]) {
     });
     try {
       await app.page.goto(url);
-      assert(await waitFor(async () => await app.page.locator('#comments-content .page-header-disclosure').count() > 0, 15000), "missing sources menu");
+      assert(await waitFor(async () => await app.page.locator('#comments-content .page-header-disclosure').count() > 0 && await app.page.locator('#comments-content .discussion-loading').count() === 0, 15000), "missing sources menu after loading");
       assert.equal(await app.page.locator("#comments-content .discussion-load-warning").count(), 0, "load errors should not cover the discussion");
       const disclosure = app.page.locator('#comments-content .page-header-disclosure');
       assert.match(await disclosure.textContent(), /6\* discussions/, "the discussion count marks a failed load");
@@ -63,7 +63,7 @@ test("Reader puts a failed discussion on its source row and badges the Sources b
     await app.page.goto("https://backchnnl.app/");
     await app.page.locator("#app-list-body .browse-title-link", { hasText: STORIES[0].title }).first().click();
     const button = app.page.locator('#app-discussion-meta .page-header-disclosure');
-    assert(await waitFor(async () => await button.count() > 0, 15000));
+    assert(await waitFor(async () => await button.locator('.discussion-source-badge').count() === 1, 15000));
     assert.equal(await app.page.locator('#comments-content .discussion-load-warning').count(), 0);
     assert.equal(await button.locator('.discussion-source-badge').count(), 1, "the Sources button has a visible status badge");
     assert.match(await button.getAttribute('aria-label'), /could not be loaded/i);
@@ -98,13 +98,66 @@ test("the loading skeleton reports completed discussions while slower sources ar
     await app.page.goto(url);
     const loading = app.page.locator('#comments-content .discussion-loading');
     assert(await waitFor(async () => await loading.count() > 0, 10000), "the loading skeleton appears");
-    assert(await loading.locator('.discussion-skeleton-comment').count() >= 2, "the skeleton resembles a discussion");
+    assert(await loading.locator('.discussion-skeleton-comment').count() >= 4, "the skeleton fills the discussion area");
+    assert.equal(await loading.locator('.discussion-skeleton-heading, .discussion-skeleton-compose').count(), 0, "known content is not replaced with placeholders");
+    assert((await app.page.locator('#comments-content .page-header-title').textContent()).length > 0, "the known article title appears immediately");
+    const composer = app.page.locator('#comments-content .compose-box');
+    assert.equal(await composer.count(), 1, "the real composer appears while discussions load");
+    await composer.locator('.composer-text').fill('A draft while loading');
+    assert(await composer.locator('.compose-send-note').isDisabled(), "note submission stays disabled while loading");
+    assert(await composer.locator('.compose-send-comment').isDisabled(), "comment submission stays disabled while loading");
+    const area = await app.page.locator('#comments').boundingBox();
+    const skeleton = await loading.boundingBox();
+    assert(skeleton.y + skeleton.height >= area.y + area.height - 40, "the skeleton extends to the bottom of the discussion viewport");
     assert.equal(await loading.locator('[role="progressbar"]').count(), 0, "Sidebar does not duplicate the status in its body");
     const subtitle = app.page.locator('#header-subtitle');
-    assert(await waitFor(async () => /loading comments \([1-5] of 6\)/i.test(await subtitle.textContent()), 10000), "header progress advances while discussions remain");
+    assert(await waitFor(async () => /loading discussions \([1-5] of 6\)/i.test(await subtitle.textContent()), 10000), "header progress advances while discussions remain");
     assert(await waitFor(async () => await loading.count() === 0, 15000), "the skeleton is removed after loading");
     assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-story-id="fixture0"]').count() === 140, 10000), "all comments render after loading");
-    assert(await waitFor(async () => !/loading comments/i.test(await subtitle.textContent()), 10000), "the header stops reporting comment loading after rendering");
+    assert(await waitFor(async () => !/loading discussions|rendering comments|annotating link/i.test(await subtitle.textContent()), 10000), "the header stops reporting loading after rendering");
+    assert.equal(await composer.locator('.composer-text').inputValue(), 'A draft while loading', "the draft survives the transition to comments");
+    assert(!(await composer.locator('.compose-send-note').isDisabled()), "note submission is enabled once ready");
+    assert(!(await composer.locator('.compose-send-comment').isDisabled()), "comment submission is enabled once ready");
+    assert.deepEqual(app.errors, []);
+  } finally {
+    await app.browser.close();
+  }
+});
+
+test("Reader shows a header-sized progress strip and the real disabled composer during loading", { timeout: 45000 }, async () => {
+  const fixture = discussionFixture(url);
+  const app = await launchApp({
+    sharedStore: true,
+    handler: "Tampermonkey",
+    settings: { sources: { hn: true, reddit: true }, frontPageMode: "sources", updateCheck: false },
+    values: { "HNewhere:reddit_tier": { tier: "archive", timestamp: Date.now() } },
+    responses: [
+      ...fixture.posts.map((post) => ({ match: (path) => path.includes('/api/comments/tree') && new URL(path).searchParams.get('link_id') === `t3_${post.id}`, delay: 600, json: { data: fixture.trees.get(post.id) } })),
+      ...fixture.responses,
+    ],
+  });
+  try {
+    await app.page.goto('https://backchnnl.app/');
+    await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
+    const strip = app.page.locator('#panel.app-docked > .discussion-progress-strip');
+    assert(await waitFor(async () => await strip.count() === 1, 10000), "progress appears directly below the Discussion header");
+    assert(await waitFor(async () => (await strip.boundingBox())?.height > 30, 3000));
+    const head = await app.page.locator('#panel.app-docked > header').boundingBox();
+    const progress = await strip.boundingBox();
+    assert(Math.abs(progress.height - head.height) <= 2, "progress and header have the same height");
+    assert(Math.abs(progress.y - (head.y + head.height)) <= 2, "progress is attached to the header");
+    const font = await strip.evaluate((element) => getComputedStyle(element).fontSize);
+    const headerFont = await app.page.locator('#panel.app-docked > header').evaluate((element) => getComputedStyle(element).fontSize);
+    assert.equal(font, headerFont, "progress uses the header's font size");
+    const composer = app.page.locator('#panel .compose-box');
+    assert.equal(await composer.count(), 1);
+    await app.page.locator('#comment-toggle').click();
+    await composer.locator('.composer-text').fill('Reader draft while loading');
+    assert(await composer.locator('.compose-send-note').isDisabled());
+    assert(await composer.locator('.compose-send-comment').isDisabled());
+    assert(await waitFor(async () => await strip.count() === 0, 20000), "progress slides away when requests finish");
+    assert(await waitFor(async () => !(await composer.locator('.compose-send-comment').isDisabled()), 15000));
+    assert.equal(await composer.locator('.composer-text').inputValue(), 'Reader draft while loading');
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();
@@ -134,16 +187,21 @@ test("Sidebar shows sync in the header while browsing without a duplicate toast"
 });
 
 test("syncing a discussion restores its article highlights and finishes the header status", { timeout: 30000 }, async () => {
-  const app = await launchApp({ appHost: new URL(url).hostname, sharedStore: true, settings: { sources: { hn: true }, autoOpenSidebar: true, annotations: true, updateCheck: false } });
+  const slowGets = { key: "HNewhere:settings", ms: 1500, armed: false };
+  const app = await launchApp({ appHost: new URL(url).hostname, sharedStore: true, slowGets, settings: { sources: { hn: true }, autoOpenSidebar: true, annotations: true, updateCheck: false } });
   try {
     await app.page.goto(url);
     const marks = app.page.locator('[data-hnewhere-annotation-overlay] button');
     assert(await waitFor(async () => await marks.count() > 0, 15000), "the discussion initially highlights the article");
+    assert(await waitFor(async () => /updated/i.test(await app.page.locator('#header-subtitle').textContent()), 15000), "initial rendering has finished");
     const button = app.page.locator('#browse-home-sync');
+    slowGets.armed = true;
     await button.click();
+    assert(await waitFor(async () => /checking sources/i.test(await app.page.locator('#header-subtitle').textContent()), 3000), "sync first reports source discovery");
+    assert(await app.page.locator('#header-subtitle').evaluate((element) => element.classList.contains('header-subtitle-loading')), "source discovery uses the loading animation");
     assert(await waitFor(async () => await button.getAttribute('aria-busy') !== 'true', 15000), "discussion sync finishes");
     assert(await waitFor(async () => await marks.count() > 0, 10000), "the refreshed comments still highlight the article");
-    assert.doesNotMatch(await app.page.locator('#header-subtitle').textContent(), /loading comments|displaying comments|syncing/i);
+    assert.doesNotMatch(await app.page.locator('#header-subtitle').textContent(), /loading discussions|rendering comments|annotating link|syncing/i);
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();

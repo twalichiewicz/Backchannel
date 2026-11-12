@@ -17,15 +17,16 @@ use to detect updates, so every release bumps it.
 - Large or deeply nested Reddit discussions no longer prevent other discussions
   from loading. Failed or partial discussion loads are identified, and a failed
   request for more replies stays available to retry.
-- The Sources menu identifies discussions that could not load, and the loading
-  view shows progress while discussions are being checked, including when the
-  Reddit background tab needs to stay open. Large queues no longer time out just
-  because earlier Reddit discussions are still loading.
+- The Sources menu identifies discussions that could not load. Large queues no
+  longer time out just because earlier Reddit discussions are still loading.
 - Sidebar recovers matching discussions already found in Reader's feeds, even
   when a source search misses them. Reddit results found before a later search
   times out remain available.
 - Sidebar shows discussion and Sync progress in its header, and article
   highlights appear while large comment threads are still being rendered.
+- Loading views show the known article details and composer immediately, with
+  a subtle discussion skeleton and a header-sized progress strip in Reader.
+  The Reddit refresh tab identifies itself and closes when its requests finish.
 - Readable Reddit comments stay visible when their authors have deleted their
   accounts, and queued Reddit discussions no longer time out before their own
   requests start.

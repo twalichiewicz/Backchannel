@@ -5571,10 +5571,10 @@ ${
 			const accepted = close();
 			redditReadInitialAttempted = true;
 
-			runSync(async () => {
+			runSync(async (releaseRead) => {
 				await accepted;
 				if (!(await loadSettings()).sources?.reddit || sidebarUI !== ui) return;
-				return refreshRedditReadViews(ui);
+				return refreshRedditReadViews(ui, { onThreadsLoaded: releaseRead });
 			}).catch(console.error);
 		};
 		modal.addEventListener("click", (event) => {
@@ -5594,12 +5594,12 @@ ${
 		modal.querySelector("[role=dialog]").focus({ preventScroll: true });
 	}
 
-	async function refreshRedditReadViews(ui) {
+	async function refreshRedditReadViews(ui, { onThreadsLoaded = null } = {}) {
 		if (appState) {
 			return Promise.allSettled([renderAppList({ force: true }), appState.open ? openAppDiscussion(appState.open.row) : Promise.resolve()]);
 		} else if (redditReadPendingPage && redditReadPendingPage === normalizeURL(pageAddress())) {
 			redditReadPendingPage = "";
-			return refreshRedditPage(ui);
+			return refreshRedditPage(ui, { onThreadsLoaded });
 		} else if (isBrowsing(ui)) {
 			return renderBrowseView(ui, { force: true });
 		} else {
@@ -5608,8 +5608,8 @@ ${
 			if (sidebarUI !== ui) return;
 			if (found.length) {
 				sidebarHasDiscussion = true;
-				await renderDiscussions(found, ui);
-			} else await ui.syncStatus?.onSync?.();
+				await renderDiscussions(found, ui, { onThreadsLoaded });
+			} else await ui.syncStatus?.onSync?.(onThreadsLoaded);
 		}
 	}
 
@@ -5687,10 +5687,10 @@ ${
 	function runSync(task, options = {}) {
 		const runId = ++syncRunId;
 		if (sidebarUI?.shadow?.getElementById("toast")?.textContent === "Synced") showToast("");
-		return runRedditReadAction(async () => {
+		return runRedditReadAction(async (releaseRead) => {
 			const batch = usesRedditReadWindow() && redditReadSourceOn && !redditReadBatch?.closing ? redditReadBatch : null;
 			const untapped = Boolean(batch && !batch.popup && !batch.tab && !batch.activated);
-			const result = await task();
+			const result = await task(releaseRead);
 			const runs = Array.isArray(result) ? result : [{ status: "fulfilled", value: result }];
 			const feeds = runs.flatMap((run) => run.status === "fulfilled" ? run.value?.feedStates || [] : []);
 			const waiting = untapped ? feeds.filter((feed) => feed.status === "window") : [];
@@ -5712,7 +5712,7 @@ ${
 	}
 
 	function runRedditReadAction(task, { automatic = false } = {}) {
-		if (!usesRedditReadWindow() || !redditReadSourceOn || redditReadWaitUntil > Date.now()) return Promise.resolve().then(task);
+		if (!usesRedditReadWindow() || !redditReadSourceOn || redditReadWaitUntil > Date.now()) return Promise.resolve().then(() => task(() => Promise.resolve()));
 		let batch = redditReadBatch;
 
 		if (!batch || batch.closing) {
@@ -5730,6 +5730,16 @@ ${
 			batch.preparing = prepareRedditReadBatch(batch).catch(() => ({ error: "window-unavailable" }));
 		}
 		batch.users++;
+		let released = false;
+		let releaseResult = Promise.resolve();
+		const releaseRead = () => {
+			if (!released) {
+				released = true;
+				batch.users--;
+				if (!batch.users) releaseResult = finishRedditReadBatch(batch);
+			}
+			return releaseResult;
+		};
 		return (async () => {
 			try {
 				const ready = await batch.preparing;
@@ -5738,13 +5748,12 @@ ${
 					batch.reported = true;
 					showToast(ready.error === "popup-blocked" ? "Allow popups for this site, then press Sync to refresh Reddit." : ready.error === "cancelled" ? "Reddit refresh cancelled." : ready.error === "limited" ? "Reddit requests are temporarily limited. Try syncing again later." : "The Reddit window did not respond. Press Sync to try again.", { kind: "system", page: true });
 				}
-				return await task();
+				return await task(releaseRead);
 			} catch (error) {
 				batch.failed = true;
 				throw error;
 			} finally {
-				batch.users--;
-				if (!batch.users) await finishRedditReadBatch(batch);
+				await releaseRead();
 			}
 		})();
 	}
@@ -5753,9 +5762,9 @@ ${
 		let release;
 		let released = false;
 		const ready = new Promise((resolve) => { release = resolve; });
-		const running = runRedditReadAction(async () => {
+		const running = runRedditReadAction(async (releaseRead) => {
 			const task = await ready;
-			if (task) return task();
+			if (task) return task(releaseRead);
 		});
 		running.catch(console.error);
 		return {
@@ -5801,6 +5810,13 @@ ${
 			let paused = false;
 			let authenticated = false;
 			let lastLoginReport = 0;
+			let titleFrame = 0;
+			const titleFrames = ["|", "/", "-", "\\"];
+			const paintTitle = () => {
+				document.title = paused ? "Sign in to Reddit — Backchannel" : "Backchannel is refreshing Reddit " + (prefersReducedMotion() ? "" : titleFrames[titleFrame++ % titleFrames.length]);
+			};
+			paintTitle();
+			const titleTimer = window.setInterval(paintTitle, 400);
 			const fetchJSON = async (path) => {
 				let response;
 				try { response = await fetch(path, { credentials: "same-origin", cache: "no-store", redirect: path === "/api/me.json" ? "manual" : "error", signal: AbortSignal.timeout(10000) }); }
@@ -5881,6 +5897,8 @@ ${
 			} catch {
 				await publish({ phase: "error", requestId: previous, error: "window-unavailable" }).catch(() => {});
 			} finally {
+				clearInterval(titleTimer);
+				document.title = "Reddit — Backchannel";
 				clearBridgeReload(REDDIT_READ_RESUME_KEY);
 				if (completed) await publish({ phase: "closed", requestId: "done" }).catch(() => {});
 				if (typeof GM?.closeTab === "function") { try { await GM.closeTab(); } catch {} }
@@ -8846,8 +8864,8 @@ button {
 			if (accepted && !(cooldown?.until > Date.now())) {
 				const ui = sidebarUI;
 
-				runSync(async () => {
-					if (sidebarUI === ui && (await loadSettings()).sources?.reddit) return refreshRedditReadViews(ui);
+				runSync(async (releaseRead) => {
+					if (sidebarUI === ui && (await loadSettings()).sources?.reddit) return refreshRedditReadViews(ui, { onThreadsLoaded: releaseRead });
 				}, { automatic: true }).catch(console.error);
 			}
 			if (!accepted) scheduleRedditReadNotice();
@@ -9426,11 +9444,11 @@ button {
 
 	// #region hnewhere-test-export
 	const SIDEBAR_STAGES = {
-		discussion: "loading discussion…",
-		comments: "loading comments…",
+		discussion: "checking sources…",
+		comments: "loading discussions…",
 		sync: "syncing…",
 		votes: "loading votes…",
-		annotations: "loading annotations…",
+		annotations: "annotating link…",
 	};
 
 	function sidebarStageLabel(stage) {
@@ -15547,7 +15565,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			}
 
 			try {
-				await runSync(() => (isBrowsing(ui) ? renderBrowseView(ui, { force: true }) : Promise.resolve(ui.syncStatus?.onSync?.())));
+				await runSync((releaseRead) => (isBrowsing(ui) ? renderBrowseView(ui, { force: true }) : Promise.resolve(ui.syncStatus?.onSync?.(releaseRead))));
 			} catch (error) {
 				console.error(error);
 			}
@@ -15848,12 +15866,13 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 				redditReadPendingPage = page;
 				return;
 			}
-			const read = beginRedditDiscussionRead();
+			const read = usesManagerTabs() ? null : beginRedditDiscussionRead();
 			const held = { page, read, release(opened) {
-				if (!opened) return read.cancel();
-				return read.run(async () => {
+				if (!opened) return read ? read.cancel() : Promise.resolve();
+				if (!read) return normalizeURL(pageAddress()) === page ? refreshSidebarFromButton(opened.opening) : Promise.resolve();
+				return read.run(async (releaseRead) => {
 					await opened.opening;
-					if (sidebarUI && normalizeURL(pageAddress()) === page) await refreshRedditPage(sidebarUI);
+					if (sidebarUI && normalizeURL(pageAddress()) === page) await refreshRedditPage(sidebarUI, { onThreadsLoaded: releaseRead });
 				});
 			} };
 			checkingRedditRead = held;
@@ -16803,56 +16822,64 @@ header {
 	line-height:1.5;
 }
 
+#comments > #comments-content:has(.discussion-loading) {
+	display:flex;
+	flex:1 0 auto;
+	flex-direction:column;
+}
+
 .discussion-loading {
-	padding:14px 12px;
-	color:var(--meta);
-	font-size:11px;
-}
-
-.discussion-loading-title {
-	text-align:center;
-	font-size:12px;
-}
-
-.discussion-loading-dots {
-	animation:discussion-loading-pulse 1.2s ease-in-out infinite;
-}
-
-.discussion-loading-progress {
-	max-width:280px;
-	margin:10px auto 22px;
-	text-align:center;
-}
-
-.discussion-loading-track {
-	height:3px;
-	border-radius:3px;
-	background:var(--hover-tint);
+	display:flex;
+	flex:1 0 280px;
+	min-height:280px;
+	padding:12px 8px 0;
+	box-sizing:border-box;
 	overflow:hidden;
 }
 
-.discussion-loading-track span {
-	display:block;
-	width:0;
-	height:100%;
-	background:var(--accent);
-	transition:width .25s ease;
+.discussion-skeleton {
+	display:flex;
+	flex:1;
+	flex-direction:column;
+	justify-content:space-around;
+	opacity:.45;
 }
 
-.discussion-loading-detail { margin-top:5px; }
-.discussion-skeleton-heading { width:72%; height:11px; }
-.discussion-skeleton-meta { width:42%; height:8px; margin-top:7px; }
-.discussion-skeleton-compose { height:54px; margin:18px 0 25px; border:1px solid var(--border-soft); border-radius:5px; }
-.discussion-skeleton-comment { margin:0 0 20px; }
-.discussion-skeleton-comment.is-reply { margin-left:24px; padding-left:10px; border-left:1px solid var(--border-soft); }
-.discussion-skeleton-comment .browse-skeleton-bar:first-child { width:35%; height:8px; }
-.discussion-skeleton-comment .browse-skeleton-bar:nth-child(2) { width:88%; height:10px; margin-top:7px; }
-.discussion-skeleton-comment .browse-skeleton-bar:nth-child(3) { width:64%; height:10px; margin-top:5px; }
+.discussion-skeleton-comment { padding:7px 0; }
+.discussion-skeleton-comment.is-reply { margin-left:22px; }
+.discussion-skeleton-comment .browse-skeleton-bar:first-child { width:29%; height:6px; }
+.discussion-skeleton-comment .browse-skeleton-bar:nth-child(2) { width:var(--skeleton-width, 72%); height:7px; margin-top:8px; }
+.discussion-skeleton-comment .browse-skeleton-bar:nth-child(3) { width:42%; height:7px; margin-top:5px; }
 
-@keyframes discussion-loading-pulse { 50% { opacity:.25; } }
+.discussion-progress-strip {
+	box-sizing:border-box;
+	flex:0 0 auto;
+	display:flex;
+	align-items:center;
+	gap:10px;
+	max-height:0;
+	padding:0 12px;
+	border-bottom:1px solid transparent;
+	overflow:hidden;
+	opacity:0;
+	color:var(--meta);
+	font-size:inherit;
+	transition:max-height .2s ease, opacity .2s ease, border-color .2s ease;
+}
+
+.discussion-progress-strip.is-visible {
+	max-height:36px;
+	height:36px;
+	border-color:var(--border-soft);
+	opacity:1;
+}
+
+.discussion-progress-label { white-space:nowrap; }
+.discussion-progress-track { flex:1; height:2px; border-radius:2px; background:var(--hover-tint); overflow:hidden; }
+.discussion-progress-track span { display:block; width:0; height:100%; background:var(--accent); transition:width .25s ease; }
+
 @media (prefers-reduced-motion: reduce) {
-	.discussion-loading-dots { animation:none; }
-	.discussion-loading-track span { transition:none; }
+	.discussion-progress-strip, .discussion-progress-track span { transition:none; }
 }
 
 .browse-row-read {
@@ -23508,10 +23535,21 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		);
 
 		for (const button of box.querySelectorAll(".compose-send")) {
-			if (!button.dataset.sending) {
+			if (box.dataset.loading) {
+				button.disabled = true;
+			} else if (!button.dataset.sending) {
 				button.disabled = !written;
 			}
 		}
+	}
+
+	function setComposeLoading(box, loading) {
+		if (!box) return;
+		if (loading) {
+			box.dataset.loading = "true";
+			closeComposeTargets(box);
+		} else delete box.dataset.loading;
+		syncComposeSendable(box);
 	}
 
 	function syncComposeBox() {
@@ -25039,7 +25077,32 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		);
 	}
 
-	async function renderDiscussions(stories, ui, { arrival = true } = {}) {
+	function startDiscussionProgress(ui, total) {
+		const panel = ui.shadow?.querySelector("#panel.app-docked");
+		if (!panel) return null;
+		panel.querySelector(":scope > .discussion-progress-strip")?.remove();
+		const strip = document.createElement("div");
+		strip.className = "discussion-progress-strip";
+		strip.setAttribute("role", "progressbar");
+		strip.setAttribute("aria-label", "Discussions loaded");
+		strip.setAttribute("aria-valuemin", "0");
+		strip.setAttribute("aria-valuemax", String(total));
+		strip.setAttribute("aria-valuenow", "0");
+		strip.innerHTML = '<span class="discussion-progress-label"></span><span class="discussion-progress-track" aria-hidden="true"><span></span></span>';
+		panel.querySelector(":scope > header")?.after(strip);
+		requestAnimationFrame(() => { if (strip.isConnected && strip.getAttribute("aria-hidden") !== "true") strip.classList.add("is-visible"); });
+		return strip;
+	}
+
+	function finishDiscussionProgress(strip) {
+		if (!strip) return;
+		strip.classList.remove("is-visible");
+		strip.setAttribute("aria-hidden", "true");
+		if (prefersReducedMotion()) strip.remove();
+		else window.setTimeout(() => strip.remove(), 220);
+	}
+
+	async function renderDiscussions(stories, ui, { arrival = true, onThreadsLoaded = null } = {}) {
 		const run = ++discussionRenderRun;
 		const docked = dockedComposeBox(ui.shadow);
 		const kept = docked && stories.some((story) => story.key === docked._hnewhereStoryKey) ? docked : null;
@@ -25050,6 +25113,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		renderedFor = stories === renderedDiscussions ? renderedFor : openPageKey();
 		renderedDiscussions = stories;
+		liveDiscussions.clear();
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
 		setWordmarkLocation(ui, "Discussion");
@@ -25064,9 +25128,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const waiting = document.createElement("div");
 
 		waiting.className = "discussion-loading";
-		waiting.innerHTML = `${ui.headerSubtitle ? '<div class="discussion-loading-detail" hidden></div>' : `<div class="discussion-loading-title" role="status">Loading comments<span class="discussion-loading-dots">…</span></div>
-<div class="discussion-loading-progress"><div class="discussion-loading-track" role="progressbar" aria-label="Discussions checked" aria-valuemin="0" aria-valuemax="${stories.length}" aria-valuenow="0"><span></span></div><div class="discussion-loading-detail">0 of ${stories.length} discussions checked</div></div>`}
-<div class="discussion-skeleton" aria-hidden="true"><div class="discussion-skeleton-heading browse-skeleton-bar"></div><div class="discussion-skeleton-meta browse-skeleton-bar"></div><div class="discussion-skeleton-compose"></div>${[0, 1, 2, 3].map((index) => `<div class="discussion-skeleton-comment${index === 1 ? " is-reply" : ""}"><div class="browse-skeleton-bar"></div><div class="browse-skeleton-bar"></div><div class="browse-skeleton-bar"></div></div>`).join("")}</div>`;
+		waiting.innerHTML = `<div class="discussion-skeleton" aria-hidden="true">${Array.from({ length: 10 }, (_, index) => `<div class="discussion-skeleton-comment${index % 4 === 1 ? " is-reply" : ""}" style="--skeleton-width:${[76, 61, 83, 69][index % 4]}%"><div class="browse-skeleton-bar"></div><div class="browse-skeleton-bar"></div>${index % 3 === 0 ? '<div class="browse-skeleton-bar"></div>' : ""}</div>`).join("")}</div>`;
 		ui.body.appendChild(waiting);
 
 		setSidebarRestingSubtitle(ui, "");
@@ -25074,22 +25136,43 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const generation = sidebarGeneration;
 
 		const settings = await loadSettings();
+		if (generation !== sidebarGeneration || run !== discussionRenderRun) return;
+		const page = discussionsPageTitle(stories);
+		const headerOptions = { page, sort: settings.commentSort, onSortChange: () => renderDiscussions(stories, ui) };
+		let headerElement = renderPageHeader(stories, ui.body, headerOptions);
+		ui.body.insertBefore(headerElement, waiting);
+		mountFilterBanner(headerElement, ui);
+
+		sidebarSourceKeys.clear();
+		for (const story of stories) sidebarSourceKeys.add(story.source);
+		const details = document.createElement("div");
+		details.className = "submission-details";
+		ui.body.insertBefore(details, waiting);
+		for (const story of stories) {
+			const block = renderStory(story, details, { compose: false, title: storyTitle(story, page, stories.length > 1), showTitle: true });
+			if (block) {
+				block.classList.add("submission-detail");
+				block.dataset.discussionKey = story.key;
+				block.hidden = stories.length > 1;
+			}
+		}
+		let sortRow = ui.body.querySelector(".page-sort");
+		if (sortRow) ui.body.insertBefore(sortRow, waiting);
+		const composer = mountComposeBox(ui, stories, settings, sortRow || waiting, kept);
+		setComposeLoading(composer, true);
+		for (const control of (sortRow || ui.shadow?.querySelector("#app-discussion-sort"))?.querySelectorAll("select, button") || []) control.disabled = true;
+		const progress = startDiscussionProgress(ui, stories.length);
 
 		const pending = new Set(stories.map((story) => story.key));
 		const updateLoadingLabel = () => {
 			if (!waiting.isConnected || generation !== sidebarGeneration || run !== discussionRenderRun) return;
 			const completed = stories.length - pending.size;
-			const progress = waiting.querySelector("[role=progressbar]");
-			const readingReddit = redditReadBatch?.connected && !redditReadBatch.closing && stories.some((story) => story.source === "reddit" && pending.has(story.key));
-			const detail = waiting.querySelector(".discussion-loading-detail");
 			if (ui.headerSubtitle) {
-				setSidebarLoadingLabel(ui, "loading comments (" + completed + " of " + stories.length + ")…");
-				detail.hidden = !readingReddit;
-				detail.textContent = readingReddit ? "Keep the Reddit tab open while comments load." : "";
-			} else {
+				setSidebarLoadingLabel(ui, "loading discussions (" + completed + " of " + stories.length + ")…");
+			} else if (progress) {
 				progress.setAttribute("aria-valuenow", String(completed));
-				progress.firstElementChild.style.width = (stories.length ? completed / stories.length * 100 : 100) + "%";
-				detail.textContent = completed + " of " + stories.length + " discussions checked" + (readingReddit ? ". Keep the Reddit tab open while it loads." : "");
+				progress.querySelector(".discussion-progress-track span").style.width = (stories.length ? completed / stories.length * 100 : 100) + "%";
+				progress.querySelector(".discussion-progress-label").textContent = "Loading discussions (" + completed + " of " + stories.length + ")…";
 			}
 		};
 
@@ -25104,12 +25187,14 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				}),
 			),
 		);
+		onThreadsLoaded?.()?.catch(console.error);
+		finishDiscussionProgress(progress);
 
 		if (generation !== sidebarGeneration || run !== discussionRenderRun) {
 			return;
 		}
 
-		setSidebarLoadingLabel(ui, "displaying comments…");
+		setSidebarLoadingLabel(ui, "rendering comments…");
 
 		setSidebarSyncStatus(ui, {
 			checkedAt: threadsCheckedAt(
@@ -25117,7 +25202,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				stories.map((story) => story.key),
 				Date.now(),
 			),
-			onSync: () => syncDiscussions(ui, stories),
+			onSync: (releaseRead) => syncDiscussions(ui, stories, releaseRead),
 		});
 
 		liveDiscussions.clear();
@@ -25130,72 +25215,23 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			}
 		});
 
-		const page = discussionsPageTitle(stories);
-
-		waiting.remove();
-
-		const view = ui.shadow?.querySelector("#comments");
-
-		if (view && !prefersReducedMotion()) {
-			view.classList.add("comments-arriving");
-			requestAnimationFrame(() => {
-				requestAnimationFrame(() => view.classList.remove("comments-arriving"));
-			});
-		}
-
 		const loadStatus = new Map(stories.flatMap((story, index) => threads[index].empty && Number(story.commentCount) > 0
 			? [[story.key, "unavailable"]]
 			: threads[index].incomplete && !threads[index].empty ? [[story.key, "incomplete"]] : []));
-		const headerElement = renderPageHeader(stories, ui.body, {
-			page,
-			sort: settings.commentSort,
-			loadStatus,
-			onSortChange: () => renderDiscussions(stories, ui),
-		});
-
+		headerElement.remove();
+		sortRow?.remove();
+		headerElement = renderPageHeader(stories, ui.body, { ...headerOptions, loadStatus });
+		ui.body.insertBefore(headerElement, details);
 		mountFilterBanner(headerElement, ui);
-
-		sidebarSourceKeys.clear();
-
-		for (const story of stories) {
-			sidebarSourceKeys.add(story.source);
-		}
-
-		const details = document.createElement("div");
-
-		details.className = "submission-details";
-		ui.body.appendChild(details);
-
-		const disambiguating = stories.length > 1;
-
-		for (const story of stories) {
-			const resolved = storyTitle(story, page, disambiguating);
-			const block = renderStory(story, details, {
-				compose: false,
-				title: resolved,
-				showTitle: true,
-			});
-
-			if (block) {
-				block.classList.add("submission-detail");
-				block.dataset.discussionKey = story.key;
-				block.hidden = stories.length > 1;
-			}
-		}
+		sortRow = ui.body.querySelector(".page-sort");
+		if (sortRow) ui.body.insertBefore(sortRow, waiting);
+		for (const control of (sortRow || ui.shadow?.querySelector("#app-discussion-sort"))?.querySelectorAll("select, button") || []) control.disabled = true;
 
 		const comments = document.createElement("div");
 
 		comments.className = "top-level-comments";
-		ui.body.appendChild(comments);
+		waiting.replaceWith(comments);
 		paintAppPinnedDiscussion();
-
-		const sortRow = ui.body.querySelector(".page-sort");
-
-		if (sortRow) {
-			ui.body.insertBefore(sortRow, comments);
-		}
-
-		mountComposeBox(ui, stories, settings, sortRow || comments, kept);
 
 		const collapsedKeys = await loadCollapsed();
 		const seenTimes = new Map(
@@ -25312,8 +25348,10 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			}
 
 			if (entries.length > batchSize && !appState && settings.annotations && shouldShowArticleAnnotations(settings) && (i === 0 || performance.now() - annotatedAt >= 1000)) {
+				setSidebarStage(ui, "annotations");
 				await refreshArticleAnnotations();
 				annotatedAt = performance.now();
+				if (generation === sidebarGeneration && run === discussionRenderRun) setSidebarLoadingLabel(ui, "rendering comments…");
 			}
 
 			await new Promise(requestAnimationFrame);
@@ -25378,7 +25416,11 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				if (settings.annotations && shouldShowArticleAnnotations(settings)) setSidebarStage(ui, "annotations");
 				await refreshArticleAnnotations();
 			}
-			if (generation === sidebarGeneration && run === discussionRenderRun) clearSidebarStage(ui);
+			if (generation === sidebarGeneration && run === discussionRenderRun) {
+				setComposeLoading(composer, false);
+				for (const control of (sortRow || ui.shadow?.querySelector("#app-discussion-sort"))?.querySelectorAll("select, button") || []) control.disabled = false;
+				clearSidebarStage(ui);
+			}
 		}
 	}
 
@@ -26288,14 +26330,18 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			redditReadPendingPage = page;
 			return opening;
 		}
-		return beginRedditDiscussionRead().run(async () => {
+		const refresh = () => beginRedditDiscussionRead().run(async (releaseRead) => {
 			await opening;
 			const ui = sidebarUI;
-			if (ui && normalizeURL(pageAddress()) === page) await refreshRedditPage(ui);
+			if (ui && normalizeURL(pageAddress()) === page) await refreshRedditPage(ui, { onThreadsLoaded: releaseRead });
+		});
+		if (!usesManagerTabs()) return refresh();
+		return Promise.resolve(opening).then(() => {
+			if (sidebarUI && isSidebarVisible() && normalizeURL(pageAddress()) === page) return refresh();
 		});
 	}
 
-	async function refreshRedditPage(ui) {
+	async function refreshRedditPage(ui, { onThreadsLoaded = null } = {}) {
 		const page = normalizeURL(pageAddress());
 		const generation = sidebarGeneration;
 		if (!isSidebarVisible()) return;
@@ -26305,7 +26351,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		forgetThreads(previous);
 		sidebarHasDiscussion = true;
 		setBrowseMode(ui, false, { animate: false });
-		await renderDiscussions(disambiguateLabels(dedupeDiscussions([...found, ...previous]).sort(compareStoriesByDiscussion)), ui);
+		await renderDiscussions(disambiguateLabels(dedupeDiscussions([...found, ...previous]).sort(compareStoriesByDiscussion)), ui, { onThreadsLoaded });
 	}
 
 	async function runOpenSidebar(stories, options = {}) {
@@ -31165,7 +31211,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		crossFadeCommentsView(comments, render);
 	}
 
-	async function syncDiscussions(ui, stories) {
+	async function syncDiscussions(ui, stories, onThreadsLoaded = null) {
 		await flushComposerDrafts(ui.shadow);
 		itemCache.clear();
 		forgetThreads(stories);
@@ -31185,6 +31231,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		return renderDiscussions(
 			disambiguateLabels(dedupeDiscussions([...found, ...stories]).sort(compareStoriesByDiscussion)),
 			ui,
+			{ onThreadsLoaded },
 		);
 	}
 
@@ -39033,7 +39080,7 @@ ${frontPageChooserHTML()}
 			}
 
 			if (liveRead) {
-				await liveRead.run(() => state.open === opened ? openAppDiscussion(entry, { focus, previousSeen }) : undefined);
+				await liveRead.run((releaseRead) => state.open === opened ? openAppDiscussion(entry, { focus, previousSeen, onThreadsLoaded: releaseRead }) : undefined);
 			} else {
 				await openAppDiscussion(entry, { focus, previousSeen });
 			}
@@ -39062,6 +39109,7 @@ ${frontPageChooserHTML()}
 		if (!body) {
 			return;
 		}
+		appState.ui.shadow.querySelector("#panel > .discussion-progress-strip")?.remove();
 
 		const waiting = document.createElement("div");
 
@@ -39112,7 +39160,7 @@ ${frontPageChooserHTML()}
 		return lists.flat();
 	}
 
-	async function openAppDiscussion(row, { focus = "", previousSeen = appState?.openSeen || {} } = {}) {
+	async function openAppDiscussion(row, { focus = "", previousSeen = appState?.openSeen || {}, onThreadsLoaded = null } = {}) {
 		const state = appState;
 		const ui = state.ui;
 		const url = state.open?.url;
@@ -39153,7 +39201,7 @@ ${frontPageChooserHTML()}
 			}
 
 			setSidebarStage(ui, "comments");
-			await renderDiscussions(loaded, ui);
+			await renderDiscussions(loaded, ui, { onThreadsLoaded });
 			await refreshArticleAnnotations();
 		} catch (error) {
 			console.error(error);

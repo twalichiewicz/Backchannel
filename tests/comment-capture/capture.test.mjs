@@ -193,7 +193,7 @@ test("Sidebar shows quote annotations while a large discussion is still renderin
     const comments = app.page.locator('#comments-content .comment[data-story-id="fixture0"]');
     assert(await waitFor(async () => await app.page.locator('[data-hnewhere-annotation-overlay] [title="Show the comments quoting this"]').count() > 0, 60000), "a quote highlight appears on the article");
     assert((await comments.count()) < 1600, "annotations should not wait for every comment to render");
-    assert.doesNotMatch(await app.page.locator('#header-subtitle').textContent(), /loading comments/i, "the header identifies rendering after requests finish");
+    assert.doesNotMatch(await app.page.locator('#header-subtitle').textContent(), /loading discussions/i, "the header identifies rendering after requests finish");
     assert(await waitFor(async () => await comments.count() === 1600, 60000), "rendering still completes");
     assert.deepEqual(app.errors, []);
   } finally {
