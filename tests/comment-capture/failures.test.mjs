@@ -301,7 +301,7 @@ test("mobile Reader can sync an article with no discussions", { timeout: 45000 }
     assert(await sync.isVisible(), 'Sync remains available when no Sources menu exists');
     search.json = { hits: [{ objectID: '9988', title: STORIES[0].title, url: STORIES[0].url, author: 'reader', points: 10, num_comments: 1, created_at_i: now }] };
     const before = app.requests.filter(({ url }) => search.match(url)).length;
-    await sync.click();
+    await sync.tap();
     assert(await waitFor(() => app.requests.filter(({ url }) => search.match(url)).length > before, 10000), 'Sync checks sources again');
     assert(await waitFor(async () => /A newly found discussion/.test(await app.page.locator('#comments-content').textContent()), 15000), 'a newly discovered discussion appears');
     assert(await sync.isHidden(), 'the empty-state control is replaced by the Sources menu');

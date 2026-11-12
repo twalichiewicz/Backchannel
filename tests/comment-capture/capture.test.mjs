@@ -193,7 +193,7 @@ test('mobile Reader syncs the discussion from the Sources menu', { timeout: 4500
     tree.json = updated;
     tree.delay = 1200;
     const before = app.requests.filter(({ url }) => tree.match(url)).length;
-    await sync.click();
+    await sync.tap();
     assert(await waitFor(async () => await sync.getAttribute('aria-busy') === 'true', 5000), 'the menu icon indicates the active sync');
     assert(await sync.isDisabled(), 'a second sync cannot start while one is running');
     await sync.evaluate((button) => button.click());
