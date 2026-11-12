@@ -60,22 +60,26 @@ for (const outcome of ['empty', 'failed', 'malformed']) test(`concurrent views $
   } finally { await app.browser.close(); }
 });
 
-for (const firstMode of ['Sidebar', 'Reader']) for (const outcome of ['success', 'failed']) test(`concurrent ${firstMode} and Sidebar browsing views ${outcome === 'success' ? 'share a successful' : 'retry a failed'} Reddit feed refresh`, { timeout: 45000 }, async () => {
+for (const { firstMode, outcome, topics } of [
+  ...['Sidebar', 'Reader'].flatMap((firstMode) => ['success', 'failed'].map((outcome) => ({ firstMode, outcome, topics: false }))),
+  { firstMode: 'Reader', outcome: 'success', topics: true },
+]) test(`concurrent ${firstMode} and Sidebar browsing views ${outcome === 'success' ? 'share a successful' : 'retry a failed'} Reddit ${topics ? 'topic ' : ''}feed refresh`, { timeout: 45000 }, async () => {
   const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
   const source = original.replace('let redditReadInitialAttempted = false;', 'let redditReadInitialAttempted = true;');
   assert.notEqual(source, original);
   const url = STORIES[0].url;
   const reader = firstMode === 'Reader';
-  const app = await launchApp({ source, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com', new URL(url).hostname], settings: { sources: { hn: true, reddit: true }, autoOpenSidebar: true, frontPageMode: 'sources', updateCheck: false }, values: { 'HNewhere:reddit_read_window_notice': 2 } });
+  const app = await launchApp({ source, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com', new URL(url).hostname], settings: { sources: { hn: true, reddit: true }, autoOpenSidebar: true, frontPageMode: topics ? 'topics' : 'sources', frontPageTopics: topics ? ['technology'] : [], updateCheck: false }, values: { 'HNewhere:reddit_read_window_notice': 2 } });
   let feedRequests = 0;
   let feedTitle = 'A freshly synced feed item';
   await app.context.route('https://www.reddit.com/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path !== '/') await new Promise((resolve) => setTimeout(resolve, 250));
-    if (path === '/r/popular.json') feedRequests++;
-    if (path === '/r/popular.json' && outcome === 'failed') return route.fulfill({ status: 403, contentType: 'application/json', body: '{"reason":"private"}' });
+    const feed = /^\/r\/[^/]+\.json$/.test(path);
+    if (feed) feedRequests++;
+    if (feed && outcome === 'failed') return route.fulfill({ status: 403, contentType: 'application/json', body: '{"reason":"private"}' });
     const post = { id: 'feedonly', url: 'https://framed.example.com/post/110', title: feedTitle, author: 'reader', subreddit: 'news', permalink: '/r/news/comments/feedonly/article/', num_comments: 1, created_utc: Math.floor(Date.now() / 1000), score: 10 };
-    const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : JSON.stringify({ data: { children: path === '/r/popular.json' ? [{ kind: 't3', data: post }] : [] } });
+    const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : JSON.stringify({ data: { children: feed ? [{ kind: 't3', data: post }] : [] } });
     await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
   });
   const other = await app.context.newPage();
