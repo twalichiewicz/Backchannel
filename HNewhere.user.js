@@ -36637,7 +36637,23 @@ ${settingsModalHTML()}
 
 		listBody.addEventListener("pointerdown", (event) => {
 			rowPress = { x: event.clientX, y: event.clientY };
+			if (!event.isPrimary || event.button !== 0) return;
+			let release;
+			const done = new Promise((resolve) => { release = resolve; });
+			listBody._hnewherePointer = { id: event.pointerId, done, release };
 		});
+		const finishListPointer = (event) => {
+			const pointer = listBody._hnewherePointer;
+			if (!pointer || pointer.ending || event?.pointerId != null && event.pointerId !== pointer.id) return;
+			pointer.ending = true;
+			window.setTimeout(() => {
+				if (listBody._hnewherePointer === pointer) delete listBody._hnewherePointer;
+				pointer.release();
+			}, 0);
+		};
+		window.addEventListener("pointerup", finishListPointer, true);
+		window.addEventListener("pointercancel", finishListPointer, true);
+		window.addEventListener("blur", finishListPointer);
 
 		listBody.addEventListener("click", (event) => {
 			const press = rowPress;
@@ -39521,6 +39537,10 @@ ${frontPageChooserHTML()}
 			const failureText = frontPageFailureText(feedStates, view);
 			const queuedKeys = new Set(queued.map(queueKey));
 
+			while (list._hnewherePointer) {
+				await list._hnewherePointer.done;
+				if (request !== state.listSeq) return;
+			}
 			list.replaceChildren();
 
 			if (!shown.length) {
