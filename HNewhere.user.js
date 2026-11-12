@@ -5680,7 +5680,7 @@ ${
 			try { batch.popup?.close(); } catch {}
 			if (batch.tabId != null) { try { await GM.closeTab(batch.tabId); } catch {} }
 			if (redditReadBatch === batch) redditReadBatch = null;
-			if (batch.syncRun === syncRunId && batch.synced && !batch.failed && !batch.cancelled && isSidebarVisible()) showToast("Synced", { kind: "system", duration: TOAST_BRIEF_MS });
+			if (batch.syncRun === syncRunId && batch.synced && !batch.failed && !batch.cancelled && isSidebarVisible()) showSyncComplete();
 		}
 	}
 
@@ -5705,7 +5705,7 @@ ${
 				batch.failed ||= failed;
 			} else if (runId === syncRunId && isSidebarVisible()) {
 				if (waiting.length && !failed) showToast("Press Sync to refresh Reddit.", { kind: "system", action: { label: "sync", onAct: () => runSync(task, options).catch(console.error) } });
-				else if (synced) showToast("Synced", { kind: "system", duration: TOAST_BRIEF_MS });
+				else if (synced) showSyncComplete();
 			}
 			return result;
 		}, options);
@@ -5726,7 +5726,7 @@ ${
 				return Promise.resolve();
 			}
 
-			batch = { nonce, popup, tab, activated, created: Date.now(), expires: Date.now() + SIGN_IN_TIMEOUT, connected: false, closing: false, cancelled: false, users: 0, sequence: 0, accessVersion: redditAccessVersion };
+			batch = { nonce, popup, tab, activated, created: Date.now(), expires: Date.now() + SIGN_IN_TIMEOUT, connected: false, closing: false, cancelled: false, users: 0, sequence: 0 };
 			redditReadBatch = batch;
 			batch.preparing = prepareRedditReadBatch(batch).catch(() => ({ error: "window-unavailable" }));
 		}
@@ -5812,7 +5812,7 @@ ${
 			let authenticated = false;
 			let lastLoginReport = 0;
 			let titleFrame = 0;
-			const titleFrames = ["|", "/", "-", "\\"];
+			const titleFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 			const paintTitle = () => {
 				document.title = paused ? "Sign in to Reddit — Backchannel" : "Backchannel is refreshing Reddit " + (prefersReducedMotion() ? "" : titleFrames[titleFrame++ % titleFrames.length]);
 			};
@@ -5957,7 +5957,7 @@ ${
 	async function fetchReddit(path, archivePath, { listing, retryAccess, accessVersion, readBatch, archiveFallbackPath }) {
 		const windowTransport = usesRedditReadWindow();
 		const connected = windowTransport && readBatch?.connected && !readBatch.cancelled && !readBatch.closing;
-		let tier = retryAccess && accessVersion === redditAccessVersion || connected && readBatch.accessVersion === redditAccessVersion ? "loid" : await redditTier();
+		let tier = connected || (retryAccess && accessVersion === redditAccessVersion) ? "loid" : await redditTier();
 		let attempted = false;
 		let httpStatus = 0;
 		let retryAt = 0;
@@ -15572,6 +15572,9 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			button.setAttribute("aria-busy", "true");
 			const browsing = isBrowsing(ui);
 			if (browsing) {
+				window.clearTimeout(ui.browseSyncedTimer);
+				ui.browseSyncedTimer = null;
+				ui.browseSynced = false;
 				ui.browseSyncing = true;
 				refreshSidebarSubtitle(ui);
 			}
@@ -16853,14 +16856,20 @@ header {
 	flex:1;
 	flex-direction:column;
 	justify-content:space-around;
-	opacity:.45;
+	opacity:.3;
 }
 
-.discussion-skeleton-comment { padding:7px 0; }
+.discussion-skeleton-comment { padding:6px 0 8px 8px; border-left:1px solid var(--meta); }
 .discussion-skeleton-comment.is-reply { margin-left:22px; }
-.discussion-skeleton-comment .browse-skeleton-bar:first-child { width:29%; height:6px; }
-.discussion-skeleton-comment .browse-skeleton-bar:nth-child(2) { width:var(--skeleton-width, 72%); height:7px; margin-top:8px; }
-.discussion-skeleton-comment .browse-skeleton-bar:nth-child(3) { width:42%; height:7px; margin-top:5px; }
+.discussion-skeleton-comment .browse-skeleton-bar { height:2px; border-radius:0; background:var(--text); animation:none; }
+.discussion-skeleton-comment .browse-skeleton-bar:first-child { width:29%; height:1px; background:var(--meta); }
+.discussion-skeleton-comment .browse-skeleton-bar:nth-child(2) { width:var(--skeleton-width, 72%); height:2px; margin-top:10px; }
+.discussion-skeleton-comment .browse-skeleton-bar:nth-child(3) { width:42%; height:2px; margin-top:10px; }
+.top-level-comments:has(> .discussion-loading) { position:relative; min-height:280px; flex:1 0 280px; }
+.top-level-comments > .discussion-loading { position:absolute; inset:0; z-index:1; pointer-events:none; transition:opacity .22s ease; }
+.top-level-comments > .discussion-loading.is-fading { opacity:0; }
+.top-level-comments.discussion-entering > :not(.discussion-loading) { opacity:0; transition:opacity .22s ease; }
+.top-level-comments.discussion-entering.is-visible > :not(.discussion-loading) { opacity:1; }
 
 .discussion-progress-strip {
 	box-sizing:border-box;
@@ -16888,6 +16897,7 @@ header {
 .discussion-progress-label { white-space:nowrap; }
 @media (prefers-reduced-motion: reduce) {
 	.discussion-progress-strip { transition:none; }
+	.top-level-comments > .discussion-loading, .top-level-comments.discussion-entering > :not(.discussion-loading) { transition:none; }
 }
 
 .browse-row-read {
@@ -17905,8 +17915,9 @@ header > .settings-panel {
 	left:0;
 	top:calc(100% + 3px);
 	z-index:4;
-	min-width:180px;
-	max-width:270px;
+	width:300px;
+	max-width:calc(100vw - 24px);
+	box-sizing:border-box;
 	max-height:260px;
 	overflow-y:auto;
 	padding:8px;
@@ -23375,6 +23386,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		spacer.className = "compose-spacer";
 		control.hidden = false;
+		control.disabled = false;
 		control.title = label;
 		control.setAttribute("aria-label", label);
 
@@ -23483,7 +23495,13 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				return;
 			}
 
-			const room = menu.getRootNode().querySelector("#panel").getBoundingClientRect().bottom - menu.getBoundingClientRect().top - 12;
+			const panel = menu.getRootNode().querySelector("#panel").getBoundingClientRect();
+			menu.style.transform = "";
+			menu.style.maxWidth = `${Math.max(0, Math.floor(panel.width - 16))}px`;
+			const box = menu.getBoundingClientRect();
+			const left = Math.max(panel.left + 8, Math.min(box.left, panel.right - box.width - 8));
+			menu.style.transform = `translateX(${left - box.left}px)`;
+			const room = panel.bottom - box.top - 12;
 
 			menu.style.maxHeight = `${Math.max(160, Math.floor(room))}px`;
 		});
@@ -23600,7 +23618,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		field.setAttribute("aria-label", placeholder);
 	}
 
-	function mountComposeBox(ui, stories, settings, before, kept = null) {
+	function mountComposeBox(ui, stories, settings, before, kept = null, { anticipateReplies = false } = {}) {
 		if (kept) {
 			ui.body.insertBefore(kept._hnewhereDock.home(), before);
 			syncComposeBox();
@@ -23610,7 +23628,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const canNote = Boolean(settings.notepad);
 		const canComment = stories.some(
 			(story) => getSource(story.source)?.capabilities.reply,
-		);
+		) || (anticipateReplies && canNote && enabledSources(settings).some((source) => source.capabilities.reply));
 
 		if (!canComment && !canNote) {
 			const control = ui.shadow.querySelector("#comment-toggle");
@@ -25088,7 +25106,12 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 	function startDiscussionProgress(ui) {
 		const panel = ui.shadow?.querySelector("#panel.app-docked");
 		if (!panel) return null;
-		panel.querySelector(":scope > .discussion-progress-strip")?.remove();
+		const existing = panel.querySelector(":scope > .discussion-progress-strip");
+		if (existing?.dataset.phase === "discovery") {
+			delete existing.dataset.phase;
+			return existing;
+		}
+		existing?.remove();
 		const strip = document.createElement("div");
 		strip.className = "discussion-progress-strip";
 		strip.setAttribute("role", "status");
@@ -25116,8 +25139,15 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 	async function renderDiscussions(stories, ui, { arrival = true, onThreadsLoaded = null } = {}) {
 		const run = ++discussionRenderRun;
-		const docked = dockedComposeBox(ui.shadow);
-		const kept = docked && stories.some((story) => story.key === docked._hnewhereStoryKey) ? docked : null;
+		const provisional = ui.body.querySelector(".compose-box");
+		const docked = dockedComposeBox(ui.shadow) || (provisional?._hnewhereProvisional ? provisional : null);
+		const kept = docked && (stories.some((story) => story.key === docked._hnewhereStoryKey) || docked._hnewhereProvisional && appState && sameURL(docked._hnewhereProvisionalURL, pageAddress())) ? docked : null;
+		if (kept?._hnewhereProvisional) {
+			kept._hnewhereStoryKey = stories.find((story) => story.source === kept._hnewhereProvisionalSource)?.key || stories[0]?.key || null;
+			delete kept._hnewhereProvisional;
+			delete kept._hnewhereProvisionalSource;
+			delete kept._hnewhereProvisionalURL;
+		}
 
 		if (!kept) {
 			closeComposeDock(ui.shadow);
@@ -25244,8 +25274,24 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		const comments = document.createElement("div");
 
-		comments.className = "top-level-comments";
+		comments.className = "top-level-comments discussion-entering";
 		waiting.replaceWith(comments);
+		comments.appendChild(waiting);
+		let revealed = false;
+		const revealComments = () => {
+			if (revealed) return;
+			revealed = true;
+			if (prefersReducedMotion()) {
+				waiting.remove();
+				comments.classList.remove("discussion-entering");
+				return;
+			}
+			requestAnimationFrame(() => {
+				comments.classList.add("is-visible");
+				waiting.classList.add("is-fading");
+				window.setTimeout(() => { waiting.remove(); comments.classList.remove("discussion-entering", "is-visible"); }, 220);
+			});
+		};
 		paintAppPinnedDiscussion();
 
 		const collapsedKeys = await loadCollapsed();
@@ -25330,6 +25376,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		const batchSize = 5;
 		let annotatedAt = 0;
+		if (!entries.length) revealComments();
 
 		for (let i = 0; i < entries.length; i += batchSize) {
 			if (generation !== sidebarGeneration || run !== discussionRenderRun) {
@@ -25361,6 +25408,8 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 					generation,
 				);
 			}
+
+			revealComments();
 
 			if (entries.length > batchSize && !appState && settings.annotations && shouldShowArticleAnnotations(settings) && (i === 0 || performance.now() - annotatedAt >= 1000)) {
 				await refreshArticleAnnotations();
@@ -25751,7 +25800,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const wrapper = document.createElement("div");
 
 		const single = stories.length < 2;
-		const hasMenu = stories.length > 1 || loadStatus.size > 0;
+		const hasMenu = stories.length > 1 || loadStatus.size > 0 || Boolean(appState && stories.length);
 		const pageURL = pageAddress();
 		const pageSave = single
 			? ""
@@ -26150,6 +26199,14 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		return fragment;
 	}
 
+	function showSyncComplete() {
+		const ui = sidebarUI;
+		if (!appState && ui && isBrowsing(ui)) {
+			ui.browseSynced = true;
+			refreshSidebarSubtitle(ui);
+		} else showToast("Synced", { kind: "system", duration: TOAST_BRIEF_MS });
+	}
+
 	function refreshSidebarSubtitle(ui) {
 		const element = ui?.headerSubtitle;
 
@@ -26172,6 +26229,18 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			}
 
 			where.classList.toggle("wordmark-where-loading", crumbLoading);
+		}
+
+		if (browsing && !ui.browseSyncing && ui.browseSynced) {
+			element.classList.remove("header-subtitle-stage", "header-subtitle-loading");
+			element.classList.add("header-subtitle-quiet");
+			writeSidebarSubtitle(element, "synced");
+			if (!ui.browseSyncedTimer) ui.browseSyncedTimer = window.setTimeout(() => {
+				ui.browseSyncedTimer = null;
+				ui.browseSynced = false;
+				refreshSidebarSubtitle(ui);
+			}, TOAST_BRIEF_MS);
+			return;
 		}
 
 		if (browsing && !ui.browseSyncing) {
@@ -33932,8 +34001,8 @@ ${READER_LIST_CSS}
 #panel.app-docked .app-discussion-meta .source-menu {
 	left:auto;
 	right:0;
-	width:240px;
-	max-width:none;
+	width:300px;
+	max-width:calc(100vw - 24px);
 	box-sizing:border-box;
 	overflow-x:hidden;
 	padding:10px 10px 13px;
@@ -39055,10 +39124,11 @@ ${frontPageChooserHTML()}
 			setTimeout(() => shell.classList.remove("discussion-entering"), 320);
 		}
 
-		clearAppDiscussion();
-		decorateAppRows(state.ui.shadow.querySelector("#app-list-body"));
 		setAppSubject({ url, title: story.title || "" });
 		state.openTotal = 0;
+		clearAppDiscussion();
+		prepareAppDiscussion(entry, opened).catch(console.error);
+		decorateAppRows(state.ui.shadow.querySelector("#app-list-body"));
 		loadAppArticle(url, story.title || "");
 
 		if (appIsPhone()) {
@@ -39128,12 +39198,61 @@ ${frontPageChooserHTML()}
 		const waiting = discussionSkeleton();
 		closeComposeDock(appState.ui.shadow);
 		body.replaceChildren(waiting);
+		const progress = startDiscussionProgress(appState.ui);
+		if (progress) {
+			progress.dataset.phase = "discovery";
+			progress.querySelector(".discussion-progress-label").textContent = "Checking sources…";
+		}
 		renderedDiscussions = [];
 		renderedFor = "";
 		sidebarGeneration++;
 		appState.discussionSync = null;
 		appState.ui.shadow.querySelector("#app-discussion-meta")?.replaceChildren();
 		appState.ui.shadow.querySelector("#app-discussion-sort")?.replaceChildren();
+		const control = appState.ui.shadow.querySelector("#comment-toggle");
+		if (control) control.hidden = true;
+	}
+
+	async function prepareAppDiscussion(row, opened) {
+		const state = appState;
+		const ui = state?.ui;
+		const waiting = ui?.body.querySelector(":scope > .discussion-loading");
+		if (!waiting) return;
+		const stories = disambiguateLabels(
+			[row?.story, ...(row?.also || [])]
+				.filter((story) => story?.id && story.source && (!story.kind || story.kind === "discussion") && typeof getSource(story.source)?.recover === "function")
+				.map((story) => ({
+					source: story.source,
+					key: sourceKey(story.source, story.id),
+					id: story.id,
+					title: story.title || "",
+					author: story.by || "",
+					score: story.score || 0,
+					commentCount: story.descendants || 0,
+					createdAt: story.time || 0,
+					permalink: story.permalink || "",
+					articleURL: story.url || opened.url,
+					label: story.source === "reddit" ? story.site || "Reddit" : sourceShortLabel(story),
+				})),
+		);
+		if (!stories.length) return;
+		renderedDiscussions = stories;
+		const header = renderPageHeader(stories, ui.body, { page: opened.row?.story?.title || "" });
+		ui.body.insertBefore(header, waiting);
+		mountFilterBanner(header, ui);
+		for (const control of ui.shadow.querySelectorAll("#app-discussion-sort select, #app-discussion-sort button")) control.disabled = true;
+		const control = ui.shadow.querySelector("#comment-toggle");
+		if (control) { control.hidden = false; control.disabled = true; }
+		const settings = await loadSettings();
+		if (appState !== state || state.open !== opened || waiting.parentElement !== ui.body) return;
+		const composer = mountComposeBox(ui, stories, settings, waiting, null, { anticipateReplies: true });
+		if (composer) {
+			composer._hnewhereProvisional = true;
+			composer._hnewhereProvisionalSource = stories[0].source;
+			composer._hnewhereProvisionalURL = opened.url;
+		}
+		setComposeLoading(composer, true);
+		if (control) control.disabled = false;
 	}
 
 	function appRowThreads(row, settings) {
@@ -39203,6 +39322,11 @@ ${frontPageChooserHTML()}
 
 			if (!loaded.length) {
 				sidebarHasDiscussion = false;
+				renderedDiscussions = [];
+				state.openTotal = 0;
+				ui.shadow.querySelector("#app-discussion-meta")?.replaceChildren();
+				ui.shadow.querySelector("#app-discussion-sort")?.replaceChildren();
+				paintAppChrome();
 				renderNoDiscussion(ui, threads.length ? "Couldn't load what people said about this article." : "");
 				return;
 			}
@@ -39218,7 +39342,11 @@ ${frontPageChooserHTML()}
 		} catch (error) {
 			console.error(error);
 		} finally {
-			if (generation === sidebarGeneration) clearSidebarStage(ui);
+			if (generation === sidebarGeneration) {
+				const progress = ui.shadow.querySelector('#panel > .discussion-progress-strip[data-phase="discovery"]');
+				finishDiscussionProgress(progress);
+				clearSidebarStage(ui);
+			}
 		}
 	}
 

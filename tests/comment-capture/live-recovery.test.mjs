@@ -62,6 +62,55 @@ for (const tabs of [true, false]) test(`opening while discovery is running rende
   }
 });
 
+test('Reader Sync still requests a working Reddit feed after an individual discussion is denied', { timeout: 60000 }, async () => {
+  const url = STORIES[0].url;
+  const now = Math.floor(Date.now() / 1000);
+  const post = { id: 'freshpost', url, title: STORIES[0].title, author: 'reader', subreddit: 'news', subreddit_name_prefixed: 'r/news', permalink: '/r/news/comments/freshpost/article/', num_comments: 1, created_utc: now - 3600, score: 100 };
+  const comment = { kind: 't1', data: { id: 'freshcomment', body: 'A comment available from the archive', author: 'reader', parent_id: 't3_freshpost', link_id: 't3_freshpost', created_utc: now - 60, replies: '' } };
+  const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
+  const seam = 'renderAppList({ force: true }),\n\t\t\t\tPromise.resolve(appState?.discussionSync?.()),';
+  assert(original.includes(seam));
+  const source = original.replace(seam, 'new Promise((resolve) => setTimeout(resolve, 3000)).then(() => renderAppList({ force: true })),\n\t\t\t\tPromise.resolve(appState?.discussionSync?.()),');
+  const app = await launchApp({ source, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com'], settings: { sources: { hn: true, reddit: true }, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
+    { match: (path) => path.includes('/api/posts/search'), json: { data: [post] } },
+    { match: (path) => path.includes('/api/comments/tree'), json: { data: [comment] } },
+  ] });
+  let denyThread = false;
+  let denyFeed = false;
+  const calls = [];
+  await app.context.route('https://www.reddit.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (denyThread) calls.push(path);
+    if (path === '/r/popular.json' && denyFeed) return route.fulfill({ status: 403, contentType: 'application/json', body: '{"message":"Forbidden"}' });
+    if (path.includes('/comments/') && denyThread) {
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+      return route.fulfill({ status: 403, contentType: 'application/json', body: '{"message":"Forbidden"}' });
+    }
+    const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : path.includes('/comments/') ? JSON.stringify([{ data: { children: [{ kind: 't3', data: post }] } }, { data: { children: [comment] } }]) : JSON.stringify({ data: { children: [{ kind: 't3', data: post }] } });
+    await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
+  });
+  try {
+    await app.page.goto('https://backchnnl.app/');
+    await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:freshcomment"]').count() === 1, 20000));
+    denyThread = true;
+    await app.page.locator('#app-list-sync').click();
+    assert(await waitFor(async () => await app.page.locator('#app-list-sync').getAttribute('aria-busy') !== 'true', 25000));
+    assert(calls.some((path) => path.includes('/comments/')), 'a discussion request was denied');
+    assert(calls.includes('/r/popular.json'), `the separately accessible feed is still requested: ${calls.join(', ')}`);
+    assert(calls.findIndex((path) => path.includes('/comments/')) < calls.indexOf('/r/popular.json'), `the denial precedes the feed request: ${calls.join(', ')}`);
+    assert.equal(await app.page.locator('#app-list-body .browse-feed-status').count(), 0, 'an unrelated discussion denial does not mark the feed unavailable');
+    denyThread = false;
+    denyFeed = true;
+    await app.page.locator('#app-list-sync').click();
+    assert(await waitFor(async () => await app.page.locator('#app-list-sync').getAttribute('aria-busy') !== 'true', 25000));
+    assert.match(await app.page.locator('#app-list-body .browse-feed-status').textContent(), /Reddit.*feed.*Showing saved articles/i, 'a real feed failure is still disclosed');
+    assert.deepEqual(app.errors, []);
+  } finally {
+    await app.browser.close();
+  }
+});
+
 test("the Reddit tab identifies its purpose and closes before local comment rendering finishes", { timeout: 45000 }, async () => {
   const url = STORIES[0].url;
   const sourceText = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
@@ -95,6 +144,7 @@ test("the Reddit tab identifies its purpose and closes before local comment rend
     assert(await waitFor(async () => opened.some((page) => !page.isClosed()) && /Backchannel/i.test(await opened.find((page) => !page.isClosed()).title()), 5000), 'the tab title explains that Backchannel is using Reddit');
     const redditTab = opened.find((page) => !page.isClosed());
     const firstTitle = await redditTab.title();
+    assert.match(firstTitle, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, 'the title uses a Braille spinner');
     await new Promise((resolve) => setTimeout(resolve, 500));
     assert.notEqual(await redditTab.title(), firstTitle, 'the tab title animates while the refresh is active');
     assert(await waitFor(async () => await app.page.locator('#comments-content .top-level-comments').count() === 1, 15000), 'local rendering has started');
