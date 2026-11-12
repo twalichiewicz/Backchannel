@@ -10,27 +10,8 @@ use to detect updates, so every release bumps it.
 
 ## [1.6.18.5] — 2026-11-11
 
-### Changed
-
-- Discussion lookup can find matching articles submitted under different URLs
-  when an archive address identifies the original or both pages expose the same
-  descriptive headline and complete comparable content. Verified addresses are
-  searched across enabled sources, including
-  addresses recognized from locally stored fingerprints of recently visited
-  copies. Reader and Collection checks use the same article identity.
-
 ### Fixed
 
-- Article matching requires agreement across the extracted content, rather than
-  just shared passages. Changed headlines, incomplete pages, and uncheckable
-  media can keep equivalent copies apart, avoiding uncertain associations.
-- Cached and saved article associations are tied to the content that established
-  them, so a changed page does not reuse a stale match in its own lookup.
-- Collection keeps verified alternate addresses for future checks and detects
-  new discussions when an address is first recognized, retrying if its lookup
-  cannot be completed.
-- Clearing cached article identities now invalidates lookups already in progress,
-  including in other tabs.
 - The Reader's NEW control is easier to read while keeping its pressed state
   and unread-comment sorting.
 - The Sidebar's article menu button now matches Reader on desktop and keeps

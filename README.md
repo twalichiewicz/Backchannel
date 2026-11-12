@@ -64,12 +64,8 @@ It runs on every page, so this matters: there's no backend, no analytics, and no
 telemetry. Which hosts it contacts depends on which sources you switch on.
 
 - Hacker News talks to the HN API, Algolia search, and news.ycombinator.com, with
-no persistent identifier attached. To find discussions under other addresses,
-Algolia may also receive words from the article title. Backchannel may fetch
-candidate pages without cookies or a referrer to compare their text, where the
-candidate site permits it.
-- Reddit sends the pages you visit and, when searching for equivalent articles,
-up to three words from their titles to reddit.com, and if you're
+no persistent identifier attached.
+- Reddit sends the pages you visit to reddit.com, and if you're
 signed in to Reddit, those requests arrive as your account. Signed out, they carry a long-lived device identifier
 instead. In Safari's Userscripts extension, live reads happen in a temporary
 Reddit tab when your article list loads, you open a Reddit item in Reader,
@@ -90,22 +86,9 @@ searchable, so it finds a slice of the fediverse rather than all of it. The fron
 page asks mastodon.social what it's currently linking to, which tells it nothing
 about you. No account, signed in or out.
 - Lemmy sends the pages you visit to lemmy.world, a large instance whose
-federation reaches across the wider network. Lemmy may also receive words
-from the article title to find equivalent articles, using the same anonymous
-candidate-page comparisons described above. No account, signed in or out.
+federation reaches across the wider network. No account, signed in or out.
 - Hypothes.is sends the pages you visit to its API, to find the public
 annotations people have left on them. No account, signed in or out.
-
-When Backchannel verifies another address for an article, it also searches that
-address across your enabled sources. It can recognize copies you visit within
-an hour using locally stored content fingerprints. Content matching requires the
-same descriptive headline and complete extracted content in the same order. It
-can miss copies with changed text, media, or layout; an archive that identifies
-its original can still be linked directly. The cache contains addresses, hashes
-and content lengths, not article text, and can be cleared in Settings. For a
-page in your Collection, up to eight verified alternate addresses and a content
-fingerprint are kept with that saved entry for later checks; clearing the cache
-leaves your Collection intact.
 
 Webmail, banking, auth flows, and cloud consoles are excluded outright.
 

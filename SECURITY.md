@@ -47,23 +47,19 @@ Worth stating plainly, because the permissions are broad by necessity:
 
   | Source | Hosts contacted | What they are told |
   | --- | --- | --- |
-  | Hacker News | `hn.algolia.com`, `hacker-news.firebaseio.com`, `news.ycombinator.com` | the URL of each page you visit and, for finding equivalent articles, up to three words from its title, with no persistent identifier attached |
-  | Equivalent articles | hosts of candidate pages returned by the Hacker News, Lemmy or Reddit title search | an anonymous browser request without a referrer, to compare article text; cross-origin requests can include the origin of the page being viewed and require the candidate's CORS permission |
-  | Reddit | `www.reddit.com` | the URL of each page you visit and, for finding equivalent articles, up to three words from its title. Signed in to Reddit, these requests arrive authenticated as your account; signed out, they carry a long-lived device identifier |
+  | Hacker News | `hn.algolia.com`, `hacker-news.firebaseio.com`, `news.ycombinator.com` | the URL of each page you visit, with no persistent identifier attached |
+  | Reddit | `www.reddit.com` | the URL of each page you visit. Signed in to Reddit, these requests arrive authenticated as your account; signed out, they carry a long-lived device identifier |
   | Reddit (fallback) | `arctic-shift.photon-reddit.com` | the URL of each page you visit, with no identifier. Used automatically when reddit.com declines the request |
   | Bluesky (discovery) | `constellation.microcosm.blue` | the URL of each page you visit, with no identifier attached |
   | Bluesky | `public.api.bsky.app` | post identifiers only -- never the URL of the page you are on |
   | Lobsters | `lobste.rs` | the domain of each page you visit -- never the full address. It has no URL search, so the exact match is made here |
   | Wikipedia | `en.wikipedia.org` | the URL of each page you visit, to find the Talk pages citing it, and then those pages' names to read what was said. Signed in to Wikipedia, these requests carry your session; signed out, they carry a device identifier that lasts a year |
-  | Lemmy | `lemmy.world` | the URL of each page you visit and up to three words from its title to find equivalent articles, with no account |
+  | Lemmy | `lemmy.world` | the URL of each page you visit, with no account |
   | Mastodon (discovery) | `www.tootfinder.ch` | the domain of each page you visit -- never the full address. An opt-in index of Mastodon posts, not Mastodon, and it holds only people who chose to be searchable |
   | Mastodon (front page) | `mastodon.social` | what that instance is currently linking to and, when you open one of those links in the reader and the search finds no posts for it, that link's address, to find the posts sharing it |
   | Front Pages, by topic | `www.reddit.com`, `news.ycombinator.com`, `lemmy.world`, `lobste.rs` and `public.api.bsky.app`, each only while that source is on | nothing about the page you are on, only the topics you picked. Signed in to Reddit or Hacker News, those requests arrive as your account |
   | Hypothes.is | `api.hypothes.is` | the URL of each page you visit, to find public annotations on it. No account, signed in or out |
   | *no source enabled* | none | nothing -- the script performs no lookup at all. Kind of weird to use it this way, but no judgements. |
-
-  When an equivalent article address is verified, each enabled source may also
-  receive that address in its normal lookup.
 
   Eleven sit outside that table because they are not lookups:
 
@@ -154,25 +150,6 @@ Worth stating plainly, because the permissions are broad by necessity:
   Before 1.6.15.2 every page had a stored value of its own, named
   `HNewhere:hn_cache:` followed by its address, and none was removed. Since
   1.6.17.2 the daily pass above deletes them.
-- **Equivalent-article checks keep a short-lived cache in the tab's memory.**
-  It holds up to 30 sets of addresses, headlines, and extracted article content,
-  used to recognize a repeat check for five minutes. Entries may remain in memory until
-  replaced, the tab closes, or you clear cached data; they are not saved to
-  userscript storage.
-- **Visited-article fingerprints stay in userscript storage.** To recognize
-  articles you have opened at different addresses, Backchannel keeps up to 100
-  addresses, SHA-256 hashes of headlines and normalized content or media
-  references, and content lengths, without saving the text itself. A record is
-  usable for one hour; expired records are removed during a later identity lookup
-  or the daily storage sweep. Clearing
-  cached data removes them too. Hashes can reveal known text by guessing, so
-  they should still be treated as reading history. Excluded pages are omitted.
-  When a page is in your Collection, up to eight verified alternate addresses
-  and a SHA-256 content signature are also kept with its saved entry so later
-  checks can find activity after fingerprints expire. Current pages must match
-  that signature before the saved addresses are used for their lookup. Clearing
-  cached data leaves those saved Collection addresses intact; removing the entry
-  removes them with it.
 - **The notepad stays on the machine you wrote it on.** Notes live in your
   userscript manager's storage, keyed by page address or, on a PDF, by the
   document's fingerprint. Nothing is uploaded and no source is told they exist.
@@ -286,10 +263,6 @@ with its address as `<page>`.
 | Source | Request | What it carries | Arrives as you? |
 | --- | --- | --- | --- |
 | Hacker News | `GET hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=url&hitsPerPage=20&query=<page>` | `<page>` | No, and no identifier of any kind |
-| Hacker News (equivalent articles) | `GET hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=title&hitsPerPage=30&query=<title words>` | up to three words from the article's title, only while Hacker News is on | No, and no identifier of any kind |
-| Lemmy (equivalent articles) | `GET lemmy.world/api/v3/search?q=<title words>&type_=Posts&listing_type=All&limit=30` | up to three words from the article's title, only while Lemmy is on | No |
-| Reddit (equivalent articles) | `GET www.reddit.com/search.json?type=link&limit=25&q=title:<title words>` | up to three words from the article's title, only while Reddit is on and a live read is available | Direct requests depend on the browser and userscript manager, as in the Reddit row |
-| Equivalent article comparison | browser `GET` to candidate URLs returned by that title search | the candidate URL; a cross-origin request can include the current page's origin. No referrer, cookies, or redirects; requires CORS for cross-origin responses | No |
 | Hacker News | `GET hacker-news.firebaseio.com/v0/item/<id>` | story and comment ids it already has | No |
 | Hacker News | `GET news.ycombinator.com/item?id=<id>` | a thread id, to read scores and flags | Yes, if you are signed in there |
 | Hacker News (vote, reply, submit) | popup window on `news.ycombinator.com` | the one story or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
