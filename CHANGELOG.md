@@ -20,6 +20,13 @@ use to detect updates, so every release bumps it.
 
 ### Fixed
 
+- Matching articles now considers shorter passages as well, so shared publisher
+  notices alone are less likely to join unrelated discussions.
+- Collection keeps verified alternate addresses for future checks and detects
+  new discussions when an address is first recognized, retrying if its lookup
+  cannot be completed.
+- Clearing cached article identities now invalidates lookups already in progress,
+  including in other tabs.
 - The Reader's NEW control is easier to read while keeping its pressed state
   and unread-comment sorting.
 - The Sidebar's article menu button now matches Reader on desktop and keeps

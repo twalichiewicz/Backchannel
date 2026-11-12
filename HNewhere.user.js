@@ -8094,9 +8094,11 @@ button {
 
 	function articleSamplesFromRoot(root) {
 		if (!root) return [];
-		return [...root.querySelectorAll("p")]
+		const passages = [...root.querySelectorAll("p")]
 			.map((node) => articleMatchText(node.textContent))
-			.filter((text) => text.length >= 120)
+			.filter((text) => text.length >= 8)
+			.filter((text, index, all) => all.indexOf(text) === index);
+		return [...passages.filter((text) => text.length >= 120), ...passages.filter((text) => text.length < 120)]
 			.map((text) => text.slice(0, 120))
 			.filter((text, index, all) => all.indexOf(text) === index)
 			.slice(0, 12);
@@ -8105,12 +8107,13 @@ button {
 	function articleContentsMatch(samples, doc) {
 		if (samples.length < 2) return false;
 		const text = articleMatchText(articleMatchRoot(doc)?.textContent || "");
-		const count = samples.filter((sample) => text.includes(sample)).length;
-		return articleEvidenceMatches(count, samples.length, articleMatchSamples(doc).length);
+		const matched = samples.filter((sample) => text.includes(sample));
+		return articleEvidenceMatches(matched.length, samples.length, articleMatchSamples(doc).length, matched.reduce((total, sample) => total + sample.length, 0));
 	}
 
-	function articleEvidenceMatches(shared, left, right) {
-		return shared >= 2 && shared >= Math.ceil(Math.max(left, right) / 2);
+	function articleEvidenceMatches(shared, left, right, characters) {
+		const total = Math.max(left, right);
+		return characters >= 240 && shared >= (total > 2 ? 3 : 2) && shared * 3 >= total * 2;
 	}
 
 	function articleTitleQuery(title) {
@@ -8138,7 +8141,7 @@ button {
 			.slice(0, 12)
 			.filter((value) => typeof value === "string")
 			.map((value) => articleMatchText(value.slice(0, 1000)))
-			.filter((value) => value.length >= 120)
+			.filter((value) => value.length >= 8)
 			.map((value) => value.slice(0, 120));
 
 		return { addresses: evidence.map((entry) => entry.url), evidence, title: String(title || "").trim().slice(0, 500), samples: [...new Set(passages)] };
@@ -8186,6 +8189,7 @@ button {
 	}
 
 	const ARTICLE_IDENTITY_PREFIX = "HNewhere:article_identity:";
+	const ARTICLE_IDENTITY_EPOCH_KEY = "HNewhere:identity_epoch";
 	const ARTICLE_IDENTITY_MAX = 100;
 	const ARTICLE_IDENTITY_AGE = 3600000;
 
@@ -8199,6 +8203,50 @@ button {
 		});
 	}
 
+	function safeIdentityAddress(url) {
+		try {
+			const parsed = new URL(url);
+			return !parsed.username && !parsed.password && !isHiddenSite(parsed.href);
+		} catch {
+			return false;
+		}
+	}
+
+	async function rememberCollectedIdentity(addresses) {
+		const unique = [...new Map(addresses.filter(safeIdentityAddress).map((url) => [normalizeURL(url), url])).values()];
+		if (unique.length < 2) return;
+		const keys = new Set(unique.map(normalizeURL));
+		const overlaps = (entry) => [entry?.url, ...(Array.isArray(entry?.identityAddresses) ? entry.identityAddresses : [])].some((url) => keys.has(normalizeURL(url)));
+		const current = await load(STORAGE.collected, []);
+		if (!Array.isArray(current) || !current.some(overlaps)) return;
+		await mutateCollected((entries) => {
+			let changed = false;
+			const next = entries.map((entry) => {
+				if (!overlaps(entry)) return entry;
+				const own = normalizeURL(entry.url);
+				const previous = Array.isArray(entry.identityAddresses) ? entry.identityAddresses : [];
+				const aliases = [...new Map([...previous, ...unique].filter((url) => safeIdentityAddress(url) && normalizeURL(url) !== own).map((url) => [normalizeURL(url), url])).values()].slice(0, 8);
+				if (JSON.stringify(previous) === JSON.stringify(aliases)) return entry;
+				changed = true;
+				return { ...entry, identityAddresses: aliases };
+			});
+			return changed ? next : undefined;
+		}).catch(console.error);
+	}
+
+	async function collectedIdentityAddresses(addresses) {
+		const keys = new Set(addresses.map(normalizeURL));
+		const entries = await load(STORAGE.collected, []);
+		if (!Array.isArray(entries)) return [];
+		const matches = [];
+		for (const entry of entries) {
+			const known = [entry?.url, ...(Array.isArray(entry?.identityAddresses) ? entry.identityAddresses : [])].filter(safeIdentityAddress);
+			if (!known.some((url) => keys.has(normalizeURL(url)))) continue;
+			for (const url of known) matches.push({ url, evidence: "collection" });
+		}
+		return mergeIdentityAddresses(matches).slice(0, 9);
+	}
+
 	async function observedArticleIdentity(subject) {
 		if (!globalThis.crypto?.subtle) return [];
 		const keys = await listKeys();
@@ -8208,38 +8256,45 @@ button {
 			return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
 		};
 		try {
+			const epoch = String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0"));
 			let fingerprints = await Promise.all(subject.samples.map(digest));
+			let lengths = subject.samples.map((sample) => sample.length);
 			const now = Date.now();
 			const records = await Promise.all(keys.filter((key) => key.startsWith(ARTICLE_IDENTITY_PREFIX)).map(async (key) => ({ key, value: await load(key, null) })));
 			const valid = [];
 			const stale = [];
 			for (const record of records) {
 				const { value, key } = record;
-				if (!value || typeof value.url !== "string" || isHiddenSite(value.url) || !Number.isFinite(value.timestamp) || value.timestamp > now || now - value.timestamp >= ARTICLE_IDENTITY_AGE || !Array.isArray(value.fingerprints) || value.fingerprints.length < 2 || value.fingerprints.length > 12 || !value.fingerprints.every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash))) stale.push(key);
+				if (!value || String(value.epoch || "0") !== epoch || typeof value.url !== "string" || isHiddenSite(value.url) || !Number.isFinite(value.timestamp) || value.timestamp > now || now - value.timestamp >= ARTICLE_IDENTITY_AGE || !Array.isArray(value.fingerprints) || value.fingerprints.length < 2 || value.fingerprints.length > 12 || !value.fingerprints.every((hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash)) || (value.lengths !== undefined && (!Array.isArray(value.lengths) || value.lengths.length !== value.fingerprints.length || !value.lengths.every((length) => Number.isInteger(length) && length >= 8 && length <= 120)))) stale.push(key);
 				else valid.push(record);
 			}
 			valid.sort((a, b) => b.value.timestamp - a.value.timestamp);
 			for (const record of valid.splice(ARTICLE_IDENTITY_MAX - Math.min(subject.samples.length >= 2 ? subject.addresses.length : 0, 9))) stale.push(record.key);
+			if (String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) !== epoch) return [];
 			if (stale.length) await forgetMany(stale);
 			if (fingerprints.length < 2) {
 				const targets = new Set(subject.addresses.map(normalizeURL));
-				fingerprints = valid.find(({ value }) => targets.has(normalizeURL(value.url)))?.value.fingerprints || [];
+				const stored = valid.find(({ value }) => targets.has(normalizeURL(value.url)))?.value;
+				fingerprints = stored?.fingerprints || [];
+				lengths = stored?.lengths || fingerprints.map(() => 120);
 			}
 			if (fingerprints.length < 2) return [];
 			const targets = new Set(subject.addresses.map(normalizeURL));
 			const matches = valid.filter(({ value }) => {
 				if (targets.has(normalizeURL(value.url))) return false;
-				const shared = new Set(value.fingerprints.filter((hash) => fingerprints.includes(hash))).size;
-				return articleEvidenceMatches(shared, fingerprints.length, value.fingerprints.length);
+				const shared = [...new Set(value.fingerprints.filter((hash) => fingerprints.includes(hash)))];
+				const characters = shared.reduce((sum, hash) => sum + lengths[fingerprints.indexOf(hash)], 0);
+				return articleEvidenceMatches(shared.length, fingerprints.length, value.fingerprints.length, characters);
 			}).slice(0, 8).map(({ value }) => ({ url: value.url, evidence: "observed-content" }));
 			for (const url of subject.samples.length >= 2 ? subject.addresses.slice(0, 9) : []) {
 				let parsed;
 				try { parsed = new URL(url); } catch { continue; }
 				if (isHiddenSite(url) || parsed.username || parsed.password) continue;
-				const key = ARTICLE_IDENTITY_PREFIX + await digest(normalizeURL(url));
-				await save(key, { url, fingerprints, timestamp: now });
+				const key = ARTICLE_IDENTITY_PREFIX + epoch + ":" + await digest(normalizeURL(url));
+				await save(key, { url, fingerprints, lengths, timestamp: now, epoch });
+				if (String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) !== epoch) await forgetMany([key]);
 			}
-			return matches;
+			return String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) === epoch ? matches : [];
 		} catch {
 			return [];
 		}
@@ -8249,14 +8304,21 @@ button {
 
 	async function resolveArticleIdentity(subject, { force = false, sources = [] } = {}) {
 		const { addresses: targets, title, samples } = subject;
-		const primary = mergeIdentityAddresses(subject.evidence.map((entry) => ({ ...entry })), await observedArticleIdentity(subject));
+		const epoch = String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0"));
+		let primary = mergeIdentityAddresses(subject.evidence.map((entry) => ({ ...entry })), await observedArticleIdentity(subject));
+		if (primary.length > 1 && String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) === epoch) await rememberCollectedIdentity(primary.map((entry) => entry.url));
+		primary = mergeIdentityAddresses(primary, await collectedIdentityAddresses(primary.map((entry) => entry.url)));
 		const incomplete = (reason) => ({ addresses: primary, incomplete: [reason] });
 		if (!sources.length) return incomplete("no-candidate-source");
 		const query = articleTitleQuery(title);
 		if (!query) return incomplete("insufficient-title");
 		const cacheKey = JSON.stringify([sources, targets.map(normalizeURL).sort(), query, samples]);
 		const cached = relatedArticleCache.get(cacheKey);
-		if (!force && cached && Date.now() - cached.timestamp < 300000) return { addresses: mergeIdentityAddresses(primary, cached.aliases.map((entry) => ({ ...entry }))), incomplete: [] };
+		if (!force && cached && cached.epoch === epoch && Date.now() - cached.timestamp < 300000) {
+			const addresses = mergeIdentityAddresses(primary, cached.aliases.map((entry) => ({ ...entry })));
+			if (addresses.length > 1 && String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) === epoch) await rememberCollectedIdentity(addresses.map((entry) => entry.url));
+			return { addresses, incomplete: [] };
+		}
 
 		const results = await Promise.all(sources.map(async (source) => {
 			const search = source === "lemmy"
@@ -8299,12 +8361,13 @@ button {
 			return articleContentsMatch(samples, doc) ? { url, evidence: "content" } : null;
 		}));
 		const addresses = mergeIdentityAddresses(primary, matches.filter((entry) => entry?.url));
+		if (addresses.length > 1 && String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) === epoch) await rememberCollectedIdentity(addresses.map((entry) => entry.url));
 		const gaps = [];
 		if (results.some((hits) => !hits)) gaps.push("candidate-search-unavailable");
 		if (matches.some((entry) => entry?.incomplete)) gaps.push("candidate-unverifiable");
-		if (!gaps.length) {
+		if (!gaps.length && String(await load(ARTICLE_IDENTITY_EPOCH_KEY, "0")) === epoch) {
 			relatedArticleCache.delete(cacheKey);
-			relatedArticleCache.set(cacheKey, { timestamp: Date.now(), aliases: addresses.slice(primary.length) });
+			relatedArticleCache.set(cacheKey, { timestamp: Date.now(), epoch, aliases: addresses.slice(primary.length) });
 			while (relatedArticleCache.size > 30) relatedArticleCache.delete(relatedArticleCache.keys().next().value);
 		}
 		return { addresses, incomplete: gaps };
@@ -8352,7 +8415,8 @@ button {
 		const marks = { ...(entry.marks || {}) };
 		let changed = false;
 		let answered = false;
-		const subject = articleIdentitySubject({ url: entry.url, title: entry.title || "" });
+		const newCandidates = [];
+		const subject = articleIdentitySubject({ url: entry.url, title: entry.title || "", addresses: entry.identityAddresses || [] });
 		const identity = await resolveArticleIdentity(subject, { sources: [] });
 		const addresses = identity.addresses.slice(0, 9).map((item) => item.url);
 
@@ -8368,11 +8432,12 @@ button {
 				}
 				if (!result) continue;
 				answered = true;
+				if (entry.checkedAt && key !== source.id && marks[key] == null && (typeof result.mark === "number" ? result.mark > 0 : typeof result.mark === "string" && result.mark.length > 0)) newCandidates.push({ key, source: source.id, address: normalizeURL(address) });
 				marks[key] = result.mark;
 				changed = changed || result.changed;
 			}
 		}
-		return { marks, changed, answered };
+		return { marks, changed, answered, newCandidates, addresses };
 	}
 
 	async function checkCollected(settings) {
@@ -8389,7 +8454,7 @@ button {
 		const patches = new Map();
 
 		for (const entry of due) {
-			const { marks, changed, answered } = await probeCollected(entry, settings);
+			const { marks, changed, answered, newCandidates, addresses } = await probeCollected(entry, settings);
 			const now = Date.now();
 			const patch = {
 				marks,
@@ -8399,12 +8464,18 @@ button {
 
 			patches.set(entry.key, patch);
 
-			if (changed) {
-				const found = await discoverAll(articleIdentitySubject({ url: entry.url, title: entry.title || "" }), settings);
+			if (changed || newCandidates.length) {
+				const found = await discoverAll(articleIdentitySubject({ url: entry.url, title: entry.title || "", addresses }), settings, { force: Boolean(newCandidates.length) });
+				const since = Math.max(Number(entry.addedAt) || 0, Number(entry.seenAt) || 0, Number(entry.lastViewedAt) || 0);
+				const belongs = (story, candidate) => story.source === candidate.source && normalizeURL(story.articleURL) === candidate.address;
+				for (const candidate of newCandidates) {
+					if (!found.some((story) => belongs(story, candidate))) delete marks[candidate.key];
+				}
+				const newDiscussion = found.some((story) => newCandidates.some((candidate) => belongs(story, candidate)) && (Number(story.createdAt) || 0) * 1000 > since);
 
-				if (found.length) {
+				if (found.length && (changed || newDiscussion)) {
 					patch.foundAt = now;
-					patch.count = foundCommentCount(found, Math.max(Number(entry.addedAt) || 0, Number(entry.seenAt) || 0, Number(entry.lastViewedAt) || 0));
+					patch.count = foundCommentCount(found, since);
 				}
 			}
 		}
@@ -11022,6 +11093,7 @@ html[data-backchannel-installed] .chin {
 
 	async function clearCache() {
 		relatedArticleCache.clear();
+		await save(ARTICLE_IDENTITY_EPOCH_KEY, Date.now().toString(36) + "-" + Math.random().toString(36).slice(2));
 		const listed = await listKeys();
 		const keys = listed
 			? []

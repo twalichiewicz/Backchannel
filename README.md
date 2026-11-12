@@ -100,8 +100,10 @@ When Backchannel verifies another address for an article, it also searches that
 address across your enabled sources. It can recognize copies you visit within
 an hour using locally stored passage fingerprints. This helps even when an
 external search cannot find a copy; it does not guarantee finding an unvisited
-copy. The cache contains addresses and hashes, not article text, and can be
-cleared in Settings.
+copy. The cache contains addresses, hashes and passage lengths, not article text,
+and can be cleared in Settings. For a page in your Collection, up to eight
+verified alternate addresses are kept with that saved entry for later checks;
+clearing the cache leaves your Collection intact.
 
 Webmail, banking, auth flows, and cloud consoles are excluded outright.
 

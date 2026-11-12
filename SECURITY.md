@@ -161,11 +161,15 @@ Worth stating plainly, because the permissions are broad by necessity:
   userscript storage.
 - **Visited-article fingerprints stay in userscript storage.** To recognize
   articles you have opened at different addresses, Backchannel keeps up to 100
-  addresses and SHA-256 hashes of short normalized passages, without saving the
-  passages themselves. A record is usable for one hour; expired records are
-  removed during a later identity lookup or the daily storage sweep. Clearing
+  addresses, SHA-256 hashes and lengths of short normalized passages, without
+  saving the passages themselves. A record is usable for one hour; expired
+  records are removed during a later identity lookup or the daily storage sweep. Clearing
   cached data removes them too. Hashes can reveal known text by guessing, so
   they should still be treated as reading history. Excluded pages are omitted.
+  When a page is in your Collection, up to eight verified alternate addresses
+  are also kept with its saved entry so later checks can find activity after
+  fingerprints expire. Clearing cached data leaves those saved Collection addresses intact;
+  removing the entry removes them with it.
 - **The notepad stays on the machine you wrote it on.** Notes live in your
   userscript manager's storage, keyed by page address or, on a PDF, by the
   document's fingerprint. Nothing is uploaded and no source is told they exist.
