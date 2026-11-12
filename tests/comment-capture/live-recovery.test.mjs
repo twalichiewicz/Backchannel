@@ -3,6 +3,102 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { launchApp, STORIES, waitFor } from "./harness.mjs";
 
+for (const mode of ['Reader', 'Sidebar']) test(`${mode} does not start a delayed automatic Reddit refresh after a manual sync`, { timeout: 45000 }, async () => {
+  const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
+  const seam = 'const [accepted, cooldown] = await Promise.all([load(REDDIT_READ_NOTICE_KEY, false), load(REDDIT_POLL_KEY, null)]);';
+  assert(original.includes(seam));
+  const source = original.replace(seam, `if (!window.__autoRefreshPaused) { window.__autoRefreshPaused = true; await new Promise((resolve) => { window.__resumeAutoRefresh = resolve; }); }\n\t\t\t${seam}`);
+  const url = STORIES[0].url;
+  const sidebar = mode === 'Sidebar';
+  const app = await launchApp({ source, ...(sidebar ? { appHost: new URL(url).hostname } : {}), sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com'], settings: { sources: { hn: true, reddit: true }, autoOpenSidebar: sidebar, frontPageMode: 'sources', updateCheck: false }, values: { 'HNewhere:reddit_read_window_notice': 2 } });
+  const opened = [];
+  app.context.on('page', (page) => { if (page !== app.page) opened.push(page); });
+  await app.context.route('https://www.reddit.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : JSON.stringify({ data: { children: [] } });
+    await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
+  });
+  try {
+    await app.page.goto(sidebar ? url : 'https://backchnnl.app/');
+    if (sidebar) {
+      assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id]').count() > 0, 15000));
+      await app.page.locator('#browse-toggle .wordmark-root').click();
+    }
+    assert(await waitFor(async () => await app.page.evaluate(() => window.__autoRefreshPaused === true), 10000), 'automatic refresh is waiting on storage');
+    const button = app.page.locator(sidebar ? '#browse-home-sync' : '#app-list-sync');
+    await button.click();
+    assert(await waitFor(() => opened.length === 1, 10000), 'manual sync opens Reddit');
+    assert(await waitFor(async () => await button.getAttribute('aria-busy') !== 'true' && opened.every((page) => page.isClosed()), 15000), 'manual sync has completed');
+    await app.page.evaluate(() => window.__resumeAutoRefresh());
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    assert.equal(opened.length, 1, 'the delayed automatic refresh must not open another tab after sync');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
+for (const outcome of ['empty', 'failed', 'malformed']) test(`concurrent views ${outcome === 'empty' ? 'share an empty' : `retry a ${outcome}`} Reddit discovery`, { timeout: 45000 }, async () => {
+  const url = STORIES[0].url;
+  const app = await launchApp({ sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com', new URL(url).hostname], settings: { sources: { hn: true, reddit: true }, autoOpenSidebar: true, frontPageMode: 'sources', updateCheck: false }, values: { 'HNewhere:reddit_read_window_notice': 2 } });
+  await app.context.route('https://www.reddit.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path !== '/') await new Promise((resolve) => setTimeout(resolve, 250));
+    if (outcome === 'failed' && path !== '/' && path !== '/api/me.json') return route.fulfill({ status: 403, contentType: 'application/json', body: '{"reason":"private"}' });
+    if (outcome === 'malformed' && path !== '/' && path !== '/api/me.json') return route.fulfill({ status: 200, contentType: 'application/json', body: '{"data":{}}' });
+    const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : JSON.stringify({ data: { children: [] } });
+    await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
+  });
+  const other = await app.context.newPage();
+  const opened = [];
+  app.context.on('page', (page) => { if (page !== app.page && page !== other) opened.push(page); });
+  try {
+    await Promise.all([app.page.goto(url), other.goto(url)]);
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id]').count() > 0 && await other.locator('#comments-content .comment[data-comment-id]').count() > 0, 15000));
+    await Promise.all([app.page.locator('#browse-home-sync').click(), other.locator('#browse-home-sync').click()]);
+    assert(await waitFor(async () => await app.page.locator('#browse-home-sync').getAttribute('aria-busy') !== 'true' && await other.locator('#browse-home-sync').getAttribute('aria-busy') !== 'true' && opened.length && opened.every((page) => page.isClosed()), 25000), 'both syncs complete');
+    assert.equal(opened.length, outcome === 'empty' ? 1 : 2, `both views ${outcome === 'empty' ? 'share the successful empty refresh' : 'retry after an unsuccessful refresh'}: ${JSON.stringify(app.store.get('HNewhere:reddit_shared_refresh'))}`);
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
+for (const firstMode of ['Sidebar', 'Reader']) for (const outcome of ['success', 'failed']) test(`concurrent ${firstMode} and Sidebar browsing views ${outcome === 'success' ? 'share a successful' : 'retry a failed'} Reddit feed refresh`, { timeout: 45000 }, async () => {
+  const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
+  const source = original.replace('let redditReadInitialAttempted = false;', 'let redditReadInitialAttempted = true;');
+  assert.notEqual(source, original);
+  const url = STORIES[0].url;
+  const reader = firstMode === 'Reader';
+  const app = await launchApp({ source, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com', new URL(url).hostname], settings: { sources: { hn: true, reddit: true }, autoOpenSidebar: true, frontPageMode: 'sources', updateCheck: false }, values: { 'HNewhere:reddit_read_window_notice': 2 } });
+  let feedRequests = 0;
+  await app.context.route('https://www.reddit.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path !== '/') await new Promise((resolve) => setTimeout(resolve, 250));
+    if (path === '/r/popular.json') feedRequests++;
+    if (path === '/r/popular.json' && outcome === 'failed') return route.fulfill({ status: 403, contentType: 'application/json', body: '{"reason":"private"}' });
+    const post = { id: 'feedonly', url: 'https://framed.example.com/post/110', title: 'A freshly synced feed item', author: 'reader', subreddit: 'news', permalink: '/r/news/comments/feedonly/article/', num_comments: 1, created_utc: Math.floor(Date.now() / 1000), score: 10 };
+    const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : JSON.stringify({ data: { children: path === '/r/popular.json' ? [{ kind: 't3', data: post }] : [] } });
+    await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
+  });
+  const other = await app.context.newPage();
+  const opened = [];
+  app.context.on('page', (page) => { if (page !== app.page && page !== other) opened.push(page); });
+  try {
+    await Promise.all([app.page.goto(reader ? 'https://backchnnl.app/' : url), other.goto(url)]);
+    assert(await waitFor(async () => await app.page.locator(reader ? '#app-list-body .browse-title-link' : '#comments-content .comment[data-comment-id]').count() > 0 && await other.locator('#comments-content .comment[data-comment-id]').count() > 0, 15000));
+    await Promise.all([...(reader ? [] : [app.page.locator('#browse-toggle .wordmark-root').click()]), other.locator('#browse-toggle .wordmark-root').click()]);
+    assert(await waitFor(async () => (reader || await app.page.locator('#panel.browsing').count() === 1) && await other.locator('#panel.browsing').count() === 1, 10000));
+    const firstButton = app.page.locator(reader ? '#app-list-sync' : '#browse-home-sync');
+    const otherButton = other.locator('#browse-home-sync');
+    await Promise.all([firstButton.click(), otherButton.click()]);
+    assert(await waitFor(async () => await firstButton.getAttribute('aria-busy') !== 'true' && await otherButton.getAttribute('aria-busy') !== 'true' && opened.length && opened.every((page) => page.isClosed()), 25000));
+    assert.equal(opened.length, outcome === 'success' ? 1 : 2, 'only a successful feed refresh can be shared');
+    assert.equal(feedRequests, outcome === 'success' ? 1 : 2, 'failed feeds are retried and successful feeds are fetched once');
+    if (outcome === 'success') {
+      assert(await app.page.locator(reader ? '#app-list-body' : '#browse-list').getByText('A freshly synced feed item').count(), 'the first view shows the refreshed feed');
+      assert(await other.locator('#browse-list').getByText('A freshly synced feed item').count(), 'the other view shows the refreshed feed');
+    }
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
 test('shared storage coordination serializes competing views and ignores expired claims', { timeout: 30000 }, async () => {
   const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
   const seam = '\tasync function loadCollapsed() {';

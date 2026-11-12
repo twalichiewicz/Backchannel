@@ -5588,6 +5588,7 @@ ${
 	let redditReadNoticeAccepted = false;
 	let redditReadPendingPage = "";
 	let redditReadInitialAttempted = false;
+	let redditReadActionId = 0;
 	let syncRunId = 0;
 	const REDDIT_READ_NOTICE_KEY = "HNewhere:reddit_read_window_notice";
 	const REDDIT_READ_RESUME_KEY = "HNewhere:reddit_read_resume";
@@ -5597,6 +5598,7 @@ ${
 	const redditReadID = () => [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 	const redditViewId = redditReadID();
 	let sharedRefreshSince = 0;
+	let sharedEmptyReddit = new Set();
 	let consumedSharedRefresh = "";
 	let consumedSharedPage = "";
 
@@ -5681,7 +5683,7 @@ ${
 			redditReadPendingPage = "";
 			return refreshRedditPage(ui, { onThreadsLoaded });
 		} else if (isBrowsing(ui)) {
-			return renderBrowseView(ui, { force: true });
+			return renderBrowseView(ui, { force: !sharedRefreshSince });
 		} else {
 			const found = await discoverAll(pageAddresses(), await loadSettings());
 
@@ -5823,30 +5825,46 @@ ${
 	}
 
 	function runRedditReadAction(task, options = {}) {
+		redditReadActionId++;
+		if (!options.automatic && usesRedditReadWindow() && redditReadSourceOn) redditReadInitialAttempted = true;
 		if (!usesRedditReadWindow() || !redditReadSourceOn || !usesManagerTabs() || redditReadBatch && !redditReadBatch.closing) return runRedditReadActionLocal(task, options);
 		const page = openPageKey();
+		const targets = page ? [...new Set(pageAddresses().map(normalizeURL).filter(Boolean))] : [];
 		return (async () => {
 			const id = redditReadID();
+			const readyForPage = (entry) => entry?.page === page && entry.ok && entry.pageReady && (!entry.emptyOnly || targets.length > 0 && targets.every((target) => entry.emptyTargets?.includes(target)));
+			const readyForFeed = async (entry) => {
+				if (!options.feedOnly || !entry?.ok || !Array.isArray(entry.feedKeys) || !entry.feedKeys.length) return false;
+				const settings = await loadSettings();
+				const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabledSourceIds(settings, registeredSourceIds()));
+				const keys = frontPageStorageKeys(feeds);
+				if (JSON.stringify(keys) !== JSON.stringify(entry.feedKeys)) return false;
+				const caches = await Promise.all(keys.map((key) => load(key, null)));
+				return caches.every((cache) => cache?.timestamp >= entry.started && (Array.isArray(cache.rows) ? Array.isArray(cache.feedStates) && cache.feedStates.every((feed) => feed.status === "ok") : Array.isArray(cache.stories) && cache.status === "ok"));
+			};
+			const readyForAction = async (entry) => options.feedOnly ? readyForFeed(entry) : readyForPage(entry);
 			const reuse = async (entry) => {
 				consumedSharedRefresh = entry.id;
 				const sharedPage = await load(SHARED_REDDIT_PAGE_PREFIX + page, null);
 				if (sharedPage?.token) consumedSharedPage = sharedPage.token;
 				const previous = sharedRefreshSince;
+				const previousEmpty = sharedEmptyReddit;
 				sharedRefreshSince = entry.started;
+				sharedEmptyReddit = new Set(entry.emptyTargets || []);
 				try { return await task(() => Promise.resolve()); }
-				finally { sharedRefreshSince = previous; }
+				finally { sharedRefreshSince = previous; sharedEmptyReddit = previousEmpty; }
 			};
 			for (;;) {
 				const decision = await withSharedStorageLock("reddit-refresh", async (lease) => {
 					const held = await load(REDDIT_SHARED_REFRESH_KEY, null);
-					if (!(held?.state === "running" && held.expires > Date.now())) {
+					if (!options.feedOnly && !(held?.state === "running" && held.expires > Date.now())) {
 						const sharedPage = await load(SHARED_REDDIT_PAGE_PREFIX + page, null);
 						if ((sharedPage?.owner !== redditViewId || options.reuseFresh || options.automatic) && sharedPage?.token && sharedPage.token !== consumedSharedPage && Date.now() - sharedPage.at < THREAD_TTL && Array.isArray(sharedPage.keys) && sharedPage.keys.length) {
 							const entries = await Promise.all(sharedPage.keys.map((key) => load(SHARED_THREAD_PREFIX + key, null)));
 							if (entries.every((entry) => entry?.version === 1 && entry.at >= sharedPage.since)) return { reuse: { id: sharedPage.token, started: sharedPage.since } };
 						}
 					}
-					if (held?.state === "done" && held.ok && held.pageReady && held.page === page && held.owner !== redditViewId && held.id !== consumedSharedRefresh && held.expires > Date.now()) return { reuse: held };
+					if (held?.state === "done" && held.owner !== redditViewId && held.id !== consumedSharedRefresh && held.expires > Date.now() && await readyForAction(held)) return { reuse: held };
 					if (held?.state === "running" && held.expires > Date.now()) return { held };
 					const claim = { id, owner: redditViewId, page, state: "running", started: Date.now(), expires: Date.now() + 120000 };
 					await lease.commit(() => save(REDDIT_SHARED_REFRESH_KEY, claim));
@@ -5861,7 +5879,7 @@ ${
 						current = await load(REDDIT_SHARED_REFRESH_KEY, null);
 					}
 					if (page !== openPageKey()) return [];
-					if (current?.id === held.id && current.state === "done" && current.page === page && current.ok && current.pageReady) return reuse(current);
+					if (current?.id === held.id && current.state === "done" && await readyForAction(current)) return reuse(current);
 					continue;
 				}
 				if (!claim) continue;
@@ -5873,8 +5891,8 @@ ${
 					})).catch(console.error);
 				}, 10000);
 				let ok = false;
+				const outcome = {};
 				try {
-					const outcome = {};
 					const result = await runRedditReadActionLocal(task, { ...options, outcome });
 					ok = Boolean(outcome.ok);
 					return result;
@@ -5883,9 +5901,13 @@ ${
 					await heartbeat;
 					const refreshed = freshRedditPage(page) ? redditPageRefreshes.get(page) : null;
 					const snapshots = await Promise.all((refreshed?.keys || []).map((key) => load(SHARED_THREAD_PREFIX + key, null)));
-					const pageReady = snapshots.length > 0 && snapshots.every((snapshot) => snapshot?.version === 1 && snapshot.at >= claim.started);
+					const emptyTargets = outcome.emptyTargets || [];
+					const feedKeys = outcome.feedKeys || [];
+					const hasSnapshots = snapshots.length > 0 && snapshots.every((snapshot) => snapshot?.version === 1 && snapshot.at >= claim.started);
+					const emptyOnly = !hasSnapshots && targets.length > 0 && targets.every((target) => emptyTargets.includes(target));
+					const pageReady = hasSnapshots || emptyOnly;
 					await withSharedStorageLock("reddit-refresh", async (lease) => {
-						if ((await load(REDDIT_SHARED_REFRESH_KEY, null))?.id === id) await lease.commit(() => save(REDDIT_SHARED_REFRESH_KEY, { ...claim, state: "done", ok, pageReady, expires: Date.now() + THREAD_TTL }));
+						if ((await load(REDDIT_SHARED_REFRESH_KEY, null))?.id === id) await lease.commit(() => save(REDDIT_SHARED_REFRESH_KEY, { ...claim, state: "done", ok, pageReady, emptyOnly, emptyTargets, feedKeys, expires: Date.now() + THREAD_TTL }));
 					});
 				}
 			}
@@ -5894,7 +5916,6 @@ ${
 
 	function runRedditReadActionLocal(task, { automatic = false, outcome = null } = {}) {
 		if (!usesRedditReadWindow() || !redditReadSourceOn || redditReadWaitUntil > Date.now()) return Promise.resolve().then(() => task(() => Promise.resolve()));
-		if (!automatic) redditReadInitialAttempted = true;
 		let batch = redditReadBatch;
 
 		if (!batch || batch.closing) {
@@ -5936,7 +5957,11 @@ ${
 				throw error;
 			} finally {
 				await releaseRead();
-				if (outcome) outcome.ok = Boolean(batch.connected && !batch.failed && !batch.cancelled);
+				if (outcome) {
+					outcome.ok = Boolean(batch.connected && !batch.failed && !batch.cancelled);
+					outcome.emptyTargets = [...(batch.emptyTargets || [])];
+					outcome.feedKeys = batch.feedKeys || [];
+				}
 			}
 		})();
 	}
@@ -6354,22 +6379,25 @@ ${
 			if (!target) {
 				return [];
 			}
+			if (sharedEmptyReddit.has(target)) return [];
 
 			const scheme = url.startsWith("http://") ? "http://" : "https://";
 			const bare = scheme + target;
 			const matches = new Map();
+			const batch = redditReadBatch?.connected && !redditReadBatch.closing ? redditReadBatch : null;
+			let complete = Boolean(batch);
 
 			for (const [path, archivePath] of redditDiscoveryPaths(bare)) {
 				const result = await redditFetch(path, archivePath);
 
 				if (!result) {
+					complete = false;
 					continue;
 				}
 
-				const posts =
-					result.tier === "archive"
-						? result.json?.data || []
-						: (result.json?.data?.children || []).map((child) => child.data);
+				const listing = result.tier === "archive" ? result.json?.data : result.json?.data?.children;
+				if (!Array.isArray(listing)) { complete = false; continue; }
+				const posts = result.tier === "archive" ? listing : listing.map((child) => child.data);
 
 				for (const post of posts) {
 					if (post?.id) {
@@ -6381,10 +6409,12 @@ ${
 				}
 			}
 
-			return [...matches.values()]
+			const found = [...matches.values()]
 				.filter(redditHitPasses)
 				.filter((post) => normalizeURL(post.url) === target)
 				.map(redditDiscussion);
+			if (complete && !found.length) (batch.emptyTargets ||= new Set()).add(target);
+			return found;
 		},
 
 		async frontPage({ force = false } = {}) {
@@ -9166,6 +9196,15 @@ button {
 
 	const FRONT_PAGE_FEED_KEY = "HNewhere:frontpage_feed:";
 
+	function frontPageStorageKeys(feeds) {
+		return feeds.some((feed) => feed.topic) ? feeds.map((feed) => FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`) : [frontPageCacheKey(feeds)];
+	}
+
+	function rememberRedditFeeds(feeds, results) {
+		const batch = redditReadBatch;
+		if (batch?.connected && !batch.closing && feeds.some((feed) => feed.source === "reddit") && results.every((result) => result.status === "ok" && result.attempted)) batch.feedKeys = frontPageStorageKeys(feeds);
+	}
+
 	async function frontPageFeedResult(feed, force = false) {
 		try {
 			return { stories: await fetchFrontPageFeed(feed, force), status: "ok", attempted: true };
@@ -9226,14 +9265,15 @@ button {
 
 		if (usesRedditReadWindow() && !redditReadInitialAttempted && !redditReadBatch && isSidebarVisible() && feeds.some((feed) => feed.source === "reddit")) {
 			redditReadInitialAttempted = true;
+			const scheduledAction = redditReadActionId;
 			const [accepted, cooldown] = await Promise.all([load(REDDIT_READ_NOTICE_KEY, false), load(REDDIT_POLL_KEY, null)]);
 
-			if (accepted && !(cooldown?.until > Date.now())) {
+			if (accepted && !(cooldown?.until > Date.now()) && scheduledAction === redditReadActionId) {
 				const ui = sidebarUI;
 
 				runSync(async (releaseRead) => {
 					if (sidebarUI === ui && (await loadSettings()).sources?.reddit) return refreshRedditReadViews(ui, { onThreadsLoaded: releaseRead });
-				}, { automatic: true }).catch(console.error);
+				}, { automatic: true, feedOnly: appState ? !appState.open : isBrowsing(ui) }).catch(console.error);
 			}
 			if (!accepted) scheduleRedditReadNotice();
 		}
@@ -9244,6 +9284,7 @@ button {
 
 		if (feeds.some((feed) => feed.topic)) {
 			const results = await Promise.all(feeds.map((feed) => loadTopicFeed(feed, options.force)));
+			rememberRedditFeeds(feeds, results);
 			const lists = results.map((result) => result.stories);
 
 			return {
@@ -9284,7 +9325,10 @@ button {
 		const topics = [...new Set(feeds.filter((feed, index) => lists[index].length && feed.topic).map((feed) => feed.topic))];
 		const rows = mergeStoriesByURL(blendStories(lists.filter((list) => list.length)));
 
-		if (frontPageLoads.get(cacheKey) === request) await save(cacheKey, { timestamp: Date.now(), rows, sources: answered, topics, feedStates });
+		if (frontPageLoads.get(cacheKey) === request) {
+			await save(cacheKey, { timestamp: Date.now(), rows, sources: answered, topics, feedStates });
+			rememberRedditFeeds(feeds, results);
+		}
 
 		return { rows, sources: answered, topics, feedStates, attempted: results.some((result) => result.attempted) };
 	}
@@ -15964,7 +16008,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			}
 
 			try {
-				await runSync((releaseRead) => (isBrowsing(ui) ? renderBrowseView(ui, { force: true }) : Promise.resolve(ui.syncStatus?.onSync?.(releaseRead))));
+				await runSync((releaseRead) => (isBrowsing(ui) ? renderBrowseView(ui, { force: !sharedRefreshSince }) : Promise.resolve(ui.syncStatus?.onSync?.(releaseRead))), { feedOnly: browsing });
 			} catch (error) {
 				console.error(error);
 			}
@@ -37281,7 +37325,7 @@ ${settingsModalHTML()}
 			showToast("Syncing…", { kind: "system", persist: true, loading: true });
 
 			try {
-				const runs = await runSync((releaseRead) => syncReaderViews(releaseRead));
+				const runs = await runSync((releaseRead) => syncReaderViews(releaseRead), { feedOnly: !appState?.open });
 				for (const run of runs) {
 					if (run.status === "rejected") {
 						console.error(run.reason);

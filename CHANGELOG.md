@@ -26,7 +26,10 @@ use to detect updates, so every release bumps it.
   highlights appear while large comment threads are still being rendered.
 - Reader and Sidebar share captured discussions and coordinate Reddit refreshes
   across views, avoiding duplicate refresh tabs for the same work. Interrupted
-  views release their coordination claims so another view can continue.
+  views release their coordination claims so another view can continue. A
+  delayed automatic refresh no longer repeats a newer sync, and successful
+  searches with no Reddit discussions and refreshed feeds can be shared
+  between views.
 - Sync updates existing discussions without clearing comments, drafts or
   expanded replies. A feed refresh no longer interrupts an article click.
 - On mobile, Reader can sync from the Discussion sheet: use the Sources menu,
