@@ -124,12 +124,12 @@ root, run:
 ```sh
 cd tests
 npm ci
-npx playwright install chromium webkit
+npx playwright install chromium firefox webkit
 npm test
 ```
 
 The checked-in tests exercise comment and discussion capture with synthetic
-sources in Chromium and WebKit. GitHub Actions runs them on pushes and pull
+sources in Chromium, Firefox and WebKit. GitHub Actions runs them on pushes and pull
 requests. Additional local HTML tests run too when present; `npm run test:slow`
 includes the slow ones. To run only the comment-capture checks, use
 `npm run test:capture`.

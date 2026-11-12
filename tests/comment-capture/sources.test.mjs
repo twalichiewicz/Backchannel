@@ -1,14 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { chromium, webkit } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
 
 test("source adapters preserve discussions, comments, and parent-child links", { timeout: 30000 }, async () => {
   const path = process.env.BC_SCRIPT || new URL("../../HNewhere.user.js", import.meta.url);
   const source = await readFile(path, "utf8");
   const regions = [...source.matchAll(/\/\/ #region hnewhere-test-export([\s\S]*?)\/\/ #endregion hnewhere-test-export/g)].map((match) => match[1]);
   assert(regions.length > 0, "source test exports are missing");
-  const browser = await (process.env.ENGINE === "webkit" ? webkit : chromium).launch();
+  const browser = await ({ chromium, firefox, webkit }[process.env.ENGINE] || chromium).launch();
   const page = await browser.newPage();
   try {
     const result = await page.evaluate((code) => {

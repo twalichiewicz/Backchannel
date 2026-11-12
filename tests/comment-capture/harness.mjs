@@ -1,7 +1,7 @@
 // Runs the userscript against synthetic articles, sources, and manager storage.
 // Unhandled browser requests are blocked so these tests do not depend on live APIs.
 
-import { chromium, webkit } from "playwright";
+import { chromium, firefox, webkit } from "playwright";
 import { readFile } from "node:fs/promises";
 import { join, extname, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -349,7 +349,7 @@ export async function launchApp({
 	const pageFor = (url) => (pages[url] ? { status: pages[url].status ?? 200, headers: pages[url].headers || {}, html: pages[url].html, body: pages[url].body, fetch: pages[url].fetch } : articleFor(url));
 
 	source = source ?? (await readFile(process.env.BC_SCRIPT || join(ROOT, "HNewhere.user.js"), "utf8"));
-	const browser = await (engine === "webkit" ? webkit : chromium).launch(launchOptions);
+	const browser = await ({ chromium, firefox, webkit }[engine] || chromium).launch(launchOptions);
 	const context = await browser.newContext({ viewport, colorScheme, hasTouch, deviceScaleFactor: scale, ...(timezoneId ? { timezoneId } : {}) });
 	await context.route("**/*", (route) => route.abort("blockedbyclient"));
 	const requests = [];

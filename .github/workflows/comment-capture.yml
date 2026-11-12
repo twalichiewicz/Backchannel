@@ -12,6 +12,10 @@ jobs:
   regression:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
     defaults:
       run:
         working-directory: tests
@@ -23,5 +27,12 @@ jobs:
           cache: npm
           cache-dependency-path: tests/package-lock.json
       - run: npm ci
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npm test
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
+      - if: matrix.browser == 'chromium'
+        run: npm test
+        env:
+          CAPTURE_ENGINES: ${{ matrix.browser }}
+      - if: matrix.browser != 'chromium'
+        run: npm run test:capture
+        env:
+          CAPTURE_ENGINES: ${{ matrix.browser }}

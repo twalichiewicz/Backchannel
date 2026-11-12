@@ -416,6 +416,7 @@ test("Reader Sync closes its Reddit tab after feeds and threads load, before loc
     await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
     assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:initial"]').count() === 1, 20000));
     assert(await waitFor(() => opened.every((page) => page.isClosed()), 10000));
+    assert(await waitFor(() => app.store.get('HNewhere:reddit_shared_refresh')?.state === 'done', 10000), 'the initial refresh finishes before starting another');
     opened.length = 0;
     current = 'freshsync';
     await app.page.evaluate(() => { window.__bcSlowRender = true; });
