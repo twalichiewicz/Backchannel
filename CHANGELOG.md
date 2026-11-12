@@ -8,6 +8,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [1.6.18.5] — 2026-11-12
+
+### Fixed
+
+- Reddit's archive fallback loads the discussion tree instead of stopping at
+  100 comments. Additional archived replies can be opened.
+- Large or deeply nested Reddit discussions no longer prevent other discussions
+  from loading. Failed or partial discussion loads are identified, and a failed
+  request for more replies stays available to retry.
+- The Sources menu identifies discussions that could not load. Large queues no
+  longer time out just because earlier Reddit discussions are still loading.
+- Sidebar recovers matching discussions already found in Reader's feeds, even
+  when a source search misses them. Reddit results found before a later search
+  times out remain available.
+- Sidebar shows discussion and Sync progress in its header, and article
+  highlights appear while large comment threads are still being rendered.
+- Reader and Sidebar share captured discussions and coordinate Reddit refreshes
+  across views, avoiding duplicate refresh tabs for the same work. Interrupted
+  views release their coordination claims so another view can continue. A
+  delayed automatic refresh no longer repeats a newer sync, and successful
+  searches with no Reddit discussions and refreshed feeds can be shared
+  between views.
+- Sync updates existing discussions without clearing comments, drafts or
+  expanded replies. A feed refresh no longer interrupts an article click.
+- On mobile, Reader can sync from the Discussion sheet: use the Sources menu,
+  or the Sync button when no discussion has been found yet.
+- Search remembers recent queries across Reader and Sidebar, and clearing them
+  keeps an older delayed search from returning, even when timestamps match.
+- Loading views show the known article details and composer immediately, with
+  a subtle discussion skeleton and a header-sized progress strip in Reader.
+  The Reddit refresh tab identifies itself and closes when its requests finish.
+- Readable Reddit comments stay visible when their authors have deleted their
+  accounts, and queued Reddit discussions no longer time out before their own
+  requests start.
+- The Reader's NEW control is easier to read while keeping its pressed state
+  and unread-comment sorting.
+- The Sidebar's article menu button now matches Reader on desktop and keeps
+  its larger touch size on phones. Its pressed state stays visible while the
+  menu is open.
+- NYT gift links and share links find discussions for the underlying article,
+  including when it is read through an archive that identifies the original.
+  Archive.today snapshots can identify it through their Saved from field without
+  mistaking an unrelated search box for the original address.
+- In Safari's Userscripts extension, opening an article in Reader or
+  opening the Sidebar on a page refreshes its Reddit discussions through the
+  signed-in background tab, instead of relying on an out-of-date archive.
+- On Discourse, scrolling between posts in a topic keeps the sidebar in place,
+  and a direct post link searches for the topic's discussions too.
+- URL parameters excluded by a page's canonical address no longer reload the
+  sidebar when the site adds them after the page opens; changing an existing
+  non-tracking parameter now reloads the lookup for the new address.
+- A previous Reader lookup no longer clears the loading status for a newer one.
+- Leftover Collection identity metadata from the unreleased matching experiment
+  is removed while saved pages and their other data are kept.
+
 ## [1.6.18.4] — 2026-11-10
 
 ### Fixed
