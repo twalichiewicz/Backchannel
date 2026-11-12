@@ -68,12 +68,13 @@ for (const firstMode of ['Sidebar', 'Reader']) for (const outcome of ['success',
   const reader = firstMode === 'Reader';
   const app = await launchApp({ source, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com', new URL(url).hostname], settings: { sources: { hn: true, reddit: true }, autoOpenSidebar: true, frontPageMode: 'sources', updateCheck: false }, values: { 'HNewhere:reddit_read_window_notice': 2 } });
   let feedRequests = 0;
+  let feedTitle = 'A freshly synced feed item';
   await app.context.route('https://www.reddit.com/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path !== '/') await new Promise((resolve) => setTimeout(resolve, 250));
     if (path === '/r/popular.json') feedRequests++;
     if (path === '/r/popular.json' && outcome === 'failed') return route.fulfill({ status: 403, contentType: 'application/json', body: '{"reason":"private"}' });
-    const post = { id: 'feedonly', url: 'https://framed.example.com/post/110', title: 'A freshly synced feed item', author: 'reader', subreddit: 'news', permalink: '/r/news/comments/feedonly/article/', num_comments: 1, created_utc: Math.floor(Date.now() / 1000), score: 10 };
+    const post = { id: 'feedonly', url: 'https://framed.example.com/post/110', title: feedTitle, author: 'reader', subreddit: 'news', permalink: '/r/news/comments/feedonly/article/', num_comments: 1, created_utc: Math.floor(Date.now() / 1000), score: 10 };
     const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : JSON.stringify({ data: { children: path === '/r/popular.json' ? [{ kind: 't3', data: post }] : [] } });
     await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
   });
@@ -94,6 +95,11 @@ for (const firstMode of ['Sidebar', 'Reader']) for (const outcome of ['success',
     if (outcome === 'success') {
       assert(await app.page.locator(reader ? '#app-list-body' : '#browse-list').getByText('A freshly synced feed item').count(), 'the first view shows the refreshed feed');
       assert(await other.locator('#browse-list').getByText('A freshly synced feed item').count(), 'the other view shows the refreshed feed');
+      feedTitle = 'A later feed refresh';
+      await otherButton.click();
+      assert(await waitFor(async () => opened.length === 2 && opened.every((page) => page.isClosed()) && await otherButton.getAttribute('aria-busy') !== 'true', 15000), 'a later explicit sync starts a fresh request');
+      assert.equal(feedRequests, 2);
+      assert(await other.locator('#browse-list').getByText('A later feed refresh').count(), 'a later sync displays the newer feed');
     }
     assert.deepEqual(app.errors, []);
   } finally { await app.browser.close(); }
