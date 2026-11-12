@@ -434,11 +434,14 @@ export async function launchApp({
 			return [...store.keys()];
 		}
 
+		let delayedSet = false;
 		if (slowSets.armed && key.startsWith(slowSets.prefix) && (!slowSets.query || value?.query === slowSets.query)) {
 			slowSets.armed = false;
+			delayedSet = true;
 			await new Promise((resolve) => setTimeout(resolve, slowSets.ms));
 		}
 		store.set(key, value);
+		if (delayedSet) slowSets.completed = true;
 		return true;
 	});
 	await context.addInitScript({ content: `window.__bcSource = ${JSON.stringify(source)};` });

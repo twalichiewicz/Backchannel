@@ -22,6 +22,25 @@ test('shared storage coordination serializes competing views and ignores expired
   } finally { await app.browser.close(); }
 });
 
+test('closing a view releases its shared storage claim', { timeout: 20000 }, async () => {
+  const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
+  const seam = '\tasync function loadCollapsed() {';
+  assert(original.includes(seam));
+  const source = original.replace(seam, `\twindow.__holdReviewLock = () => withSharedStorageLock('close-probe', async () => { window.__reviewLockHeld = true; await new Promise(() => {}); });\n\twindow.__takeReviewLock = () => withSharedStorageLock('close-probe', async () => { window.__reviewLockTaken = true; });\n${seam}`);
+  const app = await launchApp({ source, sharedStore: true, topHosts: [new URL(STORIES[0].url).hostname], settings: { sources: { hn: true }, updateCheck: false } });
+  try {
+    const other = await app.context.newPage();
+    await Promise.all([app.page.goto('https://backchnnl.app/'), other.goto(STORIES[0].url)]);
+    assert(await waitFor(async () => await app.page.evaluate(() => typeof window.__holdReviewLock === 'function') && await other.evaluate(() => typeof window.__takeReviewLock === 'function'), 5000));
+    await app.page.evaluate(() => { window.__holdReviewLock().catch(() => {}); });
+    assert(await waitFor(async () => await app.page.evaluate(() => window.__reviewLockHeld === true), 5000));
+    await app.page.close();
+    await other.evaluate(() => { window.__takeReviewLock().catch(() => {}); });
+    assert(await waitFor(async () => await other.evaluate(() => window.__reviewLockTaken === true), 8000), 'another view recovers promptly from the abandoned lease');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
 test('the Reddit title advances when background timers run once per spinner cycle', { timeout: 30000 }, async () => {
   const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
   const seam = 'const titleTimer = window.setInterval(tickTitle, 200);';
@@ -105,12 +124,16 @@ test('Reader opens an article when the feed refreshes during a click', { timeout
   } finally { releaseReddit(); await app.browser.close(); }
 });
 
-for (const delayedLease of [false, true]) test(`concurrent Reader and Sidebar syncs share one Reddit refresh${delayedLease ? ' with delayed storage reads' : ''}`, { timeout: 60000 }, async () => {
+for (const scenario of ['normal', 'delayed', 'expired']) test(`concurrent Reader and Sidebar syncs share one Reddit refresh${scenario === 'delayed' ? ' with delayed storage reads' : scenario === 'expired' ? ' after a suspended claim expires' : ''}`, { timeout: 60000 }, async () => {
   const url = STORIES[0].url;
   const now = Math.floor(Date.now() / 1000);
   const post = { id: 'freshpost', url, title: STORIES[0].title, author: 'reader', subreddit: 'news', subreddit_name_prefixed: 'r/news', permalink: '/r/news/comments/freshpost/article/', num_comments: 1, created_utc: now - 3600, score: 100 };
   const comment = { kind: 't1', data: { id: 'freshcomment', body: 'A shared live comment', author: 'reader', parent_id: 't3_freshpost', link_id: 't3_freshpost', created_utc: now - 60, replies: '' } };
-  const app = await launchApp({ sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com', new URL(url).hostname], settings: { sources: { hn: true, reddit: true }, autoOpenSidebar: true, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
+  const original = scenario === 'expired' ? await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8') : '';
+  const seam = 'const held = await load(REDDIT_SHARED_REFRESH_KEY, null);';
+  if (original) assert(original.includes(seam));
+  const source = original ? original.replace(seam, `${seam}\n if (window.__pauseSharedClaim) { window.__sharedClaimPaused = true; await new Promise((resolve) => { window.__resumeSharedClaim = resolve; }); }`) : null;
+  const app = await launchApp({ source, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com', new URL(url).hostname], settings: { sources: { hn: true, reddit: true }, autoOpenSidebar: true, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
     { match: (path) => path.includes('/api/posts/search'), json: { data: [post] } },
     { match: (path) => path.includes('/api/comments/tree'), json: { data: [comment] } },
   ] });
@@ -155,7 +178,19 @@ for (const delayedLease of [false, true]) test(`concurrent Reader and Sidebar sy
     assert.equal(opened.filter((page) => page !== article).length, earlierTabs, `reopening Sidebar reuses the Reader refresh without another Reddit tab: ${JSON.stringify(sharedBeforeArticle)}; ${JSON.stringify(priorRefresh)} => ${JSON.stringify(app.store.get('HNewhere:reddit_shared_refresh'))}`);
     opened.length = 0;
     slow = true;
-    if (delayedLease) {
+    if (scenario === 'expired') {
+      app.store.delete('HNewhere:reddit_shared_refresh');
+      app.store.delete('HNewhere:reddit_page_cache:framed.example.com/gc');
+      await app.page.evaluate(() => { window.__pauseSharedClaim = true; });
+      await app.page.locator('#app-list-sync').click();
+      assert(await waitFor(async () => await app.page.evaluate(() => window.__sharedClaimPaused === true), 5000), 'the first view pauses inside the claim');
+      const key = [...app.store.keys()].find((item) => item.startsWith('HNewhere:storage_lock:reddit-refresh:'));
+      assert(key, 'the first view holds the coordination lease');
+      app.store.set(key, { ...app.store.get(key), expires: Date.now() - 1 });
+      await article.locator('#browse-home-sync').click();
+      assert(await waitFor(() => opened.length > 0, 5000), 'the second view starts after expiry');
+      await app.page.evaluate(() => { window.__pauseSharedClaim = false; window.__resumeSharedClaim(); });
+    } else if (scenario === 'delayed') {
       app.store.delete('HNewhere:reddit_shared_refresh');
       app.store.delete('HNewhere:reddit_page_cache:framed.example.com/gc');
       Object.assign(app.slowGets, { key: 'HNewhere:reddit_shared_refresh', armed: true, afterRead: true, delays: [200, 700] });

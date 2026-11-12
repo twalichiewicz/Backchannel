@@ -27,7 +27,7 @@ let HOST = "";
 // Loads two dozen saved pages in iframes; minutes, not seconds.
 const SLOW = new Set(["hypothesis-anchor.html", "pdf-render-anchor.html"]);
 // Harness shells and probes rather than suites.
-const SKIP = new Set(["_runner.html", "_runner_laidout.html", "has-invalidation-probe.html"]);
+const SKIP = new Set(["_runner.html", "_runner_laidout.html", "has-invalidation-probe.html", "probe-reader-wide.html", "repro.html"]);
 // Suites whose subject is failure handling, so they log errors on purpose.
 const LOGS_ERRORS = new Set(["write-bridge.html", "repro.html", "blocked-styles.html"]);
 // Suites that load saved copies of real pages. The pages' own assets were not
@@ -101,10 +101,14 @@ const candidates = (await readdir(HERE))
 	.sort();
 const skippedSlow = args.has("--all") ? 0 : candidates.filter((file) => SLOW.has(file)).length;
 const files = candidates.filter((file) => args.has("--all") || !SLOW.has(file));
+if (!files.length) {
+	await browser.close();
+	server.close();
+	throw new Error("No HTML test suites selected");
+}
 
 let failures = 0;
 let total = 0;
-const skipped = [];
 
 for (const file of files) {
 	const page = await browser.newPage();
@@ -124,7 +128,9 @@ for (const file of files) {
 	let verdict;
 
 	try {
-		await page.goto(`${HOST}/tests/${file}`, { waitUntil: "load", timeout: 20000 });
+		const response = await page.goto(`${HOST}/tests/${file}`, { waitUntil: "load", timeout: 20000 });
+		if (!response?.ok()) throw new Error(`Test page returned HTTP ${response?.status() || 0}`);
+		if (!(await page.locator("#summary").count())) throw new Error("Test page is missing #summary");
 		await page
 			.waitForFunction(
 				() => !/running/i.test(document.getElementById("summary")?.textContent || "running"),
@@ -138,9 +144,7 @@ for (const file of files) {
 			return el ? el.textContent : null;
 		});
 
-		// No #summary at all means a fixture or a hand-driven repro page, which
-		// is not the same as a suite that hung before it could report.
-		verdict = found === null ? { ok: true, note: "no summary" } : readSummary(found);
+		verdict = found === null ? { ok: false, note: "missing #summary" } : readSummary(found);
 
 		if (found !== null && !verdict.ok) {
 			verdict.fails = await page.evaluate(() =>
@@ -156,15 +160,9 @@ for (const file of files) {
 
 	await page.close();
 
-	// A suite with no #summary is a fixture page, not a failure.
-	if (verdict.note === "no summary") {
-		skipped.push(file);
-		continue;
-	}
-
 	total += verdict.count || 0;
 
-	const bad = !verdict.ok || noise.length;
+	const bad = !verdict.ok || !verdict.count || noise.length;
 
 	if (bad) failures += 1;
 
@@ -180,8 +178,7 @@ server.close();
 
 console.log(
 	`\n${failures ? `${failures} suite(s) failed` : "all suites passed"} — ` +
-		`${total} assertions across ${files.length - skipped.length} suites` +
-		(skipped.length ? `, ${skipped.length} pages had no summary` : "") +
+		`${total} assertions across ${files.length} suites` +
 		(skippedSlow ? `, ${skippedSlow} slow suites skipped (--all to include)` : ""),
 );
 

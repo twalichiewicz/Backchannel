@@ -25,13 +25,14 @@ use to detect updates, so every release bumps it.
 - Sidebar shows discussion and Sync progress in its header, and article
   highlights appear while large comment threads are still being rendered.
 - Reader and Sidebar share captured discussions and coordinate Reddit refreshes
-  across views, avoiding duplicate refresh tabs for the same work.
+  across views, avoiding duplicate refresh tabs for the same work. Interrupted
+  views release their coordination claims so another view can continue.
 - Sync updates existing discussions without clearing comments, drafts or
   expanded replies. A feed refresh no longer interrupts an article click.
 - On mobile, Reader can sync from the Discussion sheet: use the Sources menu,
   or the Sync button when no discussion has been found yet.
 - Search remembers recent queries across Reader and Sidebar, and clearing them
-  keeps an older delayed search from returning.
+  keeps an older delayed search from returning, even when timestamps match.
 - Loading views show the known article details and composer immediately, with
   a subtle discussion skeleton and a header-sized progress strip in Reader.
   The Reddit refresh tab identifies itself and closes when its requests finish.
@@ -45,7 +46,8 @@ use to detect updates, so every release bumps it.
   menu is open.
 - NYT gift links and share links find discussions for the underlying article,
   including when it is read through an archive that identifies the original.
-  Archive.today snapshots can identify it through their Saved from field.
+  Archive.today snapshots can identify it through their Saved from field without
+  mistaking an unrelated search box for the original address.
 - In Safari's Userscripts extension, opening an article in Reader or
   opening the Sidebar on a page refreshes its Reddit discussions through the
   signed-in background tab, instead of relying on an out-of-date archive.

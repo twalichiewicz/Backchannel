@@ -34,6 +34,80 @@ async function assertCaptured(app, fixture) {
 
 const url = STORIES[0].url;
 
+test('archive pages do not treat an article search field as its original URL', { timeout: 30000 }, async () => {
+  const archive = 'https://archive.li/fixture';
+  const app = await launchApp({ sharedStore: true, topHosts: ['archive.li'], settings: { sources: { hn: true }, autoOpenSidebar: true, updateCheck: false } });
+  try {
+    await app.context.route('https://archive.li/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: `<!doctype html><html><head><title>Different article</title><link rel="canonical" href="${archive}"></head><body><article><h1>Different article</h1><form><label>Search <input name="q" value="${url}"></label></form></article></body></html>` }));
+    await app.page.goto(archive);
+    assert(await waitFor(async () => await app.page.locator('#hn-submit-button').count() === 1, 15000), 'the archive lookup finishes without an unrelated discussion');
+    assert.equal(await app.page.locator('#comments-content .comment[data-story-id="9001"]').count(), 0);
+    assert(!app.requests.some((request) => request.url.includes('hn.algolia.com/api/v1/search?') && new URL(request.url).searchParams.get('query') === url), 'the article search field is never used as a lookup address');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
+test('archive Saved-from metadata wins over unrelated search fields', { timeout: 30000 }, async () => {
+  const archive = 'https://archive.li/fixture';
+  const app = await launchApp({ sharedStore: true, topHosts: ['archive.li'], settings: { sources: { hn: true }, autoOpenSidebar: true, updateCheck: false } });
+  try {
+    const toolbar = `<table><tr><td>archive.today<br>webpage capture</td><td>Saved from</td><td><form action="https://archive.li/search/" method="get"><input name="q" value="${url}"><input name="t" type="hidden" value="123"><input name="id" type="hidden" value="fixture"></form></td></tr></table>`;
+    await app.context.route('https://archive.li/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: `<!doctype html><html><head><title>Archived article</title><link rel="canonical" href="${archive}"></head><body><article><form><input name="q" value="${STORIES[1].url}"></form></article>${toolbar}</body></html>` }));
+    await app.page.goto(archive);
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-story-id="9001"]').count() > 0, 15000), 'the verified Saved-from address finds its discussion');
+    assert.equal(await app.page.locator('#comments-content .comment[data-story-id="9002"]').count(), 0, 'an unrelated search field is ignored');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
+test('an archive without verified metadata does not use an unrelated canonical URL', { timeout: 30000 }, async () => {
+  const archive = 'https://archive.li/fixture';
+  const app = await launchApp({ sharedStore: true, topHosts: ['archive.li'], settings: { sources: { hn: true }, autoOpenSidebar: true, updateCheck: false } });
+  try {
+    await app.context.route('https://archive.li/**', (route) => route.fulfill({ status: 200, contentType: 'text/html', body: `<!doctype html><html><head><title>Different article</title><link rel="canonical" href="${url}"></head><body><article><h1>Different article</h1></article></body></html>` }));
+    await app.page.goto(archive);
+    assert(await waitFor(async () => await app.page.locator('#hn-submit-button').count() === 1, 15000));
+    assert(!app.requests.some((request) => request.url.includes('hn.algolia.com/api/v1/search?') && new URL(request.url).searchParams.get('query') === url), 'an unverified canonical does not identify the archived article');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
+test('clearing recent searches respects cross-view order when timestamps tie', { timeout: 30000 }, async () => {
+  let source = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
+  const writer = 'const recentSearchWriter = [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, "0")).join("");';
+  const time = '`${String(Date.now()).padStart(16, "0")}:${recentSearchWriter}';
+  const seam = '\tfunction settingsSearchEntries(shadow, openSettings) {';
+  assert(source.includes(writer) && source.includes(time) && source.includes(seam));
+  source = source.replace(writer, "const recentSearchWriter = location.search.includes('first') ? 'f'.repeat(32) : '0'.repeat(32);").replace(time, '`${String(1700000000000).padStart(16, "0")}:${recentSearchWriter}').replace(seam, `\twindow.__recentSearchProbe = { rememberSearchQuery, clearRecentSearches, loadRecentSearches };\n${seam}`);
+  const app = await launchApp({ source, sharedStore: true, settings: { sources: { hn: true }, frontPageMode: 'sources', updateCheck: false } });
+  try {
+    const other = await app.context.newPage();
+    await Promise.all([app.page.goto('https://backchnnl.app/?first'), other.goto('https://backchnnl.app/?second')]);
+    await Promise.all([app.page.waitForFunction(() => window.__recentSearchProbe), other.waitForFunction(() => window.__recentSearchProbe)]);
+    await app.page.evaluate(() => window.__recentSearchProbe.rememberSearchQuery('earlier private query'));
+    await other.evaluate(() => window.__recentSearchProbe.clearRecentSearches());
+    assert.deepEqual(await other.evaluate(() => window.__recentSearchProbe.loadRecentSearches()), [], 'clearing removes the earlier query even when timestamps are equal');
+    await app.page.evaluate(() => window.__recentSearchProbe.rememberSearchQuery('later query'));
+    assert.deepEqual(await other.evaluate(() => window.__recentSearchProbe.loadRecentSearches()), ['later query'], 'a later query survives the clear');
+    await other.evaluate(() => window.__recentSearchProbe.clearRecentSearches());
+    Object.assign(app.slowSets, { prefix: 'HNewhere:recent_search_event:', query: 'delayed private query', armed: true, ms: 1000 });
+    await app.page.evaluate(() => { window.__recentPending = window.__recentSearchProbe.rememberSearchQuery('delayed private query'); });
+    assert(await waitFor(() => !app.slowSets.armed, 5000));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await other.evaluate(() => window.__recentSearchProbe.clearRecentSearches());
+    await app.page.evaluate(() => window.__recentPending);
+    assert.deepEqual(await other.evaluate(() => window.__recentSearchProbe.loadRecentSearches()), [], 'an older delayed query stays cleared when timestamps tie');
+    Object.assign(app.slowSets, { prefix: 'HNewhere:recent_search_event:', query: '', armed: true, ms: 1000 });
+    await other.evaluate(() => { window.__recentPending = window.__recentSearchProbe.clearRecentSearches(); });
+    assert(await waitFor(() => !app.slowSets.armed, 5000));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.page.evaluate(() => window.__recentSearchProbe.rememberSearchQuery('query after delayed clear'));
+    await other.evaluate(() => window.__recentPending);
+    assert.deepEqual(await other.evaluate(() => window.__recentSearchProbe.loadRecentSearches()), ['query after delayed clear'], 'a query after a delayed clear survives when timestamps tie');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
 test('simultaneous searches in separate views preserve both recent queries', { timeout: 30000 }, async () => {
   const app = await launchApp({ sharedStore: true, settings: { sources: { hn: true }, frontPageMode: 'sources', updateCheck: false } });
   try {
@@ -75,7 +149,7 @@ test('clearing recent searches prevents an older delayed search from returning',
     await new Promise((resolve) => setTimeout(resolve, 30));
     await clear.click();
     assert(await waitFor(() => [...app.store.values()].some((value) => value?.clear), 5000));
-    assert(await waitFor(() => [...app.store.values()].some((value) => value?.query === 'delayed old search'), 5000), 'the delayed write eventually arrives');
+    assert(await waitFor(() => app.slowSets.completed, 5000), 'the delayed write eventually arrives');
     await app.page.locator('#app-rail-search').click();
     assert(await waitFor(async () => await app.page.locator('#app-search-results .app-search-group-name', { hasText: /^Recent searches$/ }).count() === 0, 5000), 'cleared searches do not return');
     assert.deepEqual(app.errors, []);
@@ -102,11 +176,18 @@ test('a delayed clear keeps a search made after the clear', { timeout: 30000 }, 
     await app.page.locator('#app-rail-search').click();
     await input.fill('newer search');
     await input.press('Escape');
-    assert(await waitFor(() => [...app.store.values()].some((value) => value?.clear), 5000), 'the delayed clear eventually arrives');
+    assert(await waitFor(() => app.slowSets.completed && [...app.store.values()].some((value) => value?.clear && !value.pending) && ![...app.store.values()].some((value) => value?.query === 'earlier search'), 5000), 'the delayed clear eventually finishes');
+    await app.page.locator('#app-search-results').evaluate((element) => {
+      window.__recentSearchSnapshots = [];
+      new MutationObserver(() => window.__recentSearchSnapshots.push(element.textContent)).observe(element, { childList: true, subtree: true });
+    });
     await app.page.locator('#app-rail-search').click();
     const recent = app.page.locator('#app-search-results .app-search-item-title');
-    assert(await waitFor(async () => (await recent.allTextContents()).includes('newer search'), 5000), 'the later search remains available');
-    assert(!(await recent.allTextContents()).includes('earlier search'), 'the earlier search stays cleared');
+    assert(await waitFor(async () => {
+      const titles = await recent.allTextContents();
+      return titles.includes('newer search') && !titles.includes('earlier search');
+    }, 5000), 'the later search remains available and the earlier search stays cleared');
+    assert(!(await app.page.evaluate(() => window.__recentSearchSnapshots)).some((text) => text.includes('earlier search')), 'a cleared query is never briefly rendered on reopen');
     assert.deepEqual(app.errors, []);
   } finally { await app.browser.close(); }
 });

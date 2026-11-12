@@ -594,37 +594,68 @@
 	}
 
 	async function withSharedStorageLock(name, task) {
-		if (!(await listKeys())) return task();
+		if (!(await listKeys())) return task({ check: async () => {}, commit: (operation) => operation() });
+		const expired = Symbol("expired shared storage lock");
+		for (;;) {
+			try { return await acquireSharedStorageLock(name, task, expired); }
+			catch (error) { if (error !== expired) throw error; }
+		}
+	}
+
+	async function acquireSharedStorageLock(name, task, expired) {
 		const prefix = `HNewhere:storage_lock:${name}:`;
 		const id = [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 		const key = prefix + id;
-		const expires = () => Date.now() + 120000;
+		const expires = () => Date.now() + 4000;
 		let timer = null;
 		let renewal = Promise.resolve();
-		await save(key, { choosing: true, ticket: 0, expires: expires() });
+		let closed = false;
+		const onPageHide = () => {
+			closed = true;
+			if (timer !== null) clearInterval(timer);
+			forget(key).catch(console.error);
+			renewal.then(() => forget(key)).catch(console.error);
+		};
+		window.addEventListener("pagehide", onPageHide, { once: true });
+		const lease = {
+			async check() {
+				if (closed) throw new DOMException("Page closed", "AbortError");
+				const current = await load(key, null);
+				if (closed) throw new DOMException("Page closed", "AbortError");
+				if (!current || !Number.isFinite(current.expires) || current.expires <= Date.now()) throw expired;
+			},
+			async commit(operation) { await this.check(); return operation(); },
+		};
 		try {
+			await save(key, { choosing: true, ticket: 0, expires: expires() });
+			await lease.check();
 			const keys = await listKeys();
 			if (!keys) throw new Error("Shared storage coordination is unavailable");
 			const candidates = await Promise.all(keys.filter((item) => item.startsWith(prefix) && item !== key).map((item) => load(item, null)));
 			const ticket = 1 + Math.max(0, ...candidates.filter((item) => item?.expires > Date.now()).map((item) => Number(item.ticket) || 0));
-			await save(key, { choosing: false, ticket, expires: expires() });
+			await lease.commit(() => save(key, { choosing: false, ticket, expires: expires() }));
 			timer = window.setInterval(() => {
 				renewal = renewal.then(async () => {
 					const current = await load(key, null);
-					if (current) await save(key, { ...current, expires: expires() });
+					if (!closed && current && Number.isFinite(current.expires) && current.expires > Date.now()) await save(key, { ...current, expires: expires() });
 				}).catch(console.error);
-			}, 15000);
+			}, 1000);
 			const waiting = await listKeys();
 			if (!waiting) throw new Error("Shared storage coordination is unavailable");
 			for (const other of waiting.filter((item) => item.startsWith(prefix) && item !== key)) {
 				for (;;) {
+					await lease.check();
 					const candidate = await load(other, null);
 					if (!candidate || !Number.isFinite(candidate.expires) || candidate.expires <= Date.now() || !candidate.choosing && (!Number.isFinite(candidate.ticket) || candidate.ticket <= 0 || candidate.ticket > ticket || candidate.ticket === ticket && other > key)) break;
 					await new Promise((resolve) => window.setTimeout(resolve, 50));
 				}
 			}
-			return await task();
+			await lease.check();
+			const result = await task(lease);
+			await lease.check();
+			return result;
 		} finally {
+			window.removeEventListener("pagehide", onPageHide);
 			if (timer !== null) clearInterval(timer);
 			await renewal;
 			await forget(key);
@@ -5806,7 +5837,7 @@ ${
 				finally { sharedRefreshSince = previous; }
 			};
 			for (;;) {
-				const decision = await withSharedStorageLock("reddit-refresh", async () => {
+				const decision = await withSharedStorageLock("reddit-refresh", async (lease) => {
 					const held = await load(REDDIT_SHARED_REFRESH_KEY, null);
 					if (!(held?.state === "running" && held.expires > Date.now())) {
 						const sharedPage = await load(SHARED_REDDIT_PAGE_PREFIX + page, null);
@@ -5818,7 +5849,7 @@ ${
 					if (held?.state === "done" && held.ok && held.pageReady && held.page === page && held.owner !== redditViewId && held.id !== consumedSharedRefresh && held.expires > Date.now()) return { reuse: held };
 					if (held?.state === "running" && held.expires > Date.now()) return { held };
 					const claim = { id, owner: redditViewId, page, state: "running", started: Date.now(), expires: Date.now() + 120000 };
-					await save(REDDIT_SHARED_REFRESH_KEY, claim);
+					await lease.commit(() => save(REDDIT_SHARED_REFRESH_KEY, claim));
 					return { claim };
 				});
 				if (decision.reuse) return reuse(decision.reuse);
@@ -5836,9 +5867,9 @@ ${
 				if (!claim) continue;
 				let heartbeat = Promise.resolve();
 				const timer = window.setInterval(() => {
-					heartbeat = heartbeat.then(() => withSharedStorageLock("reddit-refresh", async () => {
+					heartbeat = heartbeat.then(() => withSharedStorageLock("reddit-refresh", async (lease) => {
 						const current = await load(REDDIT_SHARED_REFRESH_KEY, null);
-						if (current?.id === id && current.state === "running") await save(REDDIT_SHARED_REFRESH_KEY, { ...current, expires: Date.now() + 120000 });
+						if (current?.id === id && current.state === "running") await lease.commit(() => save(REDDIT_SHARED_REFRESH_KEY, { ...current, expires: Date.now() + 120000 }));
 					})).catch(console.error);
 				}, 10000);
 				let ok = false;
@@ -5853,8 +5884,8 @@ ${
 					const refreshed = freshRedditPage(page) ? redditPageRefreshes.get(page) : null;
 					const snapshots = await Promise.all((refreshed?.keys || []).map((key) => load(SHARED_THREAD_PREFIX + key, null)));
 					const pageReady = snapshots.length > 0 && snapshots.every((snapshot) => snapshot?.version === 1 && snapshot.at >= claim.started);
-					await withSharedStorageLock("reddit-refresh", async () => {
-						if ((await load(REDDIT_SHARED_REFRESH_KEY, null))?.id === id) await save(REDDIT_SHARED_REFRESH_KEY, { ...claim, state: "done", ok, pageReady, expires: Date.now() + THREAD_TTL });
+					await withSharedStorageLock("reddit-refresh", async (lease) => {
+						if ((await load(REDDIT_SHARED_REFRESH_KEY, null))?.id === id) await lease.commit(() => save(REDDIT_SHARED_REFRESH_KEY, { ...claim, state: "done", ok, pageReady, expires: Date.now() + THREAD_TTL }));
 					});
 				}
 			}
@@ -9487,10 +9518,24 @@ button {
 			return appSubject.canonical;
 		}
 
-		if (isArchiveHost(location.hostname) && location.hostname.toLowerCase().replace(/^www\./, "") !== "web.archive.org") {
-			const savedFrom = document.querySelector('input[name="q"]')?.value || "";
-
-			if (savedFrom && archivedOriginalURL(pageHref(), savedFrom)) return savedFrom;
+		if (isArchiveHost(location.hostname)) {
+			const saved = new Set();
+			for (const form of document.querySelectorAll("form[action]")) {
+				if (form.closest("article, main")) continue;
+				let action;
+				try { action = new URL(form.getAttribute("action"), location.href); } catch { continue; }
+				if (!/^https?:$/.test(action.protocol) || !isArchiveHost(action.hostname) || action.pathname.replace(/\/+$/, "") !== "/search") continue;
+				const cell = form.closest("td");
+				const cells = [...(cell?.parentElement?.children || [])];
+				const position = cells.indexOf(cell);
+				if (position < 0 || !cells.slice(0, position).some((item) => /^saved from:?$/i.test(item.textContent.trim()))) continue;
+				const snapshot = form.querySelector('input[name="id"]')?.getAttribute("value") || "";
+				const shortPath = /^\/([a-z0-9]{5,})\/?$/i.exec(location.pathname)?.[1] || "";
+				if (snapshot && shortPath && snapshot !== shortPath) continue;
+				const address = form.querySelector('input[name="q"]')?.getAttribute("value") || "";
+				if (address && archivedOriginalURL(pageHref(), address)) saved.add(address);
+			}
+			return saved.size === 1 ? [...saved][0] : location.href;
 		}
 
 		return (
@@ -15826,6 +15871,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		}
 
 		state.searchRows = state.rows?.length ? state.rows : state.searchRows || [];
+		state.recentSearches = [];
 		setBrowseSearchOpen(ui, true);
 		const sequence = state.searchSequence;
 		const [queue, documents, hidden, settings, front, recent] = await Promise.all([loadQueue(), loadCollectionDocuments(), loadHiddenStoryKeys(), loadSettings(), state.rows?.length ? null : loadFrontPages(), loadRecentSearches()]);
@@ -38665,6 +38711,7 @@ ${settingsModalHTML()}
 		}
 
 		const state = appState;
+		state.recentSearches = [];
 		const sequence = state.searchSequence = (state.searchSequence || 0) + 1;
 		Promise.all([indexAppLists(), loadRecentSearches()]).then(([, recent]) => {
 			if (appState !== state || page.hidden || state.searchSequence !== sequence) return;
@@ -39211,6 +39258,7 @@ ${note ? appShortcutNoteHTML(note) : ""}
 	let recentSearchSequence = 0;
 	const recentSearchWriter = [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 	const RECENT_SEARCH_EVENT = "HNewhere:recent_search_event:";
+	const RECENT_SEARCH_SERIAL = "HNewhere:recent_search_serial";
 
 	function recentSearchQuery(value) {
 		return typeof value === "string" ? value.trim().replace(/\s+/g, " ").slice(0, 200) : "";
@@ -39226,46 +39274,71 @@ ${note ? appShortcutNoteHTML(note) : ""}
 		}).slice(0, 8);
 	}
 
-	async function loadRecentSearches() {
-		await recentSearchWrites.catch(() => {});
+	async function reconcileRecentSearches(lease, preferredKey = "") {
 		const stored = await load(STORAGE.recentSearches, []);
 		const legacy = Array.isArray(stored) ? stored : stored?.items?.map((item) => typeof item === "string" ? item : item?.query);
-		const keys = (await listKeys())?.filter((key) => key.startsWith(RECENT_SEARCH_EVENT)).sort().reverse() || [];
-		const events = await Promise.all(keys.map((key) => load(key, null)));
+		const listed = await listKeys();
+		if (!listed) return normalizeRecentSearches(legacy);
+		const keys = listed.filter((key) => key.startsWith(RECENT_SEARCH_EVENT));
+		const entries = await Promise.all(keys.map(async (key) => ({ key, event: await load(key, null) })));
+		const pending = entries.filter((entry) => entry.event?.pending).sort((a, b) => a.key === preferredKey ? 1 : b.key === preferredKey ? -1 : a.key < b.key ? -1 : 1);
+		let serial = Number(await load(RECENT_SEARCH_SERIAL, 0)) || 0;
+		for (const entry of pending) {
+			serial++;
+			await lease.commit(() => save(RECENT_SEARCH_SERIAL, serial));
+			entry.event = { ...entry.event, serial, pending: false };
+			await lease.commit(() => save(entry.key, entry.event));
+		}
+		entries.sort((a, b) => {
+			const first = String(a.event?.order || a.key.slice(RECENT_SEARCH_EVENT.length));
+			const second = String(b.event?.order || b.key.slice(RECENT_SEARCH_EVENT.length));
+			const aTime = first.slice(0, 16);
+			const bTime = second.slice(0, 16);
+			if (aTime !== bTime) return aTime > bTime ? -1 : 1;
+			const aFine = Number(a.event?.fineTime);
+			const bFine = Number(b.event?.fineTime);
+			if (Number.isFinite(aFine) && Number.isFinite(bFine) && aFine !== bFine) return bFine - aFine;
+			const bySerial = (Number(b.event?.serial) || 0) - (Number(a.event?.serial) || 0);
+			return bySerial || (first === second ? 0 : first > second ? -1 : 1);
+		});
 		const recent = [];
 		const seen = new Set();
 		const discard = [];
 		let cleared = false;
-		for (let index = 0; index < keys.length; index++) {
-			const event = events[index];
+		for (const { key, event } of entries) {
 			if (event?.clear && !cleared) { cleared = true; continue; }
 			const query = recentSearchQuery(event?.query);
 			const normalized = query.toLowerCase();
-			if (cleared || !query || seen.has(normalized) || recent.length >= 8) { discard.push(keys[index]); continue; }
+			if (cleared || !query || seen.has(normalized) || recent.length >= 8) { discard.push(key); continue; }
 			seen.add(normalized);
 			recent.push(query);
 		}
 		if (!cleared) recent.push(...normalizeRecentSearches(legacy).filter((query) => !seen.has(query.toLowerCase())));
-		if (discard.length) forgetMany(discard).catch(console.error);
+		else await lease.commit(() => forget(STORAGE.recentSearches));
+		if (discard.length) await lease.commit(() => forgetMany(discard));
 		return recent.slice(0, 8);
+	}
+
+	async function loadRecentSearches() {
+		await recentSearchWrites.catch(() => {});
+		return withSharedStorageLock("recent-search-order", (lease) => reconcileRecentSearches(lease));
 	}
 
 	function recordRecentSearch(query, clear = false) {
 		const order = `${String(Date.now()).padStart(16, "0")}:${recentSearchWriter}:${String(++recentSearchSequence).padStart(12, "0")}`;
-		const event = { order, query, clear };
-		const pending = save(RECENT_SEARCH_EVENT + order, event);
+		const fineTime = Number.isFinite(performance.timeOrigin) ? performance.timeOrigin + performance.now() : Date.now();
+		const event = { order, query, clear, fineTime, pending: true };
+		const key = RECENT_SEARCH_EVENT + order;
+		const pending = save(key, event);
 		recentSearchWrites = Promise.all([recentSearchWrites.catch(() => {}), pending]).then(async () => {
 			const keys = await listKeys();
 			if (!keys) {
 				const previous = normalizeRecentSearches(await load(STORAGE.recentSearches, []));
 				await save(STORAGE.recentSearches, clear ? [] : normalizeRecentSearches([query, ...previous]));
-				await forget(RECENT_SEARCH_EVENT + order);
+				await forget(key);
 				return;
 			}
-			if (clear) {
-				await forget(STORAGE.recentSearches);
-				await forgetMany(keys.filter((key) => key.startsWith(RECENT_SEARCH_EVENT) && key < RECENT_SEARCH_EVENT + order));
-			}
+			await withSharedStorageLock("recent-search-order", (lease) => reconcileRecentSearches(lease, key));
 		});
 		return recentSearchWrites;
 	}
