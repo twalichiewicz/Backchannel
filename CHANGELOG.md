@@ -20,13 +20,17 @@ use to detect updates, so every release bumps it.
 - NYT gift links and share links find discussions for the underlying article,
   including when it is read through an archive that identifies the original.
   Archive.today snapshots can identify it through their Saved from field.
-- In Safari's Userscripts extension, opening a Reddit article in Reader or
+- In Safari's Userscripts extension, opening an article in Reader or
   opening the Sidebar on a page refreshes its Reddit discussions through the
   signed-in background tab, instead of relying on an out-of-date archive.
 - On Discourse, scrolling between posts in a topic keeps the sidebar in place,
   and a direct post link searches for the topic's discussions too.
 - URL parameters excluded by a page's canonical address no longer reload the
-  sidebar when the site adds them after the page opens.
+  sidebar when the site adds them after the page opens; changing an existing
+  non-tracking parameter now reloads the lookup for the new address.
+- A previous Reader lookup no longer clears the loading status for a newer one.
+- Leftover Collection identity metadata from the unreleased matching experiment
+  is removed while saved pages and their other data are kept.
 
 ## [1.6.18.4] — 2026-11-10
 

@@ -2030,6 +2030,22 @@
 
 	const mutateCollected = serializeMutations(loadCollected, saveCollected);
 
+	async function cleanupRetiredArticleIdentity() {
+		const key = "HNewhere:retired_identity_cleaned";
+		if (await load(key, false)) return;
+		await mutateCollected((entries) => {
+			let changed = false;
+			const next = entries.map((entry) => {
+				if (!["identityAddresses", "identityAddressesV2", "identitySignatureV2", "identityVersion"].some((name) => Object.prototype.hasOwnProperty.call(entry, name))) return entry;
+				const { identityAddresses, identityAddressesV2, identitySignatureV2, identityVersion, ...kept } = entry;
+				changed = true;
+				return kept;
+			});
+			return changed ? next : undefined;
+		});
+		await save(key, true);
+	}
+
 	const COLLECTION_FILED_KEY = "HNewhere:collection_filed";
 
 	async function fileSavedOnce() {
@@ -5452,11 +5468,7 @@ ${
 
 		if (/^\/r\/[a-z0-9_+]+\.json$/i.test(url.pathname)) allowed = only("limit") && limit(100);
 		else if (url.pathname === "/api/info.json") allowed = only("url", "id") && keys.length === 1 && (article(params.get("url")) || /^t3_[a-z0-9]+$/i.test(params.get("id") || ""));
-		else if (url.pathname === "/search.json") {
-			const query = params.get("q") || "";
-			const title = query.length <= 200 && /^title:[\p{L}\p{N}]{2,}(?: [\p{L}\p{N}]{2,}){2}$/u.test(query);
-			allowed = only("type", "limit", "q") && params.get("type") === "link" && limit(25) && (query.startsWith("url:") && article(query.slice(4)) || title);
-		}
+		else if (url.pathname === "/search.json") allowed = only("type", "limit", "q") && params.get("type") === "link" && limit(25) && params.get("q")?.startsWith("url:") && article(params.get("q").slice(4));
 		else if (/^\/(?:r\/[a-z0-9_]+\/)?comments\/[a-z0-9]+(?:\/[^/?#]+)?\/?\.json$/i.test(url.pathname)) allowed = only("limit", "sort") && limit(500) && (!params.has("sort") || params.get("sort") === "confidence");
 		else if (url.pathname === "/api/morechildren.json") allowed = only("api_type", "link_id", "sort", "children") && params.get("api_type") === "json" && /^t3_[a-z0-9]+$/i.test(params.get("link_id") || "") && (!params.has("sort") || params.get("sort") === "confidence") && /^[a-z0-9]+(?:,[a-z0-9]+)*$/i.test(params.get("children") || "") && params.get("children").split(",").length <= 100;
 		return allowed ? url.pathname + url.search : null;
@@ -9034,14 +9046,26 @@ button {
 		return appSubject ? canonicalPageURL(pageHref(), canonicalHint()) : livePageAddress(pageHref());
 	}
 
+	let queryRoutePath = "";
+	let queryRouteKeys = new Set();
+
 	function livePageAddress(href) {
 		const hint = document.querySelector('link[rel~="canonical" i]')?.href ||
 			document.querySelector('meta[property="og:url" i]')?.content || "";
 		const generator = document.querySelector('meta[name="generator" i]')?.content || "";
-
-		return /^discourse(?:\s|$)/i.test(generator)
+		const address = /^discourse(?:\s|$)/i.test(generator)
 			? discoursePageURL(href, hint)
 			: canonicalPageURL(href, hint);
+		try {
+			const page = new URL(href);
+			if (page.origin + page.pathname !== queryRoutePath) return address;
+			const resolved = new URL(address);
+			for (const key of queryRouteKeys) {
+				resolved.searchParams.delete(key);
+				for (const value of page.searchParams.getAll(key)) resolved.searchParams.append(key, value);
+			}
+			return resolved.href;
+		} catch { return address; }
 	}
 
 	function pageAddresses() {
@@ -38803,7 +38827,7 @@ ${frontPageChooserHTML()}
 		markQueueArrival(url).catch(console.error);
 
 		const liveReddit = usesRedditReadWindow() && redditReadNoticeAccepted && redditReadSourceOn &&
-			Boolean(navigator.userActivation?.isActive) && [entry.story, ...(entry.also || [])].some((item) => item?.source === "reddit");
+			Boolean(navigator.userActivation?.isActive);
 		const liveRead = liveReddit ? beginRedditDiscussionRead() : null;
 
 		try {
@@ -38946,7 +38970,7 @@ ${frontPageChooserHTML()}
 		} catch (error) {
 			console.error(error);
 		} finally {
-			clearSidebarStage(ui);
+			if (generation === sidebarGeneration) clearSidebarStage(ui);
 		}
 	}
 
@@ -44366,6 +44390,21 @@ ${frontPageChooserHTML()}
 				return;
 			}
 
+			try {
+				const previous = new URL(currentHref);
+				const next = new URL(location.href);
+				if (previous.origin !== next.origin || previous.pathname !== next.pathname) {
+					queryRoutePath = "";
+					queryRouteKeys.clear();
+				} else {
+					for (const key of new Set(previous.searchParams.keys())) {
+						if (!isTrackingParam(key) && next.searchParams.has(key) && JSON.stringify(previous.searchParams.getAll(key)) !== JSON.stringify(next.searchParams.getAll(key))) {
+							queryRoutePath = next.origin + next.pathname;
+							queryRouteKeys.add(key);
+						}
+					}
+				}
+			} catch {}
 			currentHref = location.href;
 
 			const nextURL = normalizeURL(livePageAddress(currentHref));
@@ -44426,6 +44465,7 @@ ${frontPageChooserHTML()}
 		await migrateQueue();
 
 		await fileSavedOnce().catch(console.error);
+		await cleanupRetiredArticleIdentity().catch(console.error);
 
 		const bridge = writeBridgeForHost(writeBridges(), location.hostname);
 		const onHN = location.hostname === "news.ycombinator.com";

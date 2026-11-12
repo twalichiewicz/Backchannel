@@ -68,7 +68,7 @@ no persistent identifier attached.
 - Reddit sends the pages you visit to reddit.com, and if you're
 signed in to Reddit, those requests arrive as your account. Signed out, they carry a long-lived device identifier
 instead. In Safari's Userscripts extension, live reads happen in a temporary
-Reddit tab when your article list loads, you open a Reddit item in Reader,
+Reddit tab when your article list loads, you open an article in Reader,
 you open the Sidebar on a page, you press Sync, or you load more replies,
 using your Reddit login after you confirm the introduction.
 Voting and replying go through that same session, and only when you press something.

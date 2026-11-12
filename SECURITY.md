@@ -182,7 +182,7 @@ Worth stating plainly, because the permissions are broad by necessity:
   and 1.6.18.2 used a popup window. Article lists then try automatically on
   their first load; later refreshes start with Sync, or with a pull on a phone.
   The introduction's dismissal or confirmation is stored locally with the app's
-  data and survives cache cleanup. Opening a Reddit item in Reader, opening the
+  data and survives cache cleanup. Opening an article in Reader, opening the
   Sidebar on a page, pressing Sync or loading more replies can also open the tab.
   Background page discovery opens no tab and can use cached content or the
   existing archive fallback.
@@ -268,7 +268,7 @@ with its address as `<page>`.
 | Hacker News (vote, reply, submit) | popup window on `news.ycombinator.com` | the one story or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
 | Reddit | `GET www.reddit.com/search.json?type=link&limit=25&q=<page>` | `<page>` | May carry Reddit session or device cookies when your browser and userscript manager permit them. A signed-in Reddit tab does not guarantee that these requests share its session |
 | Reddit (fallback) | `GET arctic-shift.photon-reddit.com<path>` | the same lookup, against an archive mirror | No identifier, no session |
-| Reddit (Safari Userscripts reads) | a background tab on `www.reddit.com`, opened and closed by the extension, using `GET /api/me.json` internally, then supported listing, lookup, thread and more-replies endpoints | the topics, article address or thread requested by initial article-list loading, opening a Reddit item or Sidebar, Sync, a pull on a phone or loading more replies, after confirming the introduction; no tab for background page discovery | Yes, using the existing Reddit session. Account details stay in the Reddit tab; only allowed public fields and rate-limit metadata return |
+| Reddit (Safari Userscripts reads) | a background tab on `www.reddit.com`, opened and closed by the extension, using `GET /api/me.json` internally, then supported listing, lookup, thread and more-replies endpoints | the topics, article address or thread requested by initial article-list loading, opening an article or Sidebar, Sync, a pull on a phone or loading more replies, after confirming the introduction; no tab for background page discovery | Yes, using the existing Reddit session. Account details stay in the Reddit tab; only allowed public fields and rate-limit metadata return |
 | Reddit (vote, reply, submit) | popup window on `old.reddit.com` | the one post or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
 | Bluesky | `GET constellation.microcosm.blue/links/all?target=<page>` | `<page>`, plus a `User-Agent` naming Backchannel and its version | No |
 | Bluesky | `GET constellation.microcosm.blue/xrpc/blue.microcosm.links.getBacklinks?subject=<page>&source=...&limit=100` | `<page>` | No |
