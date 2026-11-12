@@ -344,6 +344,7 @@ export async function launchApp({
 	launchOptions = {},
 	injectDelay = 0,
 	slowGets = { key: "", ms: 0, armed: false },
+	slowSets = { prefix: "", ms: 0, armed: false },
 } = {}) {
 	const pageFor = (url) => (pages[url] ? { status: pages[url].status ?? 200, headers: pages[url].headers || {}, html: pages[url].html, body: pages[url].body, fetch: pages[url].fetch } : articleFor(url));
 
@@ -404,6 +405,13 @@ export async function launchApp({
 
 	await context.exposeFunction("__gmStore", async (op, key, value) => {
 		if (op === "get") {
+			const snapshot = store.has(key) ? { has: true, value: store.get(key) } : { has: false };
+			if (slowGets.armed && slowGets.key === key && slowGets.afterRead) {
+				const ms = slowGets.delays?.shift() ?? slowGets.ms;
+				if (!slowGets.delays?.length) slowGets.armed = false;
+				await new Promise((resolve) => setTimeout(resolve, ms));
+				return snapshot;
+			}
 			if (slowGets.armed && slowGets.key === key) {
 				slowGets.armed = false;
 				await new Promise((resolve) => setTimeout(resolve, slowGets.ms));
@@ -426,6 +434,10 @@ export async function launchApp({
 			return [...store.keys()];
 		}
 
+		if (slowSets.armed && key.startsWith(slowSets.prefix) && (!slowSets.query || value?.query === slowSets.query)) {
+			slowSets.armed = false;
+			await new Promise((resolve) => setTimeout(resolve, slowSets.ms));
+		}
 		store.set(key, value);
 		return true;
 	});
@@ -440,7 +452,7 @@ export async function launchApp({
 	page.on("pageerror", (error) => errors.push(error.message));
 	context.on("page", (other) => other.on("pageerror", (error) => errors.push(error.message)));
 
-	return { browser, context, page, errors, requests, store, slowGets };
+	return { browser, context, page, errors, requests, store, slowGets, slowSets };
 }
 
 export function reporter() {

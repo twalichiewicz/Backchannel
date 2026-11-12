@@ -40,7 +40,7 @@
 ## Usage
 1. Browse the web as usual. If a thread exists for that page the (BC) button lights up, letting you know people are discussing this site. 
 2. You can visit [backchnnl.app](https://backchnnl.app) once you have the script installed to have a customizable front page you can bookmark.
-3. You can directly upload to Hacker News and Reddit using the **↑** button.
+3. Open the Sidebar to read discussions and use the reply or vote controls for supported sources.
 4. Reddit is [changing access for other apps](https://support.reddithelp.com/hc/en-us/articles/54353370049684-Changelog-October-8-2026).
    Backchannel's illustrated introduction explains the updated connection.
    Choose **Continue** to start. When your Reddit session needs refreshing,

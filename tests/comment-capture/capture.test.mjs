@@ -34,6 +34,83 @@ async function assertCaptured(app, fixture) {
 
 const url = STORIES[0].url;
 
+test('simultaneous searches in separate views preserve both recent queries', { timeout: 30000 }, async () => {
+  const app = await launchApp({ sharedStore: true, settings: { sources: { hn: true }, frontPageMode: 'sources', updateCheck: false } });
+  try {
+    const second = await app.context.newPage();
+    await Promise.all([app.page.goto('https://backchnnl.app/'), second.goto('https://backchnnl.app/')]);
+    await Promise.all([app.page.locator('#app-rail-search').click(), second.locator('#app-rail-search').click()]);
+    const firstInput = app.page.locator('#app-search-input');
+    const secondInput = second.locator('#app-search-input');
+    await Promise.all([firstInput.fill('alpha recent'), secondInput.fill('beta recent')]);
+    Object.assign(app.slowGets, { key: 'HNewhere:recent_searches', armed: true, afterRead: true, delays: [500, 500] });
+    await Promise.all([firstInput.press('Escape'), secondInput.press('Escape')]);
+    await app.page.locator('#app-rail-search').click();
+    assert(await waitFor(async () => {
+      const recent = await app.page.locator('#app-search-results .app-search-item-title').allTextContents();
+      return recent.includes('alpha recent') && recent.includes('beta recent');
+    }, 6000), 'both recent searches are retained');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
+test('clearing recent searches prevents an older delayed search from returning', { timeout: 30000 }, async () => {
+  const app = await launchApp({ sharedStore: true, settings: { sources: { hn: true }, frontPageMode: 'sources', updateCheck: false } });
+  try {
+    const second = await app.context.newPage();
+    await Promise.all([app.page.goto('https://backchnnl.app/'), second.goto('https://backchnnl.app/')]);
+    await app.page.locator('#app-rail-search').click();
+    const input = app.page.locator('#app-search-input');
+    await input.fill('earlier search');
+    await input.press('Escape');
+    assert(await waitFor(() => [...app.store.values()].some((value) => value?.query === 'earlier search'), 5000));
+    await second.locator('#app-rail-search').click();
+    const clear = second.locator('#app-search-results').getByRole('button', { name: 'Clear recent searches' });
+    await clear.waitFor();
+    await app.page.locator('#app-rail-search').click();
+    await input.fill('delayed old search');
+    Object.assign(app.slowSets, { prefix: 'HNewhere:recent_search_event:', query: 'delayed old search', armed: true, ms: 1500 });
+    await input.press('Escape');
+    assert(await waitFor(() => !app.slowSets.armed, 5000), 'the older write is delayed');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await clear.click();
+    assert(await waitFor(() => [...app.store.values()].some((value) => value?.clear), 5000));
+    assert(await waitFor(() => [...app.store.values()].some((value) => value?.query === 'delayed old search'), 5000), 'the delayed write eventually arrives');
+    await app.page.locator('#app-rail-search').click();
+    assert(await waitFor(async () => await app.page.locator('#app-search-results .app-search-group-name', { hasText: /^Recent searches$/ }).count() === 0, 5000), 'cleared searches do not return');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
+test('a delayed clear keeps a search made after the clear', { timeout: 30000 }, async () => {
+  const app = await launchApp({ sharedStore: true, settings: { sources: { hn: true }, frontPageMode: 'sources', updateCheck: false } });
+  try {
+    const second = await app.context.newPage();
+    await Promise.all([app.page.goto('https://backchnnl.app/'), second.goto('https://backchnnl.app/')]);
+    await app.page.locator('#app-rail-search').click();
+    const input = app.page.locator('#app-search-input');
+    await input.fill('earlier search');
+    await input.press('Escape');
+    assert(await waitFor(() => [...app.store.values()].some((value) => value?.query === 'earlier search'), 5000));
+    await second.locator('#app-rail-search').click();
+    const clear = second.locator('#app-search-results').getByRole('button', { name: 'Clear recent searches' });
+    await clear.waitFor();
+    Object.assign(app.slowSets, { prefix: 'HNewhere:recent_search_event:', armed: true, ms: 1500 });
+    await clear.click();
+    assert(await waitFor(() => !app.slowSets.armed, 5000), 'the clear is delayed');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.page.locator('#app-rail-search').click();
+    await input.fill('newer search');
+    await input.press('Escape');
+    assert(await waitFor(() => [...app.store.values()].some((value) => value?.clear), 5000), 'the delayed clear eventually arrives');
+    await app.page.locator('#app-rail-search').click();
+    const recent = app.page.locator('#app-search-results .app-search-item-title');
+    assert(await waitFor(async () => (await recent.allTextContents()).includes('newer search'), 5000), 'the later search remains available');
+    assert(!(await recent.allTextContents()).includes('earlier search'), 'the earlier search stays cleared');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
 test('recent search queries are reusable and shared between Reader and Sidebar', { timeout: 60000 }, async () => {
   const app = await launchApp({ sharedStore: true, topHosts: [new URL(url).hostname], settings: { sources: { hn: true }, autoOpenSidebar: true, frontPageMode: 'sources', updateCheck: false } });
   const recent = (page, root) => page.locator(`${root} .app-search-group`).filter({ has: page.locator('.app-search-group-name', { hasText: /^Recent searches$/ }) });
@@ -74,7 +151,7 @@ test('recent search queries are reusable and shared between Reader and Sidebar',
     await sidebarRecent.getByRole('button', { name: 'Clear recent searches' }).click();
     assert.equal(await sidebarRecent.count(), 0, 'recent searches can be cleared');
     assert(await sidebarInput.evaluate((element) => element.getRootNode().activeElement === element), 'clearing returns keyboard focus to Search');
-    assert(await waitFor(() => Array.isArray(app.store.get('HNewhere:recent_searches')) && app.store.get('HNewhere:recent_searches').length === 0, 5000), 'clearing removes the shared history');
+    assert(await waitFor(() => !app.store.has('HNewhere:recent_searches') && [...app.store.entries()].some(([key, value]) => key.startsWith('HNewhere:recent_search_event:') && value?.clear), 5000), 'clearing removes the shared history');
     await input.press('Escape');
     await app.page.locator('#app-rail-search').click();
     assert(await waitFor(async () => await readerRecent.count() === 0, 5000), 'clearing applies to Reader too');

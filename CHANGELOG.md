@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
-## [1.6.18.5] — 2026-11-11
+## [1.6.18.5] — 2026-11-12
 
 ### Fixed
 
@@ -24,6 +24,12 @@ use to detect updates, so every release bumps it.
   times out remain available.
 - Sidebar shows discussion and Sync progress in its header, and article
   highlights appear while large comment threads are still being rendered.
+- Reader and Sidebar share captured discussions and coordinate Reddit refreshes
+  across views, avoiding duplicate refresh tabs for the same work.
+- Sync updates existing discussions without clearing comments, drafts or
+  expanded replies. A feed refresh no longer interrupts an article click.
+- Search remembers recent queries across Reader and Sidebar, and clearing them
+  keeps an older delayed search from returning.
 - Loading views show the known article details and composer immediately, with
   a subtle discussion skeleton and a header-sized progress strip in Reader.
   The Reddit refresh tab identifies itself and closes when its requests finish.

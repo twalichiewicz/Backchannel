@@ -3,6 +3,25 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { launchApp, STORIES, waitFor } from "./harness.mjs";
 
+test('shared storage coordination serializes competing views and ignores expired claims', { timeout: 30000 }, async () => {
+  const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
+  const seam = '\tasync function loadCollapsed() {';
+  assert(original.includes(seam));
+  const source = original.replace(seam, `\twindow.__storageLockProbe = () => withSharedStorageLock('test-probe', async () => {\n\t\tconst previous = await load('test-probe-counter', 0);\n\t\tawait new Promise((resolve) => setTimeout(resolve, 30));\n\t\tawait save('test-probe-counter', previous + 1);\n\t});\n${seam}`);
+  const app = await launchApp({ source, sharedStore: true, topHosts: [new URL(STORIES[0].url).hostname], settings: { sources: { hn: true }, updateCheck: false } });
+  try {
+    app.store.set('HNewhere:storage_lock:test-probe:expired', { choosing: true, ticket: 0, expires: Date.now() - 1000 });
+    const pages = [app.page, ...await Promise.all(Array.from({ length: 3 }, () => app.context.newPage()))];
+    await Promise.all(pages.map((page, index) => page.goto(index % 2 ? STORIES[0].url : 'https://backchnnl.app/')));
+    await Promise.all(pages.map((page) => page.evaluate(async () => {
+      while (!window.__storageLockProbe) await new Promise((resolve) => setTimeout(resolve, 20));
+      for (let index = 0; index < 4; index++) await window.__storageLockProbe();
+    })));
+    assert.equal(app.store.get('test-probe-counter'), 16, 'all views enter the critical section separately');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
 test('the Reddit title advances when background timers run once per spinner cycle', { timeout: 30000 }, async () => {
   const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
   const seam = 'const titleTimer = window.setInterval(tickTitle, 200);';
@@ -86,7 +105,7 @@ test('Reader opens an article when the feed refreshes during a click', { timeout
   } finally { releaseReddit(); await app.browser.close(); }
 });
 
-test('concurrent Reader and Sidebar syncs share one Reddit refresh', { timeout: 60000 }, async () => {
+for (const delayedLease of [false, true]) test(`concurrent Reader and Sidebar syncs share one Reddit refresh${delayedLease ? ' with delayed storage reads' : ''}`, { timeout: 60000 }, async () => {
   const url = STORIES[0].url;
   const now = Math.floor(Date.now() / 1000);
   const post = { id: 'freshpost', url, title: STORIES[0].title, author: 'reader', subreddit: 'news', subreddit_name_prefixed: 'r/news', permalink: '/r/news/comments/freshpost/article/', num_comments: 1, created_utc: now - 3600, score: 100 };
@@ -136,14 +155,21 @@ test('concurrent Reader and Sidebar syncs share one Reddit refresh', { timeout: 
     assert.equal(opened.filter((page) => page !== article).length, earlierTabs, `reopening Sidebar reuses the Reader refresh without another Reddit tab: ${JSON.stringify(sharedBeforeArticle)}; ${JSON.stringify(priorRefresh)} => ${JSON.stringify(app.store.get('HNewhere:reddit_shared_refresh'))}`);
     opened.length = 0;
     slow = true;
-    await app.page.locator('#app-list-sync').click();
-    assert(await waitFor(() => opened.length > 0, 5000));
-    await article.locator('#browse-home-sync').click();
+    if (delayedLease) {
+      app.store.delete('HNewhere:reddit_shared_refresh');
+      app.store.delete('HNewhere:reddit_page_cache:framed.example.com/gc');
+      Object.assign(app.slowGets, { key: 'HNewhere:reddit_shared_refresh', armed: true, afterRead: true, delays: [200, 700] });
+      await Promise.all([app.page.locator('#app-list-sync').click(), article.locator('#browse-home-sync').click()]);
+    } else {
+      await app.page.locator('#app-list-sync').click();
+      assert(await waitFor(() => opened.length > 0, 5000));
+      await article.locator('#browse-home-sync').click();
+    }
     await new Promise((resolve) => setTimeout(resolve, 1500));
     assert.equal(opened.length, 1, 'concurrent refreshes must not open separate Reddit tabs');
     assert(await waitFor(() => opened.every((page) => page.isClosed()), 30000), 'the shared refresh closes its tab');
     assert(await waitFor(async () => /A freshly synced shared comment/.test(await article.locator('#comments-content').textContent()), 15000), 'Sidebar receives the refreshed comment');
-    assert.match(await app.page.locator('#comments-content').textContent(), /A freshly synced shared comment/, 'Reader receives the refreshed comment');
+    assert(await waitFor(async () => /A freshly synced shared comment/.test(await app.page.locator('#comments-content').textContent()), 15000), 'Reader receives the refreshed comment');
     assert.equal(requests.filter((path) => path.includes('/comments/')).length, 1, 'the two views share the same Reddit discussion request');
     assert(await waitFor(() => app.store.get('HNewhere:reddit_shared_refresh')?.state === 'done', 10000));
     assert(await waitFor(async () => await app.page.locator('#app-list-sync').getAttribute('aria-busy') !== 'true', 10000), 'the first Sync has finished');
