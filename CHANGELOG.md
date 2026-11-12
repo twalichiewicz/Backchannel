@@ -17,6 +17,10 @@ use to detect updates, so every release bumps it.
 - Large or deeply nested Reddit discussions no longer prevent other discussions
   from loading. Failed or partial discussion loads are identified, and a failed
   request for more replies stays available to retry.
+- The Sources menu identifies discussions that could not load, and the loading
+  view shows progress while discussions are being checked, including when the
+  Reddit background tab needs to stay open. Large queues no longer time out just
+  because earlier Reddit discussions are still loading.
 - Readable Reddit comments stay visible when their authors have deleted their
   accounts, and queued Reddit discussions no longer time out before their own
   requests start.

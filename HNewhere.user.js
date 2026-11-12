@@ -5890,6 +5890,7 @@ ${
 
 	const redditRequests = new Map();
 	let redditRequestQueue = Promise.resolve();
+	let redditQueueDepth = 0;
 	let redditAccessVersion = 0;
 
 	async function redditTier() {
@@ -5921,7 +5922,8 @@ ${
 		});
 		turn.started = started;
 		if (onStart) started.then(onStart);
-		const done = () => redditRequests.delete(key);
+		redditQueueDepth++;
+		const done = () => { redditQueueDepth--; redditRequests.delete(key); };
 
 		redditRequests.set(key, turn);
 		redditRequestQueue = turn.then(done, done);
@@ -8426,7 +8428,7 @@ button {
 				clearTimeout(queueTimer);
 				timer = setTimeout(timeout, THREAD_CEILING_MS);
 			};
-			if (story.source === "reddit") queueTimer = setTimeout(timeout, Math.max(THREAD_CEILING_MS * 6, 120000));
+			if (story.source === "reddit") queueTimer = setTimeout(timeout, Math.max(THREAD_CEILING_MS * 6, (redditQueueDepth + 1) * THREAD_CEILING_MS * 2));
 			else start();
 
 			Promise.resolve(getSource(story.source).loadThread(story, { onStart: start })).then(
@@ -16760,6 +16762,58 @@ header {
 	line-height:1.5;
 }
 
+.discussion-loading {
+	padding:14px 12px;
+	color:var(--meta);
+	font-size:11px;
+}
+
+.discussion-loading-title {
+	text-align:center;
+	font-size:12px;
+}
+
+.discussion-loading-dots {
+	animation:discussion-loading-pulse 1.2s ease-in-out infinite;
+}
+
+.discussion-loading-progress {
+	max-width:280px;
+	margin:10px auto 22px;
+	text-align:center;
+}
+
+.discussion-loading-track {
+	height:3px;
+	border-radius:3px;
+	background:var(--hover-tint);
+	overflow:hidden;
+}
+
+.discussion-loading-track span {
+	display:block;
+	width:0;
+	height:100%;
+	background:var(--accent);
+	transition:width .25s ease;
+}
+
+.discussion-loading-detail { margin-top:5px; }
+.discussion-skeleton-heading { width:72%; height:11px; }
+.discussion-skeleton-meta { width:42%; height:8px; margin-top:7px; }
+.discussion-skeleton-compose { height:54px; margin:18px 0 25px; border:1px solid var(--border-soft); border-radius:5px; }
+.discussion-skeleton-comment { margin:0 0 20px; }
+.discussion-skeleton-comment.is-reply { margin-left:24px; padding-left:10px; border-left:1px solid var(--border-soft); }
+.discussion-skeleton-comment .browse-skeleton-bar:first-child { width:35%; height:8px; }
+.discussion-skeleton-comment .browse-skeleton-bar:nth-child(2) { width:88%; height:10px; margin-top:7px; }
+.discussion-skeleton-comment .browse-skeleton-bar:nth-child(3) { width:64%; height:10px; margin-top:5px; }
+
+@keyframes discussion-loading-pulse { 50% { opacity:.25; } }
+@media (prefers-reduced-motion: reduce) {
+	.discussion-loading-dots { animation:none; }
+	.discussion-loading-track span { transition:none; }
+}
+
 .browse-row-read {
 	opacity:.5;
 }
@@ -17989,11 +18043,22 @@ header > .settings-panel {
 	opacity:.7;
 }
 
-.discussion-load-warning {
-	padding:8px 12px;
+.discussion-source-status {
+	margin:3px 0 0 25px;
 	color:var(--meta);
-	font-size:12px;
-	line-height:1.5;
+	font-size:10px;
+	line-height:1.4;
+}
+
+.discussion-source-badge {
+	position:absolute;
+	top:0;
+	right:0;
+	width:7px;
+	height:7px;
+	border-radius:50%;
+	background:var(--accent);
+	box-shadow:0 0 0 1px var(--bg);
 }
 
 @media (hover: hover) {
@@ -24957,8 +25022,10 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		const waiting = document.createElement("div");
 
-		waiting.className = appState ? "browse-empty app-discussion-empty" : "browse-empty";
-		waiting.textContent = "Loading comments…";
+		waiting.className = "discussion-loading";
+		waiting.innerHTML = `<div class="discussion-loading-title" role="status">Loading comments<span class="discussion-loading-dots">…</span></div>
+<div class="discussion-loading-progress"><div class="discussion-loading-track" role="progressbar" aria-label="Discussions checked" aria-valuemin="0" aria-valuemax="${stories.length}" aria-valuenow="0"><span></span></div><div class="discussion-loading-detail">0 of ${stories.length} discussions checked</div></div>
+<div class="discussion-skeleton" aria-hidden="true"><div class="discussion-skeleton-heading browse-skeleton-bar"></div><div class="discussion-skeleton-meta browse-skeleton-bar"></div><div class="discussion-skeleton-compose"></div>${[0, 1, 2, 3].map((index) => `<div class="discussion-skeleton-comment${index === 1 ? " is-reply" : ""}"><div class="browse-skeleton-bar"></div><div class="browse-skeleton-bar"></div><div class="browse-skeleton-bar"></div></div>`).join("")}</div>`;
 		ui.body.appendChild(waiting);
 
 		setSidebarRestingSubtitle(ui, "");
@@ -24980,6 +25047,13 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			]),
 		);
 		const updateLoadingLabel = () => {
+			if (!waiting.isConnected || generation !== sidebarGeneration || run !== discussionRenderRun) return;
+			const completed = stories.length - pending.size;
+			const progress = waiting.querySelector("[role=progressbar]");
+			progress.setAttribute("aria-valuenow", String(completed));
+			progress.firstElementChild.style.width = (stories.length ? completed / stories.length * 100 : 100) + "%";
+			const readingReddit = redditReadBatch?.connected && !redditReadBatch.closing && stories.some((story) => story.source === "reddit" && pending.has(story.key));
+			waiting.querySelector(".discussion-loading-detail").textContent = completed + " of " + stories.length + " discussions checked" + (readingReddit ? ". Keep the Reddit tab open while it loads." : "");
 			if (pending.size && [...pending].every((key) => slowKeys.has(key))) {
 				const names = [...new Set([...pending].map((key) => nameByKey.get(key)))];
 				setSidebarLoadingLabel(ui, "still loading " + joinNames(names) + "…");
@@ -25034,23 +25108,17 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			});
 		}
 
+		const loadStatus = new Map(stories.flatMap((story, index) => threads[index].empty && Number(story.commentCount) > 0
+			? [[story.key, "unavailable"]]
+			: threads[index].incomplete && !threads[index].empty ? [[story.key, "incomplete"]] : []));
 		const headerElement = renderPageHeader(stories, ui.body, {
 			page,
 			sort: settings.commentSort,
+			loadStatus,
 			onSortChange: () => renderDiscussions(stories, ui),
 		});
 
 		mountFilterBanner(headerElement, ui);
-		const unavailable = stories.filter((story, index) => threads[index].empty && Number(story.commentCount) > 0);
-		const incomplete = stories.filter((story, index) => threads[index].incomplete && !threads[index].empty);
-		if (unavailable.length || incomplete.length) {
-			const warning = document.createElement("div");
-			const names = (rows) => joinNames([...new Set(rows.map((story) => story.label || story.source || "discussion"))]);
-			warning.className = "discussion-load-warning";
-			warning.setAttribute("role", "status");
-			warning.textContent = [unavailable.length ? "Couldn't load comments from " + names(unavailable) + "." : "", incomplete.length ? "Only some comments from " + names(incomplete) + " could be loaded." : "", "Use Sync to retry."].filter(Boolean).join(" ");
-			ui.body.appendChild(warning);
-		}
 
 		sidebarSourceKeys.clear();
 
@@ -25575,6 +25643,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 	function renderPageHeader(stories, container, options = {}) {
 		const sort = options.sort || "best";
+		const loadStatus = options.loadStatus || new Map();
 		const page = options.page ?? discussionsPageTitle(stories);
 		const total = stories.reduce(
 			(sum, story) => sum + (story.commentCount || 0),
@@ -25584,6 +25653,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const wrapper = document.createElement("div");
 
 		const single = stories.length < 2;
+		const hasMenu = stories.length > 1 || loadStatus.size > 0;
 		const pageURL = pageAddress();
 		const pageSave = single
 			? ""
@@ -25599,8 +25669,8 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		wrapper.innerHTML = `
 <div class="page-header-title">${single ? "" : escapeHTML(page)}</div>
 <div class="page-header-meta">${
-	stories.length > 1
-		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <span class="source-menu-anchor"><button type="button" class="page-header-disclosure" aria-expanded="false" aria-haspopup="true" aria-controls="source-menu">${escapeHTML(pluralize(stories.length, "discussion"))}</button>${sourceMenuHTML(stories)}</span><span class="page-header-sep">|</span>`
+	hasMenu
+		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <span class="source-menu-anchor"><button type="button" class="page-header-disclosure" aria-expanded="false" aria-haspopup="true" aria-controls="source-menu"${loadStatus.size ? ` aria-label="${escapeHTML(pluralize(stories.length, "discussion"))}. Some discussions could not be loaded completely. Open sources for details."` : ""}>${stories.length}${loadStatus.size ? "*" : ""} ${stories.length === 1 ? "discussion" : "discussions"}</button>${sourceMenuHTML(stories, loadStatus)}</span>${pageSave ? '<span class="page-header-sep">|</span>' : ""}`
 		: ""
 }${stories.length > 1 && pageSave ? pageSave : ""}</div>
 `;
@@ -25690,7 +25760,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			stories.length > 1
 				? `${pluralize(total, "comment")} across ${pluralize(stories.length, "discussion")}`
 				: pluralize(total, "comment");
-		const anchor = stories.length > 1 ? wrapper.querySelector(".source-menu-anchor") : null;
+		const anchor = wrapper.querySelector(".source-menu-anchor");
 
 		slot.classList.toggle("app-discussion-lone", !anchor);
 
@@ -25705,9 +25775,13 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const hint = document.createElement("div");
 
 		disclosure.innerHTML = APP_DISCUSSIONS_ICON;
+		if (menu.querySelector(".discussion-source-status")) {
+			disclosure.insertAdjacentHTML("beforeend", '<span class="discussion-source-badge" aria-hidden="true"></span>');
+		}
 		disclosure.classList.add("app-head-icon");
-		disclosure.setAttribute("aria-label", summary);
-		disclosure.title = summary;
+		const status = menu.querySelector(".discussion-source-status") ? ". Some discussions could not be loaded; open sources for details." : "";
+		disclosure.setAttribute("aria-label", summary + status);
+		disclosure.title = summary + status;
 		const title = document.createElement("div");
 
 		title.className = "settings-head app-sources-head";
@@ -25871,13 +25945,13 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		}</div>`;
 	}
 
-	function sourceMenuHTML(stories) {
+	function sourceMenuHTML(stories, loadStatus = new Map()) {
 		const name = `source-menu-${(sourceMenuSeq += 1)}`;
 		const option = (key, about, story = null) => `
 <div class="source-menu-entry"><label class="settings-option source-menu-option"${key ? ` data-discussion-key="${escapeHTML(key)}"` : ""}>${discussionChoiceHTML(
 			`<input type="radio" name="${name}"${key ? "" : " checked"}>`,
 			{ ...about, count: null },
-		)}</label>${story ? discussionHintHTML(story, about.count) : ""}</div>`;
+		)}</label>${story ? discussionHintHTML(story, about.count) : ""}${story && loadStatus.has(key) ? `<div class="discussion-source-status">${loadStatus.get(key) === "incomplete" ? "Only some comments could be loaded." : "Couldn't load comments."} Use Sync to retry.</div>` : ""}</div>`;
 
 		return `<div class="source-menu hidden" id="source-menu" role="menu">
 <div class="choice-group">${option("", { label: "All sources" })}</div>

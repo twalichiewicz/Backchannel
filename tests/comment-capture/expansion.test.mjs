@@ -65,8 +65,11 @@ test("unexpandable missing replies are disclosed", { timeout: 30000 }, async () 
   const initial = [comment("root", "t3_fixture0", "Parent"), { kind: "more", data: { children: [], count: 3 } }];
   const app = await openArchive(initial, []);
   try {
-    assert(await waitFor(async () => await app.page.locator("#comments-content .discussion-load-warning").count() === 1, 15000));
-    assert.match(await app.page.locator("#comments-content .discussion-load-warning").textContent(), /only some comments/i);
+    const disclosure = app.page.locator("#comments-content .page-header-disclosure");
+    assert(await waitFor(async () => await disclosure.count() === 1, 15000), "a single affected discussion still has a sources menu");
+    assert.match(await disclosure.textContent(), /1\* discussion/);
+    await disclosure.click();
+    assert.match(await app.page.locator("#comments-content .discussion-source-status").textContent(), /only some comments/i);
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();

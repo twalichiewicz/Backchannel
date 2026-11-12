@@ -32,6 +32,7 @@ test("an oversized live thread falls back without losing other live discussions"
     if (path === "/") body = "<!doctype html><title>Reddit fixture</title>";
     else if (path === "/api/me.json") body = JSON.stringify({ data: { name: "fixture-user", modhash: "private-fixture-token" } });
     else if (path.includes("/comments/")) {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
       const largeThread = path.includes("bigthread");
       const item = largeThread ? liveComment("huge", "x".repeat(2000001), large.id) : liveComment("small", "Other live comment", small.id);
       body = JSON.stringify([{ data: { children: [{ kind: "t3", data: largeThread ? large : small }] } }, { data: { children: [item] } }]);
@@ -44,6 +45,7 @@ test("an oversized live thread falls back without losing other live discussions"
     assert(await waitFor(async () => await app.page.locator("#app-list-body .browse-title-link", { hasText: large.title }).count() > 0, 15000));
     assert(await waitFor(() => opened.length > 0 && opened.every((page) => page.isClosed()), 15000));
     await app.page.locator("#app-list-body .browse-title-link", { hasText: large.title }).first().click();
+    assert(await waitFor(async () => (await app.page.locator("#comments-content").textContent()).includes("Keep the Reddit tab open"), 15000), "the user can see why the Reddit tab is open");
     assert(await waitFor(async () => (await app.page.locator("#comments-content").textContent()).includes("Recovered archive comment"), 20000));
     assert.match(await app.page.locator("#comments-content").textContent(), /Other live comment/, "a local size limit must not hide the next discussion");
     assert(!(app.store.get("HNewhere:reddit_poll")?.until > Date.now()), "a local size limit is not a server rate limit");
