@@ -1,6 +1,69 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { launchApp, waitFor } from "./harness.mjs";
+import { readFile } from "node:fs/promises";
+import { launchApp, STORIES, waitFor } from "./harness.mjs";
+
+test("Sidebar recovers live Reddit comments when the archive has none", { timeout: 45000 }, async () => {
+  const url = STORIES[0].url;
+  const now = Math.floor(Date.now() / 1000);
+  const post = { id: 'freshpost', url, title: STORIES[0].title, author: 'reader', subreddit: 'news', subreddit_name_prefixed: 'r/news', permalink: '/r/news/comments/freshpost/article/', num_comments: 2, created_utc: now - 3600, score: 100 };
+  const comment = { kind: 't1', data: { id: 'freshcomment', body: 'A live comment missing from the archive', author: 'reader', parent_id: 't3_freshpost', link_id: 't3_freshpost', created_utc: now - 60, replies: '' } };
+  const app = await launchApp({ appHost: new URL(url).hostname, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com'], settings: { sources: { hn: false, reddit: true }, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
+    { match: (path) => path.includes('/api/posts/search'), json: { data: [{ ...post, num_comments: 0 }] } },
+    { match: (path) => path.includes('/api/comments/tree'), json: { data: [] } },
+  ] });
+  await app.context.route('https://www.reddit.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    let body;
+    if (path === '/') body = '<!doctype html><title>Reddit fixture</title>';
+    else if (path === '/api/me.json') body = JSON.stringify({ data: { name: 'fixture-user' } });
+    else if (path.includes('/comments/')) body = JSON.stringify([{ data: { children: [{ kind: 't3', data: post }] } }, { data: { children: [comment] } }]);
+    else body = JSON.stringify({ data: { children: [{ kind: 't3', data: post }] } });
+    await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
+  });
+  try {
+    await app.page.goto(url);
+    const button = app.page.locator('#hn-submit-button');
+    assert(await waitFor(async () => await button.count() === 1, 15000), 'archive lookup completes without a discussion');
+    await button.click();
+    assert(await waitFor(async () => (await app.page.locator('#comments-content').textContent()).includes('A live comment missing from the archive'), 20000), 'opening Sidebar finds the signed-in live discussion');
+    assert.deepEqual(app.errors, []);
+  } finally {
+    await app.browser.close();
+  }
+});
+
+test("a slow Reddit search does not discard an already discovered live discussion", { timeout: 45000 }, async () => {
+  const url = STORIES[0].url;
+  const source = (await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8')).replace('const DISCOVER_CEILING_MS = 12000;', 'const DISCOVER_CEILING_MS = 1200;');
+  const now = Math.floor(Date.now() / 1000);
+  const post = { id: 'freshpost', url, title: STORIES[0].title, author: 'reader', subreddit: 'news', subreddit_name_prefixed: 'r/news', permalink: '/r/news/comments/freshpost/article/', num_comments: 2, created_utc: now - 3600, score: 100 };
+  const comment = { kind: 't1', data: { id: 'freshcomment', body: 'Already discovered live comment', author: 'reader', parent_id: 't3_freshpost', link_id: 't3_freshpost', created_utc: now - 60, replies: '' } };
+  const app = await launchApp({ source, appHost: new URL(url).hostname, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com'], settings: { sources: { hn: false, reddit: true }, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
+    { match: (path) => path.includes('/api/posts/search'), json: { data: [{ ...post, num_comments: 0 }] } },
+    { match: (path) => path.includes('/api/comments/tree'), json: { data: [] } },
+  ] });
+  await app.context.route('https://www.reddit.com/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/search.json') await new Promise((resolve) => setTimeout(resolve, 1700));
+    let body;
+    if (path === '/') body = '<!doctype html><title>Reddit fixture</title>';
+    else if (path === '/api/me.json') body = JSON.stringify({ data: { name: 'fixture-user' } });
+    else if (path.includes('/comments/')) body = JSON.stringify([{ data: { children: [{ kind: 't3', data: post }] } }, { data: { children: [comment] } }]);
+    else body = JSON.stringify({ data: { children: [{ kind: 't3', data: post }] } });
+    await route.fulfill({ status: 200, contentType: path === '/' ? 'text/html' : 'application/json', body });
+  });
+  try {
+    await app.page.goto(url);
+    const button = app.page.locator('#hn-submit-button');
+    assert(await waitFor(async () => await button.count() === 1, 15000));
+    await button.click();
+    assert(await waitFor(async () => (await app.page.locator('#comments-content').textContent()).includes('Already discovered live comment'), 12000), 'a later slow search must not erase the first exact match');
+    assert.deepEqual(app.errors, []);
+  } finally {
+    await app.browser.close();
+  }
+});
 
 test("an oversized live thread falls back without losing other live discussions", { timeout: 60000 }, async () => {
   const url = "https://video.example.com/clip";

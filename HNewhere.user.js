@@ -4912,6 +4912,15 @@
 		return (post?.replyCount ?? 0) > 0;
 	}
 
+	function bskyPostReferences(post, url) {
+		const target = normalizeURL(url);
+		if (!target) return false;
+		const facets = Array.isArray(post?.record?.facets) ? post.record.facets : [];
+		const links = [post?.embed?.external?.uri, post?.embed?.media?.external?.uri, post?.record?.embed?.external?.uri, post?.record?.embed?.media?.external?.uri,
+			...facets.flatMap((facet) => Array.isArray(facet?.features) ? facet.features.map((feature) => feature?.uri) : [])];
+		return links.some((link) => link && normalizeURL(link) === target);
+	}
+
 	function bskyTime(post) {
 		const parsed = Date.parse(post?.record?.createdAt || "");
 
@@ -5333,10 +5342,6 @@ ${
 		return enabledSourceIds(settings, registeredSourceIds()).map((id) =>
 			SOURCES.get(id),
 		);
-	}
-
-	function isSlowSource(id) {
-		return Boolean(getSource(id)?.slow);
 	}
 
 	function hasFrontPage(source) {
@@ -6116,7 +6121,7 @@ ${
 			return { mark, changed: probeMarkChanged(context.mark, mark) };
 		},
 
-		async discover(url) {
+		async discover(url, { onPartial = null } = {}) {
 			const target = normalizeURL(url);
 
 			if (!target) {
@@ -6143,6 +6148,9 @@ ${
 					if (post?.id) {
 						matches.set(post.id, post);
 					}
+				}
+				if (onPartial) {
+					onPartial([...matches.values()].filter((post) => redditHitPasses(post) && normalizeURL(post.url) === target).map(redditDiscussion));
 				}
 			}
 
@@ -6432,7 +6440,7 @@ ${
 
 		async recover(story) {
 			const result = await bskyJSON(`${BSKY_APPVIEW}/app.bsky.feed.getPosts?uris=${encodeURIComponent(story.id)}`);
-			const collective = bskyCollective(story.url, result?.posts || [], () => true);
+			const collective = bskyCollective(story.url, result?.posts || [], (post) => post?.uri === story.id && bskyPostReferences(post, story.url));
 
 			return collective ? [collective] : [];
 		},
@@ -8125,11 +8133,11 @@ button {
 
 	const DISCOVER_CEILING_MS = 12000;
 
-	function discoverWithCeiling(promise, sourceId) {
+	function discoverWithCeiling(promise, sourceId, partial = () => []) {
 		return new Promise((resolve) => {
 			const timer = setTimeout(() => {
 				console.warn("Backchannel " + sourceId + " discovery timed out");
-				resolve([]);
+				resolve(partial());
 			}, DISCOVER_CEILING_MS);
 
 			promise.then(
@@ -8149,23 +8157,49 @@ button {
 		const targets = [...new Set([].concat(urls).filter(Boolean))];
 		const results = await Promise.all(
 			enabledSources(settings).flatMap((source) =>
-				targets.map((target) =>
-					discoverWithCeiling(
-						source.discover(target, { force }).catch((e) => {
+				targets.map((target) => {
+					let partial = [];
+					return discoverWithCeiling(
+						source.discover(target, { force, onPartial: (rows) => { partial = rows; } }).catch((e) => {
 							console.error("Backchannel " + source.id + " discovery failed:", e);
-							return [];
+							return partial;
 						}),
 						source.id,
-					),
-				),
+						() => partial,
+					);
+				}),
 			),
 		);
 
+		const found = dedupeDiscussions(results.flat().filter(Boolean));
+		const recovered = appState ? [] : await recoverCachedFrontPageDiscussions(targets, settings, found);
+
 		return disambiguateLabels(
-			dedupeDiscussions(results.flat().filter(Boolean)).sort(
+			dedupeDiscussions([...found, ...recovered]).sort(
 				compareStoriesByDiscussion,
 			),
 		);
+	}
+
+	async function recoverCachedFrontPageDiscussions(targets, settings, found) {
+		const enabled = enabledSourceIds(settings, registeredSourceIds());
+		const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabled);
+		if (!feeds.length) return [];
+		const caches = feeds.some((feed) => feed.topic)
+			? await Promise.all(feeds.map((feed) => load(FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`, null)))
+			: [await load(frontPageCacheKey(feeds), null)];
+		const stories = caches.flatMap((cache) => Array.isArray(cache?.stories) ? cache.stories : Array.isArray(cache?.rows) ? cache.rows.flatMap((row) => [row?.story, ...(Array.isArray(row?.also) ? row.also : [])]) : []);
+		const addresses = new Set(targets.map(normalizeURL).filter(Boolean));
+		const seen = new Set();
+		const candidates = stories.filter((story) => {
+			if (!story?.source || !enabled.includes(story.source) || !story.id || !addresses.has(normalizeURL(story.url)) || typeof getSource(story.source)?.recover !== "function") return false;
+			const key = sourceKey(story.source, story.id);
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
+		const recovered = await recoverAppRowThreads(candidates, found);
+		return recovered.filter((discussion) => addresses.has(normalizeURL(discussion.articleURL)));
 	}
 
 	// -------------------------
@@ -9394,6 +9428,7 @@ button {
 	const SIDEBAR_STAGES = {
 		discussion: "loading discussion…",
 		comments: "loading comments…",
+		sync: "syncing…",
 		votes: "loading votes…",
 		annotations: "loading annotations…",
 	};
@@ -15505,7 +15540,11 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 			button.classList.add("is-syncing");
 			button.setAttribute("aria-busy", "true");
-			showToast("Syncing…", { kind: "system", persist: true, loading: true });
+			const browsing = isBrowsing(ui);
+			if (browsing) {
+				ui.browseSyncing = true;
+				setSidebarStage(ui, "sync");
+			}
 
 			try {
 				await runSync(() => (isBrowsing(ui) ? renderBrowseView(ui, { force: true }) : Promise.resolve(ui.syncStatus?.onSync?.())));
@@ -15513,8 +15552,10 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 				console.error(error);
 			}
 
-			if (shadow.getElementById("toast")?.textContent === "Syncing…") {
-				showToast("");
+			if (browsing) {
+				ui.browseSyncing = false;
+				if (ui.activeStage === "sync") clearSidebarStage(ui);
+				else refreshSidebarSubtitle(ui);
 			}
 
 			await settleSyncSpin(button);
@@ -19870,7 +19911,7 @@ class="wordmark-tail"><span class="wordmark-sep">/</span><span
 class="wordmark-where">Discussion</span></span></button>`
 		: `<span><b>Back</b>channel</span>`
 }
-${subtitle ? `<span id="header-subtitle" class="header-subtitle"></span>` : ""}
+${subtitle ? `<span id="header-subtitle" class="header-subtitle" role="status" aria-live="polite"></span>` : ""}
 </span>
 
 <div class="header-actions">
@@ -25023,8 +25064,8 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const waiting = document.createElement("div");
 
 		waiting.className = "discussion-loading";
-		waiting.innerHTML = `<div class="discussion-loading-title" role="status">Loading comments<span class="discussion-loading-dots">…</span></div>
-<div class="discussion-loading-progress"><div class="discussion-loading-track" role="progressbar" aria-label="Discussions checked" aria-valuemin="0" aria-valuemax="${stories.length}" aria-valuenow="0"><span></span></div><div class="discussion-loading-detail">0 of ${stories.length} discussions checked</div></div>
+		waiting.innerHTML = `${ui.headerSubtitle ? '<div class="discussion-loading-detail" hidden></div>' : `<div class="discussion-loading-title" role="status">Loading comments<span class="discussion-loading-dots">…</span></div>
+<div class="discussion-loading-progress"><div class="discussion-loading-track" role="progressbar" aria-label="Discussions checked" aria-valuemin="0" aria-valuemax="${stories.length}" aria-valuenow="0"><span></span></div><div class="discussion-loading-detail">0 of ${stories.length} discussions checked</div></div>`}
 <div class="discussion-skeleton" aria-hidden="true"><div class="discussion-skeleton-heading browse-skeleton-bar"></div><div class="discussion-skeleton-meta browse-skeleton-bar"></div><div class="discussion-skeleton-compose"></div>${[0, 1, 2, 3].map((index) => `<div class="discussion-skeleton-comment${index === 1 ? " is-reply" : ""}"><div class="browse-skeleton-bar"></div><div class="browse-skeleton-bar"></div><div class="browse-skeleton-bar"></div></div>`).join("")}</div>`;
 		ui.body.appendChild(waiting);
 
@@ -25035,28 +25076,20 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const settings = await loadSettings();
 
 		const pending = new Set(stories.map((story) => story.key));
-		const slowKeys = new Set(
-			stories
-				.filter((story) => isSlowSource(story.source))
-				.map((story) => story.key),
-		);
-		const nameByKey = new Map(
-			stories.map((story) => [
-				story.key,
-				getSource(story.source)?.shortLabel || story.source || "",
-			]),
-		);
 		const updateLoadingLabel = () => {
 			if (!waiting.isConnected || generation !== sidebarGeneration || run !== discussionRenderRun) return;
 			const completed = stories.length - pending.size;
 			const progress = waiting.querySelector("[role=progressbar]");
-			progress.setAttribute("aria-valuenow", String(completed));
-			progress.firstElementChild.style.width = (stories.length ? completed / stories.length * 100 : 100) + "%";
 			const readingReddit = redditReadBatch?.connected && !redditReadBatch.closing && stories.some((story) => story.source === "reddit" && pending.has(story.key));
-			waiting.querySelector(".discussion-loading-detail").textContent = completed + " of " + stories.length + " discussions checked" + (readingReddit ? ". Keep the Reddit tab open while it loads." : "");
-			if (pending.size && [...pending].every((key) => slowKeys.has(key))) {
-				const names = [...new Set([...pending].map((key) => nameByKey.get(key)))];
-				setSidebarLoadingLabel(ui, "still loading " + joinNames(names) + "…");
+			const detail = waiting.querySelector(".discussion-loading-detail");
+			if (ui.headerSubtitle) {
+				setSidebarLoadingLabel(ui, "loading comments (" + completed + " of " + stories.length + ")…");
+				detail.hidden = !readingReddit;
+				detail.textContent = readingReddit ? "Keep the Reddit tab open while comments load." : "";
+			} else {
+				progress.setAttribute("aria-valuenow", String(completed));
+				progress.firstElementChild.style.width = (stories.length ? completed / stories.length * 100 : 100) + "%";
+				detail.textContent = completed + " of " + stories.length + " discussions checked" + (readingReddit ? ". Keep the Reddit tab open while it loads." : "");
 			}
 		};
 
@@ -25075,6 +25108,8 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		if (generation !== sidebarGeneration || run !== discussionRenderRun) {
 			return;
 		}
+
+		setSidebarLoadingLabel(ui, "displaying comments…");
 
 		setSidebarSyncStatus(ui, {
 			checkedAt: threadsCheckedAt(
@@ -25243,6 +25278,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		}
 
 		const batchSize = 5;
+		let annotatedAt = 0;
 
 		for (let i = 0; i < entries.length; i += batchSize) {
 			if (generation !== sidebarGeneration || run !== discussionRenderRun) {
@@ -25273,6 +25309,11 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 					collapsedKeys,
 					generation,
 				);
+			}
+
+			if (entries.length > batchSize && !appState && settings.annotations && shouldShowArticleAnnotations(settings) && (i === 0 || performance.now() - annotatedAt >= 1000)) {
+				await refreshArticleAnnotations();
+				annotatedAt = performance.now();
 			}
 
 			await new Promise(requestAnimationFrame);
@@ -25333,7 +25374,11 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		}
 
 		if (generation === sidebarGeneration && run === discussionRenderRun) {
-			clearSidebarStage(ui);
+			if (!appState) {
+				if (settings.annotations && shouldShowArticleAnnotations(settings)) setSidebarStage(ui, "annotations");
+				await refreshArticleAnnotations();
+			}
+			if (generation === sidebarGeneration && run === discussionRenderRun) clearSidebarStage(ui);
 		}
 	}
 
@@ -26079,7 +26124,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		window.clearInterval(ui.syncTimer);
 		ui.syncTimer = null;
 
-		if (browsing) {
+		if (browsing && !(ui.browseSyncing && loading)) {
 			element.classList.remove(
 				"header-subtitle-stage",
 				"header-subtitle-loading",
@@ -26261,13 +26306,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		sidebarHasDiscussion = true;
 		setBrowseMode(ui, false, { animate: false });
 		await renderDiscussions(disambiguateLabels(dedupeDiscussions([...found, ...previous]).sort(compareStoriesByDiscussion)), ui);
-		if (generation === sidebarGeneration) await refreshArticleAnnotations();
 	}
 
 	async function runOpenSidebar(stories, options = {}) {
+		const generation = ++sidebarGeneration;
 		try {
-			const generation = ++sidebarGeneration;
-
 			const ui = await createSidebar({ pageMode: options.pageMode });
 			sidebarUI = ui;
 			scheduleRedditReadNotice();
@@ -26333,21 +26376,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 			setSidebarStage(ui, "comments");
 
-			const settings = await loadSettings();
-
 			await renderDiscussions(loaded, ui, { arrival: options.arrival !== false });
-
-			if (generation === sidebarGeneration) {
-				if (settings.annotations && shouldShowArticleAnnotations(settings)) {
-					setSidebarStage(ui, "annotations");
-				}
-
-				await refreshArticleAnnotations();
-			}
 		} catch (e) {
 			console.error(e);
 		} finally {
-			clearSidebarStage(sidebarUI);
+			if (generation === sidebarGeneration) clearSidebarStage(sidebarUI);
 			stopButtonSpinner(document.getElementById("hn-restore-button"));
 		}
 	}
@@ -31120,10 +31153,6 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 				if (wasPicking) {
 					leaveBrowsing();
-				}
-
-				if (generation === sidebarGeneration) {
-					await refreshArticleAnnotations();
 				}
 			})().catch(console.error);
 		};
