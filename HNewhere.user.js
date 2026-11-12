@@ -5678,7 +5678,7 @@ ${
 			? state.discussionSync(finishDiscussion)
 			: state?.open && canReconcileDiscussion(state.ui)
 				? syncDiscussions(state.ui, renderedDiscussions, finishDiscussion)
-				: state?.open ? openAppDiscussion(state.open.row, { onThreadsLoaded: finishDiscussion }) : Promise.resolve();
+				: state?.open ? openAppDiscussion(state.open.row, { onThreadsLoaded: finishDiscussion, force: true }) : Promise.resolve();
 		return Promise.allSettled([
 			renderAppList({ force: !sharedRefreshSince }).finally(finishFeed),
 			Promise.resolve(discussion).finally(finishDiscussion),
@@ -20328,7 +20328,7 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle" role="status" a
 </span>
 
 <div class="header-actions">
-${title ? `<span id="app-discussion-sort" class="app-discussion-sort"></span><span id="app-discussion-meta" class="app-discussion-meta"></span>` : ""}
+${title ? `<span id="app-discussion-sort" class="app-discussion-sort"></span><span id="app-discussion-meta" class="app-discussion-meta"></span><button id="app-discussion-sync-empty" class="app-head-icon" type="button" aria-label="Sync" title="Sync" hidden><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button>` : ""}
 <button id="comment-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="compose-dock" aria-label="Add a comment" title="Add a comment" hidden>
 <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
@@ -26328,7 +26328,8 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const title = document.createElement("div");
 
 		title.className = "settings-head app-sources-head";
-		title.innerHTML = '<span class="settings-crumb-root">Sources</span>';
+		title.innerHTML = `<span class="settings-crumb-root">Sources</span><button type="button" class="app-head-icon app-sources-sync" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button>`;
+		title.querySelector(".app-sources-sync").onclick = () => shadow.querySelector("#app-list-sync")?.click();
 		menu.prepend(title);
 		hint.className = "settings-option-hint app-discussion-summary";
 		hint.textContent = summary;
@@ -26361,6 +26362,21 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		arrow.setAttribute("aria-hidden", "true");
 		menu.after(arrow);
 		slot.replaceChildren(anchor);
+		const emptySync = shadow.querySelector("#app-discussion-sync-empty");
+		if (emptySync) emptySync.hidden = true;
+		paintAppDiscussionSync();
+	}
+
+	function paintAppDiscussionSync() {
+		const shadow = appState?.ui.shadow;
+		if (!shadow) return;
+		const busy = shadow.querySelector("#app-list-sync")?.classList.contains("is-syncing") || false;
+		for (const button of shadow.querySelectorAll(".app-sources-sync, #app-discussion-sync-empty")) {
+			button.classList.toggle("is-syncing", busy);
+			button.disabled = busy;
+			if (busy) button.setAttribute("aria-busy", "true");
+			else button.removeAttribute("aria-busy");
+		}
 	}
 
 	function syncSubmissionDetails() {
@@ -34807,6 +34823,30 @@ ${READER_LIST_CSS}
 	font-size:inherit;
 }
 
+#panel.app-docked .app-discussion-meta .source-menu .app-sources-sync,
+#app-discussion-sync-empty {
+	display:none;
+}
+
+@media (max-width: 700px) {
+	#panel.app-docked .app-discussion-meta .app-sources-head {
+		align-items:center;
+	}
+
+	#panel.app-docked .app-discussion-meta .source-menu .app-sources-sync {
+		display:inline-flex;
+		width:36px;
+		height:36px;
+		margin-left:auto;
+		padding:0;
+		border-radius:5px;
+	}
+
+	#app-discussion-sync-empty:not([hidden]) {
+		display:inline-flex;
+	}
+}
+
 
 
 #panel.app-docked #header-subtitle,
@@ -37191,26 +37231,27 @@ ${settingsModalHTML()}
 
 			button.classList.add("is-syncing");
 			button.setAttribute("aria-busy", "true");
+			paintAppDiscussionSync();
 			showToast("Syncing…", { kind: "system", persist: true, loading: true });
 
-			const runs = await runSync((releaseRead) => syncReaderViews(releaseRead));
-
-			if (shadow.getElementById("toast")?.textContent === "Syncing…") {
-				showToast("");
-			}
-
-			for (const run of runs) {
-				if (run.status === "rejected") {
-					console.error(run.reason);
+			try {
+				const runs = await runSync((releaseRead) => syncReaderViews(releaseRead));
+				for (const run of runs) {
+					if (run.status === "rejected") {
+						console.error(run.reason);
+					}
 				}
+			} finally {
+				if (shadow.getElementById("toast")?.textContent === "Syncing…") showToast("");
+				await settleSyncSpin(button);
+				button.classList.remove("is-syncing");
+				button.removeAttribute("aria-busy");
+				paintAppDiscussionSync();
 			}
-
-			await settleSyncSpin(button);
-			button.classList.remove("is-syncing");
-			button.removeAttribute("aria-busy");
 		};
 
-		syncButton.onclick = () => syncList();
+		syncButton.onclick = () => syncList().catch(console.error);
+		shadow.querySelector("#app-discussion-sync-empty").onclick = () => syncButton.click();
 
 		shadow.querySelector("#app-article-open").onclick = () => {
 			rememberAppArrival(appState?.open?.url).catch(console.error);
@@ -39996,6 +40037,8 @@ ${frontPageChooserHTML()}
 		renderedFor = "";
 		sidebarGeneration++;
 		appState.discussionSync = null;
+		const emptySync = appState.ui.shadow.querySelector("#app-discussion-sync-empty");
+		if (emptySync) emptySync.hidden = true;
 		appState.ui.shadow.querySelector("#app-discussion-meta")?.replaceChildren();
 		appState.ui.shadow.querySelector("#app-discussion-sort")?.replaceChildren();
 		const control = appState.ui.shadow.querySelector("#comment-toggle");
@@ -40079,7 +40122,7 @@ ${frontPageChooserHTML()}
 		return lists.flat();
 	}
 
-	async function openAppDiscussion(row, { focus = "", previousSeen = appState?.openSeen || {}, onThreadsLoaded = null } = {}) {
+	async function openAppDiscussion(row, { focus = "", previousSeen = appState?.openSeen || {}, onThreadsLoaded = null, force = false } = {}) {
 		const state = appState;
 		const ui = state.ui;
 		const url = state.open?.url;
@@ -40101,7 +40144,7 @@ ${frontPageChooserHTML()}
 		try {
 			const settings = await loadSettings();
 			const threads = appRowThreads(row, settings);
-			const found = await discoverAll(pageAddresses(), settings);
+			const found = await discoverAll(pageAddresses(), settings, { force });
 			const recovered = await recoverAppRowThreads(threads, found);
 			const loaded = await resolveDiscussions(dedupeDiscussions([...found, ...recovered]));
 
@@ -40117,6 +40160,9 @@ ${frontPageChooserHTML()}
 				ui.shadow.querySelector("#app-discussion-sort")?.replaceChildren();
 				paintAppChrome();
 				renderNoDiscussion(ui, threads.length ? "Couldn't load what people said about this article." : "");
+				const emptySync = ui.shadow.querySelector("#app-discussion-sync-empty");
+				if (emptySync) emptySync.hidden = false;
+				paintAppDiscussionSync();
 				return;
 			}
 

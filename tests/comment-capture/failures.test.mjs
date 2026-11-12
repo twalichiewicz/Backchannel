@@ -287,6 +287,28 @@ test("Reader reuses cached comments when selecting and revisiting articles", { t
   }
 });
 
+test("mobile Reader can sync an article with no discussions", { timeout: 45000 }, async () => {
+  const search = { match: (path) => path.startsWith('https://hn.algolia.com/api/v1/search?'), json: { hits: [] } };
+  const missing = { match: (path) => path.includes('hacker-news.firebaseio.com/v0/item/9001.json'), json: { id: 9001, type: 'deleted' } };
+  const now = Math.floor(Date.now() / 1000);
+  const app = await launchApp({ viewport: { width: 390, height: 844 }, hasTouch: true, sharedStore: true, settings: { sources: { hn: true }, frontPageMode: 'sources', updateCheck: false }, responses: [search, missing, { match: (path) => path.includes('/v0/item/9988.json'), json: { id: 9988, type: 'story', title: STORIES[0].title, url: STORIES[0].url, by: 'reader', time: now, descendants: 1, kids: [998801] } }, { match: (path) => path.includes('/v0/item/998801.json'), json: { id: 998801, type: 'comment', parent: 9988, by: 'reader', time: now, text: 'A newly found discussion' } }] });
+  try {
+    await app.page.goto('https://backchnnl.app/');
+    await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
+    await app.page.locator('#app-bar-discussion').click();
+    assert(await waitFor(async () => await app.page.locator('#comments-content .no-discussion').count() === 1, 10000));
+    const sync = app.page.locator('#app-discussion-sync-empty');
+    assert(await sync.isVisible(), 'Sync remains available when no Sources menu exists');
+    search.json = { hits: [{ objectID: '9988', title: STORIES[0].title, url: STORIES[0].url, author: 'reader', points: 10, num_comments: 1, created_at_i: now }] };
+    const before = app.requests.filter(({ url }) => search.match(url)).length;
+    await sync.click();
+    assert(await waitFor(() => app.requests.filter(({ url }) => search.match(url)).length > before, 10000), 'Sync checks sources again');
+    assert(await waitFor(async () => /A newly found discussion/.test(await app.page.locator('#comments-content').textContent()), 15000), 'a newly discovered discussion appears');
+    assert(await sync.isHidden(), 'the empty-state control is replaced by the Sources menu');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
 test("Reader clears provisional controls and its loading hint when discovery finds no discussions", { timeout: 30000 }, async () => {
   const app = await launchApp({
     sharedStore: true,

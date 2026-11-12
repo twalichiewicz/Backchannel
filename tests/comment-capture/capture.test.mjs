@@ -171,6 +171,45 @@ test('recent search queries are reusable and shared between Reader and Sidebar',
   } finally { await app.browser.close(); }
 });
 
+test('mobile Reader syncs the discussion from the Sources menu', { timeout: 45000 }, async () => {
+  const fixture = discussionFixture(url, { rootCount: 1, replyRoots: 0 });
+  const tree = fixture.responses.find((response) => response.match('https://arctic-shift.photon-reddit.com/api/comments/tree?link_id=t3_fixture0'));
+  const app = await launchApp({ viewport: { width: 390, height: 844 }, hasTouch: true, sharedStore: true, handler: 'Tampermonkey', settings: { sources: { hn: true, reddit: true }, frontPageMode: 'sources', updateCheck: false }, values: { 'HNewhere:reddit_tier': { tier: 'archive', timestamp: Date.now() } }, responses: fixture.responses });
+  try {
+    await app.page.goto('https://backchnnl.app/');
+    await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
+    await app.page.locator('#app-bar-discussion').click();
+    const comment = app.page.locator('#comments-content .comment[data-comment-id="reddit:root0"]');
+    assert(await waitFor(async () => await comment.count() === 1, 15000));
+    const disclosure = app.page.locator('#app-discussion-meta .page-header-disclosure');
+    await disclosure.click();
+    const menu = app.page.locator('#app-discussion-meta .source-menu');
+    const sync = menu.locator('.app-sources-sync');
+    assert(await sync.isVisible(), 'Sync is available beside the Sources title');
+    assert.equal(await sync.getAttribute('aria-label'), 'Sync', 'the icon has an accessible name');
+    assert.equal(await sync.locator('svg').count(), 1, 'Sync uses the existing icon');
+    const updated = structuredClone(tree.json);
+    updated.data[0].data.body = 'A refreshed mobile discussion';
+    tree.json = updated;
+    tree.delay = 1200;
+    const before = app.requests.filter(({ url }) => tree.match(url)).length;
+    await sync.click();
+    assert(await waitFor(async () => await sync.getAttribute('aria-busy') === 'true', 5000), 'the menu icon indicates the active sync');
+    assert(await sync.isDisabled(), 'a second sync cannot start while one is running');
+    await sync.evaluate((button) => button.click());
+    assert.equal(await comment.count(), 1, 'existing comments stay visible while syncing');
+    assert(await waitFor(async () => /A refreshed mobile discussion/.test(await comment.textContent()), 20000), 'the discussion is refreshed');
+    assert(await waitFor(async () => await app.page.locator('#app-list-sync').getAttribute('aria-busy') !== 'true', 15000), 'the sync completes');
+    assert(!(await sync.isDisabled()), 'the menu icon becomes available again');
+    assert.equal(app.requests.filter(({ url }) => tree.match(url)).length, before + 1, 'one sync downloads the discussion once');
+    await app.page.setViewportSize({ width: 1100, height: 844 });
+    const desktopMenu = app.page.locator('#app-discussion-meta .source-menu');
+    if (await desktopMenu.isHidden()) await disclosure.click();
+    assert(await desktopMenu.getByRole('button', { name: 'Sync' }).isHidden(), 'desktop keeps its existing Sync control');
+    assert.deepEqual(app.errors, []);
+  } finally { await app.browser.close(); }
+});
+
 for (const mode of ['Sidebar', 'Reader']) test(`${mode} Sync keeps existing comments and applies changed and new comments in place`, { timeout: 60000 }, async () => {
   const fixture = discussionFixture(url, { rootCount: 12, replyRoots: 2 });
   const response = {

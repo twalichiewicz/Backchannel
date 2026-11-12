@@ -28,6 +28,8 @@ use to detect updates, so every release bumps it.
   across views, avoiding duplicate refresh tabs for the same work.
 - Sync updates existing discussions without clearing comments, drafts or
   expanded replies. A feed refresh no longer interrupts an article click.
+- On mobile, Reader can sync from the Discussion sheet: use the Sources menu,
+  or the Sync button when no discussion has been found yet.
 - Search remembers recent queries across Reader and Sidebar, and clearing them
   keeps an older delayed search from returning.
 - Loading views show the known article details and composer immediately, with
