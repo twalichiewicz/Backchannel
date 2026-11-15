@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="210" height="120" viewBox="0 0 210 120" role="img" aria-label="Install Backchannel. Requires a userscript manager.">
+  <rect y="32" width="210" height="40" rx="20" fill="#24663d" />
+  <text x="105" y="52" fill="#efece6" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="500" text-anchor="middle" dominant-baseline="central">Install Backchannel</text>
+  <text x="105" y="87" fill="#888888" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="11" text-anchor="middle">Requires a userscript manager</text>
+</svg>

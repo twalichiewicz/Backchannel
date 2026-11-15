@@ -1,62 +1,57 @@
+<a name="install"></a>
+<img align="left" width="100" height="100" alt="Backchannel bird" src="site/icon-360.png" />
+<a href="https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js"><img align="right" src="site/src/install-button.svg" width="210" height="120" alt="Install Backchannel. Requires a userscript manager." /></a>
+
+<p><strong>⺌Backchannel⺌</strong><br />
+The internet's commentary track. Find the conversations happening around the pages you read, right alongside them.</p>
+
+<br clear="all" />
+
+---
+
+<a href="https://github.com/user-attachments/assets/17f947d5-c66c-4dfb-84a7-ade01ecd3a74"><img width="1280" height="800" alt="Backchannel's Reader showing an article and its discussion, with a second browser window showing the Sidebar on another article." src="https://github.com/user-attachments/assets/17f947d5-c66c-4dfb-84a7-ade01ecd3a74" /></a>
+
 <p align="center">
-<picture>
-  <img width="120" height="120" alt="backchannel-birb" src="site/icon-360.png" />
-</picture>
-  <br/><center><h1 align="center">⺌Backchannel⺌</h1></center>
-  <p align="center">The internet's commentary track.</p>
+  <a href="https://news.ycombinator.com/item?id=49090607"><img src="https://hackergit.org/badge/twalichiewicz/HNewhere.svg?style=rank&amp;rank=day&amp;scope=show" alt="Hacker News: #1 Show HN of the Day" width="250" height="55" /></a>
+  <a href="https://news.ycombinator.com/item?id=49090607"><img src="https://hackergit.org/badge/twalichiewicz/HNewhere.svg?style=rank&amp;rank=month&amp;scope=show" alt="Hacker News: #3 Show HN of the Month" width="250" height="55" /></a>
+  <a href="https://trendshift.io/repositories/95983?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-95983"><img src="https://trendshift.io/api/badge/trendshift/repositories/95983/daily?language=JavaScript" alt="Backchannel on Trendshift: JavaScript repository of the day" width="250" height="55" /></a>
 </p>
-
-<picture>
-  <a href="https://github.com/user-attachments/assets/17f947d5-c66c-4dfb-84a7-ade01ecd3a74"><img width="1280" height="600" alt="Two screenshots of Safari on macOS  overlapping each other diagonally bottom-left to top-right. The front screenshot shows a tab opened to https://backchnnl.app, displaying the Reader view with the user having selected and loaded 'C for Rust Programmers' (https://bd103.dev/blog/2026-10-07-c-for-rust-programmers/) with the Discussion panel open alongside the article. The back screenshot shows a tab opened to 'Sharing AI progress in mathematics' (https://openai.com/index/sharing-ai-progress-in-mathematics/) with the Sidebar open, showing the discussions about the article in an overlay panel." src="https://github.com/user-attachments/assets/17f947d5-c66c-4dfb-84a7-ade01ecd3a74" /></a>
-
-</picture>
 
 ## Features
 
-- **The internet's commentary track:** Avoid the two-tab-tango and conveniently read the community's comments in-context.
-- **Never miss a thread:** Every page you land on gets checked against the sources you've picked, so you find out a discussion exists without going hunting for one.
-- **What the internet is saying, in one thread:** Every source you've switched on, merged into a single conversation, each comment quietly noting where it came from. Pick them with a checkbox.
-- **See what they're talking about:** Quotes in the comments get matched back to the article and lit as annotations in articles. Click a highlight to filter the thread to the people discussing that passage.
-   - **Enable Annotations** in the settings menu to try it out!
-   - Enable **Enhanced PDF support** to get highlighting directly on PDF documents. (Not supported on Firefox)
-- **Read, then join in:** Vote, reply, and even submit on supported sources. It acts in a popup on the source's own site, using the session you already have there. The script never sees your password.
-- **Take notes across the web:** Add notes to any page or PDF you visit, allowing you to have your own personal commentary track. All stored locally.
-- **New front page of the internet**: Blend together all of your added sources to create a custom front page to find new articles to read.
-- **Quality of life:** Indent guides, OP marking, and new comment highlighting.
-- **Yours to adjust:** Button shape and size, sidebar width, theme, which annotation layers show, and a per-site off switch. It's one file with no build step, so if the settings don't cover it, the source is right there.
+### Bring the discussion to you
 
-## Install
+Skip the two-tab tango. Backchannel checks the pages you visit against your chosen sources and puts the conversations it finds in a sidebar beside the page. Discussions from enabled sources come together in one thread, with each comment showing where it came from. Vote, reply, or submit on supported sources using your existing session in a popup on the source's own site; the script never sees your password.
 
-<a href="https://trendshift.io/repositories/95983?utm_source=trendshift-badge&amp;utm_medium=badge&amp;utm_campaign=badge-trendshift-95983" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/trendshift/repositories/95983/daily?language=JavaScript" alt="twalichiewicz%2FBackchannel | Trendshift" width="250" height="55"/></a> <a href="https://www.producthunt.com/products/backchannel-4?embed=true&amp;utm_source=badge-featured&amp;utm_medium=badge&amp;utm_campaign=badge-backchannel-4" target="_blank" rel="noopener noreferrer"><img alt="Backchannel - The internet's commentary track. | Product Hunt" width="250" height="54" src="https://api.producthunt.com/widgets/embed-image/v1/featured.svg?post_id=1222392&amp;theme=light&amp;t=1786733251041"></a>
+<img src="site/src/shot-sidebar.webp" width="750" alt="A GitHub repository with the Backchannel sidebar open beside it, showing a discussion." />
 
-1. Install a userscript plugin:
-   - [Tampermonkey](https://www.tampermonkey.net/) (Chrome, Edge, Firefox, Safari)
-   - [Violentmonkey](https://violentmonkey.github.io/) (Chrome, Edge, Firefox)
-   - [Greasemonkey](https://www.greasespot.net) (Firefox)
-   - [Userscripts](https://apps.apple.com/us/app/userscripts/id1463298887) (Safari)
+### Follow the conversation through the article
 
-2. **[Install Backchannel](https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js)**
+Quoted passages can be highlighted in the article. Click a highlight to focus the discussion on comments about that passage. Turn on **Annotations** in settings to try it, and enable **Enhanced PDF support** for highlights directly on PDFs (not supported on Firefox).
 
-## Usage
-1. Browse the web as usual. If a thread exists for that page the (BC) button lights up, letting you know people are discussing this site. 
-2. You can visit [backchnnl.app](https://backchnnl.app) once you have the script installed to have a customizable front page you can bookmark.
-3. Open the Sidebar to read discussions and use the reply or vote controls for supported sources.
-4. Reddit is [changing access for other apps](https://support.reddithelp.com/hc/en-us/articles/54353370049684-Changelog-October-8-2026).
-   Backchannel's illustrated introduction explains the updated connection.
-   Choose **Continue** to start. When your Reddit session needs refreshing,
-   a temporary Reddit window opens; sign in there if asked. The window closes
-   when finished, and **Synced** confirms the overall refresh.
-   The introduction is remembered locally after confirmation or dismissal.
-   Front Pages tries refreshing on its first load; use **Sync** for later
-   refreshes. Loading more Reddit replies uses the same temporary-window flow.
-   Other articles stay available while you sign in. Settings ›
-   Sources › **(?)** explains the connection.
+<img src="site/src/shot-annotations.webp" width="750" alt="An article with a quoted passage highlighted and the sidebar focused on comments about it." />
 
-Compact system messages slide down from the top; feedback for user actions
-slides up from the bottom. Toasts use black and white in both Reader and Sidebar,
-with reduced motion when your device requests it.
+### Make your own front page
+
+Blend the sources you choose into a custom front page at [backchnnl.app](https://backchnnl.app), and open articles in the Reader alongside their discussions.
+
+<img src="site/src/shot-reader.webp" width="750" alt="The Backchannel Reader showing a list of stories with one open beside it." />
+
+### Make it yours
+
+- **Take notes:** Add your own notes to pages and PDFs; they're stored locally.
+- **Read comfortably:** Indent guides, OP marking, and new comment highlighting help you follow a thread.
+- **Customize the view:** Adjust the button shape and size, sidebar width, theme, and annotation layers, or switch Backchannel off on individual sites. It's one file with no build step, so the source is there if you want to go further.
 
 ## FAQ
+
+### How do I install Backchannel?
+
+Install a userscript manager for your browser, then select **Install Backchannel** above:
+
+- **Chrome or Edge:** [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/)
+- **Firefox:** [Tampermonkey](https://www.tampermonkey.net/), [Violentmonkey](https://violentmonkey.github.io/), or [Greasemonkey](https://www.greasespot.net)
+- **Safari:** [Tampermonkey](https://www.tampermonkey.net/) or [Userscripts](https://apps.apple.com/us/app/userscripts/id1463298887)
 
 ### What exactly is the script doing with my information?
 
@@ -94,12 +89,9 @@ Webmail, banking, auth flows, and cloud consoles are excluded outright.
 
 Full detail, including a host-by-host table, in [SECURITY.md](SECURITY.md).
 
-### What do annotations highlight?
+### Where are my notes and settings stored?
 
-Annotations highlight quoted passages so you can jump between the article and
-the discussion about them. Clicking a highlight opens the Discussion panel.
-To show highlights while the Sidebar is closed, enable **Show when Sidebar
-closed**. The ambient heat map was removed in v1.6.18.1.
+Your notes, settings, reading queue, and other Backchannel data are stored locally in your userscript manager. Removing the script or clearing the manager's data can delete them.
 
 ### Where did HNewhere go?
 
