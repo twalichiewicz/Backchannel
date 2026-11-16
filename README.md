@@ -1,11 +1,5 @@
 <a name="install"></a>
-<img align="left" width="100" height="100" alt="Backchannel bird" src="site/icon-360.png" />
-<a href="https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js"><img align="right" src="site/src/install-button.svg" width="210" height="120" alt="Install Backchannel. Requires a userscript manager." /></a>
-
-<p><strong>⺌Backchannel⺌</strong><br />
-The internet's commentary track. Find the conversations happening around the pages you read, right alongside them.</p>
-
-<br clear="all" />
+<p align="center"><a href="https://raw.githubusercontent.com/twalichiewicz/Backchannel/refs/heads/main/HNewhere.user.js"><picture><source media="(prefers-color-scheme: dark) and (max-width: 900px)" srcset="site/src/readme-header-mobile-dark.svg" /><source media="(prefers-color-scheme: dark)" srcset="site/src/readme-header-dark.svg" /><source media="(max-width: 900px)" srcset="site/src/readme-header-mobile.svg" /><img src="site/src/readme-header.svg" width="720" alt="Backchannel. The internet's commentary track. Find the conversations happening around the pages you read, right alongside them. Install. Requires a userscript manager." /></picture></a></p>
 
 ---
 
@@ -47,7 +41,7 @@ Blend the sources you choose into a custom front page at [backchnnl.app](https:/
 
 ### How do I install Backchannel?
 
-Install a userscript manager for your browser, then select **Install Backchannel** above:
+Install a userscript manager for your browser, then select **Install** above:
 
 - **Chrome or Edge:** [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/)
 - **Firefox:** [Tampermonkey](https://www.tampermonkey.net/), [Violentmonkey](https://violentmonkey.github.io/), or [Greasemonkey](https://www.greasespot.net)
