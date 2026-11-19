@@ -8,11 +8,12 @@ const tests = readdirSync(directory).filter((file) => file.endsWith(".test.mjs")
 if (!tests.length) throw new Error("No comment-capture tests found");
 const engines = process.env.CAPTURE_ENGINES?.split(",").filter(Boolean) || ["chromium", "firefox", "webkit"];
 if (!engines.length) throw new Error("No browser engines selected");
+const concurrency = Math.max(1, Math.min(4, Number(process.env.CAPTURE_CONCURRENCY) || 1));
 let failed = false;
 for (const engine of engines) {
   if (!["chromium", "firefox", "webkit"].includes(engine)) throw new Error(`Unsupported browser: ${engine}`);
   console.log(`\nComment and discussion capture: ${engine}`);
-  const result = spawnSync(process.execPath, ["--test", "--test-concurrency=1", ...tests], {
+  const result = spawnSync(process.execPath, ["--test", `--test-concurrency=${concurrency}`, ...tests], {
     env: { ...process.env, ENGINE: engine },
     stdio: "inherit",
   });

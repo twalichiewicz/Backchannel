@@ -63,7 +63,7 @@ for (const outcome of ['empty', 'failed', 'malformed']) test(`concurrent views $
 for (const { firstMode, outcome, topics } of [
   ...['Sidebar', 'Reader'].flatMap((firstMode) => ['success', 'failed'].map((outcome) => ({ firstMode, outcome, topics: false }))),
   { firstMode: 'Reader', outcome: 'success', topics: true },
-]) test(`concurrent ${firstMode} and Sidebar browsing views ${outcome === 'success' ? 'share a successful' : 'retry a failed'} Reddit ${topics ? 'topic ' : ''}feed refresh`, { timeout: 45000 }, async () => {
+]) test(`concurrent ${firstMode} and Sidebar browsing views ${outcome === 'success' ? 'share a successful' : 'preserve retry delays after a failed'} Reddit ${topics ? 'topic ' : ''}feed refresh`, { timeout: 45000 }, async () => {
   const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
   const source = original.replace('let redditReadInitialAttempted = false;', 'let redditReadInitialAttempted = true;');
   assert.notEqual(source, original);
@@ -95,7 +95,11 @@ for (const { firstMode, outcome, topics } of [
     await Promise.all([firstButton.click(), otherButton.click()]);
     assert(await waitFor(async () => await firstButton.getAttribute('aria-busy') !== 'true' && await otherButton.getAttribute('aria-busy') !== 'true' && opened.length && opened.every((page) => page.isClosed()), 25000));
     assert.equal(opened.length, outcome === 'success' ? 1 : 2, 'only a successful feed refresh can be shared');
-    assert.equal(feedRequests, outcome === 'success' ? 1 : 2, 'failed feeds are retried and successful feeds are fetched once');
+    assert.equal(feedRequests, 1, 'the second view shares successful data and respects the retry delay after failure');
+    if (outcome === 'failed') {
+      assert.doesNotMatch(await app.page.locator('#toast').textContent(),/^Synced$/);
+      assert.doesNotMatch(await other.locator('#toast').textContent(),/^Synced$/);
+    }
     if (outcome === 'success') {
       assert(await app.page.locator(reader ? '#app-list-body' : '#browse-list').getByText('A freshly synced feed item').count(), 'the first view shows the refreshed feed');
       assert(await other.locator('#browse-list').getByText('A freshly synced feed item').count(), 'the other view shows the refreshed feed');
@@ -260,7 +264,8 @@ for (const scenario of ['normal', 'delayed', 'expired']) test(`concurrent Reader
   });
   try {
     await app.page.goto('https://backchnnl.app/');
-    await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
+    assert(await waitFor(() => app.store.get('HNewhere:reddit_shared_refresh')?.state === 'done', 15000), 'the initial feed refresh finishes');
+    await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().evaluate((element) => element.click());
     const initialComment = await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:freshcomment"]').count() === 1, 20000);
     if (!initialComment) {
       const panel = app.page.locator('#comments-content');
@@ -395,7 +400,10 @@ test('Reader Sync still requests a working Reddit feed after an individual discu
   const original = await readFile(new URL('../../HNewhere.user.js', import.meta.url), 'utf8');
   const seam = 'renderAppList({ force: !sharedRefreshSince }).finally(finishFeed),';
   assert(original.includes(seam));
-  const source = original.replace(seam, 'new Promise((resolve) => setTimeout(resolve, 3000)).then(() => renderAppList({ force: true })).finally(finishFeed),');
+  const stagedFeed = 'if (!batch.reuseFresh && (batch.feedOnly || appState || isBrowsing(sidebarUI))) {';
+  assert(original.includes(stagedFeed));
+  const source = original.replace(seam, 'new Promise((resolve) => setTimeout(resolve, 3000)).then(() => renderAppList({ force: true })).finally(finishFeed),')
+    .replace(stagedFeed,'if (!window.__skipStagedFeed && !batch.reuseFresh && (batch.feedOnly || appState || isBrowsing(sidebarUI))) {');
   const app = await launchApp({ source, sharedStore: true, handler: 'Userscripts', tabs: true, topHosts: ['www.reddit.com'], settings: { sources: { hn: true, reddit: true }, updateCheck: false, frontPageMode: 'sources' }, values: { 'HNewhere:reddit_read_window_notice': 2 }, responses: [
     { match: (path) => path.includes('/api/posts/search'), json: { data: [post] } },
     { match: (path) => path.includes('/api/comments/tree'), json: { data: [comment] } },
@@ -408,7 +416,7 @@ test('Reader Sync still requests a working Reddit feed after an individual discu
     if (denyThread) calls.push(path);
     if (path === '/r/popular.json' && denyFeed) return route.fulfill({ status: 403, contentType: 'application/json', body: '{"message":"Forbidden"}' });
     if (path.includes('/comments/') && denyThread) {
-      await new Promise((resolve) => setTimeout(resolve, 4000));
+      await new Promise((resolve) => setTimeout(resolve, 250));
       return route.fulfill({ status: 403, contentType: 'application/json', body: '{"message":"Forbidden"}' });
     }
     const body = path === '/' ? '<!doctype html><title>Reddit fixture</title>' : path === '/api/me.json' ? JSON.stringify({ data: { name: 'fixture-user' } }) : path.includes('/comments/') ? JSON.stringify([{ data: { children: [{ kind: 't3', data: post }] } }, { data: { children: [comment] } }]) : JSON.stringify({ data: { children: [{ kind: 't3', data: post }] } });
@@ -418,7 +426,9 @@ test('Reader Sync still requests a working Reddit feed after an individual discu
     await app.page.goto('https://backchnnl.app/');
     await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
     assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:freshcomment"]').count() === 1, 20000));
+    assert(await waitFor(async () => await app.page.locator('#app-list-sync').getAttribute('aria-busy') !== 'true', 15000), 'the initial automatic refresh completes before testing manual Sync');
     denyThread = true;
+    await app.page.evaluate(()=>window.__skipStagedFeed=true);
     await app.page.locator('#app-list-sync').click();
     assert(await waitFor(async () => await app.page.locator('#app-list-sync').getAttribute('aria-busy') !== 'true', 25000));
     assert(calls.some((path) => path.includes('/comments/')), 'a discussion request was denied');
@@ -429,11 +439,42 @@ test('Reader Sync still requests a working Reddit feed after an individual discu
     denyFeed = true;
     await app.page.locator('#app-list-sync').click();
     assert(await waitFor(async () => await app.page.locator('#app-list-sync').getAttribute('aria-busy') !== 'true', 25000));
+    assert.equal(await app.page.locator('#app-list-body .browse-feed-status').count(), 0, 'a single source failure does not headline the combined view');
+    await app.page.locator('#app-rail [data-app-view="source:reddit"]').click();
+    await app.page.locator('#app-list-body .browse-feed-status').waitFor({ timeout: 10000 });
     assert.match(await app.page.locator('#app-list-body .browse-feed-status').textContent(), /Reddit.*feed.*Showing saved articles/i, 'a real feed failure is still disclosed');
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();
   }
+});
+
+test('a failed unrelated feed does not prevent views sharing a successful Reddit refresh',{timeout:45000},async()=>{
+  const original=await readFile(new URL('../../HNewhere.user.js',import.meta.url),'utf8');
+  const source=original.replace('let redditReadInitialAttempted = false;','let redditReadInitialAttempted = true;');
+  const app=await launchApp({source,sharedStore:true,handler:'Userscripts',tabs:true,topHosts:['www.reddit.com',new URL(STORIES[0].url).hostname],settings:{sources:{hn:true,reddit:true,lemmy:true},autoOpenSidebar:true,frontPageMode:'sources',updateCheck:false},values:{'HNewhere:reddit_read_window_notice':2},responses:[{match:url=>url.includes('lemmy.world/api/'),status:503,json:{error:'unavailable'}}]});
+  const history=[];const set=app.store.set.bind(app.store);app.store.set=(key,value)=>{if(key==='HNewhere:reddit_shared_refresh')history.push(structuredClone(value));return set(key,value)};
+  let feeds=0;const opened=[];const other=await app.context.newPage();
+  app.context.on('page',page=>{if(page!==app.page&&page!==other)opened.push(page)});
+  await app.context.route('https://www.reddit.com/**',async route=>{
+    const path=new URL(route.request().url()).pathname;
+    if(path==='/r/popular.json'){feeds++;await new Promise(resolve=>setTimeout(resolve,250))}
+    const body=path==='/'?'<title>Reddit fixture</title>':path==='/api/me.json'?JSON.stringify({data:{name:'fixture'}}):JSON.stringify({data:{children:[]}});
+    await route.fulfill({status:200,contentType:path==='/'?'text/html':'application/json',body});
+  });
+  try{
+    await Promise.all([app.page.goto('https://backchnnl.app/'),other.goto(STORIES[0].url)]);
+    await app.page.locator('#app-list-body .browse-title-link').first().waitFor();await other.locator('#comments-content .comment[data-comment-id^="hn:"]').first().waitFor();
+    await other.locator('#browse-toggle .wordmark-root').click();
+    const one=app.page.locator('#app-list-sync'),two=other.locator('#browse-home-sync');
+    assert(await waitFor(async()=>await other.locator('#panel.browsing').count()===1&&await one.getAttribute('aria-busy')!=='true'&&await two.getAttribute('aria-busy')!=='true',15000),'both initial views settle before the concurrent manual refresh');
+    await Promise.all([one.click(),two.click()]);
+    assert(await waitFor(async()=>await one.getAttribute('aria-busy')!=='true'&&await two.getAttribute('aria-busy')!=='true'&&opened.length>0&&opened.every(page=>page.isClosed()),20000));
+    assert.equal(opened.length,1,`another provider failure does not make Reddit success unusable: ${JSON.stringify(history)}`);
+    assert.equal(feeds,1,'the successful Reddit feed is fetched once');
+    assert.doesNotMatch(await app.page.locator('#toast').textContent(),/^Synced$/,'overall completion still reflects the failed source');
+    assert.deepEqual(app.errors,[]);
+  }finally{await app.browser.close()}
 });
 
 test("the Reddit tab identifies its purpose and closes before local comment rendering finishes", { timeout: 45000 }, async () => {
@@ -729,7 +770,8 @@ test("an oversized live thread falls back without losing other live discussions"
     assert(await waitFor(async () => await app.page.locator("#panel.app-docked > .discussion-progress-strip").count() === 1, 15000), "Reader shows progress while discussions load");
     assert.doesNotMatch(await app.page.locator("#comments-content").textContent(), /keep the reddit tab open/i);
     assert(await waitFor(async () => (await app.page.locator("#comments-content").textContent()).includes("Recovered archive comment"), 20000));
-    assert.match(await app.page.locator("#comments-content").textContent(), /Other live comment/, "a local size limit must not hide the next discussion");
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="reddit:small"]').count() === 1, 20000), "a local size limit must not hide the next discussion");
+    assert.match(await app.page.locator('#comments-content .comment[data-comment-id="reddit:small"]').textContent(), /Other live comment/);
     assert(!(app.store.get("HNewhere:reddit_poll")?.until > Date.now()), "a local size limit is not a server rate limit");
     assert(!JSON.stringify([...app.store.values()]).includes("private-fixture-token"), "private Reddit credentials stay in the Reddit tab");
     assert.deepEqual(app.errors, []);

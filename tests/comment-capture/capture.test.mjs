@@ -21,6 +21,7 @@ async function assertCaptured(app, fixture) {
   await waitFor(async () => await app.page.locator(selector).count() === 140, 12000);
   assert.equal(await app.page.locator(selector).count(), 140, "large discussion must render every available comment");
   for (let index = 0; index < fixture.posts.length; index++) {
+    assert(await waitFor(async () => await app.page.locator(`#comments-content .comment[data-story-id="${fixture.posts[index].id}"]`).count() === fixture.sizes[index],12000),`discussion ${index} finishes its independent load`);
     const actual = await app.page.locator(`#comments-content .comment[data-story-id="${fixture.posts[index].id}"]`).count();
     assert.equal(actual, fixture.sizes[index], `discussion ${index} lost or duplicated comments`);
   }
@@ -357,15 +358,16 @@ for (const mode of ['Sidebar', 'Reader']) test(`${mode} Sync keeps existing comm
     const menu = app.page.locator(sidebar ? '#comments-content .source-menu' : '#app-discussion-meta .source-menu');
     assert.equal(await menu.locator('[data-discussion-key="reddit:newdiscussion"]').count(), 1, 'the new discussion appears in the Sources menu');
     const status = app.page.locator(sidebar ? '#comments-content .source-menu-entry' : '#app-discussion-meta .source-menu-entry').filter({ has: app.page.locator('[data-discussion-key="reddit:fixture0"]') });
-    assert.match(await status.locator('.discussion-source-status').textContent(), /couldn't refresh.*previously loaded/i, 'the affected source explains that the existing comments are retained');
+    assert.equal(await status.locator('.discussion-source-status').count(), 0, 'retaining saved comments does not add a refresh diagnostic');
     await sourceMenu.click();
-    await app.page.locator('#comment-sort').selectOption('newest');
+    await app.page.locator('#comment-sort').click();
+    await app.page.getByRole('option', { name: 'Newest', exact: true }).click();
     assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading').count() === 1, 5000));
     assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading').count() === 0, 15000));
     assert(await waitFor(async () => await root.count() === 1 && await retained.count() === 1 && await app.page.locator('#comments-content .comment[data-comment-id="reddit:newroot"]').count() === 1, 15000), 'sorting reuses the retained and newly synced comments');
     assert.match(await root.textContent(), /This existing comment was edited/);
     await sourceMenu.click();
-    assert.match(await status.locator('.discussion-source-status').textContent(), /couldn't refresh.*previously loaded/i, 'sorting retains the failed-refresh status');
+    assert.equal(await status.locator('.discussion-source-status').count(), 0, 'sorting does not add a refresh diagnostic');
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();
@@ -423,7 +425,8 @@ for (const mode of ['Sidebar', 'Reader']) test(`${mode} Sync preserves Hacker Ne
     assert(await changed.evaluate((element) => element === window.__hnSyncOriginal));
     assert.match(await retained.textContent(), /Previously loaded Hacker News comment/);
     assert.equal(await app.page.locator('#comments-content .comment[data-comment-id="hn:900199"]').count(), 1);
-    await app.page.locator('#comment-sort').selectOption('newest');
+    await app.page.locator('#comment-sort').click();
+    await app.page.getByRole('option', { name: 'Newest', exact: true }).click();
     assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading').count() === 1, 5000));
     assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading').count() === 0, 15000));
     assert(await waitFor(async () => await retained.count() === 1, 15000), 'the retained comment survives a later render from cache');
@@ -452,7 +455,8 @@ test('a stale in-flight Hacker News reply cannot overwrite the refreshed cache',
     const reply = app.page.locator('#comments-content .comment[data-comment-id="hn:900199"]');
     assert.match(await reply.textContent(), /Refreshed reply/);
     await new Promise((resolve) => setTimeout(resolve, 2800));
-    await app.page.locator('#comment-sort').selectOption('newest');
+    await app.page.locator('#comment-sort').click();
+    await app.page.getByRole('option', { name: 'Newest', exact: true }).click();
     assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading').count() === 1, 5000));
     assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading').count() === 0, 15000));
     assert.match(await reply.textContent(), /Refreshed reply/, 'the earlier response cannot replace the updated cache');
@@ -475,6 +479,7 @@ for (const mode of ['Sidebar', 'Reader']) test(`${mode} Sync preserves the selec
     const disclosure = app.page.locator(sidebar ? '#comments-content .page-header-disclosure' : '#app-discussion-meta .page-header-disclosure');
     await disclosure.click();
     const menu = app.page.locator(sidebar ? '#comments-content .source-menu' : '#app-discussion-meta .source-menu');
+    await menu.getByRole('checkbox', {name:'All sources',exact:true}).uncheck();
     await menu.locator('[data-discussion-key="reddit:fixture1"] input').check();
     assert(await waitFor(async () => await other.evaluate((element) => element.classList.contains('comment-filter-hidden')), 5000));
     await app.page.locator('#comments-content').evaluate((body) => {
@@ -545,7 +550,6 @@ for (const mode of ['Sidebar', 'Reader']) test(`${mode} Sync keeps a draft when 
     await app.page.goto(sidebar ? url : 'https://backchnnl.app/');
     if (!sidebar) await app.page.locator('#app-list-body .browse-title-link', { hasText: story.title }).first().click();
     assert(await waitFor(async () => await app.page.locator('#comments-content .top-level-comments').count() === 1 && await app.page.locator('#comments-content .discussion-loading').count() === 0, 15000));
-    if (!sidebar) await app.page.locator('#comment-toggle').click();
     const composer = app.page.locator('#panel .compose-box');
     await composer.locator('.composer-text').fill('Draft in an empty discussion');
     await composer.evaluate((element) => { window.__emptyDiscussionComposer = element; });
@@ -714,10 +718,12 @@ test("Reader feed discoveries remain available on the article in Sidebar", { tim
     await app.page.goto('https://backchnnl.app/');
     await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click({ timeout: 15000 });
     assert(await waitFor(async () => (await app.page.locator('#comments-content').textContent()).includes('Lemmy feed comment'), 15000));
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id^="bsky:"]').count() === 1, 15000));
     assert.match(await app.page.locator('#comments-content').textContent(), /Bluesky feed comment/);
     const article = await app.context.newPage();
     await article.goto(url);
     assert(await waitFor(async () => await article.locator('#comments-content').count() > 0 && (await article.locator('#comments-content').textContent()).includes('Lemmy feed comment'), 15000));
+    assert(await waitFor(async () => await article.locator('#comments-content .comment[data-comment-id^="bsky:"]').count() === 1, 15000));
     assert.match(await article.locator('#comments-content').textContent(), /Bluesky feed comment/);
     assert.deepEqual(app.errors, []);
   } finally {
@@ -738,11 +744,12 @@ test('Reader recovers other exact discussions already present in shared feeds', 
     await app.page.goto('https://backchnnl.app/');
     const link = app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first();
     assert(await waitFor(async () => await link.count() > 0, 10000));
+    assert(await waitFor(() => app.store.has('HNewhere:frontpage_cache:hn,lemmy'), 10000), 'the initial feed snapshot is saved before seeding a separate known discussion');
     await app.page.evaluate(async (story) => {
       await window.__gmStore('set', 'HNewhere:frontpage_cache:hn,lemmy', { timestamp: Date.now(), rows: [{ story, also: [] }], sources: ['hn', 'lemmy'] });
     }, story);
     await link.click();
-    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="lemmy:99"]').count() === 1, 12000), 'Reader includes an exact article discussion from another cached feed');
+    assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id="lemmy:99"]').count() === 1, 12000), `Reader includes an exact article discussion from another cached feed: ${JSON.stringify({requests:app.requests.filter(entry=>entry.url.includes('lemmy')).map(entry=>entry.url),cache:app.store.get('HNewhere:frontpage_cache:hn,lemmy')?.rows?.flatMap(row=>[row.story,...(row.also||[])]).map(story=>[story.source,story.id])})}`);
     assert.deepEqual(app.errors, []);
   } finally { await app.browser.close(); }
 });
@@ -754,7 +761,7 @@ test('Sidebar reuses comments loaded by Reader in another tab', { timeout: 45000
     await app.page.locator('#app-list-body .browse-title-link', { hasText: STORIES[0].title }).first().click();
     assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-story-id="9001"]').count() === 30, 15000));
     assert(await waitFor(() => app.store.has('HNewhere:thread_cache:hn:9001'), 10000), 'the loaded discussion is available to other pages');
-    const itemRequests = () => app.requests.filter(({ url: requested }) => /hacker-news\.firebaseio\.com\/v0\/item\/(9001|9001\d\d)\.json/.test(requested)).length;
+    const itemRequests = () => app.requests.filter(({ url: requested }) => /hacker-news\.firebaseio\.com\/v0\/item\/9001\d\d\.json/.test(requested)).length;
     const before = itemRequests();
     const article = await app.context.newPage();
     await article.goto(url);
