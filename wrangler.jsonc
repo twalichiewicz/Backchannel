@@ -1,10 +1,29 @@
 {
-	"name": "backchannel",
+	"name": "backchannel-local",
 	"main": "worker.js",
 	"compatibility_date": "2026-09-11",
+	"workers_dev": false,
+	"preview_urls": false,
+	"dev": {
+		"host": "local-backchannel.test"
+	},
+	"build": {
+		"command": "npm ci --prefix account --ignore-scripts --no-audit --no-fund",
+		"watch_dir": [
+			"worker.js",
+			"account/worker.mjs",
+			"account/devices.mjs",
+			"account/package.json",
+			"account/package-lock.json"
+		]
+	},
 	"assets": {
 		"directory": "./site",
 		"binding": "ASSETS",
-		"run_worker_first": ["/"]
+		"run_worker_first": [
+			"/",
+			"/account",
+			"/account/*"
+		]
 	}
 }
