@@ -791,12 +791,13 @@ test('two devices share snapshot revisions and delete the account with a fresh p
   assert.equal((await request(worker, '/account/snapshot', { token: other.token })).status, 401);
 });
 
-test('Reader settings verify account email, connect two devices, resolve edits, and delete the account', { timeout: 45_000 }, async t => {
+test('Reader settings verify account email, connect two devices, resolve edits, and protect data when switching accounts', { timeout: 60_000 }, async t => {
   const mail = [];
   const diagnostics = [];
   const worker = createWorker(t, { database: true, limit: 100, mail });
   const db = await applySchema(worker, '0002_recovery_email.sql', '0003_devices.sql', '0004_email_code_attempts.sql', '0006_passkey_key_envelopes.sql');
   const sessionKey = 'HNewhere:account_sync';
+  const ownerKey = 'HNewhere:account_data_owner';
   const notesKey = 'HNewhere:notes:url:example.com/private';
   const indexKey = 'HNewhere:notes_index';
   const url = 'https://example.com/private';
@@ -1137,6 +1138,7 @@ test('Reader settings verify account email, connect two devices, resolve edits, 
     Object.defineProperty(PublicKeyCredential, 'signalAllAcceptedCredentials', {value: async value => window.deletedPasskeys.push(value)});
   });
   const deletedAccount = phone.store.get(sessionKey).account;
+  phone.store.delete(ownerKey); // Simulate a signed-in device upgrading from the alpha.
   await phone.syncButton('Delete account…');
   await phone.syncButton('Delete account');
   await phone.panel.locator('#account-entry-email').waitFor();
@@ -1155,7 +1157,43 @@ test('Reader settings verify account email, connect two devices, resolve edits, 
   assert.deepEqual(await phone.page.evaluate(() => window.deletedPasskeys.at(-1)), {
     rpId:'backchnnl.app', credentialId:replacementId,
   });
+  // The virtual authenticator does not act on the mocked credential removal signal.
+  await phone.devtools.send('WebAuthn.removeCredential', {
+    authenticatorId:phone.authenticatorId, credentialId:actualCredentials.credentials[0].credentialId,
+  });
   await first.syncButton('Sync now');
   await first.status.filter({hasText:'Sign in with your passkey'}).waitFor();
+
+  const snapshotRequests = [];
+  phone.page.on('request', request => {
+    if (new URL(request.url()).pathname === '/account/snapshot') snapshotRequests.push(request.method());
+  });
+  readerEmail = 'another-reader@example.test';
+  await signInByEmail(phone);
+  await phone.syncButton('Create passkey');
+  await phone.syncButton('Continue');
+  await phone.syncButton('Don’t share');
+  await phone.syncButton('Finish sign up');
+  const confirmImport = phone.panel.getByRole('heading', {name:'Use this device’s reading data?', exact:true});
+  await confirmImport.waitFor({timeout:3000});
+  const newAccount = phone.store.get(sessionKey).account;
+  assert.notEqual(newAccount,deletedAccount);
+  assert.equal(phone.store.get(ownerKey),deletedAccount);
+  await phone.page.reload();
+  await confirmImport.waitFor({timeout:5000});
+  await phone.syncButton('Sign out');
+  await phone.panel.locator('#account-entry-email').waitFor();
+  assert.equal(phone.store.get(sessionKey),undefined);
+  assert.equal(phone.store.get(ownerKey),deletedAccount);
+  assert.deepEqual(phone.store.get(notesKey).notes,restoredNotes);
+  await signInByEmail(phone);
+  await confirmImport.waitFor({timeout:5000});
+  assert.deepEqual(snapshotRequests, []);
+  assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM snapshots').first('count'),0);
+  await phone.syncButton('Import and sync');
+  await phone.revision(1);
+  assert.equal(phone.store.get(ownerKey),newAccount);
+  assert.deepEqual(phone.store.get(notesKey).notes,restoredNotes);
+  assert.deepEqual(snapshotRequests, ['GET','PUT']);
   assert.deepEqual([...first.errors,...phone.errors],[]);
 });

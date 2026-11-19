@@ -160,6 +160,30 @@ function mockAccount(app, remote) {
   return {start, requests};
 }
 
+test('importing a different library preserves the account’s existing reading queue', {timeout: 20000}, async () => {
+  const remote = {revision:0, ciphertext:null, email:'birb@example.com'};
+  const entry = id => ({id, key:`example.com/${id}`, url:`https://example.com/${id}`, title:id, addedAt:10, readAt:null});
+  const original = entry('original');
+  const imported = entry('imported');
+  const app = await launchApp({sharedStore:true, values:{[storage]:session, [queueStorage]:[original]}});
+  try {
+    await mockAccount(app, remote).start;
+    const panel = await settings(app);
+    assert(await waitFor(() => app.store.get(storage)?.revision === 1));
+    await panel.getByRole('button',{name:'Sign out',exact:true}).click();
+    await panel.locator('#account-entry-email').waitFor();
+    assert.equal(app.store.get('HNewhere:account_sync_checkpoint')?.revision,1);
+
+    app.store.set('HNewhere:account_data_owner','other-account');
+    app.store.set(queueStorage,[imported]);
+    app.store.set(storage,session);
+    const reopened = await settings(app);
+    await reopened.getByRole('button',{name:'Import and sync',exact:true}).click();
+    assert(await waitFor(() => app.store.get(storage)?.revision === 2));
+    assert.deepEqual(app.store.get(storage).base.collection.queue.map(item => item.id).sort(), ['imported','original']);
+  } finally { await app.browser.close(); }
+});
+
 test('Account sync uploads a private snapshot and another local profile can apply it', {timeout: 30000}, async () => {
   const uploadStarted = Promise.withResolvers();
   const releaseUpload = Promise.withResolvers();

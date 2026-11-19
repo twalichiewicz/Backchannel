@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.19-alpha
+// @version      1.6.19
 // @license      GPL-3.0-or-later
 // @copyright    2026 Triglavis LLC
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -22290,6 +22290,7 @@ ${
 
         <h3>Your choices</h3>
         <p>Diagnostic sharing starts off and applies to the device where you turn it on. In Reader, you can change your choice in Settings → Account → Manage account → Privacy. Reports are sent only while signed in with sharing enabled.</p>
+        <p>Signing out or deleting an account leaves your reading data in this browser profile. If you sign in to a different account in the same profile, Backchannel asks before syncing that data. Use separate browser profiles to keep reading data separate.</p>
         <p>Turn any source off in Settings, or hide Backchannel on any site. Removing the script or clearing your userscript manager's data removes the local copy. Delete account in Settings → Account removes the active account and synced data. Cloudflare database backups may retain earlier copies for up to 30 days.</p>
 
         <h3>Changes</h3>
@@ -39482,6 +39483,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	const ACCOUNT_SYNC_PROTOCOL = 2;
 	const ACCOUNT_EDIT_KEY = "HNewhere:account_pending_edit";
 	const ACCOUNT_CHECKPOINT_KEY = "HNewhere:account_sync_checkpoint";
+	const ACCOUNT_DATA_OWNER_KEY = "HNewhere:account_data_owner";
 	const ACCOUNT_DEVICE_KEY = "HNewhere:account_device";
 	const ACCOUNT_AVATAR_PREFIX = "HNewhere:account_avatar:";
 	const ACCOUNT_PREFERENCES = {
@@ -39503,6 +39505,13 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	const ACCOUNT_CIPHERTEXT_LIMIT = 1_398_102;
 	const ACCOUNT_DOCUMENT_LIMIT = 32 * 1024 * 1024;
 	let queueAccountEditSync = () => {};
+
+	async function accountDataOwner(session) {
+		const owner = await GM.getValue(ACCOUNT_DATA_OWNER_KEY, null);
+		if (owner) return owner;
+		if (session?.base) return session.account;
+		return (await GM.getValue(ACCOUNT_CHECKPOINT_KEY, null))?.account || session?.account || null;
+	}
 
 	function accountSettingsStoreKey(key) {
 		return ACCOUNT_SETTING_STORE_KEYS.has(key) || key.startsWith(ACCOUNT_AVATAR_PREFIX);
@@ -39774,6 +39783,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		const account = await load(ACCOUNT_SYNC_KEY, null);
 		const now = Date.now();
 		if (!hasAccountSyncSession(account) || account.keyBackupPending || !(account.expiresAt > now) || now < (diagnosticNextSend.get(key) ?? 0)) return;
+		if ((await accountDataOwner(account).catch(() => null)) !== account.account) return;
 		diagnosticNextSend.set(key, now + 60_000);
 		const elapsed = finishedAt - startedAt;
 		const duration = diagnosticDurationBuckets.find((limit) => elapsed <= limit) ?? diagnosticDurationBuckets.at(-1);
@@ -40010,7 +40020,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		const result = await accountSyncLock(async (lease) => {
 			const stored = await GM.getValue(ACCOUNT_SYNC_KEY, null);
 			if (!hasAccountSyncSession(stored) || stored.expiresAt <= Date.now()) throw new Error("session-expired");
-			if (stored.keyBackupPending) return null;
+			if (stored.keyBackupPending || (await accountDataOwner(stored)) !== stored.account) return null;
 			if (trigger === "edit" && !(await accountHasPendingEdits(stored))) return null;
 			const state = { ...stored };
 			let restore = trigger === "restore" ? confirmed?.recovery : null;
@@ -40297,6 +40307,14 @@ ${accountBackButton("account-manage-back")}
 </label>
 </section>
 </section>
+<section id="account-import" class="account-section account-flow" data-account-step="1" tabindex="-1" hidden>
+<h3 class="account-section-heading">Use this device’s reading data?</h3>
+<p class="appearance-row-hint">This browser profile has settings, Collection items, notes, or a reading queue from a previous account. Importing will add that data to this account. Use separate browser profiles to keep the two libraries apart.</p>
+<div class="account-actions">
+<button type="button" id="account-import-sign-out" class="settings-button">Sign out</button>
+<div><button type="button" id="account-import-continue" class="settings-button settings-button--primary" aria-describedby="account-status-import">Import and sync</button><div id="account-status-import"></div></div>
+</div>
+</section>
 <div id="account-signed-in" data-account-step="0" tabindex="-1" hidden>
 <section class="account-section">
 <div class="account-setting-row">
@@ -40458,6 +40476,7 @@ ${accountBackButton("account-manage-back")}
 		const signupEditor = find("signup-birb");
 		const signupInputs = [...signupEditor.querySelectorAll("input")];
 		let state = null;
+		let localDataOwner = null;
 		let accountLoaded = false;
 		let available = false;
 		let emailAvailable = false;
@@ -40569,6 +40588,7 @@ ${accountBackButton("account-manage-back")}
 		async function refreshLocalAccount() {
 			const saved = await load(ACCOUNT_SYNC_KEY, null);
 			state = hasAccountSyncSession(saved) ? saved : null;
+			localDataOwner = state ? await accountDataOwner(state).catch(() => null) : null;
 			avatar = state?.account ? await load(ACCOUNT_AVATAR_PREFIX + state.account, null) : null;
 			accountLoaded = true;
 		}
@@ -40627,6 +40647,7 @@ ${accountBackButton("account-manage-back")}
 			if (!accountLoaded) return;
 			const localSession = Boolean(state?.token);
 			const signedIn = Boolean(localSession && state.expiresAt > Date.now() && !expired);
+			const importRequired = signedIn && localDataOwner !== state.account;
 			const email = profile?.account === state?.account ? profile?.email : undefined;
 			const needsEmail = signedIn && emailAvailable && email === null;
 			const signup = signedIn ? null : emailFlow?.signup;
@@ -40646,6 +40667,7 @@ ${accountBackButton("account-manage-back")}
 			const signingUp = Boolean(signup || passkey?.mode === "register" || backingUp);
 			let screen = signedIn ? "signed-in" : "signed-out";
 			if (backingUp) screen = "key-setup";
+			else if (importRequired) screen = "import";
 			else if (editingAvatar) screen = "avatar-editor";
 			else if (enrolling) {
 				if (signup) screen = signup.screen || "signup-birb";
@@ -40665,7 +40687,7 @@ ${accountBackButton("account-manage-back")}
 			find("profile-name").textContent = signingUp ? "Create your account" : "Backchannel Account";
 			find("email-value").textContent = signedIn && !backingUp ? email || "" : ACCOUNT_SIGN_IN_HINT;
 			emailInput.placeholder = email || "No email on file";
-			find("avatar-edit").hidden = !signedIn || backingUp;
+			find("avatar-edit").hidden = !signedIn || backingUp || importRequired;
 			const last = find("last-sync");
 			last.querySelector("span").hidden = writeAccountTime(last.querySelector("time"), state?.lastSync);
 			const deleting = signedIn && accountAction === "delete";
@@ -40705,9 +40727,10 @@ ${accountBackButton("account-manage-back")}
 			}
 			for (const input of signupInputs) input.disabled = busy;
 			find("recovery-continue").disabled = busy || !available || !validAccountRecoveryKey(key.value.trim());
-			find("sync-now").disabled = busy || !available || !signedIn || backingUp || needsEmail || Boolean(conflict?.conflicts);
+			find("sync-now").disabled = busy || !available || !signedIn || backingUp || importRequired || needsEmail || Boolean(conflict?.conflicts);
+			find("import-continue").disabled ||= !localDataOwner;
 			find("restore-snapshot").disabled = busy || !available || !signedIn || !conflict?.recovery;
-			for (const id of ["logout", "manage", "manage-back", "key-done", "key-save", "avatar-cancel"]) find(id).disabled = busy;
+			for (const id of ["logout", "import-sign-out", "manage", "manage-back", "key-done", "key-save", "avatar-cancel"]) find(id).disabled = busy;
 			find("avatar-edit").disabled = busy || !signedIn;
 			for (const id of ["delete", "delete-final", "keep-local", "keep-remote"]) find(id).disabled = busy || !available || !signedIn;
 			find("delete-final").disabled ||= Boolean(deletePreparation && !deletePreparation.challenge);
@@ -40765,7 +40788,7 @@ ${accountBackButton("account-manage-back")}
 			showScreen(find(screen));
 			const deviceStatus = paintDevices(signedIn);
 			const requestedHost = deviceStatus || find(statusArea.startsWith("device:") ? "status-devices" : "status-" + statusArea);
-			const availabilityHost = find(backingUp ? "status-key" : signedIn ? "status-sync" : "status-signed-out");
+			const availabilityHost = find(backingUp ? "status-key" : importRequired ? "status-import" : signedIn ? "status-sync" : "status-signed-out");
 			const host = statusArea === "availability" ? availabilityHost : requestedHost;
 			const statusHost = shownScreen.contains(host) && !host.closest("[hidden]") ? host : find("feedback-parking");
 			const isError = status.hasAttribute("data-error") && Boolean(status.textContent);
@@ -40910,6 +40933,8 @@ ${accountBackButton("account-manage-back")}
 			await accountSyncLock(async (lease) => {
 				const current = await GM.getValue(ACCOUNT_SYNC_KEY, null);
 				const prior = hasAccountSyncSession(current) && current.account === signed.account ? current : {};
+				const owner = await accountDataOwner(current);
+				await lease.commit(() => GM.setValue(ACCOUNT_DATA_OWNER_KEY, owner || signed.account));
 				if (validAccountAvatar(chosenAvatar)) {
 					await lease.commit(() => GM.setValue(ACCOUNT_AVATAR_PREFIX + signed.account, chosenAvatar));
 				}
@@ -41235,6 +41260,21 @@ ${accountBackButton("account-manage-back")}
 		find("login").onclick = (event) => {
 			if (event.isTrusted) run(() => authenticate("login"), "", "login").then(focusAccountSetup);
 		};
+		action("import-continue", async () => {
+			const { account, token } = state;
+			const confirmedOwner = localDataOwner;
+			await accountSyncLock(async (lease) => {
+				const held = await GM.getValue(ACCOUNT_SYNC_KEY, null);
+				if (held?.token !== token || held?.account !== account || (await accountDataOwner(held)) !== confirmedOwner) {
+					throw new Error("account-unavailable");
+				}
+				if ((await GM.getValue(ACCOUNT_CHECKPOINT_KEY, null))?.account === account) {
+					await lease.commit(() => forget(ACCOUNT_CHECKPOINT_KEY));
+				}
+				await lease.commit(() => GM.setValue(ACCOUNT_DATA_OWNER_KEY, account));
+			});
+			queueAccountEditSync();
+		}, "", "import");
 		action("sync-now", () => sync());
 		action("restore-snapshot", () => sync("", "restore"), "", "snapshot-restore");
 		action("keep-local", () => sync("local"), "Syncing…", "conflict");
@@ -41371,7 +41411,9 @@ ${accountBackButton("account-manage-back")}
 		async function signOut() {
 			await accountSyncLock(async (lease) => {
 				const held = await GM.getValue(ACCOUNT_SYNC_KEY, null);
-				if (hasAccountSyncSession(held) && held.base) {
+				const owner = await accountDataOwner(held);
+				if (owner) await lease.commit(() => GM.setValue(ACCOUNT_DATA_OWNER_KEY, owner));
+				if (hasAccountSyncSession(held) && held.base && held.account === owner) {
 					const checkpoint = { account: held.account, revision: held.revision, ciphertext: await accountSeal(held.base, held, held.revision) };
 					await lease.commit(() => GM.setValue(ACCOUNT_CHECKPOINT_KEY, checkpoint));
 				}
@@ -41387,6 +41429,7 @@ ${accountBackButton("account-manage-back")}
 			return "";
 		}
 		action("logout", signOut, "", "logout");
+		action("import-sign-out", signOut, "", "import");
 		panel.addEventListener("account-section-hidden", () => {
 			accountAvailabilityPending = false;
 			finishSlide(stage);
@@ -41439,7 +41482,12 @@ ${accountBackButton("account-manage-back")}
 				await accountRequest("", { method: "DELETE", token, body });
 				signalRemovedAccountPasskey(body.credential.id, account);
 				await accountSyncLock(async (lease) => {
-					if ((await GM.getValue(ACCOUNT_SYNC_KEY, null))?.account === account) await lease.commit(() => forget(ACCOUNT_SYNC_KEY));
+					const held = await GM.getValue(ACCOUNT_SYNC_KEY, null);
+					if (held?.account === account) {
+						const owner = await accountDataOwner(held);
+						await lease.commit(() => GM.setValue(ACCOUNT_DATA_OWNER_KEY, owner));
+						await lease.commit(() => forget(ACCOUNT_SYNC_KEY));
+					}
 					if ((await GM.getValue(ACCOUNT_CHECKPOINT_KEY, null))?.account === account) await lease.commit(() => forget(ACCOUNT_CHECKPOINT_KEY));
 					await lease.commit(() => forget(ACCOUNT_AVATAR_PREFIX + account));
 				});
@@ -41483,6 +41531,10 @@ ${accountBackButton("account-manage-back")}
 			const held = await load(ACCOUNT_SYNC_KEY, null);
 			if (!hasAccountSyncSession(held) || held.keyBackupPending || held.expiresAt <= Date.now()) return;
 			if (emailAvailable && profile?.account === held.account && profile.email === null) return;
+			if ((await accountDataOwner(held)) !== held.account) {
+				pendingEdit = false;
+				return;
+			}
 			const hasEdits = await accountHasPendingEdits(held);
 			if (!canSyncEdits()) return;
 			pendingEdit = false;

@@ -67,6 +67,8 @@ use to detect updates, so every release bumps it.
   data. Update availability replaces the Installed label, with one matching action.
 - Manage account keeps email changes available if a startup sync is still
   running. The passkey hint appears after you enter a valid new email address.
+- Switching accounts in the same browser profile requires confirmation before
+  syncing reading data retained from the previous account.
 - Update status retains its card styling, and Cached data has its own subsection.
 - The Sync schedule dropdown closes when clicked again in Safari. Settings links
   follow the theme, and the bug-report icon aligns with the navigation.
