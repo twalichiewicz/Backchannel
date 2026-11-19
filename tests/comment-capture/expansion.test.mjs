@@ -59,7 +59,8 @@ test('expanded replies remain available to another page using the shared discuss
     assert.match(await remaining.textContent(), /^1 more reply/, 'only the remaining reply is offered');
     await remaining.click();
     assert(await waitFor(async () => await other.locator('#comments-content .comment[data-comment-id="reddit:extra100"]').count() === 1, 10000));
-    await other.locator('#comment-sort').selectOption('newest');
+    await other.locator('#comment-sort').click();
+    await other.getByRole('option', { name: 'Newest', exact: true }).click();
     assert(await waitFor(async () => await other.locator('#comments-content .discussion-loading').count() === 0 && await other.locator('#comments-content .comment[data-comment-id]').count() === 102, 15000), 'sorting keeps all replies expanded from the shared cache');
     assert.equal(await remaining.count(), 0, 'already loaded replies are not offered again');
     assert.deepEqual(app.errors, []);
@@ -139,7 +140,8 @@ test("sync keeps expanded Bluesky replies without restoring an exhausted more bu
     assert(await waitFor(async () => await sync.getAttribute('aria-busy') !== 'true', 15000));
     assert.equal(await app.page.locator('#comments-content .comment[data-comment-id]').count(), 12);
     assert.equal(await more.count(), 0, 'an already expanded reply is not offered a second time');
-    await app.page.locator('#comment-sort').selectOption('newest');
+    await app.page.locator('#comment-sort').click();
+    await app.page.getByRole('option', { name: 'Newest', exact: true }).click();
     assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading').count() === 1, 5000));
     assert(await waitFor(async () => await app.page.locator('#comments-content .discussion-loading').count() === 0, 15000));
     assert(await waitFor(async () => await app.page.locator('#comments-content .comment[data-comment-id]').count() === 12, 15000));
@@ -171,15 +173,16 @@ test("expanding an archived reply preserves its nested descendants", { timeout: 
   }
 });
 
-test("unexpandable missing replies are disclosed", { timeout: 30000 }, async () => {
+test("unexpandable missing replies keep the available comments without a load diagnostic", { timeout: 30000 }, async () => {
   const initial = [comment("root", "t3_fixture0", "Parent"), { kind: "more", data: { children: [], count: 3 } }];
   const app = await openArchive(initial, []);
   try {
     const disclosure = app.page.locator("#comments-content .page-header-disclosure");
     assert(await waitFor(async () => await disclosure.count() === 1, 15000), "a single affected discussion still has a sources menu");
-    assert.match(await disclosure.textContent(), /1\* discussion/);
+    assert.match(await disclosure.textContent(), /1 discussion/);
     await disclosure.click();
-    assert.match(await app.page.locator("#comments-content .discussion-source-status").textContent(), /only some comments/i);
+    assert.equal(await app.page.locator("#comments-content .discussion-source-status").count(), 0);
+    assert.equal(await app.page.locator('#comments-content .comment[data-comment-id="reddit:root"]').count(), 1);
     assert.deepEqual(app.errors, []);
   } finally {
     await app.browser.close();

@@ -248,7 +248,7 @@ function boot({ injectTop, skipFrameHosts, settings, values, appHost, topHosts =
 	window.GM = {
 		info: { script: { version }, scriptHandler: handler },
 		// BC_GM_TABS=1: the manager-tab API, as the Userscripts app has it, backed by window.open.
-		...(tabs ? { openInTab: async (url, background) => { window.__tabs = window.__tabs || new Map(); const id = window.__tabs.size + 1; const w = window.open(url, "_blank"); if (!w) return null; window.__tabs.set(id, w); return { id, active: !background }; }, closeTab: async (id) => { if (id != null) { window.__tabs?.get(id)?.close(); return; } window.close(); } } : {}),
+		...(tabs ? { openInTab: async (url, background) => { const w = window.open(url, "_blank"); if (!w) return null; const id = await window.__gmRegisterOpenedTab(url); return { id, active: !background }; }, closeTab: async (id) => window.__gmCloseNativeTab(id) } : {}),
 		getValue: async (key, fallback) => {
 			if (shared) {
 				const answer = await window.__gmStore("get", key);
@@ -352,6 +352,23 @@ export async function launchApp({
 	const browser = await ({ chromium, firefox, webkit }[engine] || chromium).launch(launchOptions);
 	const context = await browser.newContext({ viewport, colorScheme, hasTouch, deviceScaleFactor: scale, ...(timezoneId ? { timezoneId } : {}) });
 	await context.route("**/*", (route) => route.abort("blockedbyclient"));
+	if (tabs) {
+		const managerTabs = new Map();
+		let nextManagerTab = 1;
+		await context.exposeFunction("__gmRegisterOpenedTab", async (url) => {
+			let tab;
+			if (!(await waitFor(() => { tab = context.pages().find((page) => page.url() === url && ![...managerTabs.values()].includes(page)); return Boolean(tab); }, 5000))) throw new Error("Manager could not identify its opening");
+			const id = nextManagerTab++;
+			managerTabs.set(id, tab);
+			return id;
+		});
+		await context.exposeBinding("__gmCloseNativeTab", async ({ page }, id) => {
+			const tab = id == null ? page : managerTabs.get(id);
+			if (!tab || tab.isClosed()) throw new Error("Invalid call to tabs.remove(). Tab '" + id + "' was not found.");
+			await tab.close();
+		});
+	}
+
 	const requests = [];
 	const extra = extraStories.map((each, k) => ({ id: 9200 + k, by: `extra${k + 1}`, points: 1, comments: 3, time: NOW - 3600 * (50 + k), ...each }));
 	const stories = [...storiesWith(resubmissions), ...extra];
@@ -365,7 +382,7 @@ export async function launchApp({
 		if (canned) {
 			if (canned.delay) await new Promise((resolve) => setTimeout(resolve, canned.delay));
 
-			return { status: canned.status ?? 200, finalUrl: options.url, responseHeaders: canned.headers || "content-type: application/json", text: JSON.stringify(canned.json ?? {}) };
+			return { status: canned.status ?? 200, finalUrl: options.url, responseHeaders: canned.headers || "content-type: application/json", text: canned.text ?? JSON.stringify(canned.json ?? {}) };
 		}
 
 		return answer(options, stories, votable, live, pageFor, front);

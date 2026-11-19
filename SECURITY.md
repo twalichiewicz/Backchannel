@@ -52,6 +52,7 @@ Worth stating plainly, because the permissions are broad by necessity:
   | Reddit (fallback) | `arctic-shift.photon-reddit.com` | the URL of each page you visit, and post or parent-comment identifiers when loading discussions, with no identifier attached. Used automatically when reddit.com declines a request or a response is too large to transfer |
   | Bluesky (discovery) | `constellation.microcosm.blue` | the URL of each page you visit, with no identifier attached |
   | Bluesky | `public.api.bsky.app` | post identifiers only -- never the URL of the page you are on |
+  | X | `x.com`, `t.co`, `cdn.syndication.twimg.com`, and potentially destinations reached by redirects | the page address is searched on X using your browser's X session; link identifiers and public post identifiers are checked separately. X is off by default |
   | Lobsters | `lobste.rs` | the domain of each page you visit -- never the full address. It has no URL search, so the exact match is made here |
   | Wikipedia | `en.wikipedia.org` | the URL of each page you visit, to find the Talk pages citing it, and then those pages' names to read what was said. Signed in to Wikipedia, these requests carry your session; signed out, they carry a device identifier that lasts a year |
   | Lemmy | `lemmy.world` | the URL of each page you visit, with no account |
@@ -76,6 +77,11 @@ Worth stating plainly, because the permissions are broad by necessity:
   | wherever an image in a comment is hosted | only with *Show images in comments* on, and it is off until you turn it on | nothing but the request for the image, over https and without a referrer |
   | the page you ask the reader to scrape | only when you press *Scrape link content* | what any visit tells it: the page opens in a tab of your own browser, signed in if you are |
   | `api.github.com` | once a day while *Check for new versions automatically* is on, and when you press *Check for updates*, since 1.6.18 | nothing but the request itself: one `GET` without cookies for Backchannel's list of releases |
+
+- **Automatic source refresh follows your Settings choice.** Since 1.6.19,
+  Settings → Sources has one frequency for Front Pages. Automatic feed requests
+  run while that view is visible. Manual pauses automatic feed and Collection
+  checks; opening an article or pressing Sync can still request source data.
 
 - **It checks the pages in your Collection for new discussion.** Since 1.6.17
   every page you save is watched until you choose *Unwatch* in its card's
@@ -128,7 +134,9 @@ Worth stating plainly, because the permissions are broad by necessity:
   notepad. An
   article you ask the reader to scrape passes through the same storage on its
   way from its tab: the reader removes it once it is shown, and if the reader
-  has gone by then it stays until the next scrape replaces it. On
+  has gone by then it stays until the next scrape replaces it. Temporary helper
+  authorization also retains the requested address and a random code for up to
+  ten minutes, so delayed openings can close safely without rereading the page. On
   backchnnl.app it also keeps your theme and the reader's two
   page colors in that site's own local storage, under `backchannel:chrome`, so
   the page can take your color before the script runs and, since 1.6.17.1,
@@ -141,7 +149,34 @@ Worth stating plainly, because the permissions are broad by necessity:
   versions left behind, Front Pages unused for a week, and when you last
   visited a discussion, after 90 days. That pass reads only the values it
   needs to decide, and never deletes your Collection, queue, notes or
-  settings. Nothing is sent anywhere except the hosts above.
+  settings. Backchannel sends requests to the hosts documented here.
+- **Account sync is optional.** In Reader the same-origin account API verifies
+  passkeys and issues expiring device sessions. Cloudflare D1 holds public
+  credential records, hashed session tokens, the current encrypted snapshot,
+  and one previous version. Settings, Collection items, notes, and the reading queue
+  are encrypted before upload. Uploading requires a live session and a proof
+  derived from the sync key. If the current snapshot is unreadable, Reader can
+  offer to restore the previous readable version while preserving local edits.
+  Account setup requires a passkey that supplies
+  WebAuthn PRF output during an assertion. Reader uses that output to encrypt
+  the random recovery key for that passkey. Cloudflare holds the encrypted
+  key and a domain-separated verifier derived from the recovery key. The PRF
+  output and unencrypted key stay on the device. Sign-in releases the
+  encrypted key after verifying the passkey and creates a session only after
+  Reader opens the key and supplies the verifier with a single-use challenge.
+  Active sessions contain a random device ID, a browser and platform label,
+  and a last-active timestamp for the linked-devices list. A verified recovery
+  address lets Cloudflare deliver a one-time code. Account recovery checks the
+  saved recovery key before replacing the passkey, preserves the encrypted
+  snapshot, and revokes old credentials and sessions. Sign-out clears the
+  local session and decryption key and requests revocation. The encrypted
+  checkpoint lets Reader recognize deletions after you sign back in.
+  Deleting the account requires fresh passkey confirmation and removes the
+  account, snapshots, encrypted recovery key,
+  and all sessions. Reader then asks supported passkey providers to remove
+  the credential. Local settings, Collection items, notes, and the reading
+  queue remain. Cloudflare D1 backups may retain prior account data for up to
+  30 days on the paid plan. [Cloudflare D1 retention](https://developers.cloudflare.com/d1/reference/time-travel/)
 - **It keeps what Hacker News answered about the last pages you looked up**, so
   a page reopened within the hour is not asked about again. Since 1.6.15.2 that
   is one stored value holding thirty pages at most, by address. A page is used
@@ -150,14 +185,22 @@ Worth stating plainly, because the permissions are broad by necessity:
   Before 1.6.15.2 every page had a stored value of its own, named
   `HNewhere:hn_cache:` followed by its address, and none was removed. Since
   1.6.17.2 the daily pass above deletes them.
-- **The notepad stays on the machine you wrote it on.** Notes live in your
-  userscript manager's storage, keyed by page address or, on a PDF, by the
-  document's fingerprint. Nothing is uploaded and no source is told they exist.
-  That cuts the other way too: they do not sync between browsers, and clearing
-  your manager's data takes them with it, which is why the setting offers an
-  export.
-- **There is no backend, no analytics, and no telemetry.** Nobody but you and the
-  sources you have enabled sees which pages you look up.
+- **The notepad uses your userscript manager's storage.** Notes are keyed by
+  page address or, on a PDF, by the document's fingerprint. With Account sync
+  enabled, encrypted notes sync across your devices. The export option lets
+  you save notes before clearing your manager's storage.
+- **Cloudflare records operational requests.** Backchannel uses these logs
+  to run and troubleshoot the site and Account API. The host table above
+  describes the requests made while you browse and look up discussions.
+- **Diagnostic sharing starts off.** You can opt in during Account signup or
+  in Reader under Settings → Account → Manage account → Privacy. The choice
+  is part of the encrypted account snapshot and takes effect on each device
+  when it syncs. Reports are sent only while signed in with sharing enabled.
+  Reports contain an operation, outcome, duration bucket, Backchannel version,
+  and source name where relevant. Cloudflare Workers Analytics Engine retains
+  these reports for three months. Turning sharing off stops future reports
+  on this device immediately and on other devices when they sync.
+  [Analytics Engine retention](https://developers.cloudflare.com/analytics/analytics-engine/limits/#data-retention)
 
 ## Design decisions that limit the blast radius
 
@@ -192,12 +235,28 @@ Worth stating plainly, because the permissions are broad by necessity:
   Cookies, authorization headers, tokens and Reddit's modhash are never copied
   to the calling page or its responses. Each read session requires a stored,
   random code, expires within five minutes, accepts only the supported read
-  endpoints, respects server waits, and stops if Reddit is disabled. The tab
-  closes and temporary records are removed when finished. Settings › Sources
+  endpoints, respects server waits, and stops if Reddit is disabled. The helper
+  closes when finished through the manager or a nonce-bound signal to the
+  helper. Only the current opening operation retains a native tab handle; numeric
+  tab IDs are never saved for reuse. A same-origin background cleanup helper can
+  signal an interrupted helper without taking focus. Navigation elsewhere
+  relinquishes helper ownership. Completed markers contain no queued requests
+  and become eligible for cleanup after ten minutes. If sign-in returns to an unmarked Reddit homepage, Continue is
+  required before that page is used as a helper and closed. Settings › Sources
   keeps the explanation under (?). An illustrated notice explains Reddit's
   access changes and session refreshes, with Continue to start, and a
   toast confirms successful syncs. Other userscript managers keep their existing
   transport.
+- **X searches use a temporary tab.** X is disabled by default. When enabled,
+  looking up a page opens a background `x.com` search tab using the browser's
+  existing X session. Backchannel checks matching shortened links and requests
+  public post data before returning post text to the calling page. These checks
+  request anonymous transport, though cookie handling and redirect behavior
+  depend on the userscript manager. The helper uses the same background cleanup
+  and navigation checks as Reddit, and closes when the search finishes. Failed
+  cleanup stops further searches until a retry resolves it. Temporary completed
+  markers are eligible for cleanup after ten minutes. Turning X off stops an outstanding search from
+  returning posts. Searches and the public post service can omit results.
 - **A popup acts only on a request the script stored for it.** Before it
   opens a popup to vote, reply or submit, the script stores what you asked
   for under a one-time code and puts the code in the popup's address. The
@@ -245,6 +304,9 @@ Worth stating plainly, because the permissions are broad by necessity:
   that address or a page there that names it as its canonical address; a page
   on another site that claims the address is ignored. What comes back is
   reduced by the same allowlist as any other reading view before it is shown.
+  A matching random code is required in the helper address; an ordinary open
+  article tab does not answer or close. A delayed helper may use its completed
+  authorization only to close, and failed cleanup is retried by Sync.
   An excluded page is never read this way: a tab on one does not answer, and
   the reader does not offer to scrape one. A site you have hidden, and any site
   while the Sidebar is switched off, is still read if it is the address you
@@ -262,6 +324,8 @@ with its address as `<page>`.
 
 | Source | Request | What it carries | Arrives as you? |
 | --- | --- | --- | --- |
+| Optional Backchannel account | Same-origin requests under `backchnnl.app/account` from Reader | Passkey public credential or signed proof when authenticating, a session token when syncing, and encrypted settings, Collection, and reading queue snapshots with revision numbers | Yes, as your Backchannel account |
+| Optional diagnostics | `POST backchnnl.app/account/diagnostics` from Reader | Operation, outcome, duration bucket, Backchannel version, and source name where relevant. Cloudflare handles the connection and its operational logs. | The report carries no account or device identifier. |
 | Hacker News | `GET hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=url&hitsPerPage=20&query=<page>` | `<page>` | No, and no identifier of any kind |
 | Hacker News | `GET hacker-news.firebaseio.com/v0/item/<id>` | story and comment ids it already has | No |
 | Hacker News | `GET news.ycombinator.com/item?id=<id>` | a thread id, to read scores and flags | Yes, if you are signed in there |
@@ -271,6 +335,8 @@ with its address as `<page>`.
 | Reddit (archived comments) | `GET arctic-shift.photon-reddit.com/api/comments/tree?link_id=<post>&...`, optionally with `parent_id=<comment>` | the post identifier and, when expanding a reply branch, its parent comment identifier | No identifier, no session |
 | Reddit (Safari Userscripts reads) | a background tab on `www.reddit.com`, opened and closed by the extension, using `GET /api/me.json` internally, then supported listing, lookup, thread and more-replies endpoints | the topics, article address or thread requested by initial article-list loading, opening an article or Sidebar, Sync, a pull on a phone or loading more replies, after confirming the introduction; no tab for background page discovery | Yes, using the existing Reddit session. Account details stay in the Reddit tab; only allowed public fields and rate-limit metadata return |
 | Reddit (vote, reply, submit) | popup window on `old.reddit.com` | the one post or comment you acted on, or the page you submit, only when you press | Yes, in a window you can see, using the session already in your browser |
+| X (search) | a temporary background tab on `x.com/search` | the page address; only while X is enabled | Yes, using the existing X session |
+| X (verification) | `GET cdn.syndication.twimg.com/tweet-result?id=<post>` and `GET t.co/<link>` | a public post identifier or shortened link; redirects may contact other destinations | Anonymous transport is requested; actual cookie handling depends on the manager |
 | Bluesky | `GET constellation.microcosm.blue/links/all?target=<page>` | `<page>`, plus a `User-Agent` naming Backchannel and its version | No |
 | Bluesky | `GET constellation.microcosm.blue/xrpc/blue.microcosm.links.getBacklinks?subject=<page>&source=...&limit=100` | `<page>` | No |
 | Bluesky | `GET public.api.bsky.app/xrpc/app.bsky.feed.getPosts` and `...getPostThread` | post ids Constellation named, never `<page>` | No. Signed in, the cookie jar for `bsky.app` is empty -- it authenticates from local storage, which the browser never attaches |

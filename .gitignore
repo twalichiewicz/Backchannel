@@ -6,7 +6,13 @@ tests/*
 !tests/run.mjs
 !tests/thread-cache.html
 !tests/comment-capture/
+!tests/account/
 tests/comment-capture/node_modules/
+
+# Local Cloudflare secrets and database state.
+.env*
+.dev.vars*
+.wrangler/
 
 # Design specs and implementation plans. Working notes, kept locally.
 docs/

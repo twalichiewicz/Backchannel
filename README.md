@@ -29,6 +29,11 @@ Quoted passages can be highlighted in the article. Click a highlight to focus th
 
 Blend the sources you choose into a custom front page at [backchnnl.app](https://backchnnl.app), and open articles in the Reader alongside their discussions.
 
+Choose **Sync schedule** in **Settings → Sources**. Front Pages
+refresh while you use that view. Opening an article checks its discussions,
+with saved comments available during the check. **Manual** pauses automatic
+feed and Collection checks; you can still press Sync or open an article.
+
 <img src="site/src/shot-reader.webp" width="750" alt="The Backchannel Reader showing a list of stories with one open beside it." />
 
 ### Make it yours
@@ -49,8 +54,9 @@ Install a userscript manager for your browser, then select **Install** above:
 
 ### What exactly is the script doing with my information?
 
-It runs on every page, so this matters: there's no backend, no analytics, and no
-telemetry. Which hosts it contacts depends on which sources you switch on.
+The sources you enable determine where Backchannel looks for discussions.
+Optional Account sync uses Cloudflare to store an encrypted snapshot and
+related account metadata.
 
 - Hacker News talks to the HN API, Algolia search, and news.ycombinator.com, with
 no persistent identifier attached.
@@ -60,10 +66,16 @@ instead. In Safari's Userscripts extension, live reads happen in a temporary
 Reddit tab when your article list loads, you open an article in Reader,
 you open the Sidebar on a page, you press Sync, or you load more replies,
 using your Reddit login after you confirm the introduction.
+Read helpers open in the background, explain their task in a top banner, and close automatically when finished.
 Voting and replying go through that same session, and only when you press something.
 - Bluesky sends the pages you visit to Constellation, an independent index of
 Bluesky links, not to Bluesky. Bluesky is asked only about the posts
 Constellation names. No account is needed and neither host sets a cookie.
+- X is off by default. When enabled, Backchannel searches for the page address
+in a temporary X tab using your signed-in session, verifies matching public
+posts through X's public post service, and checks shortened links. Search results
+are incomplete and replies that don't link the page are not included. X does not
+yet provide a front-page feed or background Collection update checks.
 - Lobsters sends only the domain of each page you visit to lobste.rs, to find that domain's submissions. Signed in or out, the request
 carries no account.
 - Wikipedia sends the pages you visit to Wikipedia's API, to find the Talk and
@@ -85,7 +97,29 @@ Full detail, including a host-by-host table, in [SECURITY.md](SECURITY.md).
 
 ### Where are my notes and settings stored?
 
-Your notes, settings, reading queue, and other Backchannel data are stored locally in your userscript manager. Removing the script or clearing the manager's data can delete them.
+Your settings, notes, Collection and reading queue are saved locally in your userscript manager. Removing the script or clearing the manager's data can delete the local copy.
+
+When Account sync is available, enter your email in **Settings → Account** in
+Reader and verify the code in your inbox. For a new account, create and
+confirm a passkey that supports encrypted sync, customize your birb, choose
+whether to share diagnostics, and save your recovery key. Sync starts
+automatically when you select **Finish sign up**. Use
+**Sign in with passkey** on your other devices to sign in and unlock sync.
+Settings, your birb, your Collection, and your reading queue sync as an
+encrypted snapshot through Cloudflare.
+
+Reader syncs automatically when you make changes on a connected device.
+To pull changes from another device right away, choose **Sync now**.
+Account shows the last successful sync, linked devices and a **Sync now**
+button. If you lose access to your passkey, enter your email on the signed-out
+screen. After verifying the code, choose **Can’t use your passkey?** and
+enter your saved recovery key to replace it and restore sync.
+
+Diagnostic sharing starts off and runs only while signed in. Your choice syncs
+with your account. Change it in **Settings → Account → Manage account → Privacy**.
+Reports include reliability outcomes and approximate timings for sync and
+discussion requests. The [privacy policy](https://backchnnl.app/#privacy)
+lists the report fields and how long Cloudflare keeps them.
 
 ### Where did HNewhere go?
 
@@ -99,12 +133,13 @@ preferences all carry over untouched.
 
 ### How can I contribute?
 
-Bug reports and pull requests are welcome. Please report anything security-sensitive privately via [SECURITY.md](SECURITY.md). Backchannel is a single file with no
-build step or dependencies: edit `HNewhere.user.js`, load it in your userscript
-manager, and what you see is what users install. Release history is in
+Bug reports and pull requests are welcome. Please report anything security-sensitive privately via [SECURITY.md](SECURITY.md). The userscript is a single file with no
+build step or dependencies. Edit `HNewhere.user.js` and load it in your userscript
+manager. The Cloudflare account Worker has its own dependencies in `account/`.
+Release history is in
 [CHANGELOG.md](CHANGELOG.md).
 
-The regression tests use Node.js 20 or newer and Playwright. From the repository
+The regression tests use Node.js 24 and Playwright. From the repository
 root, run:
 
 ```sh
@@ -114,11 +149,30 @@ npx playwright install chromium firefox webkit
 npm test
 ```
 
-The checked-in tests exercise comment and discussion capture with synthetic
-sources in Chromium, Firefox and WebKit. GitHub Actions runs them on pushes and pull
-requests. Additional local HTML tests run too when present; `npm run test:slow`
-includes the slow ones. To run only the comment-capture checks, use
-`npm run test:capture`.
+GitHub Actions runs the Reader regression tests, including Account settings,
+in Chromium, Firefox, and WebKit on pull requests and pushes to `main`.
+Additional local HTML tests run when present. Use `npm run test:slow` to include
+the slow tests or `npm run test:capture` to run only the browser regression tests.
+
+The Account Worker job uses a local D1 database, test email delivery, and a
+virtual Chromium passkey. After the setup above, run it locally from `tests/`.
+
+```sh
+npm ci --prefix ../account --ignore-scripts
+npm run test:account
+```
+
+To preview the site locally, run `npx --yes wrangler@4.164.0 dev` from the
+repository root. The default `wrangler.jsonc` has local assets and no production
+bindings. Use the Account Worker tests above for sign-in and sync.
+
+CI checks that the production Worker builds. Deploy Worker releases separately
+with Wrangler and `wrangler.production.jsonc`. To run the same dry run, use the
+repository root.
+
+```sh
+npx --yes wrangler@4.164.0 versions upload --config wrangler.production.jsonc --dry-run
+```
 
 ### What's the license on this bad boy?
 

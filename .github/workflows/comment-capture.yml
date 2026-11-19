@@ -2,16 +2,21 @@ name: Comment and discussion capture
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   regression:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -20,8 +25,10 @@ jobs:
       run:
         working-directory: tests
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -36,3 +43,31 @@ jobs:
         run: npm run test:capture
         env:
           CAPTURE_ENGINES: ${{ matrix.browser }}
+
+  account:
+    name: Account Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            tests/package-lock.json
+            account/package-lock.json
+      - run: npm ci
+      - run: npm ci --prefix ../account --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:account
+      - name: Build the production Worker without uploading
+        working-directory: .
+        run: npx --yes wrangler@4.164.0 versions upload --config wrangler.production.jsonc --dry-run
+        env:
+          WRANGLER_SEND_METRICS: false

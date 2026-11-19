@@ -8,6 +8,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The version in `HNewhere.user.js`'s `@version` header is what userscript managers
 use to detect updates, so every release bumps it.
 
+## [Unreleased] — planned 1.6.19
+
+### Added
+
+- Rail navigation temporarily reveals collapsed Front Pages until hover and
+  focus leave. The explicit Front Pages toggle keeps it open.
+- The desktop Reader chin contains Aa, Save and Discussion controls, a comment
+  count and an embossed Triglavis mark. The complete privacy policy is available
+  at the end of General settings. Open the original page from Aa or a Front Pages
+  article's menu.
+- The Backchannel birds rise through center stage as discussions load. Each
+  bird tilts its head, opens its beak as its speech bubble appears, and closes
+  it as the bubble disappears. With reduced motion enabled, the loader shows a
+  still bird.
+- Optional Account sync in Reader requires a verified email for setup and
+  uses a passkey and recovery key to sync encrypted settings, Collection,
+  and reading queue data across devices. Independent changes merge
+  automatically, and Settings prompts when edits overlap.
+- Account is the first Settings entry, with a customizable birb avatar, a
+  last-sync timestamp, and linked devices. Reader syncs settings changes
+  automatically after the device is connected. A verified email can restore
+  account access from the signed-out Account screen.
+- Account sync uses Safari-compatible compression and decompression in the
+  userscript’s isolated environment.
+- Account setup confirms a passkey can unlock sync before creating the
+  account. Sign-in unlocks sync in the same flow, and lost-passkey recovery
+  requires the saved recovery key. Account deletion asks supported password
+  managers to remove the old passkey.
+- Account can restore the previous encrypted snapshot when the current one
+  cannot be read, while keeping local edits.
+- Optional diagnostics report source and Account sync reliability while signed
+  in. Sharing starts off and can be changed during signup or in Settings →
+  Account → Manage account → Privacy. The sharing choice syncs with encrypted
+  Account preferences. The Reader and site privacy policy describe what the
+  reports contain.
+- Reader Discussion has a bottom bar for writing comments and keeping notes.
+  The Sources menu can show several discussions at once, with checkboxes for
+  each source group and for all sources.
+- Drag to reorder sources and topics in the Reader rail. The order is saved;
+  Search, Unread, All articles, Queue, Collection and Settings stay fixed.
+- Sync schedule in Settings → Sources, with 5, 15, 30,
+  or 60 minute intervals and Manual. Front Pages refresh while visible;
+  discussions are checked whenever an article is opened.
+- An opt-in X source finds public posts linking a page through a temporary
+  signed-in X search tab. Search coverage is incomplete, and replies that do
+  not link the page are not yet collected. Front-page feeds and background
+  Collection update checks do not yet include X.
+
+### Fixed
+
+- The Front Pages toggle overlaps its panel. Discussion uses the linked article's
+  light or dark appearance in Auto, including the built-in Reader's page color.
+- Front Pages opens and closes within its final bounds, including narrow desktop
+  layouts with a saved width larger than the available space.
+- Reader panels animate together with the article's available space, and the
+  built-in Reader keeps its rounded corner when Front Pages is closed.
+- Settings uses consistent label and action layouts for sync, updates and cached
+  data. Update availability replaces the Installed label, with one matching action.
+- Manage account keeps email changes available if a startup sync is still
+  running. The passkey hint appears after you enter a valid new email address.
+- Switching accounts in the same browser profile requires confirmation before
+  syncing reading data retained from the previous account.
+- Update status retains its card styling, and Cached data has its own subsection.
+- The Sync schedule dropdown closes when clicked again in Safari. Settings links
+  follow the theme, and the bug-report icon aligns with the navigation.
+- Discussion Sort uses the same dropdown as Sync schedule. The link to the next
+  queued article takes up less space at the end of the discussion.
+- Available articles and discussions appear while slower sources keep loading.
+  Saved comments stay visible during a new check, including when an article is
+  reopened.
+- Sources shows a single comment total and omits discussions with no comments.
+  Unverified search results and partial comment refreshes no longer add notices.
+- Reader clears the previous article's focus banner immediately and removes a
+  single-discussion banner when more discussions arrive.
+- Sync status follows the whole operation, including failed discussions,
+  overlapping refreshes, and helper cleanup. A manual Sync requested during an
+  automatic refresh runs afterward.
+- Sync progress and results dismiss automatically. Incomplete refreshes show
+  “Partial sync” instead of a persistent source error.
+- Reddit and X helper titles describe each step of the refresh.
+- Failed refreshes preserve saved data and its fetch time. Source requests
+  respect retry delays, and cancelled or late work cannot restore cleared caches
+  or replace a newer discussion.
+- Feed errors appear in the affected source's view instead of the combined
+  article list; a complete front-page outage still shows a general message.
+- Delayed sync results from older attempts cannot replace current results.
+- Suspended Reddit helpers are cleaned up in the background without asking you
+  to select their tabs.
+- Automatic Reddit refreshes show Sync activity, and an unresponsive helper
+  no longer keeps other discussions waiting for its full connection timeout.
+- Source requests and discussion recovery finish if a manager never reports a
+  network result, so available discussions can still load.
+- A Reddit discussion already known from the feed can still load its comments
+  if its metadata lookup fails.
+- Reddit, X and article scraping helpers share a top banner and close
+  automatically in the background. Navigating elsewhere releases the tab, and
+  Sync retries interrupted cleanup.
+
 ## [1.6.18.5] — 2026-11-12
 
 ### Fixed
@@ -2778,7 +2876,7 @@ Releases before 1.4.7 are recorded in the
 commit history. Entries for 1.4.7 through 1.5.3 are summarized from their release
 commits rather than written at the time.
 
-[Unreleased]: https://github.com/twalichiewicz/Backchannel/compare/v1.6.18.3...HEAD
+[Unreleased]: https://github.com/twalichiewicz/Backchannel/compare/v1.6.18.5...HEAD
 [1.6.1]: https://github.com/twalichiewicz/Backchannel/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.8...v1.6.0
 [1.5.8]: https://github.com/twalichiewicz/Backchannel/compare/v1.5.7...v1.5.8

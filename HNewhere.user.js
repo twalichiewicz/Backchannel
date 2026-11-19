@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Backchannel
 // @namespace    https://github.com/twalichiewicz/HNewhere
-// @version      1.6.18.5
+// @version      1.6.19
 // @license      GPL-3.0-or-later
 // @copyright    2026 Triglavis LLC
 // @updateURL    https://raw.githubusercontent.com/twalichiewicz/Backchannel/main/HNewhere.user.js
@@ -59,6 +59,9 @@
 // @connect      arctic-shift.photon-reddit.com
 // @connect      public.api.bsky.app
 // @connect      constellation.microcosm.blue
+// @connect      x.com
+// @connect      t.co
+// @connect      cdn.syndication.twimg.com
 // @connect      lobste.rs
 // @connect      en.wikipedia.org
 // @connect      lemmy.world
@@ -214,6 +217,7 @@
 		appListWidth: "HNewhere:app_list_width",
 		appSplit: "HNewhere:app_split",
 		appPanes: "HNewhere:app_panes",
+		appRailOrder: "HNewhere:app_rail_order",
 		appZoom: "HNewhere:app_zoom",
 		readerPage: "HNewhere:reader_page",
 		readerFont: "HNewhere:reader_font",
@@ -435,6 +439,7 @@
 		sources: undefined,
 		frontPageMode: undefined,
 		frontPageTopics: [],
+		sourceRefreshMinutes: 5,
 		theme: "auto",
 		buttonRadius: undefined,
 		buttonSize: BUTTON_SIZE_DEFAULT,
@@ -545,8 +550,25 @@
 	// Storage
 	// -------------------------
 
+	async function writeLocalValue(key, value, write) {
+		const account = accountPortableStoreKey(key) ? await load(ACCOUNT_SYNC_KEY, null) : null;
+		if (!hasAccountSyncSession(account)) return write();
+		const scope = accountScopedPreference(key);
+		if (scope && key !== scope + account.account) return write();
+		const changed = await withSharedStorageLock("account-storage", async (lease) => {
+			const before = await GM.getValue(key, null);
+			const changed = !accountValuesEqual(accountEditValue(key, before), accountEditValue(key, value));
+			if (changed && await load(ACCOUNT_EDIT_KEY, null) !== account.account) {
+				await lease.commit(() => GM.setValue(ACCOUNT_EDIT_KEY, account.account));
+			}
+			await lease.commit(write);
+			return changed;
+		});
+		if (changed) queueAccountEditSync();
+	}
+
 	async function save(key, value) {
-		await GM.setValue(key, value);
+		await writeLocalValue(key, value, () => GM.setValue(key, value));
 	}
 
 	async function load(key, fallback) {
@@ -557,13 +579,17 @@
 		}
 	}
 
-	async function forget(key) {
+	async function removeStoredValue(key) {
 		if (typeof GM.deleteValue === "function") {
 			await GM.deleteValue(key);
 			return;
 		}
 
-		await save(key, null);
+		await GM.setValue(key, null);
+	}
+
+	async function forget(key) {
+		await writeLocalValue(key, null, () => removeStoredValue(key));
 	}
 
 	async function forgetMany(keys) {
@@ -593,8 +619,11 @@
 		}
 	}
 
-	async function withSharedStorageLock(name, task) {
-		if (!(await listKeys())) return task({ check: async () => {}, commit: (operation) => operation() });
+	async function withSharedStorageLock(name, task, { required = false } = {}) {
+		if (!(await listKeys())) {
+			if (required) throw new Error("Shared storage coordination is unavailable");
+			return task({ check: async () => {}, commit: (operation) => operation() });
+		}
 		const expired = Symbol("expired shared storage lock");
 		for (;;) {
 			try { return await acquireSharedStorageLock(name, task, expired); }
@@ -720,11 +749,14 @@
 		if (merged.annotationsWhenSidebarClosed == null) {
 			merged.annotationsWhenSidebarClosed = false;
 		}
+		merged.sourceRefreshMinutes = normalizeSourceRefreshMinutes(merged.sourceRefreshMinutes);
 
 		if (syncAppearancePreferences(merged)) {
 			reapplyThemes();
 		}
 		redditReadSourceOn = Boolean(merged.sources?.reddit);
+		xSourceOn = Boolean(merged.sources?.x);
+		updateSourceReadScope(merged);
 
 		return merged;
 	}
@@ -734,13 +766,22 @@
 			...(await loadSettings()),
 			...patch,
 		};
+		next.sourceRefreshMinutes = normalizeSourceRefreshMinutes(next.sourceRefreshMinutes);
 
 		await save(STORAGE.settings, next);
 		redditReadSourceOn = Boolean(next.sources?.reddit);
+		xSourceOn = Boolean(next.sources?.x);
+		updateSourceReadScope(next);
 
 		if (syncAppearancePreferences(next)) {
 			reapplyThemes();
 		}
+		if (["sources", "frontPageMode", "frontPageTopics"].some((key) => Object.prototype.hasOwnProperty.call(patch, key))) {
+			frontPageCacheEpoch++;
+			frontPageLoads.clear();
+			frontPageJobs.clear();
+		}
+		scheduleFrontPageRefresh();
 
 		return next;
 	}
@@ -2657,56 +2698,69 @@
 	// Network
 	// -------------------------
 
+	const NETWORK_REQUEST_TIMEOUT_MS = 10000;
+
 	function request(url) {
 		return new Promise((resolve) => {
-			GM.xmlHttpRequest({
+			let settled = false;
+			let handle;
+			const finish = (value) => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } };
+			const timer = window.setTimeout(() => { try { handle?.abort?.(); } catch {} finish(null); }, NETWORK_REQUEST_TIMEOUT_MS);
+			try { handle = GM.xmlHttpRequest({
 				method: "GET",
 
 				url: url,
 
-				timeout: 10000,
+				timeout: NETWORK_REQUEST_TIMEOUT_MS,
 
 				onload: function (response) {
 					try {
-						resolve(JSON.parse(response.responseText));
+						finish(JSON.parse(response.responseText));
 					} catch {
-						resolve(null);
+						finish(null);
 					}
 				},
 
 				onerror: function () {
-					resolve(null);
+					finish(null);
 				},
 
 				ontimeout: function () {
-					resolve(null);
+					finish(null);
 				},
-			});
+			}); handle?.catch?.(() => finish(null)); } catch { finish(null); }
 		});
 	}
 
-	function requestWithMeta(url) {
+	function requestWithMeta(url, headers) {
 		return new Promise((resolve) => {
 			const failure = { ok: false, status: 0, json: null, rateLimit: null };
+			let settled = false;
+			let handle;
+			const finish = (value) => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } };
+			const timer = window.setTimeout(() => { try { handle?.abort?.(); } catch {} finish(failure); }, NETWORK_REQUEST_TIMEOUT_MS);
 
-			GM.xmlHttpRequest({
+			try { handle = GM.xmlHttpRequest({
 				method: "GET",
 				url,
-				timeout: 10000,
+				headers,
+				timeout: NETWORK_REQUEST_TIMEOUT_MS,
 				onload: function (response) {
 					let json = null;
+					let parsed = false;
 
 					try {
 						json = JSON.parse(response.responseText);
+						parsed = true;
 					} catch {
 						json = null;
 					}
 
-					resolve({
+					finish({
 						ok:
 							response.status >= 200 &&
 							response.status < 300 &&
-							json !== null,
+							parsed,
 						status: response.status,
 						json,
 						rateLimit: parseRateLimit(response.responseHeaders),
@@ -2715,31 +2769,40 @@
 						contentType: /^content-type:\s*([^;\r\n]+)/im.exec(response.responseHeaders || "")?.[1].trim().toLowerCase() || "",
 					});
 				},
-				onerror: () => resolve(failure),
-				ontimeout: () => resolve(failure),
-			});
+				onerror: () => finish(failure),
+				ontimeout: () => finish(failure),
+			}); handle?.catch?.(() => finish(failure)); } catch { finish(failure); }
 		});
 	}
 
 	function requestText(url, headers) {
 		return new Promise((resolve) => {
-			GM.xmlHttpRequest({
+			let settled = false;
+			let handle;
+			const finish = (value) => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } };
+			const timer = window.setTimeout(() => { try { handle?.abort?.(); } catch {} finish(""); }, NETWORK_REQUEST_TIMEOUT_MS);
+			try { handle = GM.xmlHttpRequest({
 				method: "GET",
 				url,
 				headers,
-				timeout: 10000,
+				timeout: NETWORK_REQUEST_TIMEOUT_MS,
 				anonymous: false,
 				onload: function (response) {
-					resolve(response.responseText || "");
+					finish(response.responseText || "");
 				},
 				onerror: function () {
-					resolve("");
+					finish("");
 				},
 				ontimeout: function () {
-					resolve("");
+					finish("");
 				},
-			});
+			}); handle?.catch?.(() => finish("")); } catch { finish(""); }
 		});
+	}
+
+	async function requestTextWithMeta(url, headers) {
+		const response = await requestResource({ method: "GET", url, headers, anonymous: false }, NETWORK_REQUEST_TIMEOUT_MS);
+		return response ? { ok: response.status >= 200 && response.status < 300, status: response.status, text: String(response.responseText || ""), retryAfterSeconds: parseRetryAfter(response.responseHeaders) } : { ok: false, status: 0, text: "", retryAfterSeconds: 0 };
 	}
 
 	const UPDATE_RELEASES_URL = "https://api.github.com/repos/twalichiewicz/Backchannel/releases?per_page=30";
@@ -2752,18 +2815,35 @@
 	let updateCheckScheduled = false;
 
 	function compareVersions(a, b) {
-		const left = String(a).split(".").map(Number);
-		const right = String(b).split(".").map(Number);
+		const parse = (version) => {
+			const match = /^v?(\d+(?:\.\d+)*)(?:-([0-9a-z-]+(?:\.[0-9a-z-]+)*))?$/i.exec(String(version));
+			return match ? { parts: match[1].split(".").map(Number), prerelease: match[2]?.split(".") || null } : null;
+		};
+		const left = parse(a);
+		const right = parse(b);
+		if (!left || !right) return 0;
 
-		for (let i = 0; i < Math.max(left.length, right.length); i++) {
-			const x = left[i] || 0;
-			const y = right[i] || 0;
+		for (let i = 0; i < Math.max(left.parts.length, right.parts.length); i++) {
+			const x = left.parts[i] || 0;
+			const y = right.parts[i] || 0;
 
 			if (x !== y) {
 				return x > y ? 1 : -1;
 			}
 		}
 
+		if (!left.prerelease || !right.prerelease) return left.prerelease ? -1 : right.prerelease ? 1 : 0;
+		for (let i = 0; i < Math.max(left.prerelease.length, right.prerelease.length); i++) {
+			const x = left.prerelease[i];
+			const y = right.prerelease[i];
+			if (x === undefined || y === undefined) return x === undefined ? -1 : 1;
+			if (x === y) continue;
+			const xNumeric = /^\d+$/.test(x);
+			const yNumeric = /^\d+$/.test(y);
+			if (xNumeric && yNumeric) return Number(x) > Number(y) ? 1 : -1;
+			if (xNumeric !== yNumeric) return xNumeric ? -1 : 1;
+			return x > y ? 1 : -1;
+		}
 		return 0;
 	}
 
@@ -2772,7 +2852,7 @@
 	}
 
 	function newerReleases(list, installed) {
-		if (!Array.isArray(list) || !releaseVersion(installed)) {
+		if (!Array.isArray(list) || !/^v?\d+(?:\.\d+)*(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i.test(String(installed))) {
 			return [];
 		}
 
@@ -2864,11 +2944,11 @@
 	}
 
 	function updateTarget(handler, releases) {
-		if (UPDATE_REINSTALL_MANAGERS.includes(handler)) {
-			return { url: UPDATE_SCRIPT_URL, userscripts: false };
+		if (UPDATE_REINSTALL_MANAGERS.includes(handler) || handler === "Userscripts") {
+			return { url: UPDATE_SCRIPT_URL };
 		}
 
-		return { url: releases?.[0]?.url || UPDATE_RELEASES_PAGE, userscripts: handler === "Userscripts" };
+		return { url: releases?.[0]?.url || UPDATE_RELEASES_PAGE };
 	}
 
 	function requestReleases() {
@@ -3240,6 +3320,8 @@
 		}
 
 		const install = group.querySelector("#settings-update-install");
+		const check = group.querySelector("#settings-update-check");
+		const moveFocus = found && root.activeElement === check;
 		const notes = group.querySelector("#settings-update-notes");
 		const key = releases.map((release) => release.version).join(",");
 
@@ -3256,10 +3338,12 @@
 				install.click();
 			}
 		};
-		install.classList.toggle("is-shown", found);
+		install.hidden = !found;
+		check.hidden = found;
+		group.querySelector("#settings-update-status").textContent = found ? "Update available for Backchannel" : "Backchannel is up-to-date";
 		install.tabIndex = found ? 0 : -1;
 		install.setAttribute("aria-hidden", found ? "false" : "true");
-		group.querySelector("#settings-update-safari").hidden = !(found && target.userscripts);
+		if (moveFocus) install.focus({ preventScroll: true });
 
 		if (group.dataset.notes !== key) {
 			group.dataset.notes = key;
@@ -3302,7 +3386,6 @@
 
 		const IDLE = "Check for updates";
 		const CHECKING = '<svg class="settings-update-spinner" viewBox="0 0 12 12" aria-hidden="true"><g class="settings-update-spin"><circle cx="6" cy="6" r="4.6"/></g></svg><span class="settings-update-glimmer">Checking…</span>';
-		const LATEST = '<svg class="settings-update-tick" viewBox="0 0 12 12" aria-hidden="true"><path d="M2.2 6.4 4.8 9 9.8 3.4"/></svg>You’re on the latest version';
 		const FAILED = "Couldn’t reach GitHub";
 		const wait = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -3362,9 +3445,6 @@
 				if (!result.ok) {
 					await show(FAILED);
 					await wait(2000);
-				} else if (!result.releases.length) {
-					await show(LATEST);
-					await wait(2000);
 				}
 
 				await show(IDLE);
@@ -3388,24 +3468,25 @@
 	const displayAgeCache = new Map();
 	const itemActionRequests = new Map();
 
-	async function getItem(id) {
+	async function getItem(id, { strict = false } = {}) {
 		const key = String(id);
 
 		if (itemCache.has(key)) {
 			return itemCache.get(key);
 		}
 
-		const load = {};
-		itemLoads.set(key, load);
-		try {
-			const item = await request(
-				"https://hacker-news.firebaseio.com/v0/item/" + id + ".json",
-			);
-			if (item && itemLoads.get(key) === load) itemCache.set(key, item);
-			return item;
-		} finally {
-			if (itemLoads.get(key) === load) itemLoads.delete(key);
+		let load = itemLoads.get(key);
+		if (!load) {
+			load = {};
+			itemLoads.set(key, load);
+			load.promise = requestWithMeta("https://hacker-news.firebaseio.com/v0/item/" + id + ".json").then((response) => {
+				if (response.ok && response.json && itemLoads.get(key) === load) itemCache.set(key, response.json);
+				return response;
+			}).finally(() => { if (itemLoads.get(key) === load) itemLoads.delete(key); });
 		}
+		const response = await load.promise;
+		if (!response.ok && strict) throw sourceResponseError(response);
+		return response.ok ? response.json : null;
 	}
 
 	// #region hnewhere-test-export
@@ -5145,6 +5226,55 @@
 		}
 	}
 
+	function xThreadIndex(discussion) {
+		const posts = Array.isArray(discussion?.statuses) ? discussion.statuses : [];
+		const byKey = new Map();
+		const parents = new Map();
+		for (const post of posts) {
+			const key = sourceKey("x", post.id);
+			if (byKey.has(key)) continue;
+			byKey.set(key, {
+				source: "x", key, id: post.id, discussionKey: discussion.key, parentKey: null,
+				author: post.author, bodyHTML: escapeHTML(post.text).replace(/\n/g, "<br>"), score: null,
+				createdAt: post.createdAt, isOP: false, deleted: false, replyKeys: [],
+			});
+			if (/^\d+$/.test(String(post.parentId || "")) && post.parentId !== post.id) parents.set(key, sourceKey("x", post.parentId));
+		}
+		for (const [key, parent] of parents) {
+			if (!byKey.has(parent)) continue;
+			const seen = new Set([key]);
+			let cursor = parent;
+			while (cursor && byKey.has(cursor) && !seen.has(cursor)) { seen.add(cursor); cursor = parents.get(cursor); }
+			if (cursor && seen.has(cursor)) continue;
+			byKey.get(key).parentKey = parent;
+			byKey.get(parent).replyKeys.push(key);
+		}
+		const rootKeys = [...byKey.values()].filter((comment) => !comment.parentKey).map((comment) => comment.key);
+		return { byKey, rootKeys, incomplete: true };
+	}
+
+	function xCollective(url, posts) {
+		const target = normalizeURL(url);
+		if (!target || !Array.isArray(posts)) return null;
+		const statuses = [];
+		const seen = new Set();
+		for (const post of posts) {
+			const id = String(post?.id || "");
+			const author = String(post?.author || "");
+			let permalink;
+			try { permalink = new URL(post?.permalink); } catch { continue; }
+			if (!/^\d+$/.test(id) || !/^[a-z0-9_]{1,15}$/i.test(author) || seen.has(id) || permalink.protocol !== "https:" || permalink.username || permalink.password || !["x.com", "twitter.com"].includes(permalink.hostname.toLowerCase()) || !new RegExp(`^/${author}/status/${id}/?$`, "i").test(permalink.pathname) || typeof post.text !== "string") continue;
+			seen.add(id);
+			statuses.push({ id, author, text: post.text.slice(0, 10000), createdAt: Number(post.createdAt) || 0, permalink: permalink.href, parentId: /^\d+$/.test(String(post.parentId || "")) ? String(post.parentId) : null });
+		}
+		if (!statuses.length) return null;
+		const discussion = { source: "x", key: sourceKey("x", target), id: target, title: "Posts on X", author: "", score: null, commentCount: statuses.length, createdAt: Math.max(...statuses.map((post) => post.createdAt)), permalink: null, articleURL: url, label: "X", collective: true, bodyHTML: "", rootKeys: [], rootTimes: [], statuses };
+		const thread = xThreadIndex(discussion);
+		discussion.rootKeys = thread.rootKeys;
+		discussion.rootTimes = thread.rootKeys.map((key) => thread.byKey.get(key)?.createdAt || 0);
+		return discussion;
+	}
+
 	const SOURCES = new Map();
 
 	function registerSource(source) {
@@ -5435,8 +5565,8 @@ ${
 		profileURL: (author) =>
 			"https://news.ycombinator.com/user?id=" + encodeURIComponent(author),
 
-		async discover(url, { force = false } = {}) {
-			return (await findHN(url, { force })).map(algoliaDiscussion);
+		async discover(url, { force = false, signal = null, onPartial = null } = {}) {
+			return (await findHN(url, { force, signal, onPartial: (rows) => onPartial?.(rows.map(algoliaDiscussion)) })).map(algoliaDiscussion);
 		},
 
 		async probe(url, context) {
@@ -5475,9 +5605,10 @@ ${
 		},
 
 		async frontPage() {
-			const html = await requestText(HN_ORIGIN + "/news");
+			const response = await requestTextWithMeta(HN_ORIGIN + "/news");
+			if (!response.ok) throw Object.assign(sourceResponseError(response), { feedStatus: response.status === 429 ? "limited" : "unavailable" });
 			const stories = parseFrontPage(
-				new DOMParser().parseFromString(html, "text/html"),
+				new DOMParser().parseFromString(response.text, "text/html"),
 			).map(hnStory);
 
 			if (!stories.length) throw new Error("Hacker News feed unavailable");
@@ -5485,13 +5616,13 @@ ${
 		},
 
 		async recover(story) {
-			return (await loadStories([{ objectID: String(story.id) }])).map(hnDiscussion);
+			return (await loadStories([{ objectID: String(story.id) }], { strict: true })).map(hnDiscussion);
 		},
 
 		async loadThread(discussion) {
 			const roots = discussion.rootKeys.length
 				? discussion.rootKeys
-				: ((await getItem(discussion.id))?.kids || []).map((id) =>
+				: ((await getItem(discussion.id, { strict: true }))?.kids || []).map((id) =>
 						sourceKey("hn", id),
 					);
 
@@ -5510,6 +5641,7 @@ ${
 			return {
 				rootKeys: roots,
 				rootTimes,
+				incomplete: rootItems.some((item) => !item),
 				async getComment(key) {
 					const parsed = parseSourceKey(key);
 
@@ -5551,6 +5683,17 @@ ${
 		return allowed ? url.pathname + url.search : null;
 	}
 
+	function redditDiscussionFromFeed(story) {
+		try {
+			const id = String(story?.id || "");
+			const permalink = new URL(story.permalink);
+			const article = new URL(story.url);
+			const match = /^\/(?:r\/[a-z0-9_]+\/)?comments\/([a-z0-9]+)(?:\/[^/?#]+)?\/?$/i.exec(permalink.pathname);
+			if (!/^[a-z0-9]+$/i.test(id) || !match || match[1].toLowerCase() !== id.toLowerCase() || permalink.origin !== "https://www.reddit.com" || permalink.username || permalink.password || permalink.search || permalink.hash || !redditReadPath(permalink.pathname + ".json?limit=500&sort=confidence") || !["http:", "https:"].includes(article.protocol) || article.username || article.password) return null;
+			return redditDiscussion({ id, title: story.title, author: story.by, score: story.score, num_comments: story.descendants, created_utc: story.time, subreddit_name_prefixed: story.site || "Reddit", permalink: permalink.pathname, url: article.href });
+		} catch { return null; }
+	}
+
 	function publicRedditJSON(value) {
 		const containers = new Set(["data", "children", "replies", "json", "things", "errors"]);
 		const fields = new Set(["kind", "id", "title", "url", "permalink", "author", "score", "num_comments", "created_utc", "subreddit", "subreddit_name_prefixed", "selftext", "selftext_html", "body", "body_html", "parent_id", "link_id", "is_submitter", "removed_by_category", "count", "reason", "error", "message"]);
@@ -5581,6 +5724,7 @@ ${
 	// #endregion hnewhere-test-export
 
 	let redditReadSourceOn = false;
+	let xSourceOn = false;
 	let redditReadBatch = null;
 	let redditReadWaitUntil = 0;
 	let redditReadNoticeScheduled = false;
@@ -5590,17 +5734,323 @@ ${
 	let redditReadInitialAttempted = false;
 	let redditReadActionId = 0;
 	let syncRunId = 0;
+	let redditDeferredNotice = null;
+	let redditReadSuccessActionId = -1;
+	let redditReadReportedActionId = -1;
+	let redditReadDisplayedNotice = null;
 	const REDDIT_READ_NOTICE_KEY = "HNewhere:reddit_read_window_notice";
 	const REDDIT_READ_RESUME_KEY = "HNewhere:reddit_read_resume";
 	const REDDIT_READ_SOURCE = "hnewhere-reddit-read";
+	const REDDIT_OPEN_TIMEOUT_MS = 30000;
+	const REDDIT_READ_CONNECT_TIMEOUT_MS = 10000;
+	const REDDIT_LOGIN_WRITE_TIMEOUT_MS = 3000;
 	const REDDIT_SHARED_REFRESH_KEY = "HNewhere:reddit_shared_refresh";
 	const SHARED_REDDIT_PAGE_PREFIX = "HNewhere:reddit_page_cache:";
 	const redditReadID = () => [...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+	function redditAbandonedTabs(...groups) {
+		const tabs = new Map();
+		for (const item of groups.flat()) {
+			if (/^[a-f0-9]{32}$/.test(item?.nonce || "")) tabs.set(item.nonce, { nonce: item.nonce, revision: /^[a-f0-9]{32}$/.test(item.revision || "") ? item.revision : item.nonce, urgent: item.urgent !== false || Boolean(tabs.get(item.nonce)?.urgent) });
+		}
+		return [...tabs.values()].slice(-50);
+	}
+	const sameRedditAbandonedTab = (left, right) => left?.nonce === right?.nonce && left?.revision === right?.revision;
 	const redditViewId = redditReadID();
 	let sharedRefreshSince = 0;
 	let sharedEmptyReddit = new Set();
 	let consumedSharedRefresh = "";
 	let consumedSharedPage = "";
+	const readHelperHandles = new Map();
+	const readHelperCleanupToastOwner = Symbol();
+	let readHelperCleanupNoticeAttempt = "";
+	const readHelperSessions = new Map();
+	const readHelperCleanupJobs = new Map();
+	const readHelperRetired = new Set();
+	const pendingReadHelpers = new Set();
+	const READ_HELPER_CLOSE_MS = 1500;
+
+	function readHelperRecordKey(nonce) {
+		return BRIDGE_RESULT_PREFIX + nonce + ":helper";
+	}
+
+	function rememberReadHelperTab(nonce, kind, tab, created) {
+		if (!tab || readHelperRetired.has(nonce)) return;
+		readHelperHandles.set(nonce, { nonce, kind, tab, created, closing: null });
+	}
+
+	async function closeManagedReadHelper(nonce) {
+		if (readHelperRetired.has(nonce)) return "released";
+		const handle = readHelperHandles.get(nonce);
+		if (!handle) return "unknown";
+		if (handle.closing) return handle.closing;
+		handle.closing = (async () => {
+			const record = await load(readHelperRecordKey(nonce), null);
+			if (record?.source !== "backchannel-read-helper" || record.nonce !== nonce || record.kind !== handle.kind || !(record.ts >= handle.created)) return "unknown";
+			if (record.state === "released") return "released";
+			if (record.state !== "owned") return "unknown";
+			const confirmed = await load(readHelperRecordKey(nonce), null);
+			if (confirmed?.source !== record.source || confirmed.nonce !== nonce || confirmed.kind !== handle.kind) return "unknown";
+			if (confirmed.state === "released") return "released";
+			if (confirmed.state !== "owned" || confirmed.document !== record.document) return "unknown";
+			let timer;
+			try {
+				const remove = typeof handle.tab.close === "function" ? () => handle.tab.close()
+					: Number.isSafeInteger(handle.tab.id) && handle.tab.id > 0 && typeof GM.closeTab === "function" ? () => GM.closeTab(handle.tab.id) : null;
+				if (!remove) return "unsupported";
+				return await Promise.race([
+					Promise.resolve().then(remove).then(async () => {
+						if (typeof handle.tab.closed !== "boolean") return "closed";
+						const deadline = Date.now() + READ_HELPER_CLOSE_MS;
+						while (!handle.tab.closed && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+						return handle.tab.closed ? "closed" : "failed";
+					}, (error) => String(error?.message || error).includes("Tab '" + handle.tab.id + "' was not found") ? "closed" : "failed"),
+					new Promise((resolve) => { timer = setTimeout(() => resolve("failed"), READ_HELPER_CLOSE_MS); }),
+				]);
+			} finally { clearTimeout(timer); }
+		})().catch(() => "failed");
+		const result = await handle.closing;
+		if (["closed", "released"].includes(result)) { readHelperRetired.add(nonce); readHelperHandles.delete(nonce); }
+		else handle.closing = null;
+		return result;
+	}
+
+	function startReadHelperSession(nonce, kind, label, current, onRelease) {
+		const existing = readHelperSessions.get(nonce);
+		if (existing?.current()) return existing;
+		const documentId = redditReadID();
+		const created = Date.now();
+		let released = false;
+		let releaseLocks;
+		let banner;
+		const stopped = new Promise((resolve) => { releaseLocks = resolve; });
+		let writes = Promise.resolve();
+		const publish = (immediate = false) => {
+			const state = released ? "released" : "owned";
+			const write = () => save(readHelperRecordKey(nonce), {
+				source: "backchannel-read-helper", nonce, kind, document: documentId, origin: location.origin, href: location.href, ts: Math.max(created, Date.now()), state: released ? "released" : state,
+			});
+			if (immediate) write().catch(() => {});
+			writes = writes.catch(() => {}).then(write);
+			return writes;
+		};
+		const phase = (finishing = false) => {
+			if (released || !current()) return;
+			if (!banner?.isConnected && document.documentElement) {
+				banner = document.createElement("div");
+				banner.id = "backchannel-read-helper-banner";
+				banner.dataset.readHelperNonce = nonce;
+				banner.setAttribute("role", "status");
+				banner.setAttribute("aria-live", "polite");
+				banner.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;box-sizing:border-box;margin:0;padding:10px 14px;background:#164d32;color:#fff;border-bottom:1px solid #fff4;font:600 13px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;text-align:center";
+				(document.body || document.documentElement).appendChild(banner);
+			}
+			if (banner) banner.textContent = finishing || kind === "cleanup" ? "Backchannel is finishing its " + label + " refresh. This tab will close automatically." : "Backchannel is " + (kind === "article" ? "reading " : "refreshing ") + label + ". This tab will close automatically when finished.";
+		};
+		const historyMethods = [];
+		const release = () => {
+			if (released) return;
+			released = true;
+			banner?.remove();
+			const signIn = document.getElementById(SIGN_IN_NOTE_ID);
+			if (signIn?.dataset.readHelperNonce === nonce) signIn.remove();
+			releaseLocks();
+			for (const [name, original, wrapped] of historyMethods) if (history[name] === wrapped) history[name] = original;
+			window.removeEventListener("popstate", check);
+			window.removeEventListener("hashchange", check);
+			window.removeEventListener("pagehide", release);
+			observer.disconnect();
+			publish(true).catch(() => {});
+			onRelease?.();
+		};
+		const check = () => { if (!current()) release(); };
+		for (const name of ["pushState", "replaceState"]) {
+			try {
+				const original = history[name];
+				const wrapped = function (...args) { const value = original.apply(this, args); check(); return value; };
+				history[name] = wrapped;
+				historyMethods.push([name, original, wrapped]);
+			} catch {}
+		}
+		window.addEventListener("popstate", check);
+		window.addEventListener("hashchange", check);
+		window.addEventListener("pagehide", release, { once: true });
+		const observer = new MutationObserver(check);
+		if (document.documentElement) observer.observe(document.documentElement, { childList: true, subtree: true });
+		phase();
+		const ready = publish();
+		if (typeof navigator.locks?.request === "function") {
+			navigator.locks.request("backchannel-read-live:" + nonce, () => stopped).catch(() => {});
+			const listen = () => navigator.locks.request("backchannel-read-control:" + nonce, () => stopped).catch(async (error) => {
+				if (error?.name !== "AbortError" || released) return;
+				if (!current()) { release(); return; }
+				phase(true);
+				let timer;
+				try { if (typeof GM.closeTab === "function") await Promise.race([GM.closeTab(), new Promise((resolve) => { timer = setTimeout(resolve, READ_HELPER_CLOSE_MS); })]); } catch {}
+				finally { clearTimeout(timer); }
+				if (current()) try { window.close(); } catch {}
+				if (!released && current() && !window.closed) listen();
+			});
+			listen();
+		}
+		const session = { ready, phase, release, current: () => !released && current() };
+		readHelperSessions.set(nonce, session);
+		return session;
+	}
+
+	async function readHelperReleased(nonce) {
+		if (readHelperRetired.has(nonce)) return true;
+		try { if (readHelperHandles.get(nonce)?.tab?.closed === true) return true; } catch {}
+		const record = await load(readHelperRecordKey(nonce), null);
+		return record?.source === "backchannel-read-helper" && record.nonce === nonce && record.state === "released";
+	}
+
+	async function waitReadHelperRelease(nonce, timeout) {
+		const deadline = Date.now() + timeout;
+		do {
+			if (await readHelperReleased(nonce)) return true;
+			if (Date.now() >= deadline) return false;
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		} while (Date.now() < deadline);
+		return false;
+	}
+
+	async function retireReadHelperSession(nonce, timeout = 5000) {
+		const record = await load(readHelperRecordKey(nonce), null);
+		if (record?.source !== "backchannel-read-helper" || record.nonce !== nonce || record.origin !== location.origin || typeof navigator.locks?.request !== "function") return null;
+		if (record.state === "released") return true;
+		const live = "backchannel-read-live:" + nonce;
+		if (await navigator.locks.request(live, { ifAvailable: true }, (lock) => Boolean(lock))) return true;
+		await navigator.locks.request("backchannel-read-control:" + nonce, { steal: true }, () => {});
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), timeout);
+		try { return await navigator.locks.request(live, { signal: controller.signal }, () => true); }
+		catch { return false; }
+		finally { clearTimeout(timer); }
+	}
+
+	async function finishManagedReadHelper(nonce) {
+		const consumers = [...syncOperations.values()].filter((operation) => operation.kind === "sync" || operation.target === openPageKey());
+		const direct = await closeManagedReadHelper(nonce);
+		let result = direct;
+		if (!["closed", "released"].includes(direct)) {
+			let job = readHelperCleanupJobs.get(nonce);
+			if (!job || job.until < Date.now()) {
+				for (const [key, entry] of readHelperCleanupJobs) if (entry.until < Date.now()) readHelperCleanupJobs.delete(key);
+				job = { until: Infinity, promise: null };
+				readHelperCleanupJobs.set(nonce, job);
+				job.promise = requestReadHelperCleanup(nonce, direct).finally(() => { job.until = Date.now() + 10000; });
+			}
+			result = await job.promise;
+		}
+		if (["closed", "released"].includes(result)) { readHelperRetired.add(nonce); readHelperCleanupJobs.delete(nonce); pendingReadHelpers.delete(nonce); }
+		else {
+			const record = await load(readHelperRecordKey(nonce), null);
+			if (readHelperHandles.has(nonce) || record?.source === "backchannel-read-helper" && record.nonce === nonce && record.state === "owned") {
+				pendingReadHelpers.add(nonce);
+				if (record?.kind === "article" && isSidebarVisible()) showReadHelperCleanupNotice();
+			}
+		}
+		for (const operation of consumers) if (syncOperations.get(operation.id) === operation) operation.results.set("helper:" + nonce, { status: ["closed", "released"].includes(result) ? "ok" : "partial" });
+		return result;
+	}
+
+	function showReadHelperCleanupNotice() {
+		showReadHelperCleanupFailure();
+	}
+
+	function showReadHelperCleanupFailure() {
+		const syncing = [...syncOperations.values()].filter((operation) => operation.kind === "sync");
+		for (const operation of syncing) operation.results.set("helper-cleanup", { status: "partial" });
+		if (syncing.length) return;
+		const toast = sidebarUI?.shadow?.getElementById("toast");
+		const attempt = syncRunId + ":" + redditReadActionId;
+		if (toast && toastOwners.get(toast) === readHelperCleanupToastOwner && readHelperCleanupNoticeAttempt === attempt) return;
+		readHelperCleanupNoticeAttempt = attempt;
+		showToast("Partial sync", { kind: "system", duration: TOAST_BRIEF_MS, owner: readHelperCleanupToastOwner });
+	}
+
+	async function clearPendingReadHelpers({ retry = false } = {}) {
+		const index = await load(BRIDGE_PAYLOAD_PREFIX + "index", []);
+		for (const entry of Array.isArray(index) ? index : []) {
+			if (!/^[a-zA-Z0-9_-]{1,128}$/.test(entry?.nonce || "") || !Number.isFinite(entry.ts) || Date.now() - entry.ts > BRIDGE_PAYLOAD_TTL) continue;
+			const stage = await readBridgePayload(entry.nonce);
+			if (["article-read", "read-helper-cleanup"].includes(stage?.kind) && stage.nonce === entry.nonce && (stage.done || stage.expires <= Date.now())) {
+				const record = await load(readHelperRecordKey(entry.nonce), null);
+				if (readHelperHandles.has(entry.nonce) || record?.source === "backchannel-read-helper" && record.nonce === entry.nonce && record.state === "owned") pendingReadHelpers.add(entry.nonce);
+			}
+		}
+		for (const nonce of [...pendingReadHelpers]) {
+			const result = await (retry ? finishManagedReadHelper(nonce) : closeManagedReadHelper(nonce));
+			if (["closed", "released"].includes(result) || await readHelperReleased(nonce)) {
+				pendingReadHelpers.delete(nonce);
+				await clearBridgePayload(nonce);
+			}
+		}
+		if (pendingReadHelpers.size) {
+			for (const operation of syncOperations.values()) if (operation.kind === "sync") operation.results.set("helper-cleanup", { status: "partial" });
+			if (isSidebarVisible()) showReadHelperCleanupNotice();
+		}
+	}
+
+	async function requestReadHelperCleanup(nonce, direct) {
+		const record = await load(readHelperRecordKey(nonce), null);
+		if (record?.source !== "backchannel-read-helper" || record.nonce !== nonce || record.state !== "owned" || typeof GM.openInTab !== "function") return direct;
+		let url;
+		try {
+			url = new URL(record.href);
+			if (!["http:", "https:"].includes(url.protocol) || url.origin !== record.origin || url.username || url.password) return direct;
+		} catch { return direct; }
+		const cleanupNonce = redditReadID();
+		const created = Date.now();
+		const stage = { kind: "read-helper-cleanup", nonce: cleanupNonce, target: nonce, label: record.kind === "reddit" ? "Reddit" : record.kind === "x" ? "X" : hostLabel(record.href), origin: url.origin, ts: created, expires: created + 10000 };
+		url.hash = new URLSearchParams({ backchannel_read_cleanup: "1", nonce: cleanupNonce });
+		await stageBridgePayload(cleanupNonce, stage);
+		await indexBridgePayload(cleanupNonce);
+		let ended = false;
+		Promise.resolve().then(() => GM.openInTab(url.href, true)).then((tab) => {
+			rememberReadHelperTab(cleanupNonce, "cleanup", tab, created);
+			if (ended) closeManagedReadHelper(cleanupNonce).catch(() => {});
+		}, () => {});
+		try {
+			while (Date.now() < stage.expires) {
+				const result = await load(BRIDGE_RESULT_PREFIX + cleanupNonce + ":retired", null);
+				if (result?.source === "backchannel-read-cleanup" && result.nonce === cleanupNonce && result.target === nonce && result.ts >= created) {
+					if (result.retired) readHelperHandles.delete(nonce);
+					return result.retired ? "released" : "failed";
+				}
+				await new Promise((resolve) => setTimeout(resolve, 100));
+			}
+			return "failed";
+		} finally {
+			ended = true;
+			if (!["closed", "released"].includes(await closeManagedReadHelper(cleanupNonce))) pendingReadHelpers.add(cleanupNonce);
+			await Promise.allSettled([save(BRIDGE_PAYLOAD_PREFIX + cleanupNonce, { ...stage, done: true }), forget(BRIDGE_RESULT_PREFIX + cleanupNonce + ":retired")]);
+		}
+	}
+
+	async function dispatchReadHelperCleanup() {
+		const marker = parseBridgeHash("backchannel_read_cleanup");
+		if (!marker) return false;
+		const stage = await readBridgePayload(marker.nonce);
+		if (stage?.kind !== "read-helper-cleanup" || stage.nonce !== marker.nonce || stage.origin !== location.origin || !/^[a-zA-Z0-9_-]{1,128}$/.test(stage.target || "") || !Number.isFinite(stage.ts) || !Number.isFinite(stage.expires) || stage.expires - stage.ts > 10000) return true;
+		const href = location.href;
+		const current = () => location.href === href;
+		const stop = startReadHelperTitle(String(stage.label || "source").slice(0, 100), () => false, current, { nonce: marker.nonce, kind: "cleanup" });
+		await stop.helper.ready;
+		try {
+			const retired = stage.done || Date.now() >= stage.expires ? false : await retireReadHelperSession(stage.target, Math.min(6000, stage.expires - Date.now()));
+			if (current()) await save(BRIDGE_RESULT_PREFIX + marker.nonce + ":retired", { source: "backchannel-read-cleanup", nonce: marker.nonce, target: stage.target, ts: Date.now(), retired: Boolean(retired) });
+		} finally {
+			stop();
+			if (current()) {
+				let timer;
+				try { if (typeof GM.closeTab === "function") await Promise.race([GM.closeTab(), new Promise((resolve) => { timer = setTimeout(resolve, READ_HELPER_CLOSE_MS); })]); } catch {}
+				finally { clearTimeout(timer); }
+				if (current()) try { window.close(); } catch {}
+			}
+		}
+		return true;
+	}
 
 	function usesRedditReadWindow() {
 		try { return GM.info?.scriptHandler === "Userscripts"; } catch { return false; }
@@ -5736,12 +6186,9 @@ ${
 				if (reply.phase === "login") {
 					deadline = batch.expires;
 					if (Date.now() - reply.ts > 10000) return { error: "window-unavailable" };
-					if (!batch.awaitingLogin) {
-						batch.awaitingLogin = true;
-						showToast("Sign in to Reddit in the tab that opened, then press Continue.", { kind: "system", persist: true, action: { label: "Cancel", onAct: () => { batch.cancelled = true; } } });
-					}
+					batch.awaitingLogin = true;
 				} else if (["ready", "response", "error", "closed"].includes(reply.phase)) {
-					if (batch.awaitingLogin) { batch.awaitingLogin = false; showToast(""); }
+					batch.awaitingLogin = false;
 					return reply;
 				}
 			}
@@ -5756,22 +6203,89 @@ ${
 		const cooldown = await load(REDDIT_POLL_KEY, null);
 
 		if (!settings.sources?.reddit || cooldown?.until > Date.now()) return { error: "not-needed" };
-		const stage = { kind: "reddit-read", nonce: batch.nonce, origin: location.origin, ts: batch.created, expires: batch.expires, request: null };
+		const paths = [];
+		if (!batch.reuseFresh && (batch.feedOnly || appState || isBrowsing(sidebarUI))) {
+			const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabledSourceIds(settings, registeredSourceIds()));
+			for (const feed of feeds.filter((feed) => feed.source === "reddit")) {
+				const cached = await load(frontPageFeedKey(feed), null);
+				if (cached?.status !== "window" && cached?.retryAt > Date.now()) continue;
+				paths.push(feed.kind === "subreddits" ? `/r/${feed.target}.json?limit=100` : "/r/popular.json?limit=100");
+			}
+		}
+		if (!batch.feedOnly && openPageKey()) {
+			for (const address of pageAddresses()) {
+				const target = normalizeURL(address);
+				if (target) paths.push(...redditDiscoveryPaths((address.startsWith("http://") ? "http://" : "https://") + target).map(([path]) => path));
+			}
+		}
+		batch.pathIds = new Map();
+		const requests = [];
+		for (const path of paths) {
+			const safePath = redditReadPath(path);
+			if (!safePath || batch.pathIds.has(safePath) || batch.sequence >= 50) continue;
+			const id = ++batch.sequence;
+			batch.pathIds.set(safePath, id);
+			requests.push({ id, path: safePath });
+		}
+		const stage = { kind: "reddit-read", nonce: batch.nonce, origin: location.origin, ts: batch.created, expires: batch.expires, request: null, requests, abandoned: batch.abandoned || [] };
 
 		await stageBridgePayload(batch.nonce, stage);
 		await indexBridgePayload(batch.nonce);
 		const url = "https://www.reddit.com/#" + new URLSearchParams({ backchannel_read: "1", nonce: batch.nonce });
 
 		if (batch.tab) {
-			const opened = await GM.openInTab(url, true);
+			batch.tabAttempted = true;
+			if (batch.onOpened && !(await batch.onOpened(batch.nonce))) return { error: "window-unavailable" };
+			const opened = await openRedditReadTab(url, batch);
 
 			if (!opened) return { error: "window-unavailable" };
 			batch.tabId = opened.id;
-		} else batch.popup.location = url;
-		const reply = await waitRedditReadReply(batch, 0, 30000);
+			if (batch.onOpened && !(await batch.onOpened(batch.nonce, true))) {
+				batch.skipTabClose = true;
+				await markRedditReadDone(batch.nonce).catch(() => {});
+				return { error: "window-unavailable" };
+			}
+		} else {
+			rememberReadHelperTab(batch.nonce, "reddit", batch.popup, batch.created);
+			batch.popup.location = url;
+		}
+		const reply = await waitRedditReadReply(batch, 0, REDDIT_READ_CONNECT_TIMEOUT_MS);
+		const cleanup = await load(BRIDGE_RESULT_PREFIX + batch.nonce + ":cleanup", null);
+		const cleaned = cleanup?.source === REDDIT_READ_SOURCE && cleanup.nonce === batch.nonce && cleanup.ts >= batch.created && Array.isArray(cleanup.cleaned) ? cleanup.cleaned : [];
+		const pending = redditAbandonedTabs(stage.abandoned).filter((tab) => !cleaned.some((item) => sameRedditAbandonedTab(item, tab)));
+		batch.cleanupPending = pending.length > 0;
+		if (batch.onCleaned && stage.abandoned.length) {
+			const currentPending = await batch.onCleaned(cleaned, pending);
+			batch.cleanupPending ||= currentPending;
+		}
 
 		batch.connected = reply.phase === "ready";
 		return reply;
+	}
+
+	async function openRedditReadTab(url, batch) {
+		let expired = false;
+		const opening = Promise.resolve().then(() => GM.openInTab(url, true));
+		return new Promise((resolve) => {
+			const timer = window.setTimeout(() => { expired = true; batch.openTimedOut = true; resolve(null); }, Math.max(0, Math.min(REDDIT_OPEN_TIMEOUT_MS, batch.expires - Date.now())));
+			opening.then((tab) => {
+				rememberReadHelperTab(batch.nonce, "reddit", tab, batch.created);
+				if (expired) {
+					if (tab && batch.onOpened) batch.onOpened(batch.nonce, true).catch(() => {});
+					closeManagedReadHelper(batch.nonce).catch(() => {});
+					return;
+				}
+				clearTimeout(timer);
+				resolve(tab);
+			}, () => { if (!expired) { clearTimeout(timer); resolve(null); } });
+		});
+	}
+
+	async function markRedditReadDone(nonce) {
+		return withSharedStorageLock("reddit-stage:" + nonce, async (lease) => {
+			const stage = await readBridgePayload(nonce);
+			if (stage?.kind === "reddit-read" && stage.nonce === nonce) await lease.commit(() => save(BRIDGE_PAYLOAD_PREFIX + nonce, { kind: stage.kind, nonce, origin: stage.origin, ts: stage.ts, expires: stage.expires, done: true, request: null, requests: [] }));
+		});
 	}
 
 	async function finishRedditReadBatch(batch) {
@@ -5780,52 +6294,183 @@ ${
 			while (redditRequests.size) await Promise.allSettled([...redditRequests.values()]);
 			const stage = await readBridgePayload(batch.nonce);
 
-			if (stage && batch.connected && !batch.cancelled) {
-				await stageBridgePayload(batch.nonce, { ...stage, done: true });
-				await waitRedditReadReply(batch, "done", 2000);
+			if (stage) {
+				await markRedditReadDone(batch.nonce);
+				const closed = await finishManagedReadHelper(batch.nonce);
+				batch.closeAcknowledged = closed === "closed" || closed === "released";
+				if (!batch.closeAcknowledged && batch.connected && !batch.cancelled) batch.closeAcknowledged = await waitReadHelperRelease(batch.nonce, 2000);
 			}
+			batch.cleanupPending ||= Boolean(batch.connected && !batch.closeAcknowledged);
 		} finally {
-			await Promise.allSettled([clearBridgePayload(batch.nonce), forgetMany([BRIDGE_RESULT_PREFIX + batch.nonce, ...Array.from({ length: batch.sequence }, (_, index) => BRIDGE_RESULT_PREFIX + batch.nonce + ":" + (index + 1))])]);
-			try { batch.popup?.close(); } catch {}
-			if (batch.tabId != null) { try { await GM.closeTab(batch.tabId); } catch {} }
+			await Promise.allSettled([batch.closeAcknowledged ? clearBridgePayload(batch.nonce) : markRedditReadDone(batch.nonce), forgetMany([BRIDGE_RESULT_PREFIX + batch.nonce, BRIDGE_RESULT_PREFIX + batch.nonce + ":cleanup", ...Array.from({ length: batch.sequence }, (_, index) => BRIDGE_RESULT_PREFIX + batch.nonce + ":" + (index + 1))])]);
+			try { if (batch.popup?.location?.href === "about:blank") batch.popup.close(); } catch {}
 			if (redditReadBatch === batch) redditReadBatch = null;
-			if (batch.syncRun === syncRunId && batch.synced && !batch.failed && !batch.cancelled && isSidebarVisible()) showSyncComplete();
+			if (batch.cleanupPending && isSidebarVisible()) reportRedditReadNotice(batch, "cleanup");
+			else if (batch.unresponsive && isSidebarVisible()) reportRedditReadNotice(batch, "unresponsive");
+			else if (batch.syncRun === syncRunId && batch.synced && !batch.failed && !batch.cancelled && isSidebarVisible()) showSyncComplete(batch.actionId);
 		}
 	}
 
+	function showRedditCleanupNotice() {
+		showReadHelperCleanupFailure();
+	}
+
+	function recordRedditReadSuccess(actionId) {
+		if (!Number.isSafeInteger(actionId)) return;
+		redditReadSuccessActionId = Math.max(redditReadSuccessActionId, actionId);
+		const notice = redditReadDisplayedNotice;
+		if (notice?.actionId < redditReadSuccessActionId) {
+			const toast = sidebarUI?.shadow?.getElementById("toast");
+			if (toast && toastOwners.get(toast) === notice) showToast("");
+			redditReadDisplayedNotice = null;
+		}
+	}
+
+	function isCurrentRedditReadNotice(batch, kind) {
+		return kind === "cleanup" || !(batch?.actionId < Math.max(redditReadSuccessActionId, redditReadReportedActionId));
+	}
+
+	function showRedditReadStatusNotice(kind, batch) {
+		if (!isCurrentRedditReadNotice(batch, kind)) return;
+		if (Number.isSafeInteger(batch?.actionId)) redditReadReportedActionId = Math.max(redditReadReportedActionId, batch.actionId);
+		if (kind === "cleanup") showRedditCleanupNotice();
+		else {
+			const toast = sidebarUI?.shadow?.getElementById("toast");
+			if (toast && toastOwners.get(toast) === batch) return;
+			if (toast?.classList.contains("is-showing") && toastOwners.get(toast) === readHelperCleanupToastOwner) {
+				deferRedditReadNotice(batch, kind);
+				return;
+			}
+			showToast("Partial sync", { kind: "system", duration: TOAST_BRIEF_MS, owner: batch });
+			redditReadDisplayedNotice = batch;
+		}
+	}
+
+	function deferRedditReadNotice(batch, kind) {
+		if (kind === "cleanup" || redditDeferredNotice?.kind !== "cleanup" && (!redditDeferredNotice || (batch.actionId ?? -1) >= (redditDeferredNotice.batch.actionId ?? -1))) redditDeferredNotice = { kind, batch };
+	}
+
+	function reportRedditReadNotice(batch, kind) {
+		if (!isCurrentRedditReadNotice(batch, kind)) return;
+		const syncing = [...syncOperations.values()].some((operation) => operation.kind === "sync");
+		if (syncing) {
+			deferRedditReadNotice(batch, kind);
+		} else showRedditReadStatusNotice(kind, batch);
+	}
+
+	const syncOperations = new Map();
+	let syncOperationSequence = 0;
+	let runningSync = null;
+
+	function paintSyncOperations() {
+		const shadow = sidebarUI?.shadow;
+		if (!shadow) return;
+		const busy = [...syncOperations.values()].some((operation) => operation.kind === "sync");
+		for (const button of shadow.querySelectorAll("#app-list-sync, #browse-home-sync")) {
+			button.classList.toggle("is-syncing", busy);
+			if (busy) button.setAttribute("aria-busy", "true");
+			else button.removeAttribute("aria-busy");
+		}
+		paintAppDiscussionSync();
+	}
+
+	function beginSyncOperation(kind, target = openPageKey()) {
+		const parent = [...syncOperations.values()].filter((entry) => entry.kind === "sync" || entry.target === target).at(-1);
+		const operation = { id: ++syncOperationSequence, kind, target, startedAt: Date.now(), status: "running", results: new Map(), cancellations: new Set() };
+		const outcome = () => [...operation.results.values()].some((result) => !["ok", "empty", "cached"].includes(result.status)) ? "partial" : "ok";
+		syncOperations.set(operation.id, operation);
+		paintSyncOperations();
+		const handle = {
+			operation,
+			outcome,
+			attach(cancel) { operation.cancellations.add(cancel); return () => operation.cancellations.delete(cancel); },
+			record(key, result) { operation.results.set(key, result); },
+			finish(status = outcome()) {
+				if (!syncOperations.delete(operation.id)) return;
+				operation.status = status;
+				operation.finishedAt = Date.now();
+				if (status === "cancelled") for (const cancel of [...operation.cancellations]) cancel();
+				operation.cancellations.clear();
+				if (parent && syncOperations.has(parent.id)) parent.results.set(operation.id, operation);
+				paintSyncOperations();
+			},
+		};
+		operation.cancel = () => handle.finish("cancelled");
+		return handle;
+	}
+
+	function cancelDiscussionOperations(target) {
+		for (const operation of [...syncOperations.values()]) if (["discussion", "expansion"].includes(operation.kind) && operation.target === target) operation.cancel();
+	}
+
 	function runSync(task, options = {}) {
+		if (runningSync) {
+			if (!options.automatic && runningSync.automatic) {
+				if (!runningSync.next) runningSync.next = { task, options, promise: new Promise((resolve, reject) => { runningSync.resolveNext = resolve; runningSync.rejectNext = reject; }) };
+				return runningSync.next.promise;
+			}
+			return runningSync.promise;
+		}
+		const entry = { automatic: Boolean(options.automatic) };
+		runningSync = entry;
+		entry.promise = performSync(task, options).finally(() => {
+			if (runningSync === entry) runningSync = null;
+			if (entry.next) runSync(entry.next.task, entry.next.options).then(entry.resolveNext, entry.rejectNext);
+		});
+		return entry.promise;
+	}
+
+	function performSync(task, options = {}) {
 		const runId = ++syncRunId;
-		if (sidebarUI?.shadow?.getElementById("toast")?.textContent === "Synced") showToast("");
-		return runRedditReadAction(async (releaseRead) => {
+		const operation = beginSyncOperation("sync");
+		const readActionId = redditReadActionId;
+		let completedActionId = readActionId;
+		let partial = true;
+		if (isSidebarVisible() && (appState || !isBrowsing(sidebarUI))) showToast("Syncing…", { kind: "system", loading: true });
+		const execute = options.allowHelper === false ? (action) => Promise.resolve().then(() => action(() => Promise.resolve(), readActionId)) : (action) => runRedditReadAction(action, options);
+		return execute(async (releaseRead, actionId) => {
+			completedActionId = actionId;
+			await clearPendingReadHelpers({ retry: !options.automatic });
+			await clearClosedXHelpers({ retry: !options.automatic });
 			const batch = usesRedditReadWindow() && redditReadSourceOn && !redditReadBatch?.closing ? redditReadBatch : null;
 			const untapped = Boolean(batch && !batch.popup && !batch.tab && !batch.activated);
 			const result = await task(releaseRead);
+			await clearClosedXHelpers();
+			await clearPendingReadHelpers();
 			const runs = Array.isArray(result) ? result : [{ status: "fulfilled", value: result }];
 			const feeds = runs.flatMap((run) => run.status === "fulfilled" ? run.value?.feedStates || [] : []);
 			const waiting = untapped ? feeds.filter((feed) => feed.status === "window") : [];
-			const failed = runs.some((run) => run.status === "rejected") || feeds.some((feed) => feed.status !== "ok" && !waiting.includes(feed));
+			for (const feed of feeds) operation.record("feed:" + feed.source, feed);
+			const failed = runs.some((run) => run.status === "rejected") || feeds.some((feed) => feed.status !== "ok" && !waiting.includes(feed)) || operation.outcome() !== "ok";
 			const synced = feeds.length > 0 && !failed;
+			partial = failed || waiting.length > 0 || Boolean(batch?.failed || batch?.unresponsive || batch?.cancelled);
 
 			if (batch && !untapped) {
 				if (synced && runId === syncRunId) {
-					if (batch.closing) {
-						if (!batch.failed && !batch.cancelled && isSidebarVisible()) showSyncComplete();
-					} else {
+					if (!batch.closing) {
 						batch.synced = true;
 						batch.syncRun = runId;
 					}
 				}
-				batch.failed ||= failed;
-			} else if (runId === syncRunId && isSidebarVisible()) {
-				if (waiting.length && !failed) showToast("Press Sync to refresh Reddit.", { kind: "system", action: { label: "sync", onAct: () => runSync(task, options).catch(console.error) } });
-				else if (synced) showSyncComplete();
 			}
 			return result;
-		}, options);
+		}).finally(async () => {
+			partial ||= operation.outcome() !== "ok";
+			operation.finish();
+			if (runId === syncRunId && redditDeferredNotice && isSidebarVisible()) {
+				const notice = redditDeferredNotice;
+				redditDeferredNotice = null;
+				if (isCurrentRedditReadNotice(notice.batch, notice.kind)) partial = true;
+				showRedditReadStatusNotice(notice.kind, notice.batch);
+			}
+			if (runId === syncRunId && isSidebarVisible()) showSyncComplete(completedActionId, partial);
+			if (!syncOperations.size && sidebarUI?.shadow?.getElementById("toast")?.textContent === "Syncing…") showToast("");
+		});
 	}
 
 	function runRedditReadAction(task, options = {}) {
-		redditReadActionId++;
+		const actionId = ++redditReadActionId;
+		options = { ...options, actionId };
 		if (!options.automatic && usesRedditReadWindow() && redditReadSourceOn) redditReadInitialAttempted = true;
 		if (!usesRedditReadWindow() || !redditReadSourceOn || !usesManagerTabs() || redditReadBatch && !redditReadBatch.closing) return runRedditReadActionLocal(task, options);
 		const page = openPageKey();
@@ -5836,7 +6481,7 @@ ${
 			const readyForFeed = async (entry) => {
 				if (!options.feedOnly || !entry?.ok || !Array.isArray(entry.feedKeys) || !entry.feedKeys.length) return false;
 				const settings = await loadSettings();
-				const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabledSourceIds(settings, registeredSourceIds()));
+				const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabledSourceIds(settings, registeredSourceIds())).filter((feed) => feed.source === "reddit");
 				const keys = frontPageStorageKeys(feeds);
 				if (JSON.stringify(keys) !== JSON.stringify(entry.feedKeys)) return false;
 				const caches = await Promise.all(keys.map((key) => load(key, null)));
@@ -5851,27 +6496,32 @@ ${
 				const previousEmpty = sharedEmptyReddit;
 				sharedRefreshSince = entry.started;
 				sharedEmptyReddit = new Set(entry.emptyTargets || []);
-				try { return await task(() => Promise.resolve()); }
+				try {
+					const result = await task(() => Promise.resolve(), actionId);
+					recordRedditReadSuccess(actionId);
+					return result;
+				}
 				finally { sharedRefreshSince = previous; sharedEmptyReddit = previousEmpty; }
 			};
 			for (;;) {
 				const decision = await withSharedStorageLock("reddit-refresh", async (lease) => {
 					const held = await load(REDDIT_SHARED_REFRESH_KEY, null);
-					if (!options.feedOnly && !(held?.state === "running" && held.expires > Date.now())) {
+					const abandoned = redditAbandonedTabs(held?.abandoned || [], held?.state === "running" && held.expires <= Date.now() ? { nonce: held.helperNonce } : null);
+					if (!abandoned.some((tab) => tab.urgent) && !options.feedOnly && !(held?.state === "running" && held.expires > Date.now())) {
 						const sharedPage = await load(SHARED_REDDIT_PAGE_PREFIX + page, null);
 						if ((sharedPage?.owner !== redditViewId || options.reuseFresh || options.automatic) && sharedPage?.token && sharedPage.token !== consumedSharedPage && Date.now() - sharedPage.at < THREAD_TTL && Array.isArray(sharedPage.keys) && sharedPage.keys.length) {
 							const entries = await Promise.all(sharedPage.keys.map((key) => load(SHARED_THREAD_PREFIX + key, null)));
 							if (entries.every((entry) => entry?.version === 1 && entry.at >= sharedPage.since)) return { reuse: { id: sharedPage.token, started: sharedPage.since } };
 						}
 					}
-					if (held?.state === "done" && held.owner !== redditViewId && held.id !== consumedSharedRefresh && held.expires > Date.now() && await readyForAction(held)) return { reuse: held };
+					if (!abandoned.some((tab) => tab.urgent) && held?.state === "done" && held.owner !== redditViewId && held.id !== consumedSharedRefresh && held.expires > Date.now() && await readyForAction(held)) return { reuse: held };
 					if (held?.state === "running" && held.expires > Date.now()) return { held };
-					const claim = { id, owner: redditViewId, page, state: "running", started: Date.now(), expires: Date.now() + 120000 };
+					const claim = { id, owner: redditViewId, page, state: "running", started: Date.now(), expires: Date.now() + 120000, abandoned };
 					await lease.commit(() => save(REDDIT_SHARED_REFRESH_KEY, claim));
-					return { claim };
+					return { claim, abandoned };
 				});
 				if (decision.reuse) return reuse(decision.reuse);
-				const { held, claim } = decision;
+				const { held, claim, abandoned } = decision;
 				if (held?.state === "running" && held.expires > Date.now()) {
 					let current = held;
 					while (current?.id === held.id && current.state === "running" && current.expires > Date.now()) {
@@ -5879,7 +6529,7 @@ ${
 						current = await load(REDDIT_SHARED_REFRESH_KEY, null);
 					}
 					if (page !== openPageKey()) return [];
-					if (current?.id === held.id && current.state === "done" && await readyForAction(current)) return reuse(current);
+					if (current?.id === held.id && current.state === "done" && !redditAbandonedTabs(current.abandoned || []).some((tab) => tab.urgent) && await readyForAction(current)) return reuse(current);
 					continue;
 				}
 				if (!claim) continue;
@@ -5892,8 +6542,24 @@ ${
 				}, 10000);
 				let ok = false;
 				const outcome = {};
+				const onOpened = async (nonce, late = false) => withSharedStorageLock("reddit-refresh", async (lease) => {
+					const current = await load(REDDIT_SHARED_REFRESH_KEY, null);
+					if (current?.id === id && current.state === "running" && current.expires > Date.now()) {
+						await lease.commit(() => save(REDDIT_SHARED_REFRESH_KEY, { ...current, helperNonce: nonce }));
+						return true;
+					}
+					if (late && current) await lease.commit(() => save(REDDIT_SHARED_REFRESH_KEY, { ...current, abandoned: redditAbandonedTabs(current.abandoned || [], { nonce, revision: redditReadID() }) }));
+					return false;
+				});
+				const onCleaned = async (cleaned, pending) => withSharedStorageLock("reddit-refresh", async (lease) => {
+					const current = await load(REDDIT_SHARED_REFRESH_KEY, null);
+					if (current?.id !== id || current.state !== "running") return false;
+					const remaining = redditAbandonedTabs(current.abandoned || []).filter((tab) => !cleaned.some((item) => sameRedditAbandonedTab(item, tab))).map((tab) => pending.some((item) => sameRedditAbandonedTab(item, tab)) ? { ...tab, urgent: true } : tab);
+					await lease.commit(() => save(REDDIT_SHARED_REFRESH_KEY, { ...current, abandoned: remaining }));
+					return remaining.some((tab) => tab.urgent);
+				});
 				try {
-					const result = await runRedditReadActionLocal(task, { ...options, outcome });
+					const result = await runRedditReadActionLocal(task, { ...options, outcome, abandoned, onOpened, onCleaned });
 					ok = Boolean(outcome.ok);
 					return result;
 				} finally {
@@ -5907,15 +6573,19 @@ ${
 					const emptyOnly = !hasSnapshots && targets.length > 0 && targets.every((target) => emptyTargets.includes(target));
 					const pageReady = hasSnapshots || emptyOnly;
 					await withSharedStorageLock("reddit-refresh", async (lease) => {
-						if ((await load(REDDIT_SHARED_REFRESH_KEY, null))?.id === id) await lease.commit(() => save(REDDIT_SHARED_REFRESH_KEY, { ...claim, state: "done", ok, pageReady, emptyOnly, emptyTargets, feedKeys, expires: Date.now() + THREAD_TTL }));
+						const current = await load(REDDIT_SHARED_REFRESH_KEY, null);
+						if (current?.id === id) {
+							const { helperNonce, ...rest } = current;
+							await lease.commit(() => save(REDDIT_SHARED_REFRESH_KEY, { ...rest, state: "done", ok, pageReady, emptyOnly, emptyTargets, feedKeys, abandoned: redditAbandonedTabs(current.abandoned || [], outcome.abandoned), expires: Date.now() + THREAD_TTL }));
+						}
 					});
 				}
 			}
 		})();
 	}
 
-	function runRedditReadActionLocal(task, { automatic = false, outcome = null } = {}) {
-		if (!usesRedditReadWindow() || !redditReadSourceOn || redditReadWaitUntil > Date.now()) return Promise.resolve().then(() => task(() => Promise.resolve()));
+	function runRedditReadActionLocal(task, { automatic = false, feedOnly = false, reuseFresh = false, outcome = null, abandoned = null, onOpened = null, onCleaned = null, actionId = redditReadActionId } = {}) {
+		if (!usesRedditReadWindow() || !redditReadSourceOn || redditReadWaitUntil > Date.now()) return Promise.resolve().then(() => task(() => Promise.resolve(), actionId));
 		let batch = redditReadBatch;
 
 		if (!batch || batch.closing) {
@@ -5928,7 +6598,7 @@ ${
 				return Promise.resolve();
 			}
 
-			batch = { nonce, popup, tab, activated, created: Date.now(), expires: Date.now() + SIGN_IN_TIMEOUT, connected: false, closing: false, cancelled: false, users: 0, sequence: 0 };
+			batch = { nonce, popup, tab, activated, feedOnly, reuseFresh, abandoned, onOpened, onCleaned, actionId, created: Date.now(), expires: Date.now() + SIGN_IN_TIMEOUT, startedSyncRun: syncRunId, connected: false, closing: false, cancelled: false, users: 0, sequence: 0 };
 			redditReadBatch = batch;
 			batch.preparing = prepareRedditReadBatch(batch).catch(() => ({ error: "window-unavailable" }));
 		}
@@ -5949,9 +6619,11 @@ ${
 
 				if (ready.error && ready.error !== "not-needed" && ready.error !== "no-gesture" && !batch.reported) {
 					batch.reported = true;
-					showToast(ready.error === "popup-blocked" ? "Allow popups for this site, then press Sync to refresh Reddit." : ready.error === "cancelled" ? "Reddit refresh cancelled." : ready.error === "limited" ? "Reddit requests are temporarily limited. Try syncing again later." : "The Reddit window did not respond. Press Sync to try again.", { kind: "system", page: true });
+					if (ready.error === "timeout" || ready.error === "window-unavailable") batch.unresponsive = true;
+					if (batch.unresponsive && isSidebarVisible()) reportRedditReadNotice(batch, "unresponsive");
+					else reportRedditReadNotice(batch, "unresponsive");
 				}
-				return await task(releaseRead);
+				return await task(releaseRead, actionId);
 			} catch (error) {
 				batch.failed = true;
 				throw error;
@@ -5961,6 +6633,7 @@ ${
 					outcome.ok = Boolean(batch.connected && !batch.failed && !batch.cancelled);
 					outcome.emptyTargets = [...(batch.emptyTargets || [])];
 					outcome.feedKeys = batch.feedKeys || [];
+					outcome.abandoned = batch.tabAttempted ? { nonce: batch.nonce, urgent: !batch.closeAcknowledged && (batch.cleanupPending || batch.failed || !batch.connected || batch.cancelled || batch.unresponsive || batch.openTimedOut || batch.skipTabClose) } : null;
 				}
 			}
 		})();
@@ -5991,31 +6664,165 @@ ${
 			return response;
 		};
 
-		if (!safePath || !batch?.connected || batch.cancelled || batch.closing || Date.now() >= batch.expires || ++batch.sequence > 50) return complete(redditReadFailure("window-unavailable"));
-		const requestId = batch.sequence;
-		const queued = (batch.stageWrites || Promise.resolve()).then(async () => {
+		if (!safePath || !batch?.connected || batch.cancelled || batch.closing || Date.now() >= batch.expires) return complete(redditReadFailure("window-unavailable"));
+		if (!(await loadSettings()).sources?.reddit) return complete(redditReadFailure("disabled"));
+		const pathIds = batch.pathIds ||= new Map();
+		let requestId = pathIds.get(safePath);
+		if (!requestId && batch.sequence >= 50) return complete(redditReadFailure("window-unavailable"));
+		const staged = Boolean(requestId);
+		if (!requestId) { requestId = ++batch.sequence; pathIds.set(safePath, requestId); }
+		const queued = staged ? batch.stageWrites || Promise.resolve(true) : (batch.stageWrites || Promise.resolve()).then(() => withSharedStorageLock("reddit-stage:" + batch.nonce, async (lease) => {
 			const stage = await readBridgePayload(batch.nonce);
-			if (!validRedditReadStage(stage, batch.nonce) || !(await loadSettings()).sources?.reddit) return false;
-			await stageBridgePayload(batch.nonce, { ...stage, requests: [...(stage.requests || []), { id: requestId, path: safePath }] });
+			if (!validRedditReadStage(stage, batch.nonce) || stage.done || !(await loadSettings()).sources?.reddit) return false;
+			await lease.commit(() => stageBridgePayload(batch.nonce, { ...stage, requests: [...(stage.requests || []), { id: requestId, path: safePath }] }));
 			return true;
-		});
+		}));
 		batch.stageWrites = queued.catch(() => false);
 		if (!(await queued)) return complete(redditReadFailure("disabled"));
 		const reply = await waitRedditReadReply(batch, requestId);
+		if (reply.error === "timeout" || reply.error === "window-unavailable") batch.unresponsive = true;
+		if (!(await loadSettings()).sources?.reddit) return complete(redditReadFailure("disabled"));
 
 		return complete(reply.phase === "response" && reply.response ? reply.response : redditReadFailure(reply.error));
 	}
 
+	function redditReadHelperLocation(nonce) {
+		const path = location.pathname;
+		if (path !== "/" && !/^\/(?:login|register|account\/(?:login|register))\/?$/i.test(path)) return false;
+		const marker = parseBridgeHash("backchannel_read");
+		const resumed = peekBridgeReload(REDDIT_READ_RESUME_KEY);
+		return marker?.nonce === nonce || path !== "/" && resumed?.nonce === nonce && resumed.login === true;
+	}
+
+	async function offerRedditLoginReturn(nonce) {
+		const stage = await readBridgePayload(nonce);
+		if (!validRedditReadStage(stage, nonce) || stage.done || !(await loadSettings()).sources?.reddit) return false;
+		await documentReady();
+		if (location.pathname !== "/" || parseBridgeHash("backchannel_read") || peekBridgeReload(REDDIT_READ_RESUME_KEY)?.nonce !== nonce) return false;
+		showSignInNote({ noun: "refresh Reddit" });
+		const note = document.getElementById(SIGN_IN_NOTE_ID);
+		if (!note) return false;
+		note.textContent = "After signing in, press Continue to finish syncing. Backchannel will close this tab afterward.";
+		const button = document.createElement("button");
+		button.textContent = "Continue";
+		button.style.marginLeft = "12px";
+		const cancel = document.createElement("button");
+		cancel.textContent = "Cancel";
+		cancel.style.marginLeft = "12px";
+		note.append(button, cancel);
+		let active = true;
+		let timer;
+		let heartbeat = Promise.resolve();
+		const pause = () => { active = false; clearInterval(timer); button.disabled = true; cancel.disabled = true; };
+		const stop = () => { pause(); window.removeEventListener("pagehide", stop); note.remove(); };
+		const publish = (phase, error = "") => save(BRIDGE_RESULT_PREFIX + nonce, { source: REDDIT_READ_SOURCE, nonce, ts: Date.now(), phase, requestId: 0, ...(error ? { error } : {}) });
+		const publishLogin = () => { heartbeat = heartbeat.then(() => active ? publish("login") : undefined).catch(console.error); return heartbeat; };
+		const drain = async (error) => {
+			pause();
+			let timeout;
+			const complete = await Promise.race([heartbeat.then(() => true), new Promise((resolve) => { timeout = window.setTimeout(() => resolve(false), REDDIT_LOGIN_WRITE_TIMEOUT_MS); })]);
+			clearTimeout(timeout);
+			if (complete) return true;
+			clearBridgeReload(REDDIT_READ_RESUME_KEY);
+			heartbeat.then(() => publish("error", error)).catch(console.error);
+			if (note.isConnected && location.pathname === "/" && !parseBridgeHash("backchannel_read")) {
+				note.textContent = "Reddit sync could not finish. Return to Backchannel and press Sync again; this page will stay open.";
+				const dismiss = document.createElement("button");
+				dismiss.textContent = "Dismiss";
+				dismiss.style.marginLeft = "12px";
+				dismiss.onclick = stop;
+				note.append(dismiss);
+			} else stop();
+			return false;
+		};
+		button.onclick = () => (async () => {
+			const current = await readBridgePayload(nonce);
+			const enabled = (await loadSettings()).sources?.reddit;
+			if (!active || location.pathname !== "/" || parseBridgeHash("backchannel_read") || !validRedditReadStage(current, nonce) || current.done || !enabled) return;
+			if (!await drain("window-unavailable")) return;
+			if (!note.isConnected || location.pathname !== "/" || parseBridgeHash("backchannel_read")) { stop(); clearBridgeReload(REDDIT_READ_RESUME_KEY); await publish("error", "window-unavailable"); return; }
+			stop();
+			try { history.replaceState(history.state, "", location.pathname + location.search + "#" + new URLSearchParams({ backchannel_read: "1", nonce })); } catch {}
+			if (parseBridgeHash("backchannel_read")?.nonce === nonce) await dispatchRedditReadWindow();
+			else { clearBridgeReload(REDDIT_READ_RESUME_KEY); await publish("error", "window-unavailable"); }
+		})().catch(console.error);
+		cancel.onclick = () => (async () => {
+			if (!active || !await drain("cancelled")) return;
+			stop(); clearBridgeReload(REDDIT_READ_RESUME_KEY); await publish("error", "cancelled");
+		})().catch(console.error);
+		window.addEventListener("pagehide", stop, { once: true });
+		timer = window.setInterval(() => {
+			(async () => {
+				if (!active) return;
+				const current = await readBridgePayload(nonce);
+				const enabled = (await loadSettings()).sources?.reddit;
+				if (!active) return;
+				if (location.pathname !== "/" || parseBridgeHash("backchannel_read") || !validRedditReadStage(current, nonce) || current.done || !enabled) {
+					stop(); clearBridgeReload(REDDIT_READ_RESUME_KEY); return;
+				}
+				await publishLogin();
+			})().catch(console.error);
+		}, 1000);
+		await publishLogin();
+		return true;
+	}
+
+	function startReadHelperTitle(source, isPaused = () => false, isCurrent = () => true, helper = null) {
+		let titleFrame = 0;
+		let titlePhase = helper?.kind === "x" ? "Loading search" : helper?.kind === "article" ? "Reading page" : helper?.kind === "cleanup" ? "Finishing sync" : "Connecting";
+		let sourceTitle = document.title;
+		let paintedTitle = null;
+		const titleFrames = ["⠋", "⠏", "⠇", "⠧", "⠦", "⠴", "⠼", "⠸", "⠹", "⠙"];
+		const paintTitle = () => {
+			if (!isCurrent()) return;
+			const title = isPaused() ? "Sign in to " + source + " — Backchannel" : (prefersReducedMotion() ? "" : titleFrames[titleFrame] + " ") + "Backchannel is refreshing " + source + " — " + titlePhase;
+			if (document.title !== paintedTitle) sourceTitle = document.title;
+			if (document.title !== title) document.title = title;
+			paintedTitle = title;
+		};
+		const tickTitle = () => { titleFrame = (titleFrame + 1) % titleFrames.length; paintTitle(); };
+		paintTitle();
+		const titleTimer = window.setInterval(tickTitle, 200);
+		const titleObserver = new MutationObserver(paintTitle);
+		if (document.head) titleObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
+		const restore = () => { clearInterval(titleTimer); titleObserver.disconnect(); if (document.title === paintedTitle) document.title = sourceTitle; };
+		const session = helper ? startReadHelperSession(helper.nonce, helper.kind, source, isCurrent, restore) : null;
+		const stop = () => { restore(); if (session?.current()) session.phase(true); else session?.release(); };
+		stop.helper = session;
+		stop.sourceTitle = () => sourceTitle;
+		stop.setPhase = (phase) => { titlePhase = phase; paintTitle(); };
+		return stop;
+	}
+
 	async function dispatchRedditReadWindow() {
 		if (location.origin !== "https://www.reddit.com" || window.top !== window) return false;
-		const payload = parseBridgeHash("backchannel_read") || peekBridgeReload(REDDIT_READ_RESUME_KEY);
+		const marker = parseBridgeHash("backchannel_read");
+		const payload = marker || peekBridgeReload(REDDIT_READ_RESUME_KEY);
 		const nonce = payload?.nonce;
 
 		if (!nonce) return false;
+		if (!redditReadHelperLocation(nonce)) {
+			if (!marker && payload.login && location.pathname === "/" && await offerRedditLoginReturn(nonce)) return true;
+			clearBridgeReload(REDDIT_READ_RESUME_KEY);
+			if (!marker && payload.login) {
+				const stage = await readBridgePayload(nonce);
+				if (!redditReadHelperLocation(nonce) && validRedditReadStage(stage, nonce)) await save(BRIDGE_RESULT_PREFIX + nonce, { source: REDDIT_READ_SOURCE, nonce, ts: Date.now(), phase: "error", requestId: 0, error: "window-unavailable" }).catch(() => {});
+			}
+			return false;
+		}
 		const stage = await readBridgePayload(nonce);
+		if (!redditReadHelperLocation(nonce)) { clearBridgeReload(REDDIT_READ_RESUME_KEY); return false; }
 
-		if (!validRedditReadStage(stage, nonce)) { clearBridgeReload(REDDIT_READ_RESUME_KEY); return false; }
-		stageBridgeReload(REDDIT_READ_RESUME_KEY, { nonce });
+		if (!validRedditReadStage(stage, nonce)) {
+			clearBridgeReload(REDDIT_READ_RESUME_KEY);
+			if (parseBridgeHash("backchannel_read")?.nonce === nonce && location.pathname === "/" && stage?.done && Number.isFinite(stage.expires) && stage.expires <= Date.now() && validRedditReadStage(stage, nonce, stage.expires - 1)) {
+				try { Promise.resolve(GM.closeTab()).catch(() => {}); } catch {}
+				try { window.close(); } catch {}
+				return true;
+			}
+			return false;
+		}
+		stageBridgeReload(REDDIT_READ_RESUME_KEY, { nonce, login: Boolean(payload.login) });
 		const publish = (data) => save(BRIDGE_RESULT_PREFIX + nonce + (typeof data.requestId === "number" && data.requestId > 0 ? ":" + data.requestId : ""), { source: REDDIT_READ_SOURCE, nonce, ts: Date.now(), ...data });
 		const work = async () => {
 			const seen = new Set();
@@ -6024,17 +6831,28 @@ ${
 			let paused = false;
 			let authenticated = false;
 			let lastLoginReport = 0;
-			let titleFrame = 0;
-			const titleFrames = ["⠋", "⠏", "⠇", "⠧", "⠦", "⠴", "⠼", "⠸", "⠹", "⠙"];
-			const paintTitle = () => {
-				const title = paused ? "Sign in to Reddit — Backchannel" : (prefersReducedMotion() ? "" : titleFrames[titleFrame] + " ") + "Backchannel is refreshing Reddit";
-				if (document.title !== title) document.title = title;
-			};
-			const tickTitle = () => { titleFrame = (titleFrame + 1) % titleFrames.length; paintTitle(); };
-			paintTitle();
-			const titleTimer = window.setInterval(tickTitle, 200);
-			const titleObserver = new MutationObserver(paintTitle);
-			if (document.head) titleObserver.observe(document.head, { childList: true, subtree: true, characterData: true });
+			const stopTitle = startReadHelperTitle("Reddit", () => paused, () => redditReadHelperLocation(nonce), { nonce, kind: "reddit" });
+			await stopTitle.helper.ready;
+			if (stage.abandoned?.length) stopTitle.setPhase("Closing previous refresh tabs");
+			const cleaned = await Promise.all(redditAbandonedTabs(stage.abandoned || []).filter((tab) => tab.nonce !== nonce).map(async (tab) => {
+				try {
+					await markRedditReadDone(tab.nonce);
+					const retired = await retireReadHelperSession(tab.nonce);
+					if (retired !== null) return retired ? { nonce: tab.nonce, revision: tab.revision } : null;
+					const name = REDDIT_READ_SOURCE + tab.nonce;
+					const done = await navigator.locks.request(name, { ifAvailable: true }, async (lock) => {
+						if (lock) return true;
+						await markRedditReadDone(tab.nonce);
+						for (let attempt = 0; attempt < 10; attempt++) {
+							await new Promise((resolve) => window.setTimeout(resolve, 100));
+							if (await navigator.locks.request(name, { ifAvailable: true }, (next) => Boolean(next))) return true;
+						}
+						return false;
+					});
+					return done ? { nonce: tab.nonce, revision: tab.revision } : null;
+				} catch { return null; }
+			}));
+			if (cleaned.some(Boolean)) await save(BRIDGE_RESULT_PREFIX + nonce + ":cleanup", { source: REDDIT_READ_SOURCE, nonce, cleaned: cleaned.filter(Boolean), ts: Date.now() }).catch(() => {});
 			const fetchJSON = async (path) => {
 				let response;
 				try { response = await fetch(path, { credentials: "same-origin", cache: "no-store", redirect: path === "/api/me.json" ? "manual" : "error", signal: AbortSignal.timeout(10000) }); }
@@ -6050,8 +6868,49 @@ ${
 				if (rateLimit && !Number.isFinite(rateLimit.remaining)) delete rateLimit.remaining;
 				return { ok: response.ok && json !== null, status: response.status, json, rateLimit, retryAfterSeconds: parseRetryAfter(headers), finalUrl: response.url, contentType: response.headers.get("content-type")?.split(";")[0] || "" };
 			};
+			let drainQueue = Promise.resolve();
+			const drainStaged = (snapshot = null) => {
+				drainQueue = drainQueue.then(async () => {
+					if (completed || paused || !authenticated || !redditReadHelperLocation(nonce)) return;
+					const current = snapshot || await readBridgePayload(nonce);
+					if (!validRedditReadStage(current, nonce) || current.done || !redditReadHelperLocation(nonce) || !(await loadSettings()).sources?.reddit) return;
+					for (const request of Array.isArray(current.requests) ? current.requests : []) {
+						if (active.size >= 3) break;
+						if (!Number.isInteger(request?.id) || request.id < 1 || request.id > 50 || seen.has(request.id)) continue;
+						seen.add(request.id);
+						const job = (async () => {
+							const path = redditReadPath(request.path);
+							const cooldown = await load(REDDIT_POLL_KEY, null);
+							if (!path) return publish({ phase: "error", requestId: request.id, error: "invalid-request" });
+							if (cooldown?.until > Date.now()) return publish({ phase: "error", requestId: request.id, error: "limited" });
+							if (!redditReadHelperLocation(nonce) || !(await loadSettings()).sources?.reddit) return publish({ phase: "error", requestId: request.id, error: "disabled" });
+							let response;
+							try {
+								stopTitle.setPhase(path.includes("/comments/") || path.startsWith("/api/morechildren") ? "Loading comments" : /^\/r\/[^/]+\.json(?:\?|$)/.test(path) ? "Loading articles" : "Finding discussions");
+								response = await fetchJSON(path);
+								const exhausted = response.rateLimit?.remaining < REDDIT_RATE_FLOOR;
+								const transient = response.status === 0 || response.status === 429 || response.status >= 500;
+								const failures = Math.min(5, Math.max(0, Number(cooldown?.failures) || 0) + 1);
+								const pause = Math.max(response.retryAfterSeconds || 0, exhausted ? response.rateLimit.resetSeconds || 600 : response.status === 429 ? response.rateLimit?.resetSeconds || 0 : 0, transient ? Math.min(900, 60 * 2 ** (failures - 1)) : 0);
+								if (pause > 0) {
+									const until = Date.now() + pause * 1000;
+									const latest = await load(REDDIT_POLL_KEY, null);
+									if (!(latest?.until > until)) await save(REDDIT_POLL_KEY, { until, status: exhausted || response.status === 429 ? "limited" : "unavailable", failures: transient ? failures : 0, httpStatus: response.status });
+								}
+								if (response.needsSignIn || response.status === 401) authenticated = false;
+								response = (await loadSettings()).sources?.reddit ? { ...response, json: publicRedditJSON(response.json) } : redditReadFailure("disabled");
+							} catch (error) { response = error?.message === "Reddit response is too large" ? redditReadFailure("response-too-large") : { ok: false, status: 0, json: null, rateLimit: null }; }
+							await publish({ phase: "response", requestId: request.id, response });
+						})();
+						active.set(request.id, job);
+						job.catch(console.error).finally(() => { active.delete(request.id); if (!active.size && !completed) stopTitle.setPhase("Waiting for Backchannel"); drainStaged().catch(console.error); });
+					}
+				});
+				return drainQueue;
+			};
 			try {
 				while (true) {
+					if (!redditReadHelperLocation(nonce)) break;
 					const current = await readBridgePayload(nonce);
 
 					if (!validRedditReadStage(current, nonce)) break;
@@ -6060,6 +6919,7 @@ ${
 					if (paused) {
 						if (Date.now() - lastLoginReport > 1000) { await publish({ phase: "login", requestId: 0 }); lastLoginReport = Date.now(); }
 					} else if (!authenticated) {
+						stopTitle.setPhase("Checking sign-in");
 						const identity = await fetchJSON("/api/me.json");
 						const exhausted = identity.rateLimit?.remaining < REDDIT_RATE_FLOOR;
 						const transient = identity.status === 429 || identity.status >= 500 || identity.status === 0;
@@ -6076,10 +6936,17 @@ ${
 						}
 						authenticated = Boolean(identity.ok && identity.json?.data?.name);
 						if (authenticated) {
+							if (!parseBridgeHash("backchannel_read")) {
+								try { history.replaceState(history.state, "", location.pathname + location.search + "#" + new URLSearchParams({ backchannel_read: "1", nonce })); } catch {}
+							}
+							stageBridgeReload(REDDIT_READ_RESUME_KEY, { nonce, login: !parseBridgeHash("backchannel_read") });
 							document.getElementById(SIGN_IN_NOTE_ID)?.remove();
+							stopTitle.setPhase("Waiting for Backchannel");
 							await publish({ phase: "ready", requestId: 0 });
+							await drainStaged(current);
 						} else {
 							paused = true;
+							stageBridgeReload(REDDIT_READ_RESUME_KEY, { nonce, login: true });
 							await documentReady();
 							showSignInNote({ noun: "refresh Reddit" });
 							const note = document.getElementById(SIGN_IN_NOTE_ID);
@@ -6087,44 +6954,29 @@ ${
 
 							button.textContent = "Continue";
 							button.style.marginLeft = "12px";
-							button.onclick = () => { paused = false; };
+							button.onclick = () => { paused = false; stopTitle.setPhase("Checking sign-in"); };
 							note.textContent = "Sign in to Reddit, then press Continue to refresh Backchannel.";
 							note.append(button);
 							await publish({ phase: "login", requestId: 0 });
 						}
-					} else {
-						for (const request of Array.isArray(current.requests) ? current.requests : []) {
-							if (active.size >= 3) break;
-							if (!Number.isInteger(request?.id) || request.id < 1 || request.id > 50 || seen.has(request.id)) continue;
-							seen.add(request.id);
-							const job = (async () => {
-								const path = redditReadPath(request.path);
-								const cooldown = await load(REDDIT_POLL_KEY, null);
-								if (!path || cooldown?.until > Date.now()) return publish({ phase: "error", requestId: request.id, error: "invalid-request" });
-								let response;
-								try {
-									response = await fetchJSON(path);
-									response = (await loadSettings()).sources?.reddit ? { ...response, json: publicRedditJSON(response.json) } : redditReadFailure("disabled");
-								} catch (error) { response = error?.message === "Reddit response is too large" ? redditReadFailure("response-too-large") : { ok: false, status: 0, json: null, rateLimit: null }; }
-								await publish({ phase: "response", requestId: request.id, response });
-							})();
-							active.set(request.id, job);
-							job.catch(console.error).finally(() => active.delete(request.id));
-						}
-					}
+					} else await drainStaged(current);
 					await new Promise((resolve) => window.setTimeout(resolve, 150));
 				}
 			} catch {
 				await publish({ phase: "error", requestId: 0, error: "window-unavailable" }).catch(() => {});
 			} finally {
 				await Promise.allSettled([...active.values()]);
-				clearInterval(titleTimer);
-				titleObserver.disconnect();
-				document.title = "Reddit — Backchannel";
-				clearBridgeReload(REDDIT_READ_RESUME_KEY);
-				if (completed) await publish({ phase: "closed", requestId: "done" }).catch(() => {});
-				if (typeof GM?.closeTab === "function") { try { await GM.closeTab(); } catch {} }
-				window.close();
+				paused = false;
+				stopTitle.setPhase("Finishing sync");
+				stopTitle.helper.phase(true);
+				try {
+					if (completed && redditReadHelperLocation(nonce)) await publish({ phase: "closing", requestId: "done" }).catch(() => {});
+					else if (!redditReadHelperLocation(nonce)) await publish({ phase: "error", requestId: 0, error: "window-unavailable" }).catch(() => {});
+					if (redditReadHelperLocation(nonce)) {
+						if (typeof GM?.closeTab === "function") { try { await Promise.race([GM.closeTab(), new Promise((resolve) => window.setTimeout(resolve, 1500))]); } catch {} }
+						if (redditReadHelperLocation(nonce)) { clearBridgeReload(REDDIT_READ_RESUME_KEY); window.close(); }
+					} else clearBridgeReload(REDDIT_READ_RESUME_KEY);
+				} finally { stopTitle(); }
 			}
 		};
 		if (typeof navigator.locks?.request === "function") {
@@ -6165,26 +7017,30 @@ ${
 	function redditFetch(path, archivePath, { listing = false, retryAccess = false, archiveFallbackPath = "", onStart = null } = {}) {
 		const accessVersion = redditAccessVersion;
 		const readBatch = usesRedditReadWindow() && redditReadBatch?.connected ? redditReadBatch : null;
+		const actionId = readBatch?.actionId ?? redditReadActionId;
 		const key = JSON.stringify([path, archivePath || "", archiveFallbackPath, listing, retryAccess, accessVersion, readBatch?.nonce || ""]);
+		let turn = redditRequests.get(key);
 
-		if (redditRequests.has(key)) {
-			const existing = redditRequests.get(key);
-			if (onStart) existing.started.then(onStart);
-			return existing;
+		if (!turn) {
+			let markStarted;
+			const started = new Promise((resolve) => { markStarted = resolve; });
+			let resolveTurn;
+			let rejectTurn;
+			turn = new Promise((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; });
+			turn.started = started;
+			redditQueueDepth++;
+			redditRequests.set(key, turn);
+			redditPending.push({ key, parallel: Boolean(readBatch), resolve: resolveTurn, reject: rejectTurn, run: () => { markStarted(); return fetchReddit(path, archivePath, { listing, retryAccess, accessVersion, readBatch, archiveFallbackPath }); } });
+			pumpRedditRequests();
 		}
 
-		let markStarted;
-		const started = new Promise((resolve) => { markStarted = resolve; });
-		let resolveTurn;
-		let rejectTurn;
-		const turn = new Promise((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; });
-		turn.started = started;
-		if (onStart) started.then(onStart);
-		redditQueueDepth++;
-		redditRequests.set(key, turn);
-		redditPending.push({ key, parallel: Boolean(readBatch), resolve: resolveTurn, reject: rejectTurn, run: () => { markStarted(); return fetchReddit(path, archivePath, { listing, retryAccess, accessVersion, readBatch, archiveFallbackPath }); } });
-		pumpRedditRequests();
-		return turn;
+		if (onStart) turn.started.then(onStart);
+		const consumed = turn.then((result) => {
+			if (result) recordRedditReadSuccess(actionId);
+			return result;
+		});
+		consumed.started = turn.started;
+		return consumed;
 	}
 
 	async function fetchReddit(path, archivePath, { listing, retryAccess, accessVersion, readBatch, archiveFallbackPath }) {
@@ -6220,8 +7076,11 @@ ${
 		if (tier === "loid") {
 			const cooldown = await load(REDDIT_POLL_KEY, null);
 			redditReadWaitUntil = Number(cooldown?.until) || 0;
+			const stagedId = connected && readBatch.pathIds?.get(redditReadPath(path));
+			const stagedReply = stagedId && cooldown?.until > Date.now() ? await load(BRIDGE_RESULT_PREFIX + readBatch.nonce + ":" + stagedId, null) : null;
+			const completedStage = stagedReply?.source === REDDIT_READ_SOURCE && stagedReply.nonce === readBatch?.nonce && stagedReply.requestId === stagedId && stagedReply.phase === "response" && Number.isFinite(stagedReply.ts) && stagedReply.ts >= readBatch.created && stagedReply.response?.ok;
 
-			if (Number.isFinite(cooldown?.until) && Date.now() < cooldown.until) {
+			if (Number.isFinite(cooldown?.until) && Date.now() < cooldown.until && !completedStage) {
 				retryAt = cooldown.until;
 				httpStatus = cooldown.httpStatus || 0;
 				return unavailable(cooldown.status === "limited" ? "limited" : "unavailable");
@@ -6373,7 +7232,7 @@ ${
 			return { mark, changed: probeMarkChanged(context.mark, mark) };
 		},
 
-		async discover(url, { onPartial = null } = {}) {
+		async discover(url, { onPartial = null, signal = null } = {}) {
 			const target = normalizeURL(url);
 
 			if (!target) {
@@ -6386,8 +7245,10 @@ ${
 			const matches = new Map();
 			const batch = redditReadBatch?.connected && !redditReadBatch.closing ? redditReadBatch : null;
 			let complete = Boolean(batch);
+			let answered = false;
 
 			for (const [path, archivePath] of redditDiscoveryPaths(bare)) {
+				if (signal?.aborted) break;
 				const result = await redditFetch(path, archivePath);
 
 				if (!result) {
@@ -6397,6 +7258,7 @@ ${
 
 				const listing = result.tier === "archive" ? result.json?.data : result.json?.data?.children;
 				if (!Array.isArray(listing)) { complete = false; continue; }
+				answered = true;
 				const posts = result.tier === "archive" ? listing : listing.map((child) => child.data);
 
 				for (const post of posts) {
@@ -6404,7 +7266,7 @@ ${
 						matches.set(post.id, post);
 					}
 				}
-				if (onPartial) {
+				if (onPartial && !signal?.aborted) {
 					onPartial([...matches.values()].filter((post) => redditHitPasses(post) && normalizeURL(post.url) === target).map(redditDiscussion));
 				}
 			}
@@ -6413,7 +7275,8 @@ ${
 				.filter(redditHitPasses)
 				.filter((post) => normalizeURL(post.url) === target)
 				.map(redditDiscussion);
-			if (complete && !found.length) (batch.emptyTargets ||= new Set()).add(target);
+			if (!answered && !signal?.aborted) throw new Error("Reddit discovery unavailable");
+			if (complete && !found.length && !signal?.aborted) (batch.emptyTargets ||= new Set()).add(target);
 			return found;
 		},
 
@@ -6432,15 +7295,24 @@ ${
 				.map(redditStory);
 		},
 
-		async recover(story) {
+		async recover(story, { fallback: allowFallback = true } = {}) {
 			const id = encodeURIComponent(story.id);
 			const result = await redditFetch("/api/info.json?id=t3_" + id, "/api/posts/ids?ids=" + id);
-			const posts =
-				result?.tier === "archive"
-					? result.json?.data || []
-					: (result?.json?.data?.children || []).map((child) => child.data);
-
-			return posts.filter((post) => post?.id === story.id).map(redditDiscussion);
+			const fallback = () => {
+				if (!allowFallback) throw new Error("Reddit metadata unavailable");
+				const known = redditDiscussionFromFeed(story);
+				return known ? [known] : [];
+			};
+			if (!result) return fallback();
+			const listing = result.tier === "archive" ? result.json?.data : result.json?.data?.children;
+			if (!Array.isArray(listing)) return fallback();
+			const posts = result.tier === "archive" ? listing : listing.map((child) => child?.data);
+			const post = posts.find((item) => String(item?.id || "") === String(story.id));
+			if (!post) return [];
+			const valid = redditDiscussionFromFeed({ id: post.id, url: post.url, permalink: "https://www.reddit.com" + (post.permalink || "") });
+			if (!valid) return fallback();
+			if (story.url && normalizeURL(post.url) !== normalizeURL(story.url)) return [];
+			return [redditDiscussion(post)];
 		},
 
 		async loadThread(discussion, { onStart = null } = {}) {
@@ -6462,10 +7334,13 @@ ${
 				: redditThreadIndex(result.tier === "archive" ? [null, { data: { children: result.json?.data || [] } }] : result.json, discussion);
 			const shown = new Set(index.byKey.keys());
 			const unexpandable = (more) => Number(more?.count) > 0 && !more?.ids?.length;
+			const more = [index.rootMore, ...[...index.byKey.values()].map((comment) => comment.more)].filter(Boolean);
+			const remaining = more.reduce((total, item) => total + Math.max(Number(item.count) || 0, item.ids?.length || 0), 0);
 
 			return {
 				empty: !index.rootKeys.length && !index.rootMore && Number(discussion.commentCount) > 0,
-				incomplete: result.tier === "archive-search" || unexpandable(index.rootMore) || [...index.byKey.values()].some((comment) => unexpandable(comment.more)),
+				incomplete: result.tier === "archive-search" || more.some(unexpandable) || shown.size > 0 && Number(discussion.commentCount) > shown.size + remaining,
+				archiveCount: archived ? shown.size : null,
 				rootKeys: index.rootKeys,
 				rootTimes: new Map(
 					index.rootKeys.map((key) => [key, index.byKey.get(key)?.createdAt || 0]),
@@ -6558,27 +7433,39 @@ ${
 
 	const CONSTELLATION_UA = `Backchannel/${SCRIPT_VERSION || "dev"} (github.com/twalichiewicz/Backchannel)`;
 
-	async function bskyJSON(url, headers) {
+	async function bskyJSON(url, headers, { strict = false } = {}) {
+		const retryAt = sourceReadCooldowns.get("bsky") || 0;
+		if (retryAt > Date.now()) {
+			if (strict) throw Object.assign(new Error("Bluesky requests limited"), { readStatus: "limited", retryAt });
+			return null;
+		}
 		const attempt = async (sent) => {
 			try {
-				return await requestText(url, sent);
+				return await requestTextWithMeta(url, sent);
 			} catch (error) {
 				console.warn("Backchannel bsky: request threw", url, error);
 
-				return "";
+				return { ok: false, status: 0, text: "" };
 			}
 		};
 
-		let text = await attempt(headers);
+		let response = await attempt(headers);
 
-		if (!text && headers) {
-			text = await attempt(undefined);
+		if (!response.status && headers) {
+			response = await attempt(undefined);
 
-			if (text) {
+			if (response.text) {
 				console.warn(
 					"Backchannel bsky: this manager refused a custom header; retried without the User-Agent Constellation asks for",
 				);
 			}
+		}
+		const text = response.text;
+		if (!response.ok) {
+			const error = sourceResponseError(response);
+			if (error.retryAt) sourceReadCooldowns.set("bsky", Math.max(sourceReadCooldowns.get("bsky") || 0, error.retryAt));
+			if (strict) throw error;
+			return null;
 		}
 
 		if (!text) {
@@ -6599,6 +7486,328 @@ ${
 			return null;
 		}
 	}
+
+	const X_SEARCH_WAIT_MS = 10000;
+	const X_REQUEST_TIMEOUT_MS = 3000;
+	const X_RESULT_LIMIT = 20;
+	const X_HELPER_INDEX_KEY = "HNewhere:x_helper_index";
+	const xDiscoveryStates = new Map();
+	const xDiscoveryLoads = new Map();
+	const xHelpersAwaitingClose = new Set();
+
+	function xValidSearchStage(stage, nonce, now = Date.now()) {
+		if (stage?.kind !== "x-search" || stage.nonce !== nonce || !/^[a-f0-9]{32}$/.test(nonce || "") || !Number.isFinite(stage.ts) || !Number.isFinite(stage.expires) || stage.expires <= now || stage.expires - stage.ts > 30000 || typeof stage.query !== "string") return false;
+		try {
+			const target = new URL(stage.target);
+			return ["http:", "https:"].includes(target.protocol) && !target.username && !target.password && stage.target.length <= 2048 && stage.query === "url:" + normalizeURL(stage.target);
+		} catch { return false; }
+	}
+
+	function xSearchHelperLocation(stage, nonce) {
+		if (location.origin !== "https://x.com" || parseBridgeHash("backchannel_x_search")?.nonce !== nonce || stage?.kind !== "x-search" || stage.nonce !== nonce || !/^[a-f0-9]{32}$/.test(nonce || "") || !Number.isFinite(stage.ts) || Date.now() - stage.ts > BRIDGE_PAYLOAD_TTL || typeof stage.query !== "string") return false;
+		if (location.pathname === "/search") return new URLSearchParams(location.search).get("q") === stage.query;
+		return /^\/i\/(?:flow|jf)\//.test(location.pathname) || /^\/login\/?$/.test(location.pathname);
+	}
+
+	async function closeXSearchHelper(stage, nonce) {
+		const acknowledge = () => save(BRIDGE_RESULT_PREFIX + nonce + ":closed", { source: "backchannel-x-search", nonce, ts: Date.now() }).catch(() => {});
+		if (!xSearchHelperLocation(stage, nonce)) { await acknowledge(); return; }
+		window.addEventListener("pagehide", acknowledge, { once: true });
+		let closing = false;
+		const close = async () => {
+			if (closing || !xSearchHelperLocation(stage, nonce)) return;
+			closing = true;
+			try { window.close(); } catch {}
+			if (window.closed) { await acknowledge(); return; }
+			try {
+				if (typeof GM.closeTab === "function") await Promise.race([Promise.resolve(GM.closeTab()).catch(() => {}), new Promise((resolve) => window.setTimeout(resolve, 1500))]);
+			} catch {}
+			if (xSearchHelperLocation(stage, nonce)) try { window.close(); } catch {}
+			if (window.closed) { await acknowledge(); return; }
+			closing = false;
+		};
+		await close();
+		if (xSearchHelperLocation(stage, nonce)) window.addEventListener("focus", close);
+	}
+
+	function xSearchCards(target) {
+		const results = [];
+		const targetKey = normalizeURL(target);
+		for (const card of document.querySelectorAll('article[data-testid="tweet"]')) {
+			if (results.length >= X_RESULT_LIMIT) break;
+			const times = [...card.querySelectorAll("time[datetime]")];
+			if (times.length !== 1) continue;
+			const href = times[0].closest("a[href]")?.getAttribute("href") || "";
+			const match = /^\/([a-z0-9_]{1,15})\/status\/(\d+)\/?$/i.exec(href);
+			const textNode = card.querySelector('[data-testid="tweetText"]');
+			const authorNode = card.querySelector('[data-testid="User-Name"]');
+			if (!match || !textNode || !authorNode || ![...authorNode.querySelectorAll("a[href]")].some((a) => a.getAttribute("href")?.toLowerCase() === "/" + match[1].toLowerCase())) continue;
+			const created = Date.parse(times[0].getAttribute("datetime") || "");
+			if (!Number.isFinite(created)) continue;
+			const links = [];
+			for (const a of textNode.querySelectorAll("a[href]")) {
+				try {
+					const url = new URL(a.href, location.origin);
+					if (url.protocol !== "https:" || url.username || url.password) continue;
+					if (normalizeURL(url.href) === targetKey || url.hostname.toLowerCase() === "t.co" && /^\/[a-z0-9]+\/?$/i.test(url.pathname)) links.push(url.href);
+				} catch {}
+				if (links.length >= 4) break;
+			}
+			if (!links.length) continue;
+			results.push({ id: match[2], author: match[1], text: (textNode.innerText || textNode.textContent || "").slice(0, 10000), createdAt: Math.floor(created / 1000), permalink: "https://x.com" + href, links });
+		}
+		return results;
+	}
+
+	async function dispatchXSearchWindow() {
+		if (location.origin !== "https://x.com" || window.top !== window) return false;
+		const payload = parseBridgeHash("backchannel_x_search");
+		if (!payload) return false;
+		const nonce = payload.nonce;
+		const stage = await readBridgePayload(nonce);
+		if (stage?.done && xSearchHelperLocation(stage, nonce)) { await closeXSearchHelper(stage, nonce); return true; }
+		if (Number.isFinite(stage?.expires) && stage.expires <= Date.now() && xValidSearchStage(stage, nonce, stage.expires - 1) && xSearchHelperLocation(stage, nonce)) { await closeXSearchHelper(stage, nonce); return true; }
+		if (!xValidSearchStage(stage, nonce)) return true;
+		if (!(await loadSettings()).sources?.x) { await closeXSearchHelper(stage, nonce); return true; }
+		if (!xSearchHelperLocation(stage, nonce)) { await closeXSearchHelper(stage, nonce); return true; }
+		const stopTitle = startReadHelperTitle("X", () => false, () => xSearchHelperLocation(stage, nonce), { nonce, kind: "x" });
+		await stopTitle.helper.ready;
+		try {
+			const resultKey = BRIDGE_RESULT_PREFIX + nonce;
+			let result = { status: "unavailable", posts: [] };
+			const deadline = Date.now() + X_SEARCH_WAIT_MS - 4000;
+			let readyAt = 0;
+			while (Date.now() < deadline) {
+				if (!xSearchHelperLocation(stage, nonce) || !(await loadSettings()).sources?.x || !xValidSearchStage(await readBridgePayload(nonce), nonce)) return true;
+				const profile = document.querySelector('[data-testid="AppTabBar_Profile_Link"]');
+				const cards = document.querySelectorAll('article[data-testid="tweet"]');
+				const empty = [...document.querySelectorAll('[data-testid="empty_state_header_text"], [role="heading"]')].some((node) => /no results|no posts|no matches/i.test(node.textContent || ""));
+				if (/^\/i\/(?:flow|jf)\//.test(location.pathname) || /^\/login\/?$/.test(location.pathname)) { result.status = "signin"; break; }
+				if (profile && (cards.length || empty)) {
+					stopTitle.setPhase("Finding posts");
+					if (!readyAt) readyAt = Date.now();
+					if (Date.now() - readyAt >= 1000) {
+						if (empty && !cards.length) { result.status = "empty"; break; }
+						const candidates = xSearchCards(stage.target);
+						stopTitle.setPhase("Checking posts");
+						const checked = await Promise.all(candidates.map(async (post) => {
+							const publicPost = await xPublicPost(post.id, post.author);
+							if (!publicPost || !(await Promise.all(publicPost.links.map((link) => xResolvedLink(link, stage.target)))).some(Boolean)) return null;
+							const { links, ...safe } = post;
+							return { ...safe, text: publicPost.text, parentId: publicPost.parentId };
+						}));
+						const posts = checked.filter(Boolean);
+						result = { status: posts.length ? "ok" : "unverified", posts };
+						break;
+					}
+				}
+				await new Promise((resolve) => window.setTimeout(resolve, 150));
+			}
+			if (xSearchHelperLocation(stage, nonce) && (await loadSettings()).sources?.x && xValidSearchStage(await readBridgePayload(nonce), nonce)) {
+				stopTitle.setPhase("Saving results");
+				await save(resultKey, { source: "backchannel-x-search", nonce, target: stage.target, ts: Date.now(), ...result });
+			}
+			return true;
+		} finally {
+			stopTitle.setPhase("Finishing sync");
+			stopTitle.helper.phase(true);
+			try { await closeXSearchHelper(stage, nonce); } finally { stopTitle(); }
+		}
+	}
+
+	async function xSearchWindow(target) {
+		await clearClosedXHelpers({ retry: true });
+		if (xHelpersAwaitingClose.size) { if (isSidebarVisible()) showXCleanupNotice(); return { status: "unavailable", posts: [] }; }
+		const nonce = redditReadID();
+		const created = Date.now();
+		const stage = { kind: "x-search", nonce, target, query: "url:" + normalizeURL(target), ts: created, expires: created + X_SEARCH_WAIT_MS + 1000 };
+		let popup = null;
+		let tab = null;
+		let attempted = false;
+		if (!xValidSearchStage(stage, nonce)) return { status: "unavailable", posts: [] };
+		if (typeof GM.openInTab !== "function") {
+			try { popup = window.open("about:blank", "backchannel-x-" + nonce, "width=760,height=680,resizable=yes,scrollbars=yes"); } catch {}
+			if (!popup) return { status: "unavailable", posts: [] };
+		}
+		try {
+			await indexXSearch(nonce);
+			await stageBridgePayload(nonce, stage);
+			if (!(await loadSettings()).sources?.x) return { status: "unavailable", posts: [] };
+			const query = new URLSearchParams({ q: stage.query, src: "typed_query", f: "live" });
+			const hash = new URLSearchParams({ backchannel_x_search: "1", nonce });
+			const url = "https://x.com/search?" + query + "#" + hash;
+			attempted = true;
+			if (popup) { rememberReadHelperTab(nonce, "x", popup, created); popup.location = url; }
+			else {
+				const opening = Promise.resolve(GM.openInTab(url, true));
+				tab = await new Promise((resolve) => {
+					let expired = false;
+					const timer = setTimeout(() => { expired = true; resolve(null); }, Math.max(0, stage.expires - Date.now()));
+					opening.then((opened) => {
+						rememberReadHelperTab(nonce, "x", opened, created);
+						if (expired) { finishManagedReadHelper(nonce).catch(() => {}); return; }
+						clearTimeout(timer);
+						resolve(opened);
+					}, () => { clearTimeout(timer); resolve(null); });
+				});
+				if (!tab) return { status: "unavailable", posts: [] };
+			}
+			while (Date.now() < stage.expires) {
+				if (!(await loadSettings()).sources?.x) return { status: "unavailable", posts: [] };
+				const reply = await load(BRIDGE_RESULT_PREFIX + nonce, null);
+				if (reply?.source === "backchannel-x-search" && reply.nonce === nonce && reply.target === target && Number.isFinite(reply.ts) && reply.ts >= created && ["ok", "empty", "signin", "unavailable", "unverified"].includes(reply.status)) return { status: reply.status, posts: Array.isArray(reply.posts) ? reply.posts.slice(0, X_RESULT_LIMIT) : [] };
+				await new Promise((resolve) => window.setTimeout(resolve, 150));
+			}
+			return { status: "unavailable", posts: [] };
+		} catch { return { status: "unavailable", posts: [] }; }
+		finally {
+			if (attempted) {
+				await save(BRIDGE_PAYLOAD_PREFIX + nonce, { kind: stage.kind, nonce, query: stage.query, ts: created, expires: stage.expires, done: true }).catch(() => {});
+				const deadline = Date.now() + (popup || tab ? 500 : 0);
+				const managed = await finishManagedReadHelper(nonce);
+				let closed = managed === "closed" || managed === "released";
+				do {
+					if (closed) break;
+					if (await readHelperReleased(nonce)) { closed = true; break; }
+					if (Date.now() >= deadline) break;
+					await new Promise((resolve) => window.setTimeout(resolve, 100));
+				} while (Date.now() < deadline);
+				if (!closed) { xHelpersAwaitingClose.add(nonce); if (isSidebarVisible()) showXCleanupNotice(); }
+				else await Promise.allSettled([clearBridgePayload(nonce), forget(BRIDGE_RESULT_PREFIX + nonce + ":closed")]);
+			} else await clearBridgePayload(nonce);
+			await forget(BRIDGE_RESULT_PREFIX + nonce);
+			try { if (popup?.location?.href === "about:blank") popup.close(); } catch {}
+		}
+	}
+
+	function showXCleanupNotice() {
+		showReadHelperCleanupFailure();
+	}
+
+	async function dismissXCleanup() {
+		for (const nonce of [...xHelpersAwaitingClose]) {
+			await clearBridgePayload(nonce);
+			await forget(BRIDGE_RESULT_PREFIX + nonce + ":closed");
+			xHelpersAwaitingClose.delete(nonce);
+		}
+	}
+
+	async function indexXSearch(nonce) {
+		return withSharedStorageLock("x-helper-index", async (lease) => {
+			const index = await load(X_HELPER_INDEX_KEY, []);
+			const now = Date.now();
+			const entries = Array.isArray(index) ? index.filter((entry) => Number.isFinite(entry?.ts) && now - entry.ts <= BRIDGE_PAYLOAD_TTL) : [];
+			entries.push({ nonce, ts: now });
+			await lease.commit(() => save(X_HELPER_INDEX_KEY, entries));
+		}, { required: true });
+	}
+
+	async function clearClosedXHelpers({ retry = false } = {}) {
+		const index = await load(X_HELPER_INDEX_KEY, []);
+		if (Array.isArray(index)) {
+			const stages = await Promise.all(index.filter((entry) => /^[a-f0-9]{32}$/.test(entry?.nonce || "") && Number.isFinite(entry.ts) && Date.now() - entry.ts <= BRIDGE_PAYLOAD_TTL).map(async (entry) => ({ nonce: entry.nonce, stage: await readBridgePayload(entry.nonce) })));
+			for (const { nonce, stage } of stages) if (stage?.kind === "x-search" && stage.nonce === nonce && (stage.done || stage.expires <= Date.now())) {
+				if (!stage.done) await save(BRIDGE_PAYLOAD_PREFIX + nonce, { ...stage, done: true });
+				xHelpersAwaitingClose.add(nonce);
+			}
+		}
+		for (const nonce of xHelpersAwaitingClose) {
+			const stage = await readBridgePayload(nonce);
+			if (stage?.kind !== "x-search" || !stage.done) { xHelpersAwaitingClose.delete(nonce); continue; }
+			const managed = await (retry ? finishManagedReadHelper(nonce) : closeManagedReadHelper(nonce));
+			if (!["closed", "released"].includes(managed) && !(await readHelperReleased(nonce))) { if (isSidebarVisible()) showXCleanupNotice(); continue; }
+			xHelpersAwaitingClose.delete(nonce);
+			await Promise.allSettled([clearBridgePayload(nonce), forget(BRIDGE_RESULT_PREFIX + nonce + ":closed")]);
+		}
+	}
+
+	function xRequest(url) {
+		return new Promise((resolve) => {
+			let settled = false;
+			let request = null;
+			const finish = (response) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				resolve(response);
+			};
+			const timer = setTimeout(() => { try { request?.abort?.(); } catch {} finish(null); }, X_REQUEST_TIMEOUT_MS);
+			try {
+				request = GM.xmlHttpRequest({ method: "GET", url, anonymous: true, timeout: X_REQUEST_TIMEOUT_MS, onload: finish, onerror: () => finish(null), ontimeout: () => finish(null) });
+				request?.catch?.(() => finish(null));
+			} catch { finish(null); }
+		});
+	}
+
+	async function xResolvedLink(link, target) {
+		try {
+			const url = new URL(link);
+			if (url.protocol !== "https:" || url.username || url.password) return false;
+			if (normalizeURL(url.href) === normalizeURL(target)) return true;
+			if (url.hostname.toLowerCase() !== "t.co" || !/^\/[a-z0-9]+\/?$/i.test(url.pathname)) return false;
+			const response = await xRequest(url.href);
+			if (!response || response.status < 200 || response.status >= 400) return false;
+			if (normalizeURL(response.finalUrl || response.responseURL || "") === normalizeURL(target)) return true;
+			const doc = new DOMParser().parseFromString(String(response.responseText || ""), "text/html");
+			const meta = [...doc.querySelectorAll("meta[http-equiv]")].find((node) => node.getAttribute("http-equiv")?.toLowerCase() === "refresh");
+			const match = /^\s*\d+(?:\.\d+)?\s*;\s*url\s*=\s*(.+)\s*$/i.exec(meta?.getAttribute("content") || "");
+			const value = match?.[1].trim().replace(/^["']|["']$/g, "") || "";
+			const resolved = new URL(value);
+			return ["https:", "http:"].includes(resolved.protocol) && !resolved.username && !resolved.password && normalizeURL(resolved.href) === normalizeURL(target);
+		} catch { return false; }
+	}
+
+	async function xPublicPost(id, author) {
+		if (!/^\d+$/.test(String(id))) return null;
+		const query = new URLSearchParams({ id: String(id), lang: "en", token: "0" });
+		const response = await xRequest("https://cdn.syndication.twimg.com/tweet-result?" + query);
+		try {
+			const data = JSON.parse(response?.responseText || "{}");
+			if (response?.status !== 200 || String(data?.id_str || "") !== String(id) || String(data?.user?.screen_name || "").toLowerCase() !== String(author || "").toLowerCase() || typeof data.text !== "string" || !data.text.trim()) return null;
+			const parent = String(data.in_reply_to_status_id_str || "");
+			const links = Array.isArray(data.entities?.urls) ? data.entities.urls.slice(0, 20).map((entry) => typeof entry?.expanded_url === "string" && entry.expanded_url ? entry.expanded_url : entry?.url).filter((link) => typeof link === "string") : [];
+			return { parentId: /^\d+$/.test(parent) ? parent : null, text: data.text.slice(0, 10000), links };
+		} catch { return null; }
+	}
+
+	async function xDiscover(target, onPartial) {
+		const key = normalizeURL(target);
+		if (!key) return [];
+		if (xDiscoveryLoads.has(key)) return xDiscoveryLoads.get(key);
+		const work = (async () => {
+			xDiscoveryStates.delete(key);
+			const found = await xSearchWindow(target);
+			if (!(await loadSettings()).sources?.x) return [];
+			if (found.status !== "ok") {
+				xDiscoveryStates.set(key, found.status);
+				return [];
+			}
+			const discussion = xCollective(target, found.posts);
+			xDiscoveryStates.set(key, discussion ? "ok" : "unverified");
+			if (discussion && onPartial) onPartial([discussion]);
+			return discussion ? [discussion] : [];
+		})();
+		xDiscoveryLoads.set(key, work);
+		try { return await work; } finally { if (xDiscoveryLoads.get(key) === work) xDiscoveryLoads.delete(key); }
+	}
+
+	registerSource({
+		id: "x",
+		origins: ["x.com", "twitter.com", "www.twitter.com"],
+		label: "X",
+		shortLabel: "X",
+		slow: true,
+		points: ["Public posts linking this page; other replies are not included", "Sends the page address to X in a background tab using your X session", "Sign in to X to search; results may be incomplete"],
+		capabilities: { vote: false, reply: false },
+		profileURL: (author) => "https://x.com/" + encodeURIComponent(author),
+		discoveryStatus: (target) => xDiscoveryStates.get(normalizeURL(target)) || "unavailable",
+		async discover(url, { onPartial = null } = {}) { return xDiscover(url, onPartial); },
+		async loadThread(discussion) {
+			const index = xThreadIndex(discussion);
+			return { rootKeys: index.rootKeys, rootTimes: new Map(index.rootKeys.map((key) => [key, index.byKey.get(key)?.createdAt || 0])), incomplete: true, async getComment(key) { return index.byKey.get(key) || null; } };
+		},
+	});
+
 
 	registerSource({
 		id: "bsky",
@@ -6648,7 +7857,8 @@ ${
 
 			const encoded = encodeURIComponent(target);
 			const headers = { "User-Agent": CONSTELLATION_UA };
-			const all = await bskyJSON(`${CONSTELLATION}/links/all?target=${encoded}`, headers);
+			const all = await bskyJSON(`${CONSTELLATION}/links/all?target=${encoded}`, headers, { strict: true });
+			if (!all?.links || typeof all.links !== "object") throw new Error("Bluesky discovery unavailable");
 			const paths = all?.links?.["app.bsky.feed.post"];
 
 			if (!paths) {
@@ -6666,7 +7876,9 @@ ${
 				const page = await bskyJSON(
 					`${CONSTELLATION}/xrpc/blue.microcosm.links.getBacklinks?subject=${encoded}&source=${source}&limit=100`,
 					headers,
+					{ strict: true },
 				);
+				if (!Array.isArray(page?.records)) throw new Error("Bluesky discovery unavailable");
 
 				for (const record of page?.records || []) {
 					uris.add(`at://${record.did}/${record.collection}/${record.rkey}`);
@@ -6685,7 +7897,8 @@ ${
 					.slice(i, i + 25)
 					.map((uri) => "uris=" + encodeURIComponent(uri))
 					.join("&");
-				const batch = await bskyJSON(`${BSKY_APPVIEW}/app.bsky.feed.getPosts?${query}`);
+				const batch = await bskyJSON(`${BSKY_APPVIEW}/app.bsky.feed.getPosts?${query}`, undefined, { strict: true });
+				if (!Array.isArray(batch?.posts)) throw new Error("Bluesky posts unavailable");
 
 				posts.push(...(batch?.posts || []));
 			}
@@ -6696,7 +7909,7 @@ ${
 		},
 
 		async recover(story) {
-			const result = await bskyJSON(`${BSKY_APPVIEW}/app.bsky.feed.getPosts?uris=${encodeURIComponent(story.id)}`);
+			const result = await checkedSourceJSON(`${BSKY_APPVIEW}/app.bsky.feed.getPosts?uris=${encodeURIComponent(story.id)}`, (value) => Array.isArray(value?.posts));
 			const collective = bskyCollective(story.url, result?.posts || [], (post) => post?.uri === story.id && bskyPostReferences(post, story.url));
 
 			return collective ? [collective] : [];
@@ -6705,7 +7918,7 @@ ${
 		async loadThread(discussion) {
 			const byKey = new Map();
 
-			return {
+			const reader = {
 				rootKeys: discussion.rootKeys,
 				rootTimes: new Map(
 					(discussion.rootKeys || []).map((key, index) => [
@@ -6729,6 +7942,7 @@ ${
 					);
 
 					if (!thread?.thread) {
+						reader.incomplete = true;
 						byKey.set(key, null);
 
 						return null;
@@ -6787,6 +8001,7 @@ ${
 					return { ok: true, added, remaining: [] };
 				},
 			};
+			return reader;
 		},
 	});
 
@@ -6825,8 +8040,9 @@ ${
 				return [];
 			}
 
-			const stories = await lobstersJSON(
+			const stories = await checkedSourceJSON(
 				`https://lobste.rs/domains/${encodeURIComponent(host)}.json`,
+				Array.isArray,
 			);
 
 			return (Array.isArray(stories) ? stories : [])
@@ -6843,14 +8059,15 @@ ${
 		},
 
 		async recover(story) {
-			const item = await lobstersJSON(`https://lobste.rs/s/${encodeURIComponent(story.id)}.json`);
+			const item = await checkedSourceJSON(`https://lobste.rs/s/${encodeURIComponent(story.id)}.json`, (value) => value && typeof value === "object");
 
 			return item?.short_id ? [lobstersDiscussion(item)] : [];
 		},
 
 		async loadThread(discussion) {
-			const story = await lobstersJSON(
+			const story = await checkedSourceJSON(
 				`https://lobste.rs/s/${encodeURIComponent(discussion.id)}.json`,
+				(value) => Array.isArray(value?.comments),
 			);
 			const index = lobstersThreadIndex(story || { comments: [] }, discussion);
 
@@ -6921,8 +8138,9 @@ ${
 
 			const api = "https://en.wikipedia.org/w/api.php";
 			const query = target.replace(/^https?:\/\//, "");
-			const ext = await wikipediaJSON(
+			const ext = await checkedSourceJSON(
 				`${api}?action=query&list=exturlusage&eunamespace=${encodeURIComponent("1|3|4|5")}&euquery=${encodeURIComponent(query)}&eulimit=100&format=json&formatversion=2`,
+				(value) => Array.isArray(value?.query?.exturlusage),
 			);
 
 			const rows = (ext?.query?.exturlusage || []).filter(
@@ -7012,6 +8230,7 @@ ${
 			return {
 				rootKeys,
 				rootTimes,
+				incomplete: pages.length > asked.length || threads.some((thread) => !thread?.discussiontoolspageinfo),
 				async getComment(key) {
 					return byKey.get(key) || null;
 				},
@@ -7051,8 +8270,9 @@ ${
 				return [];
 			}
 
-			const found = await hypothesisJSON(
+			const found = await checkedSourceJSON(
 				`${HYPOTHESIS_API}?url=${encodeURIComponent(target)}&limit=${HYPOTHESIS_LIMIT}`,
+				(value) => Array.isArray(value?.rows),
 			);
 			const collective = hypothesisCollective(target, found?.rows || [], url);
 
@@ -8253,8 +9473,9 @@ button {
 				return [];
 			}
 
-			const statuses = await mastodonJSON(
+			const statuses = await checkedSourceJSON(
 				`${TOOTFINDER}/rest/api/search/${encodeURIComponent(host)}`,
+				Array.isArray,
 			);
 
 			if (!Array.isArray(statuses)) {
@@ -8301,8 +9522,9 @@ button {
 		},
 
 		async recover(story) {
-			const statuses = await mastodonJSON(
+			const statuses = await checkedSourceJSON(
 				`${MASTODON_INSTANCE}/api/v1/timelines/link?url=${encodeURIComponent(story.url)}&limit=40`,
+				Array.isArray,
 			);
 			const collective = Array.isArray(statuses) ? mastodonCollective(story.url, statuses) : null;
 
@@ -8344,8 +9566,9 @@ button {
 				return [];
 			}
 
-			const res = await lemmyJSON(
+			const res = await checkedSourceJSON(
 				`https://lemmy.world/api/v3/search?q=${encodeURIComponent(url)}&type_=Url&listing_type=All&limit=20`,
+				(value) => Array.isArray(value?.posts),
 			);
 
 			return (res?.posts || [])
@@ -8365,14 +9588,15 @@ button {
 		},
 
 		async recover(story) {
-			const res = await lemmyJSON(`https://lemmy.world/api/v3/post?id=${encodeURIComponent(story.id)}`);
+			const res = await checkedSourceJSON(`https://lemmy.world/api/v3/post?id=${encodeURIComponent(story.id)}`, (value) => value && Object.prototype.hasOwnProperty.call(value, "post_view"));
 
 			return res?.post_view?.post ? [lemmyDiscussion(res.post_view)] : [];
 		},
 
 		async loadThread(discussion) {
-			const res = await lemmyJSON(
+			const res = await checkedSourceJSON(
 				`https://lemmy.world/api/v3/comment/list?post_id=${encodeURIComponent(discussion.id)}&type_=All&sort=Top&max_depth=8&limit=300`,
+				(value) => Array.isArray(value?.comments),
 			);
 			const index = lemmyThreadIndex(res?.comments || [], discussion);
 
@@ -8389,13 +9613,14 @@ button {
 	});
 
 	const DISCOVER_CEILING_MS = 12000;
+	const RECOVER_CEILING_MS = 30000;
 
-	function discoverWithCeiling(promise, sourceId, partial = () => []) {
+	function discoverWithCeiling(promise, sourceId, partial = () => [], timeout = DISCOVER_CEILING_MS) {
 		return new Promise((resolve) => {
 			const timer = setTimeout(() => {
 				console.warn("Backchannel " + sourceId + " discovery timed out");
 				resolve(partial());
-			}, DISCOVER_CEILING_MS);
+			}, timeout);
 
 			promise.then(
 				(value) => {
@@ -8410,53 +9635,175 @@ button {
 		});
 	}
 
-	async function discoverAll(urls, settings, { force = false } = {}) {
-		const targets = [...new Set([].concat(urls).filter(Boolean))];
-		const results = await Promise.all(
-			enabledSources(settings).flatMap((source) =>
-				targets.map((target) => {
-					let partial = [];
-					return discoverWithCeiling(
-						source.discover(target, { force, onPartial: (rows) => { partial = rows; } }).catch((e) => {
-							console.error("Backchannel " + source.id + " discovery failed:", e);
-							return partial;
-						}),
-						source.id,
-						() => partial,
-					);
-				}),
-			),
-		);
+	const sourceReadJobs = new Map();
+	const sourceReadCooldowns = new Map();
+	const sourceReadQueues = new Map();
+	const sourceReadActive = new Map();
+	let sourceReadScope = null;
+	let sourceReadEnabled = null;
 
-		const found = dedupeDiscussions(results.flat().filter(Boolean));
-		const recovered = await recoverCachedFrontPageDiscussions(targets, settings, found);
-
-		return disambiguateLabels(
-			dedupeDiscussions([...found, ...recovered]).sort(
-				compareStoriesByDiscussion,
-			),
-		);
+	function sourceResponseError(response) {
+		const status = response?.status === 429 ? "limited" : "unavailable";
+		const seconds = Math.max(Number(response?.retryAfterSeconds) || 0, status === "limited" ? 30 : 0);
+		return Object.assign(new Error("Source response unavailable"), { readStatus: status, retryAt: seconds ? Date.now() + seconds * 1000 : 0 });
 	}
 
-	async function recoverCachedFrontPageDiscussions(targets, settings, found) {
+	async function checkedSourceJSON(url, valid, headers) {
+		const response = await requestWithMeta(url, headers);
+		if (!response.ok || !valid(response.json)) throw sourceResponseError(response);
+		return response.json;
+	}
+
+	function updateSourceReadScope(settings) {
+		const enabled = enabledSourceIds(settings, registeredSourceIds());
+		const scope = JSON.stringify(enabled);
+		if (sourceReadScope !== null && scope !== sourceReadScope) {
+			for (const job of sourceReadJobs.values()) if (!enabled.includes(job.source)) job.cancel();
+		}
+		sourceReadScope = scope;
+		sourceReadEnabled = new Set(enabled);
+	}
+
+	function pumpSourceReads(source) {
+		const queue = sourceReadQueues.get(source);
+		if (!queue) return;
+		queue.sort((left, right) => left.priority - right.priority);
+		while (queue.length && (sourceReadActive.get(source) || 0) < 3) {
+			const job = queue.shift();
+			if (!job.active) continue;
+			sourceReadActive.set(source, (sourceReadActive.get(source) || 0) + 1);
+			job.promise.finally(() => {
+				sourceReadActive.set(source, (sourceReadActive.get(source) || 1) - 1);
+				pumpSourceReads(source);
+			});
+			job.start();
+		}
+		if (!queue.length) sourceReadQueues.delete(source);
+	}
+
+	function validSourceResult(capability, value) {
+		if (["discover", "recover", "feed"].includes(capability)) return Array.isArray(value);
+		if (capability === "probe") return value && Object.prototype.hasOwnProperty.call(value, "mark");
+		if (capability === "expand") return value && typeof value.ok === "boolean";
+		return typeof value?.getComment === "function";
+	}
+
+	function sourceReadJob(source, capability, target, work, { timeout = DISCOVER_CEILING_MS, onPartial = null, operation = null } = {}) {
+		const key = JSON.stringify([source, capability, target]);
+		let job = sourceReadJobs.get(key);
+		if (!job) {
+			const controller = new AbortController();
+			job = { controller, source, listeners: new Set(), consumers: new Set(), partial: [], active: true, queuedAt: Date.now(), startedAt: 0, attempted: false, priority: ({ expand: 0, thread: 1, recover: 2, discover: 3, feed: 4, probe: 5 })[capability] ?? 3 };
+			sourceReadJobs.set(key, job);
+			job.promise = new Promise((resolve) => {
+				let timer;
+				let queueTimer;
+				const settle = (status, value, retryAt = 0) => {
+					if (!job.active) return;
+					job.active = false;
+					clearTimeout(timer);
+					clearTimeout(queueTimer);
+					if (sourceReadJobs.get(key) === job) sourceReadJobs.delete(key);
+					if (retryAt > Date.now()) sourceReadCooldowns.set(source, Math.max(sourceReadCooldowns.get(source) || 0, retryAt));
+					const finishedAt = Date.now();
+					resolve({ status, value, retryAt, attempted: job.attempted, queuedAt: job.queuedAt, startedAt: job.startedAt, finishedAt });
+					job.listeners.clear();
+					if (job.attempted && ["feed", "discover", "thread"].includes(capability) &&
+						["ok", "empty", "timeout", "limited", "unavailable", "sign-in"].includes(status)) {
+						void reportDiagnostics(capability, source, status, job.startedAt, finishedAt);
+					}
+				};
+				const publish = (value) => {
+					if (!job.active) return;
+					job.partial = value;
+					for (const listener of job.listeners) { try { listener(value); } catch (error) { console.error(error); } }
+				};
+				job.cancel = () => { controller.abort(); settle("cancelled", job.partial); };
+				job.start = () => {
+					clearTimeout(queueTimer);
+					if (!job.active) return;
+					job.startedAt = Date.now();
+					if (timeout > 0) timer = setTimeout(() => { controller.abort(); settle("timeout", job.partial); }, timeout);
+					Promise.resolve().then(() => {
+						if (!job.active) return;
+						const retryAt = sourceReadCooldowns.get(source) || 0;
+						if (retryAt > Date.now()) { settle("limited", job.partial, retryAt); return; }
+						job.attempted = true;
+						return work({ signal: controller.signal, publish });
+					}).then(
+						(value) => settle(value?.readStatus || (!validSourceResult(capability, value) || capability === "expand" && !value.ok ? "unavailable" : "ok"), value, Number(value?.retryAt) || 0),
+						(error) => { job.attempted = error?.feedAttempted !== false; console.warn("Backchannel " + source + " " + capability + " failed:", error); settle(error?.readStatus || error?.feedStatus || "unavailable", job.partial, Number(error?.retryAt) || 0); },
+					);
+				};
+				const queue = sourceReadQueues.get(source) || [];
+				if (queue.length >= 64) { settle("unavailable", job.partial); return; }
+				queue.push(job);
+				sourceReadQueues.set(source, queue);
+				queueTimer = setTimeout(() => { controller.abort(); settle("timeout", job.partial); }, Math.max(timeout || THREAD_CEILING_MS, 20000) * 4);
+				Promise.resolve().then(() => pumpSourceReads(source));
+			});
+		}
+		const consumer = {};
+		job.consumers.add(consumer);
+		if (onPartial) { job.listeners.add(onPartial); if (job.partial.length) onPartial(job.partial); }
+		let cancel;
+		const cancelled = new Promise((resolve) => { cancel = () => {
+			job.consumers.delete(consumer);
+			if (onPartial) job.listeners.delete(onPartial);
+			resolve({ status: "cancelled", value: [], attempted: false, startedAt: job.startedAt, finishedAt: Date.now() });
+			if (!job.consumers.size && job.active) job.cancel();
+		}; });
+		const detach = operation?.attach(cancel);
+		return Promise.race([job.promise, cancelled]).then((result) => { operation?.record(key, result); return result; }).finally(() => {
+			detach?.(); job.consumers.delete(consumer); if (onPartial) job.listeners.delete(onPartial);
+		});
+	}
+
+	async function cachedFrontPageStories(targets, settings) {
 		const enabled = enabledSourceIds(settings, registeredSourceIds());
 		const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabled);
 		if (!feeds.length) return [];
-		const caches = feeds.some((feed) => feed.topic)
-			? await Promise.all(feeds.map((feed) => load(FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`, null)))
-			: [await load(frontPageCacheKey(feeds), null)];
+		const keys = [...feeds.map(frontPageFeedKey), ...(feeds.some((feed) => feed.topic)
+			? feeds.map((feed) => FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`)
+			: [frontPageCacheKey(feeds)])];
+		const caches = await Promise.all(keys.map((key) => load(key, null)));
 		const stories = caches.flatMap((cache) => Array.isArray(cache?.stories) ? cache.stories : Array.isArray(cache?.rows) ? cache.rows.flatMap((row) => [row?.story, ...(Array.isArray(row?.also) ? row.also : [])]) : []);
 		const addresses = new Set(targets.map(normalizeURL).filter(Boolean));
-		const seen = new Set();
-		const candidates = stories.filter((story) => {
+		return stories.filter((story) => {
 			if (!story?.source || !enabled.includes(story.source) || !story.id || !addresses.has(normalizeURL(story.url)) || typeof getSource(story.source)?.recover !== "function") return false;
-			const key = sourceKey(story.source, story.id);
-			if (seen.has(key)) return false;
-			seen.add(key);
 			return true;
 		});
-		const recovered = await recoverAppRowThreads(candidates, found);
-		return recovered.filter((discussion) => addresses.has(normalizeURL(discussion.articleURL)));
+	}
+
+	async function discoverAll(urls, settings, { force = false, recoverCached = true, known = [], saved = [], onPartial = null, operation = null } = {}) {
+		const targets = [...new Set([].concat(urls).filter(Boolean))];
+		const addresses = new Set(targets.map(normalizeURL));
+		const lists = new Map();
+		const combined = () => disambiguateLabels(dedupeDiscussions([...lists].filter(([key]) => key !== "known").flatMap(([, rows]) => rows).concat(lists.get("known") || []).filter((row) => row && (!sourceReadEnabled || sourceReadEnabled.has(row.source)))).sort(compareStoriesByDiscussion));
+		const publish = (key, rows) => {
+			lists.set(key, (rows || []).filter((row) => row && addresses.has(normalizeURL(row.articleURL))));
+			onPartial?.(combined());
+		};
+		const tasks = enabledSources(settings).flatMap((source) => targets.map(async (target) => {
+			const key = JSON.stringify([source.id, target]);
+			const result = await sourceReadJob(source.id, "discover", normalizeURL(target), async ({ signal, publish: partial }) => {
+				const rows = await source.discover(target, { force, signal, onPartial: partial });
+				const status = source.discoveryStatus?.(target);
+				if (status && status !== "ok") throw Object.assign(new Error("Source check could not complete"), { readStatus: status === "login" ? "sign-in" : status });
+				return rows;
+			}, { onPartial: (rows) => publish(key, rows), operation });
+			publish(key, result.status === "ok" || result.value?.length ? result.value : saved.filter((row) => row.source === source.id && normalizeURL(row.articleURL) === normalizeURL(target)));
+		}));
+		tasks.push((async () => {
+			const candidates = [...known, ...(recoverCached ? await cachedFrontPageStories(targets, settings) : [])];
+			await recoverAppRowThreads(candidates, [], new Map(), (rows) => publish("known", rows), operation);
+		})());
+		await Promise.all(tasks);
+		return combined();
+	}
+
+	async function recoverCachedFrontPageDiscussions(targets, settings, found) {
+		return recoverAppRowThreads(await cachedFrontPageStories(targets, settings), found);
 	}
 
 	// -------------------------
@@ -8472,37 +9819,40 @@ button {
 		let changed = false;
 		let answered = false;
 
-		for (const source of enabledSources(settings)) {
+		await Promise.all(enabledSources(settings).map(async (source) => {
 			if (typeof source.probe !== "function") {
-				continue;
+				return;
 			}
 
 			let result = null;
 
 			try {
-				result = await source.probe(entry.url, {
+				const response = await sourceReadJob(source.id, "probe", [normalizeURL(entry.url), marks[source.id], entry.addedAt], () => source.probe(entry.url, {
 					mark: marks[source.id],
 					since: entry.addedAt,
-				});
+				}));
+				result = response.status === "ok" ? response.value : null;
 			} catch (error) {
 				console.error("Backchannel " + source.id + " probe failed:", error);
 			}
 
 			if (!result) {
-				continue;
+				return;
 			}
 
 			answered = true;
 			marks[source.id] = result.mark;
 			changed = changed || result.changed;
-		}
+		}));
 
 		return { marks, changed, answered };
 	}
 
 	async function checkCollected(settings) {
+		const interval = sourceRefreshInterval(settings);
+		if (!interval) return false;
 		const entries = await loadCollected();
-		const due = collectedDue(entries, Date.now(), COLLECTED_CHECK_INTERVAL_MS).slice(
+		const due = collectedDue(entries, Date.now(), Math.max(COLLECTED_CHECK_INTERVAL_MS, interval)).slice(
 			0,
 			COLLECTED_CHECK_BATCH,
 		);
@@ -8575,7 +9925,7 @@ button {
 
 	function scheduleCollectedChecks(settings) {
 		const run = () => {
-			checkCollected(settings)
+			loadSettings().then(checkCollected)
 				.then((found) => {
 					if (found) {
 						refreshCollectionSignal().catch(console.error);
@@ -8665,8 +10015,23 @@ button {
 
 	const threadCache = new Map();
 	const threadLoads = new Map();
+	let threadRequestSequence = 0;
+	let sourceCacheEpoch = 0;
+	const sourceCacheWrites = new Map();
 	const redditPageRefreshes = new Map();
 	const SHARED_THREAD_PREFIX = "HNewhere:thread_cache:";
+
+	function writeSourceSnapshot(key, value, epoch) {
+		const pending = (sourceCacheWrites.get(key) || Promise.resolve()).catch(() => {}).then(async () => {
+			if (epoch !== sourceCacheEpoch) return;
+			const previous = await load(key, null);
+			if (epoch !== sourceCacheEpoch) return;
+			const next = typeof value === "function" ? value(previous) : value;
+			if (!(previous?.at > next.at)) await save(key, next);
+		});
+		sourceCacheWrites.set(key, pending);
+		return pending.finally(() => { if (sourceCacheWrites.get(key) === pending) sourceCacheWrites.delete(key); });
+	}
 
 	function sharedThreadReader(story, snapshot) {
 		const comments = new Map(Object.entries(snapshot.comments));
@@ -8675,6 +10040,7 @@ button {
 			rootKeys: snapshot.rootKeys,
 			rootTimes: new Map(snapshot.rootTimes),
 			rootMore: snapshot.rootMore,
+			archiveCount: Number.isSafeInteger(snapshot.archiveCount) ? snapshot.archiveCount : null,
 			incomplete: Boolean(snapshot.incomplete),
 			refreshFailed: Boolean(snapshot.refreshFailed),
 			refreshIncomplete: Boolean(snapshot.refreshIncomplete),
@@ -8694,6 +10060,7 @@ button {
 	}
 
 	async function persistSharedThreads(stories, { updateLocal = false } = {}) {
+		const epoch = sourceCacheEpoch;
 		const snapshots = stories.flatMap((story) => {
 			const held = threadCache.get(story.key);
 			if (story.local || !held || held.reader.empty) return [];
@@ -8703,21 +10070,21 @@ button {
 			const rootKeys = [...new Set([...(held.reader.rootKeys || []).filter((key) => comments[key]), ...roots.map((entry) => entry.id)])];
 			const rootTimes = new Map([...(held.reader.rootTimes || []), ...roots.map((entry) => [entry.id, entry.time || 0])]);
 			const rootMore = mergeMoreReplies(null, held.reader.rootMore, new Set(rootKeys), story.source);
-			const snapshot = { version: 1, at: held.at, rootKeys, rootTimes: [...rootTimes], rootMore, incomplete: Boolean(held.reader.incomplete), refreshFailed: Boolean(held.reader.refreshFailed), refreshIncomplete: Boolean(held.reader.refreshIncomplete), comments };
+			const snapshot = { version: 1, at: held.at, rootKeys, rootTimes: [...rootTimes], rootMore, archiveCount: held.reader.archiveCount, incomplete: Boolean(held.reader.incomplete), refreshFailed: Boolean(held.reader.refreshFailed), refreshIncomplete: Boolean(held.reader.refreshIncomplete), comments };
 			return JSON.stringify(snapshot).length <= 3000000 ? [{ key: SHARED_THREAD_PREFIX + story.key, snapshot, story, held }] : [];
 		});
 		await Promise.all(snapshots.map(async ({ key, snapshot, story, held }) => {
 			const existing = await load(key, null);
-			if (!(existing?.at > snapshot.at)) {
-				await save(key, snapshot);
+			if (epoch === sourceCacheEpoch && !(existing?.at > snapshot.at)) {
+				await writeSourceSnapshot(key, snapshot, epoch);
 				if (updateLocal && threadCache.get(story.key) === held) rememberThread(threadCache, story.key, sharedThreadReader(story, snapshot), snapshot.at);
 			}
 		}));
 		const page = openPageKey();
 		const refreshed = freshRedditPage(page) ? redditPageRefreshes.get(page) : null;
-		if (refreshed?.keys.length) {
+		if (epoch === sourceCacheEpoch && refreshed?.keys.length) {
 			const entries = await Promise.all(refreshed.keys.map((key) => load(SHARED_THREAD_PREFIX + key, null)));
-			if (entries.every((entry) => entry?.version === 1 && Date.now() - entry.at < THREAD_TTL)) await save(SHARED_REDDIT_PAGE_PREFIX + page, { token: redditReadID(), owner: redditViewId, at: refreshed.at, since: Math.min(...entries.map((entry) => entry.at)), keys: refreshed.keys });
+			if (entries.every((entry) => entry?.version === 1 && Date.now() - entry.at < THREAD_TTL)) await writeSourceSnapshot(SHARED_REDDIT_PAGE_PREFIX + page, { token: redditReadID(), owner: redditViewId, at: refreshed.at, since: Math.min(...entries.map((entry) => entry.at)), keys: refreshed.keys }, epoch);
 		}
 	}
 
@@ -8741,23 +10108,45 @@ button {
 		while (redditPageRefreshes.size > THREAD_CACHE_MAX) redditPageRefreshes.delete(redditPageRefreshes.keys().next().value);
 	}
 
-	async function loadThread(story, { force = false } = {}) {
+	function discussionThreadVersion(story) {
+		return story.collective ? JSON.stringify([story.rootKeys, story.rootTimes, story.statuses, story.annotations, story.wikiPages]) : "";
+	}
+
+	async function loadThread(story, { force = false, operation = null } = {}) {
+		const epoch = sourceCacheEpoch;
+		const since = sharedRefreshSince;
+		const identity = JSON.stringify([story.source, normalizeURL(story.articleURL), discussionThreadVersion(story), since]);
+		const existing = threadLoads.get(story.key);
+		const compatible = !force && existing?.epoch === epoch && existing.identity === identity;
+		const joinedForce = compatible && existing.force;
+		const load = story.local ? null : compatible ? existing : { id: ++threadRequestSequence, epoch, identity, force };
+		if (load && load !== existing) {
+			threadLoads.set(story.key, load);
+			load.version = force ? operation ? "operation:" + operation.operation.id : "request:" + load.id : null;
+			load.shared = !force || since ? sharedThread(story) : Promise.resolve(null);
+		}
+		const shared = load ? await load.shared : null;
+		if (epoch !== sourceCacheEpoch) return { ...emptyThreadReader(), readStatus: "cancelled" };
+		const ownsCache = !joinedForce && (!load || threadLoads.get(story.key) === load);
 		const hit = story.local || force ? null : cachedThread(threadCache, story.key, Date.now());
-		const shared = !force || sharedRefreshSince ? await sharedThread(story) : null;
-		if (shared && (!force || shared.at >= sharedRefreshSince) && (!hit || shared.at > hit.at)) {
+		if (ownsCache && shared && (!force || shared.at >= since) && (!hit || shared.at > hit.at)) {
 			rememberThread(threadCache, story.key, shared.reader, shared.at);
+			if (load) threadLoads.delete(story.key);
 			return shared.reader;
 		}
 
 		if (hit) {
+			if (load && ownsCache) threadLoads.delete(story.key);
 			return hit.reader;
 		}
 
-		const load = story.local ? null : {};
-		if (load) threadLoads.set(story.key, load);
-		const reader = await loadThreadWithCeiling(story);
+		const requested = (force || joinedForce) && story.source === "hn" ? { ...story, rootKeys: [] } : story;
+		const version = load?.version || null;
+		const result = await sourceReadJob(story.source, "thread", [story.key, normalizeURL(story.articleURL), version, discussionThreadVersion(story)], ({ signal }) => loadThreadWithCeiling(requested, signal), { timeout: 0, operation });
+		const reader = typeof result.value?.getComment === "function" ? result.value : { ...emptyThreadReader(), readStatus: result.status, retryAt: result.retryAt };
+		operation?.record("thread:" + story.key, { ...result, status: reader.empty ? result.status === "ok" ? "unavailable" : result.status : reader.incomplete ? "partial" : result.status });
 
-		if (load && threadLoads.get(story.key) === load) {
+		if (!joinedForce && epoch === sourceCacheEpoch && load && threadLoads.get(story.key) === load) {
 			threadLoads.delete(story.key);
 			if (!reader.empty) rememberThread(threadCache, story.key, reader, Date.now());
 		}
@@ -8803,6 +10192,7 @@ button {
 			rootKeys: keys,
 			rootTimes: times,
 			rootMore: mergeMoreReplies(previous?.rootMore, null, new Set(keys), story.source),
+			archiveCount: previous?.archiveCount,
 			incomplete: Boolean(previous?.incomplete),
 			async getComment(key) { return byKey.get(key) || await base?.getComment(key) || null; },
 			async expandMore(ids, parent) { return base?.expandMore ? base.expandMore(ids, parent) : { ok: false, added: [], remaining: ids }; },
@@ -8819,8 +10209,10 @@ button {
 			rootKeys,
 			rootTimes,
 			rootMore: mergeMoreReplies(previous.rootMore, current.rootMore, new Set(rootKeys), story.source),
-			incomplete: Boolean(current.incomplete),
-			refreshIncomplete: Boolean(current.incomplete),
+			archiveCount: current.archiveCount,
+			get incomplete() { return Boolean(current.incomplete); },
+			refreshFailed: Boolean(current.refreshFailed),
+			get refreshIncomplete() { return !current.refreshFailed && Boolean(current.incomplete); },
 			async getComment(key) {
 				const fresh = await current.getComment(key);
 				const saved = await previous.getComment(key);
@@ -8856,21 +10248,55 @@ button {
 		};
 	}
 
-	function loadThreadWithCeiling(story) {
+	function prepareThreadReader(reader, current) {
+		const comments = new Map();
+		const queued = new Set(reader.rootKeys || []);
+		const pending = [...queued];
+		let missing = false;
+		const prepared = {
+			...reader,
+			get incomplete() { return Boolean(reader.incomplete || missing || comments.size < queued.size); },
+			async getComment(key) { return comments.has(key) ? comments.get(key) : queued.has(key) ? null : reader.getComment(key); },
+		};
+		const ready = (async () => {
+			while (pending.length && current()) {
+				await Promise.all(pending.splice(0, 6).map(async (key) => {
+					let comment = null;
+					try { comment = await reader.getComment(key); }
+					catch (error) {
+						prepared.readStatus = error?.readStatus || "partial";
+						prepared.retryAt = Math.max(prepared.retryAt || 0, Number(error?.retryAt) || 0);
+					}
+					if (!current()) return;
+					comments.set(key, comment);
+					if (!comment) missing = true;
+					for (const child of comment?.replyKeys || []) if (!queued.has(child)) { queued.add(child); pending.push(child); }
+				}));
+			}
+		})();
+		return { reader: prepared, ready };
+	}
+
+	function loadThreadWithCeiling(story, signal = null) {
 		return new Promise((resolve) => {
 			let settled = false;
 			let timer = null;
 			let queueTimer = null;
+			let prepared = null;
 			const finish = (reader) => {
 				if (settled) return;
 				settled = true;
 				clearTimeout(timer);
 				clearTimeout(queueTimer);
+				signal?.removeEventListener("abort", cancel);
 				resolve(reader);
 			};
+			const cancel = () => finish({ ...emptyThreadReader(), readStatus: "cancelled" });
+			if (signal?.aborted) { cancel(); return; }
+			signal?.addEventListener("abort", cancel, { once: true });
 			const timeout = () => {
 				console.warn("Backchannel " + story.source + " comments timed out");
-				finish(emptyThreadReader());
+				finish(prepared ? { ...prepared.reader, incomplete: true, readStatus: "timeout" } : { ...emptyThreadReader(), readStatus: "timeout" });
 			};
 			const start = () => {
 				if (settled || timer) return;
@@ -8881,12 +10307,16 @@ button {
 			else start();
 
 			Promise.resolve(getSource(story.source).loadThread(story, { onStart: start })).then(
-				(reader) => {
-					finish(reader || emptyThreadReader());
+				async (reader) => {
+					if (settled) return;
+					if (!reader || reader.empty) { finish(reader || emptyThreadReader()); return; }
+					prepared = prepareThreadReader(reader, () => !settled);
+					await prepared.ready;
+					finish(prepared.reader);
 				},
 				(error) => {
 					console.error("Backchannel " + story.source + " comments failed:", error);
-					finish(emptyThreadReader());
+					finish({ ...emptyThreadReader(), readStatus: error?.readStatus || "unavailable", retryAt: Number(error?.retryAt) || 0 });
 				},
 			);
 		});
@@ -8904,7 +10334,8 @@ button {
 		return hit;
 	}
 
-	async function findHN(url, { force = false } = {}) {
+	async function findHN(url, { force = false, signal = null, onPartial = null } = {}) {
+		const epoch = sourceCacheEpoch;
 		const target = normalizeURL(url);
 
 		if (!target) {
@@ -8922,16 +10353,21 @@ button {
 		const matches = new Map();
 
 		const answered = [];
+		let failure;
 
 		for (const query of queries) {
-			const result = await request(
+			if (signal?.aborted) break;
+			const response = await requestWithMeta(
 				"https://hn.algolia.com/api/v1/search?tags=story&restrictSearchableAttributes=url&hitsPerPage=20&query=" +
 					encodeURIComponent(query),
 			);
+			const result = response.ok ? response.json : null;
 
 			answered.push(Boolean(result && result.hits));
 
 			if (!result || !result.hits) {
+				failure = sourceResponseError(response);
+				if (failure.retryAt) throw failure;
 				continue;
 			}
 
@@ -8940,22 +10376,25 @@ button {
 					matches.set(item.objectID, discoveryHit(item));
 				}
 			}
+			if (!signal?.aborted) onPartial?.([...matches.values()].sort(compareStoriesByDiscussion));
 		}
 
 		const sorted = [...matches.values()].sort(compareStoriesByDiscussion);
+		if (!signal?.aborted && !answered.some(Boolean)) throw failure || new Error("Hacker News discovery unavailable");
 
-		if (shouldCacheDiscovery(answered)) {
+		if (!signal?.aborted && epoch === sourceCacheEpoch && shouldCacheDiscovery(answered)) {
 			const now = Date.now();
 
-			await save(
+			await writeSourceSnapshot(
 				DISCOVERY_CACHE_KEY,
-				keptDiscoveries(
+				(previous) => keptDiscoveries(
 					{
-						...(await load(DISCOVERY_CACHE_KEY, null)),
+						...previous,
 						[target]: { timestamp: now, results: sorted },
 					},
 					now,
 				),
+				epoch,
 			);
 		}
 
@@ -8973,7 +10412,37 @@ button {
 
 	const FRONT_PAGE_TTL = 5 * 60 * 1000;
 	const frontPageLoads = new Map();
+	const frontPageJobs = new Map();
+	const frontPageRequests = new Set();
+	const frontPageWrites = new Map();
+	const FRONT_PAGE_RETRY_MS = 30000;
+	const FRONT_PAGE_FEED_TIMEOUT_MS = 20000;
 	let frontPageRequestId = 0;
+	let frontPageCacheEpoch = 0;
+	let frontPageRefreshTimer = 0;
+	let frontPageScheduleId = 0;
+	let frontPageRefreshRunning = false;
+	let frontPageResumeWired = false;
+
+	function normalizeSourceRefreshMinutes(value) {
+		return [0, 5, 15, 30, 60].includes(Number(value)) && value !== null && value !== "" ? Number(value) : 5;
+	}
+
+	function sourceRefreshInterval(settings) {
+		return normalizeSourceRefreshMinutes(settings?.sourceRefreshMinutes) * 60 * 1000;
+	}
+
+	function frontPageFeedKey(feed) {
+		return FRONT_PAGE_FEED_KEY + `${feed.topic || ""}/${feed.source}/${feed.kind}/${feed.target || ""}`;
+	}
+
+	function frontPageNextAttempt(cached, settings, now = Date.now()) {
+		const interval = sourceRefreshInterval(settings);
+		if (!interval) return Infinity;
+		const attempt = Number(cached?.lastAttemptAt ?? cached?.timestamp) || 0;
+		const retry = Number(cached?.retryAt) || 0;
+		return Math.max(attempt > now ? now : attempt + interval, retry);
+	}
 
 	const TOPICS = [
 		{ id: "world", label: "World" },
@@ -9152,7 +10621,12 @@ button {
 		const result = await requestWithMeta(url);
 		const listing = field ? result.json?.[field] : result.json;
 
-		if (!result.ok || !Array.isArray(listing)) throw new Error("Feed returned no listing");
+		if (!result.ok || !Array.isArray(listing)) {
+			const error = new Error("Feed returned no listing");
+			error.feedStatus = result.status === 429 ? "limited" : "unavailable";
+			error.retryAt = result.retryAfterSeconds > 0 ? Date.now() + result.retryAfterSeconds * 1000 : 0;
+			throw error;
+		}
 		return result.json;
 	}
 
@@ -9197,49 +10671,93 @@ button {
 	const FRONT_PAGE_FEED_KEY = "HNewhere:frontpage_feed:";
 
 	function frontPageStorageKeys(feeds) {
-		return feeds.some((feed) => feed.topic) ? feeds.map((feed) => FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`) : [frontPageCacheKey(feeds)];
+		return feeds.map(frontPageFeedKey);
 	}
 
 	function rememberRedditFeeds(feeds, results) {
 		const batch = redditReadBatch;
-		if (batch?.connected && !batch.closing && feeds.some((feed) => feed.source === "reddit") && results.every((result) => result.status === "ok" && result.attempted)) batch.feedKeys = frontPageStorageKeys(feeds);
+		const redditFeeds = feeds.filter((feed) => feed.source === "reddit");
+		if (batch?.connected && !batch.closing && redditFeeds.length && feeds.every((feed, index) => feed.source !== "reddit" || results[index]?.status === "ok" && results[index].attempted)) batch.feedKeys = frontPageStorageKeys(redditFeeds);
 	}
 
 	async function frontPageFeedResult(feed, force = false) {
-		try {
-			return { stories: await fetchFrontPageFeed(feed, force), status: "ok", attempted: true };
-		} catch (error) {
-			console.warn("Backchannel " + feed.source + " feed failed:", error);
-			return { stories: [], status: error?.feedStatus || "unavailable", attempted: error?.feedAttempted !== false };
-		}
+		const result = await sourceReadJob(feed.source, "feed", [feed.topic || "", feed.kind, feed.target || "", force], () => fetchFrontPageFeed(feed, force), { timeout: FRONT_PAGE_FEED_TIMEOUT_MS });
+		return { stories: Array.isArray(result.value) ? result.value : [], status: result.status, attempted: result.attempted, retryAt: result.retryAt };
 	}
 
-	async function loadTopicFeed(feed, force) {
+	function writeFrontPageCache(key, request, entry) {
+		const pending = (frontPageWrites.get(key) || Promise.resolve()).catch(() => {}).then(async () => {
+			if (frontPageLoads.get(key) === request) await save(key, entry);
+		});
+		frontPageWrites.set(key, pending);
+		return pending.finally(() => {
+			if (frontPageWrites.get(key) === pending) frontPageWrites.delete(key);
+		});
+	}
+
+	function loadTopicFeed(feed, force, settings, legacy = null, { cachedOnly = false } = {}) {
+		const key = frontPageFeedKey(feed);
+		const existing = frontPageJobs.get(key);
+		if (!cachedOnly && existing && (!force || existing.force)) return existing.promise;
+		const job = { force: Boolean(force) };
+		const epoch = frontPageCacheEpoch;
 		const request = ++frontPageRequestId;
-		const key = FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`;
-		const cached = await load(key, null);
-
-		if (!force && Array.isArray(cached?.stories) && Date.now() - cached.timestamp < FRONT_PAGE_TTL) {
-			return { stories: cached.stories, status: cached.status || "ok", cached: Boolean(cached.status && cached.status !== "ok" && cached.stories.length), attempted: false };
-		}
-
-		frontPageLoads.set(key, Math.max(frontPageLoads.get(key) || 0, request));
-		const result = await frontPageFeedResult(feed, force);
-		const stories = result.status === "ok" ? result.stories : cached?.stories || [];
-
-		if (frontPageLoads.get(key) === request) await save(key, { timestamp: Date.now(), stories, status: result.status });
-
-		return { ...result, stories, cached: result.status !== "ok" && stories.length > 0 };
+		if (!cachedOnly) frontPageLoads.set(key, request);
+		job.promise = (async () => {
+			const stored = await load(key, null);
+			const oldTopic = feed.topic && !stored ? await load(FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`, null) : null;
+			const previous = stored || oldTopic || legacy;
+			const cached = previous ? { ...previous, status: previous.status || "ok" } : null;
+			const now = Date.now();
+			const savedResult = () => ({ stories: Array.isArray(cached?.stories) ? cached.stories : [], status: cached?.status || "ok", cached: Boolean(cached?.status && cached.status !== "ok" && cached.stories?.length), attempted: false, lastAttemptAt: cached?.lastAttemptAt ?? cached?.timestamp ?? 0, lastSuccessAt: cached?.lastSuccessAt ?? (cached?.status === "ok" ? cached?.timestamp || 0 : 0), dataFetchedAt: cached?.dataFetchedAt ?? (cached?.status === "ok" ? cached?.timestamp || 0 : 0), retryAt: cached?.retryAt || 0 });
+			if (epoch !== frontPageCacheEpoch || !cachedOnly && frontPageLoads.get(key) !== request) return { stories: [], status: "cancelled", attempted: false };
+			const transportReady = feed.source === "reddit" && cached?.status === "window" && redditReadBatch?.connected && !redditReadBatch.closing && !redditReadBatch.cancelled;
+			if (cachedOnly || !transportReady && (!force && frontPageNextAttempt(cached, settings, now) > now || cached?.retryAt > now)) return savedResult();
+			const cooldown = feed.source === "reddit" ? await load(REDDIT_POLL_KEY, null) : null;
+			if (cooldown?.until > now) return { ...savedResult(), status: "limited", retryAt: cooldown.until };
+			const result = await frontPageFeedResult(feed, force);
+			const finished = Date.now();
+			const stories = result.status === "ok" ? result.stories : Array.isArray(cached?.stories) ? cached.stories : [];
+			const successAt = cached?.lastSuccessAt ?? (cached?.status === "ok" ? cached?.timestamp || 0 : 0);
+			const entry = {
+				timestamp: finished,
+				stories,
+				status: result.status,
+				lastAttemptAt: result.attempted ? now : cached?.lastAttemptAt || 0,
+				lastSuccessAt: result.status === "ok" ? finished : successAt,
+				dataFetchedAt: result.status === "ok" ? finished : cached?.dataFetchedAt ?? successAt,
+				retryAt: result.status === "ok" ? 0 : Math.max(result.retryAt || 0, finished + FRONT_PAGE_RETRY_MS),
+			};
+			if (epoch === frontPageCacheEpoch) await writeFrontPageCache(key, request, entry);
+			return { ...entry, attempted: result.attempted, cached: result.status !== "ok" && stories.length > 0 };
+		})().finally(() => {
+			if (frontPageJobs.get(key) === job) frontPageJobs.delete(key);
+		});
+		if (!cachedOnly) frontPageJobs.set(key, job);
+		return job.promise;
 	}
 
 	function frontPageFeedStates(feeds, results) {
-		return feeds.map((feed, index) => ({ source: feed.source, topic: feed.topic || "", status: results[index].status, cached: Boolean(results[index].cached), attempted: Boolean(results[index].attempted) }));
+		return feeds.map((feed, index) => ({ source: feed.source, topic: feed.topic || "", status: results[index].status, cached: Boolean(results[index].cached), attempted: Boolean(results[index].attempted), lastAttemptAt: results[index].lastAttemptAt || 0, lastSuccessAt: results[index].lastSuccessAt || 0, dataFetchedAt: results[index].dataFetchedAt || 0, retryAt: results[index].retryAt || 0 }));
+	}
+
+	function frontPageSnapshot(feeds, results) {
+		const lists = results.map((result) => result.stories);
+		const merged = mergeStoriesByURL(blendStories(lists.filter((list) => list.length)));
+		return {
+			rows: feeds.some((feed) => feed.topic) ? liftMergedRows(merged) : merged,
+			sources: [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))],
+			topics: [...new Set(feeds.filter((feed, index) => lists[index].length && feed.topic).map((feed) => feed.topic))],
+			feedStates: frontPageFeedStates(feeds, results),
+			attempted: results.some((result) => result.attempted),
+			pending: results.some((result) => result.pending),
+		};
 	}
 
 	function frontPageFailureText(feedStates, view = "all") {
+		if (!view.startsWith("source:")) return "";
 		const failures = feedStates.filter((feed) => feed.status !== "ok" && feed.status !== "window" &&
-			(!view.startsWith("source:") || feed.source === view.slice(7)) &&
-			(!view.startsWith("topic:") || feed.topic === view.slice(6)));
+			feed.source === view.slice(7));
 		const messages = failures.map((feed) => {
 			const name = getSource(feed.source)?.label || feed.source;
 			const message = feed.status === "access"
@@ -9254,16 +10772,84 @@ button {
 		return [...new Set(messages)].join(" ");
 	}
 
+	function activeFrontPageUI() {
+		if (!sidebarUI || !isSidebarVisible() || sidebarUI.frontPageTransitioning) return null;
+		if (appState) return appViewIsFrontPage(appState.view) && appState.ui.shadow.querySelector("#app-search-page")?.hidden !== false && appState.ui.shadow.querySelector("#app-list-body")?.getClientRects().length ? appState.ui : null;
+		return isBrowsing(sidebarUI) && browseTab === "front" && !sidebarUI.browseHome?.searchOpen ? sidebarUI : null;
+	}
+
+	function scheduleFrontPageRefresh() {
+		const schedule = ++frontPageScheduleId;
+		window.clearTimeout(frontPageRefreshTimer);
+		frontPageRefreshTimer = 0;
+		if (!frontPageResumeWired) {
+			frontPageResumeWired = true;
+			document.addEventListener("visibilitychange", scheduleFrontPageRefresh);
+			window.addEventListener("pageshow", scheduleFrontPageRefresh);
+			window.addEventListener("focus", scheduleFrontPageRefresh);
+		}
+		if (document.visibilityState === "hidden" || !activeFrontPageUI() || frontPageRefreshRunning || frontPageRequests.size || frontPageJobs.size) return;
+		(async () => {
+			const settings = await loadSettings();
+			if (!sourceRefreshInterval(settings)) return;
+			const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabledSourceIds(settings, registeredSourceIds()));
+			if (!feeds.length) return;
+			const combined = await load(frontPageCacheKey(feeds), null);
+			const cooldown = feeds.some((feed) => feed.source === "reddit") ? await load(REDDIT_POLL_KEY, null) : null;
+			const now = Date.now();
+			const due = await Promise.all(feeds.map(async (feed) => {
+				const cached = await load(frontPageFeedKey(feed), null) || (feed.topic ? await load(FRONT_PAGE_FEED_KEY + `${feed.topic}/${feed.source}/${feed.target || ""}`, null) : combined);
+				return Math.max(frontPageNextAttempt(cached, settings, now), feed.source === "reddit" ? cooldown?.until || 0 : 0);
+			}));
+			if (schedule !== frontPageScheduleId || document.visibilityState === "hidden" || !activeFrontPageUI() || frontPageRequests.size) return;
+			frontPageRefreshTimer = window.setTimeout(() => {
+				if (Math.min(...due) > Date.now()) scheduleFrontPageRefresh();
+				else refreshActiveFrontPages().catch(console.error);
+			}, Math.max(50, Math.min(60000, Math.min(...due) - Date.now())));
+		})().catch(console.error);
+	}
+
+	async function refreshActiveFrontPages() {
+		if (frontPageRefreshRunning || frontPageRequests.size || document.visibilityState === "hidden") return;
+		const ui = activeFrontPageUI();
+		if (!ui || !sourceRefreshInterval(await loadSettings())) return;
+		frontPageRefreshRunning = true;
+		try {
+			const task = async () => {
+				if (document.visibilityState === "hidden" || activeFrontPageUI() !== ui) return;
+				return appState ? renderAppList({ automatic: true }) : renderBrowseView(ui, { automatic: true });
+			};
+			const allowHelper = !usesRedditReadWindow() || !redditReadSourceOn || usesManagerTabs() && Boolean(await load(REDDIT_READ_NOTICE_KEY, false));
+			await runSync(task, { automatic: true, feedOnly: true, allowHelper });
+		} finally {
+			frontPageRefreshRunning = false;
+			scheduleFrontPageRefresh();
+		}
+	}
+
 	async function loadFrontPages(options = {}) {
 		const request = ++frontPageRequestId;
+		frontPageRequests.add(request);
+		try {
+			return await loadFrontPagesRequest(options, request);
+		} finally {
+			frontPageRequests.delete(request);
+			scheduleFrontPageRefresh();
+		}
+	}
+
+	async function loadFrontPagesRequest(options, request) {
+		if (!options.force && (document.visibilityState === "hidden" || sidebarUI && !activeFrontPageUI())) options = { ...options, cachedOnly: true };
 		const settings = options.settings || (await loadSettings());
 		const feeds = frontPageFeeds(
 			settings,
 			frontPageSourceIds(settings),
 			enabledSourceIds(settings, registeredSourceIds()),
 		);
+		const redditFeed = feeds.find((feed) => feed.source === "reddit");
+		const redditCached = redditFeed ? await load(frontPageFeedKey(redditFeed), null) || await load(frontPageCacheKey(feeds), null) : null;
 
-		if (usesRedditReadWindow() && !redditReadInitialAttempted && !redditReadBatch && isSidebarVisible() && feeds.some((feed) => feed.source === "reddit")) {
+		if (!options.cachedOnly && frontPageNextAttempt(redditCached, settings) <= Date.now() && sourceRefreshInterval(settings) && document.visibilityState !== "hidden" && activeFrontPageUI() && usesRedditReadWindow() && !redditReadInitialAttempted && !redditReadBatch && isSidebarVisible() && redditFeed) {
 			redditReadInitialAttempted = true;
 			const scheduledAction = redditReadActionId;
 			const [accepted, cooldown] = await Promise.all([load(REDDIT_READ_NOTICE_KEY, false), load(REDDIT_POLL_KEY, null)]);
@@ -9282,55 +10868,34 @@ button {
 			return { rows: [], sources: [], topics: [], attempted: false };
 		}
 
-		if (feeds.some((feed) => feed.topic)) {
-			const results = await Promise.all(feeds.map((feed) => loadTopicFeed(feed, options.force)));
-			rememberRedditFeeds(feeds, results);
-			const lists = results.map((result) => result.stories);
-
-			return {
-				rows: liftMergedRows(mergeStoriesByURL(blendStories(lists.filter((list) => list.length)))),
-				sources: [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))],
-				topics: [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.topic))],
-				feedStates: frontPageFeedStates(feeds, results),
-				attempted: results.some((result) => result.attempted),
-			};
-		}
-
 		const cacheKey = frontPageCacheKey(feeds);
 		const cached = await load(cacheKey, null);
-
-		if (
-			!options.force &&
-			Array.isArray(cached?.rows) &&
-			Date.now() - cached.timestamp < FRONT_PAGE_TTL
-		) {
-			return { rows: cached.rows, sources: cached.sources || [], topics: cached.topics || [], feedStates: cached.feedStates || [], attempted: false };
+		if (!options.cachedOnly) frontPageLoads.set(cacheKey, Math.max(frontPageLoads.get(cacheKey) || 0, request));
+		const legacyFor = (feed) => {
+			const state = cached?.feedStates?.find((state) => state.source === feed.source && (state.topic || "") === (feed.topic || ""));
+			return cached && !feed.topic ? { ...cached, ...state, lastAttemptAt: state?.lastAttemptAt ?? cached.timestamp ?? 0, stories: (cached.rows || []).flatMap((row) => [row.story, ...(row.also || [])]).filter((story) => story.source === feed.source), status: state?.status || "ok" } : null;
+		};
+		let results;
+		if (options.onUpdate && !options.cachedOnly) {
+			results = await Promise.all(feeds.map((feed) => loadTopicFeed(feed, false, settings, legacyFor(feed), { cachedOnly: true })));
+			results = results.map((result) => ({ ...result, pending: true }));
+			const initial = frontPageSnapshot(feeds, results);
+			if (initial.rows.length) await options.onUpdate(initial);
+			await Promise.all(feeds.map(async (feed, index) => {
+				results[index] = await loadTopicFeed(feed, options.force, settings, legacyFor(feed), options);
+				await options.onUpdate(frontPageSnapshot(feeds, results));
+			}));
+		} else {
+			results = await Promise.all(feeds.map((feed) => loadTopicFeed(feed, options.force, settings, legacyFor(feed), options)));
 		}
+		const snapshot = frontPageSnapshot(feeds, results);
 
-		frontPageLoads.set(cacheKey, Math.max(frontPageLoads.get(cacheKey) || 0, request));
-		const results = await Promise.all(feeds.map(async (feed) => {
-			const result = await frontPageFeedResult(feed, options.force);
-
-			if (result.status !== "ok") {
-				result.stories = (cached?.rows || []).flatMap((row) => [row.story, ...(row.also || [])]).filter((story) => story.source === feed.source);
-				result.cached = result.stories.length > 0;
-			}
-
-			return result;
-		}));
-		const lists = results.map((result) => result.stories);
-		const feedStates = frontPageFeedStates(feeds, results);
-
-		const answered = [...new Set(feeds.filter((feed, index) => lists[index].length).map((feed) => feed.source))];
-		const topics = [...new Set(feeds.filter((feed, index) => lists[index].length && feed.topic).map((feed) => feed.topic))];
-		const rows = mergeStoriesByURL(blendStories(lists.filter((list) => list.length)));
-
-		if (frontPageLoads.get(cacheKey) === request) {
-			await save(cacheKey, { timestamp: Date.now(), rows, sources: answered, topics, feedStates });
+		if (!options.cachedOnly && frontPageLoads.get(cacheKey) === request) {
+			await writeFrontPageCache(cacheKey, request, { timestamp: snapshot.attempted ? Date.now() : cached?.timestamp || 0, ...snapshot });
 			rememberRedditFeeds(feeds, results);
 		}
 
-		return { rows, sources: answered, topics, feedStates, attempted: results.some((result) => result.attempted) };
+		return snapshot;
 	}
 
 	// -------------------------
@@ -9916,6 +11481,12 @@ button {
 		return pluralize(days, "day") + " ago";
 	}
 
+	function commentAgeLabel(age) {
+		if (age === "just now") return "now";
+		const shortUnits = { second: "s", minute: "m", hour: "h", day: "d", week: "w", month: "mo", year: "y" };
+		return age.replace(/^(\d+) (second|minute|hour|day|week|month|year)s? ago$/i, (_, count, unit) => count + shortUnits[unit.toLowerCase()]);
+	}
+
 	// #region hnewhere-test-export
 	function isNewComment(comment, seenTimestamp) {
 		if (!seenTimestamp) {
@@ -10256,7 +11827,19 @@ button {
 			document.documentElement.toggleAttribute("data-backchannel-dark", dark);
 			paintReaderLook(host);
 		}
+		applyThemeAccent(host, dark);
 
+		if (host.hasAttribute("data-hnewhere-page-mode")) {
+			paintPageCanvas(host);
+		}
+
+		if (host.hasAttribute("data-hnewhere-app")) {
+			paintPageChrome(host);
+			paintAppDiscussionTheme();
+		}
+	}
+
+	function applyThemeAccent(element, dark) {
 		const properties = {
 			"--accent": null,
 			"--accent-rgb": null,
@@ -10279,19 +11862,29 @@ button {
 
 		for (const [name, value] of Object.entries(properties)) {
 			if (value) {
-				host.style.setProperty(name, value);
+				element.style.setProperty(name, value);
 			} else {
-				host.style.removeProperty(name);
+				element.style.removeProperty(name);
 			}
 		}
+	}
 
-		if (host.hasAttribute("data-hnewhere-page-mode")) {
-			paintPageCanvas(host);
-		}
+	function paintAppDiscussionTheme() {
+		const state = appState;
+		const panel = state?.ui.shadow.querySelector("#panel");
 
-		if (host.hasAttribute("data-hnewhere-app")) {
-			paintPageChrome(host);
+		if (!panel) return;
+		let dark = detectDarkMode();
+
+		if (themePreference === "auto") {
+			const article = state.article;
+			const scroller = article?.mode === "reader" ? appReaderScroller() : null;
+			const backdrop = scroller ? getComputedStyle(scroller).backgroundColor : ["frame-agent", "frame"].includes(article?.mode) ? article.look?.bg : null;
+
+			dark = isDarkColor(backdrop) ?? dark;
 		}
+		panel.classList.toggle(DARK_CLASS, dark);
+		applyThemeAccent(panel, dark);
 	}
 
 	const PAGE_CHROME_CSS = `
@@ -10299,6 +11892,21 @@ html[data-backchannel-installed] body,
 html[data-backchannel-installed] .bezel,
 html[data-backchannel-installed] .chin {
 	background:var(--backchannel-chrome);
+}
+
+@media (min-width: 701px) {
+	html[data-backchannel-installed]:has([data-hnewhere-app]) .chin {
+		height:calc(30px + env(safe-area-inset-bottom, 0px));
+		transition:none;
+	}
+
+	html[data-backchannel-installed]:has([data-hnewhere-app]) .chin-bar {
+		visibility:hidden;
+	}
+
+	html[data-backchannel-installed]:has([data-hnewhere-app]) .privacy-drawer {
+		display:none;
+	}
 }
 `;
 
@@ -11114,6 +12722,7 @@ html[data-backchannel-installed] .chin {
 				? "https://en.wikipedia.org/wiki/Special:GoToComment/" + encodeURIComponent(id)
 				: "",
 		mastodon: (id, comment) => parseSourceKey(comment.key)?.id || "",
+		x: (id, comment) => /^[a-z0-9_]{1,15}$/i.test(comment?.author || "") && /^\d+$/.test(id) ? `https://x.com/${comment.author}/status/${id}` : "",
 	};
 
 	function commentPermalink(comment, discussion) {
@@ -11163,33 +12772,36 @@ html[data-backchannel-installed] .chin {
 	}
 
 	async function sweepBridgePayloads() {
-		const index = await load(BRIDGE_PAYLOAD_PREFIX + "index", []);
+		return withSharedStorageLock("bridge-index", async (lease) => {
+			const index = await load(BRIDGE_PAYLOAD_PREFIX + "index", []);
 
-		if (!Array.isArray(index) || !index.length) {
-			return;
-		}
-
-		const now = Date.now();
-		const kept = [];
-
-		for (const entry of index) {
-			if (!entry?.nonce) {
-				continue;
+			if (!Array.isArray(index) || !index.length) {
+				return;
 			}
 
-			if (Number.isFinite(entry.ts) && now - entry.ts > BRIDGE_PAYLOAD_TTL) {
-				await forget(BRIDGE_PAYLOAD_PREFIX + entry.nonce);
-				await forget(BRIDGE_RESULT_PREFIX + entry.nonce);
-				if (/^[a-f0-9]{32}$/.test(entry.nonce)) await forgetMany(Array.from({ length: 50 }, (_, index) => BRIDGE_RESULT_PREFIX + entry.nonce + ":" + (index + 1)));
-				continue;
+			const now = Date.now();
+			const kept = [];
+
+			for (const entry of index) {
+				if (!entry?.nonce) {
+					continue;
+				}
+
+				if (Number.isFinite(entry.ts) && now - entry.ts > BRIDGE_PAYLOAD_TTL) {
+					await forget(BRIDGE_PAYLOAD_PREFIX + entry.nonce);
+					await forget(BRIDGE_RESULT_PREFIX + entry.nonce);
+					await forget(BRIDGE_RESULT_PREFIX + entry.nonce + ":closed");
+					if (/^[a-f0-9]{32}$/.test(entry.nonce)) await forgetMany(Array.from({ length: 50 }, (_, index) => BRIDGE_RESULT_PREFIX + entry.nonce + ":" + (index + 1)));
+					continue;
+				}
+
+				kept.push(entry);
 			}
 
-			kept.push(entry);
-		}
-
-		if (kept.length !== index.length) {
-			await save(BRIDGE_PAYLOAD_PREFIX + "index", kept);
-		}
+			if (kept.length !== index.length) {
+				await lease.commit(() => save(BRIDGE_PAYLOAD_PREFIX + "index", kept));
+			}
+		});
 	}
 
 	function staleStorageKeys(values, now, done) {
@@ -11217,6 +12829,10 @@ html[data-backchannel-installed] .chin {
 				if (value === "") {
 					stale.push(key);
 				}
+			} else if (key.startsWith(BRIDGE_PAYLOAD_PREFIX) && key !== BRIDGE_PAYLOAD_PREFIX + "index") {
+				if (Number.isFinite(value?.ts) && now - value.ts > BRIDGE_PAYLOAD_TTL) stale.push(key);
+			} else if (key.startsWith(BRIDGE_RESULT_PREFIX)) {
+				if (Number.isFinite(value?.ts) && now - value.ts > BRIDGE_PAYLOAD_TTL) stale.push(key);
 			} else if (key.startsWith(SHARED_THREAD_PREFIX) || key.startsWith(SHARED_REDDIT_PAGE_PREFIX)) {
 				if (!Number.isFinite(value?.at) || now - value.at >= THREAD_TTL) stale.push(key);
 			} else if (key.startsWith(FRONT_PAGE_CACHE_KEY) || key.startsWith(FRONT_PAGE_FEED_KEY)) {
@@ -11358,6 +12974,18 @@ html[data-backchannel-installed] .chin {
 	}
 
 	async function clearCache() {
+		sourceCacheEpoch++;
+		discussionStreamRun++;
+		discussionViewCache.clear();
+		threadLoads.clear();
+		threadCache.clear();
+		itemLoads.clear();
+		itemCache.clear();
+		for (const job of sourceReadJobs.values()) job.cancel();
+		frontPageCacheEpoch++;
+		frontPageLoads.clear();
+		frontPageJobs.clear();
+		await Promise.allSettled([...frontPageWrites.values(), ...sourceCacheWrites.values()]);
 		const listed = await listKeys();
 		const keys = listed
 			? []
@@ -11393,11 +13021,12 @@ html[data-backchannel-installed] .chin {
 	}
 
 	async function indexBridgePayload(nonce) {
-		const index = await load(BRIDGE_PAYLOAD_PREFIX + "index", []);
-		const next = Array.isArray(index) ? [...index] : [];
-
-		next.push({ nonce, ts: Date.now() });
-		await save(BRIDGE_PAYLOAD_PREFIX + "index", next);
+		return withSharedStorageLock("bridge-index", async (lease) => {
+			const index = await load(BRIDGE_PAYLOAD_PREFIX + "index", []);
+			const next = Array.isArray(index) ? [...index] : [];
+			next.push({ nonce, ts: Date.now() });
+			await lease.commit(() => save(BRIDGE_PAYLOAD_PREFIX + "index", next));
+		});
 	}
 
 	// #region hnewhere-test-export
@@ -11838,6 +13467,8 @@ html[data-backchannel-installed] .chin {
 
 		const bridge = writeBridgeForHost(writeBridges(), location.hostname);
 		const note = document.createElement("div");
+		const helperBanner = document.getElementById("backchannel-read-helper-banner");
+		if (helperBanner) note.dataset.readHelperNonce = helperBanner.dataset.readHelperNonce;
 
 		note.id = SIGN_IN_NOTE_ID;
 		note.textContent = signInNoteText(
@@ -11848,7 +13479,7 @@ html[data-backchannel-installed] .chin {
 			"style",
 			[
 				"position:fixed",
-				"top:0",
+				"top:" + (helperBanner?.getBoundingClientRect().height || 0) + "px",
 				"left:0",
 				"right:0",
 				"z-index:2147483647",
@@ -12129,7 +13760,12 @@ html[data-backchannel-installed] .chin {
 			const text = ages.get(String(element.dataset.ageId));
 
 			if (text) {
-				element.textContent = text;
+				if (element.closest(".comment-attribution")) {
+					element.title = text;
+					element.textContent = commentAgeLabel(text);
+				} else {
+					element.textContent = text;
+				}
 			}
 		});
 	}
@@ -12207,6 +13843,7 @@ html[data-backchannel-installed] .chin {
 	// #endregion hnewhere-test-export
 
 	let toastTimer = 0;
+	const toastOwners = new WeakMap();
 	let pageToastHost = null;
 
 	const TOAST_DISMISS_MS = 5200;
@@ -12299,7 +13936,7 @@ html[data-backchannel-installed] .chin {
 	}
 }
 
-.toast.has-action.is-showing {
+.toast.has-action.is-showing .toast-action {
 	pointer-events:auto;
 }
 
@@ -12378,7 +14015,7 @@ html[data-backchannel-installed] .chin {
 		}
 	}
 
-	function showToast(message, { persist = false, action = null, page = false, kind = "user", loading = false, duration = TOAST_DISMISS_MS } = {}) {
+	function showToast(message, { persist = false, action = null, page = false, kind = "user", loading = false, duration = TOAST_DISMISS_MS, owner = null } = {}) {
 		if (sidebarUI?.shadow) {
 			removePageToast();
 		}
@@ -12388,6 +14025,7 @@ html[data-backchannel-installed] .chin {
 		if (!toast) {
 			return;
 		}
+		toastOwners.set(toast, owner);
 
 		clearTimeout(toastTimer);
 
@@ -12973,7 +14611,7 @@ html[data-backchannel-installed] .chin {
 	}
 
 	function sayVote(container, itemId, message, action = null) {
-		if (!container?.closest?.("#app-article-actions")) {
+		if (!container?.closest?.("#app-mobile-votes")) {
 			showVoteMessage(itemId, message, action);
 			return;
 		}
@@ -13139,83 +14777,6 @@ html[data-backchannel-installed] .chin {
 		}
 	}
 
-	function renderAppHeadVote(container, sourceID, storyID, itemId, descriptors) {
-		const up = descriptors.find((descriptor) => descriptor.variant !== "down") || null;
-		const down = descriptors.find((descriptor) => descriptor.variant === "down") || null;
-		const main = down?.active || !up ? down : up;
-		const other = main === up ? down : up;
-		const thumb = (descriptor) => {
-			const button = document.createElement("button");
-
-			button.type = "button";
-			button.className = `vote-button app-head-icon app-head-thumb app-head-thumb-${descriptor.variant === "down" ? "down" : "up"}`;
-			button.classList.toggle("vote-button-active", Boolean(descriptor.active));
-			button.title = descriptor.title;
-			button.setAttribute("aria-label", descriptor.title);
-			button.setAttribute("aria-pressed", String(Boolean(descriptor.active)));
-
-			return button;
-		};
-		const primary = thumb(main);
-
-		primary.classList.add("app-article-disc");
-
-		if (down && main !== down) {
-			primary.title = `${main.title} · shift-click to downvote`;
-		}
-
-		primary.onclick = (event) => {
-			event.preventDefault();
-			event.stopPropagation();
-			submitVote(sourceID, storyID, itemId, event.shiftKey && down ? down : main, container);
-		};
-		container.append(primary);
-
-		if (!other) {
-			return;
-		}
-
-		const more = document.createElement("span");
-		const alternate = thumb(other);
-		const show = () => {
-			const box = primary.getBoundingClientRect();
-
-			more.style.left = `${Math.round(box.left + box.width / 2)}px`;
-			more.style.top = `${Math.round(box.bottom)}px`;
-			more.hidden = false;
-		};
-		const hide = () => {
-			more.hidden = true;
-		};
-
-		more.className = "app-vote-more";
-		more.hidden = true;
-		alternate.onclick = (event) => {
-			event.preventDefault();
-			event.stopPropagation();
-			hide();
-			submitVote(sourceID, storyID, itemId, other, container);
-		};
-		more.append(alternate);
-		container.append(more);
-		container.onpointerenter = show;
-		container.onpointerleave = hide;
-
-		for (const button of [primary, alternate]) {
-			button.addEventListener("focus", show);
-			button.addEventListener("blur", (event) => {
-				if (event.relatedTarget !== primary && event.relatedTarget !== alternate) {
-					hide();
-				}
-			});
-			button.addEventListener("keydown", (event) => {
-				if (event.key === "Escape") {
-					hide();
-				}
-			});
-		}
-	}
-
 	function renderVoteControls(container, storyID, itemId, voteInfo) {
 		if (!container) {
 			return;
@@ -13239,11 +14800,6 @@ html[data-backchannel-installed] .chin {
 		requestAnimationFrame(() => {
 			container.classList.remove("vote-controls-arriving");
 		});
-
-		if (container.classList.contains("app-head-votes")) {
-			renderAppHeadVote(container, sourceID, storyID, itemId, descriptors);
-			return;
-		}
 
 		for (const descriptor of descriptors) {
 			const button = document.createElement("button");
@@ -13285,7 +14841,7 @@ html[data-backchannel-installed] .chin {
 		const selector = `[data-hn-vote-story-id="${String(storyID)}"]`;
 		const containers = [
 			...(sidebarUI?.body?.querySelectorAll(selector) || []),
-			...(appState?.ui.shadow.querySelectorAll(`#app-article-actions ${selector}`) || []),
+			...(appState?.ui.shadow.querySelectorAll(`#app-mobile-votes ${selector}`) || []),
 		];
 
 		if (!containers.length) {
@@ -13537,6 +15093,8 @@ html[data-backchannel-installed] .chin {
 		if (on && !frontPageAvailable && !queueHasItems && !notedHasItems) {
 			return;
 		}
+		ui.frontPageTransitioning = true;
+		scheduleFrontPageRefresh();
 
 		if (on && comments) {
 			discussionScrollTop = comments.scrollTop;
@@ -13559,6 +15117,8 @@ html[data-backchannel-installed] .chin {
 		const swap = () => {
 			closeBrowseRowMenus(ui.shadow);
 			panel.classList.toggle("browsing", on);
+			ui.frontPageTransitioning = false;
+			scheduleFrontPageRefresh();
 			if (ui.browseHome) {
 				if (!on) setBrowseSearchOpen(ui, false, { restoreFocus: false, restoreScroll: false });
 				paintBrowseHome(ui);
@@ -14668,6 +16228,25 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 	const cardImageFailures = new Set();
 	const cardImageQueue = [];
 	let cardImagesActive = 0;
+	const RESOURCE_REQUEST_TIMEOUT_MS = 15000;
+
+	function requestResource(options, timeout = RESOURCE_REQUEST_TIMEOUT_MS) {
+		return new Promise((resolve) => {
+			let settled = false;
+			let handle;
+			const finish = (response) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				resolve(response);
+			};
+			const timer = setTimeout(() => { finish(null); try { handle?.abort?.(); } catch {} }, timeout);
+			try {
+				handle = GM.xmlHttpRequest({ ...options, timeout, onload: finish, onerror: () => finish(null), ontimeout: () => finish(null), onabort: () => finish(null) });
+				handle?.catch?.(() => finish(null));
+			} catch { finish(null); }
+		});
+	}
 
 	function requestCardImage(url) {
 		if (cardImageFailures.has(url)) {
@@ -14694,21 +16273,13 @@ ${doc.fresh && doc.found ? `<div class="browse-card-new">${escapeHTML(pluralize(
 					resolve(blob);
 				};
 
-				try {
-					GM.xmlHttpRequest({
-						method: "GET",
-						url,
-						timeout: 15000,
-						anonymous: true,
-						responseType: "blob",
-						headers: { Accept: "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8,*/*;q=0.5" },
-						onload: (response) => finish(response.status >= 200 && response.status < 400 ? imageBlobOf(response.response) : null),
-						onerror: () => finish(null),
-						ontimeout: () => finish(null),
-					});
-				} catch {
-					finish(null);
-				}
+				requestResource({
+					method: "GET",
+					url,
+					anonymous: true,
+					responseType: "blob",
+					headers: { Accept: "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8,*/*;q=0.5" },
+				}).then((response) => finish(response?.status >= 200 && response.status < 400 ? imageBlobOf(response.response) : null));
 			};
 
 			if (cardImagesActive < CARD_IMAGES_PARALLEL) {
@@ -15224,8 +16795,6 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			return;
 		}
 
-		const remaining = unreadQueueCount(entries);
-
 		const label = document.createElement("span");
 		label.className = "next-up-label";
 		label.textContent = "Next in queue ›";
@@ -15234,10 +16803,6 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		title.className = "next-up-title";
 		title.href = next.url;
 		title.textContent = next.title;
-
-		const count = document.createElement("span");
-		count.className = "next-up-count";
-		count.textContent = pluralize(remaining, "left", "left");
 
 		title.onclick = (event) => {
 			const record = save(STORAGE.last, {
@@ -15265,7 +16830,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 
 		const row = document.createElement("div");
 		row.className = "next-up-row";
-		row.append(label, title, count);
+		row.append(label, title);
 
 		strip.replaceChildren(row);
 		strip.classList.remove("hidden");
@@ -15287,6 +16852,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		}
 
 		closeComposeDock(ui.shadow);
+		ui.shadow?.getElementById("app-discussion-compose")?.replaceChildren();
 		body.replaceChildren();
 
 		const message = document.createElement("div");
@@ -15298,6 +16864,11 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 				: "No discussion found for this page yet.");
 
 		body.appendChild(message);
+		if (!appState) {
+			ui.syncStatus = { ...(ui.syncStatus || {}), onSync: (releaseRead) => syncDiscussions(ui, [], releaseRead) };
+			ui.syncAgeDismissed = true;
+			paintSidebarSyncButton(ui);
+		}
 
 		const address = pageAddress();
 		const keep = appState
@@ -15869,6 +17440,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			}
 			if (restoreFocus) toggle.focus({ preventScroll: true });
 		}
+		scheduleFrontPageRefresh();
 	}
 
 	function browseSearchEntries(ui) {
@@ -15990,14 +17562,6 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			setBrowseSearchOpen(ui, false);
 		});
 		shadow.querySelector("#browse-home-sync").onclick = async (event) => {
-			const button = event.currentTarget;
-
-			if (button.classList.contains("is-syncing")) {
-				return;
-			}
-
-			button.classList.add("is-syncing");
-			button.setAttribute("aria-busy", "true");
 			const browsing = isBrowsing(ui);
 			if (browsing) {
 				window.clearTimeout(ui.browseSyncedTimer);
@@ -16018,9 +17582,6 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 				refreshSidebarSubtitle(ui);
 			}
 
-			await settleSyncSpin(button);
-			button.classList.remove("is-syncing");
-			button.removeAttribute("aria-busy");
 		};
 		shadow.querySelector("#browse-home-mark-read").onclick = () => markBrowseHomeRead(ui).catch(console.error);
 		list.addEventListener("click", (event) => {
@@ -16054,96 +17615,101 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			renderBrowseSkeleton(list, "Loading Front Pages…");
 		}
 
-		const [{ rows: allRows, sources, topics, feedStates = [], attempted = false }, queued, hiddenKeys, seen, settings] = await Promise.all([
-			loadFrontPages({ force: options.force }),
+		const metadata = () => Promise.all([
 			loadQueue(),
 			loadHiddenStoryKeys(),
 			load(STORAGE.seen, {}),
 			loadSettings(),
 		]);
+		let paintRevision = 0;
+		const paint = async ({ rows: allRows, sources, topics, feedStates = [], pending = false }) => {
+			const revision = ++paintRevision;
+			const [queued, hiddenKeys, seen, settings] = await metadata();
 
-		if (attempted && ui.browseHome && ui === sidebarUI && isSidebarVisible() && (isCurrent() || options.force)) {
-			const message = frontPageFailureText(feedStates.filter((feed) => feed.attempted));
-
-			if (message) {
-				showToast(message, { kind: "system" });
-				ui.browseHome.feedNotice = message;
-			} else if (!frontPageFailureText(feedStates) && ui.shadow.querySelector("#toast")?.textContent === ui.browseHome.feedNotice) {
-				showToast("");
-				ui.browseHome.feedNotice = "";
+			if (!isCurrent() || browseTab !== "front" || revision !== paintRevision) {
+				return;
 			}
-		}
 
-		if (!isCurrent() || browseTab !== "front") {
-			return;
-		}
+			const queuedKeys = new Set(queued.map(queueKey));
+			const rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
+			const state = ui.browseHome;
+			let view = state?.view || "all";
+			const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabledSourceIds(settings, registeredSourceIds()));
+			const sourceIds = [...new Set(feeds.map((feed) => feed.source))];
+			const topicIds = [...new Set(feeds.map((feed) => feed.topic).filter(Boolean))];
 
-		const queuedKeys = new Set(queued.map(queueKey));
-		const rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
-		const state = ui.browseHome;
-		let view = state?.view || "all";
-		const feeds = frontPageFeeds(settings, frontPageSourceIds(settings), enabledSourceIds(settings, registeredSourceIds()));
-		const sourceIds = [...new Set(feeds.map((feed) => feed.source))];
-		const topicIds = [...new Set(feeds.map((feed) => feed.topic).filter(Boolean))];
+			if ((view.startsWith("source:") && !sourceIds.includes(view.slice(7))) || (view.startsWith("topic:") && !topicIds.includes(view.slice(6)))) {
+				view = "all";
 
-		if ((view.startsWith("source:") && !sourceIds.includes(view.slice(7))) || (view.startsWith("topic:") && !topicIds.includes(view.slice(6)))) {
-			view = "all";
+				if (state) {
+					state.view = state.frontView = view;
+				}
+			}
+
+			const shown = appViewRows(rows, view, seen || {});
+			const failureText = frontPageFailureText(feedStates, view);
+
+			setBlendNote(ui, sources, topics);
+			while (list._hnewherePointer) {
+				await list._hnewherePointer.done;
+				if (!isCurrent() || revision !== paintRevision) return;
+			}
+			list.replaceChildren();
+
+			if (!shown.length) {
+				const note = document.createElement("div");
+				const unavailable = feedStates.length > 0 && feedStates.every((feed) => feed.status !== "ok" && feed.status !== "window");
+
+				note.className = "browse-empty";
+				note.textContent = pending ? "Loading Front Pages…" : failureText || (unavailable ? "Could not load Front Pages." : allRows.length && !rows.length ? "Everything in Front Pages is hidden." : view === "unread" ? "All caught up." : "Nothing here right now.");
+				list.append(note);
+			} else if (failureText) {
+				const notice = document.createElement("div");
+				notice.className = "browse-feed-status";
+				notice.setAttribute("role", "status");
+				notice.textContent = failureText;
+				list.append(notice);
+			}
+
+			shown.forEach((row, index) => {
+				const element = renderBrowseRow(row.story, list, state ? 0 : index + 1, {
+						also: row.also,
+						queuedKeys,
+						hideable: true,
+						reload: () => renderBrowseView(ui),
+						readerRow: Boolean(state),
+						unreadDot: state ? rowIsUnread(row, seen || {}) : undefined,
+					});
+
+				element.classList.toggle("is-unread", rowIsUnread(row, seen || {}));
+			});
+
+			if (settings.frontPageMode === undefined) {
+				list.prepend(frontPageCardElement(settings, () => refreshFrontPageConsumers()));
+			}
+
+			refreshSaveControls().catch(console.error);
 
 			if (state) {
-				state.view = state.frontView = view;
+				state.rows = rows;
+				state.seen = seen || {};
+				state.sourceIds = sourceIds;
+				state.topicIds = topicIds;
+				const counts = appViewCounts(rows, state.seen, sourceIds, topicIds);
+
+				for (const id of ["unread", "all"]) {
+					const badge = ui.shadow.querySelector(`[data-browse-view="${id}"] .rail-badge`);
+
+					badge.textContent = counts[id] ? compactCount(counts[id]) : "";
+				}
+
+				renderBrowseHomeFilters(ui, sourceIds, topicIds, counts, view);
+				paintBrowseHome(ui);
 			}
-		}
-
-		const shown = appViewRows(rows, view, seen || {});
-		const failureText = frontPageFailureText(feedStates, view);
-
-		setBlendNote(ui, sources, topics);
-		list.replaceChildren();
-
-		if (!shown.length) {
-			const note = document.createElement("div");
-
-			note.className = "browse-empty";
-			note.textContent = failureText ? "No articles available. Try syncing again." : allRows.length && !rows.length ? "Everything in Front Pages is hidden." : view === "unread" ? "All caught up." : "Nothing here right now.";
-			list.append(note);
-		}
-
-		shown.forEach((row, index) => {
-			const element = renderBrowseRow(row.story, list, state ? 0 : index + 1, {
-					also: row.also,
-					queuedKeys,
-					hideable: true,
-					reload: () => renderBrowseView(ui),
-					readerRow: Boolean(state),
-					unreadDot: state ? rowIsUnread(row, seen || {}) : undefined,
-				});
-
-			element.classList.toggle("is-unread", rowIsUnread(row, seen || {}));
-		});
-
-		if (settings.frontPageMode === undefined) {
-			list.prepend(frontPageCardElement(settings, () => refreshFrontPageConsumers()));
-		}
-
-		refreshSaveControls().catch(console.error);
-
-		if (state) {
-			state.rows = rows;
-			state.seen = seen || {};
-			state.sourceIds = sourceIds;
-			state.topicIds = topicIds;
-			const counts = appViewCounts(rows, state.seen, sourceIds, topicIds);
-
-			for (const id of ["unread", "all"]) {
-				const badge = ui.shadow.querySelector(`[data-browse-view="${id}"] .rail-badge`);
-
-				badge.textContent = counts[id] ? compactCount(counts[id]) : "";
-			}
-
-			renderBrowseHomeFilters(ui, sourceIds, topicIds, counts, view);
-			paintBrowseHome(ui);
-		}
-		return { feedStates };
+			return { feedStates };
+		};
+		const snapshot = await loadFrontPages({ force: options.force, automatic: options.automatic, onUpdate: paint });
+		return paint(snapshot);
 	}
 
 	async function renderBrowseView(ui, options = {}) {
@@ -16214,6 +17780,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 			fillAppRowThumbs(list);
 			paintBrowseHome(ui);
 		}
+		scheduleFrontPageRefresh();
 		return outcome;
 	}
 
@@ -16225,6 +17792,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		const wasHidden = sidebar.style.display === "none";
 
 		sidebar.style.display = "";
+		scheduleFrontPageRefresh();
 		showUpdateTips();
 		scheduleRedditReadNotice();
 		await saveSidebarState("open");
@@ -16366,6 +17934,7 @@ ${model.yours.length ? `<ul class="collection-tag-yours">${model.yours.map(colle
 		}
 
 		closeComposeDock(ui.shadow);
+		ui.shadow?.getElementById("app-discussion-compose")?.replaceChildren();
 		target.innerHTML = `
 <div class="source-picker">
 <div class="source-picker-title">Pick your sources</div>
@@ -16792,6 +18361,23 @@ ${frontPageChooserHTML()}
 }
 `;
 
+	// Paper poses from the promotional page, sized for the Discussion loader.
+	const DISCUSSION_BIRD_ART = {
+		round: [
+			"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",
+		],
+		pigeon: [
+			"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",
+		],
+		pelican: [
+			"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",
+		],
+	};
+	const DISCUSSION_BIRD_BUBBLE = "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";
+
 	const CHROME_CSS = `
 header {
 	background:var(--header-bg);
@@ -16805,7 +18391,7 @@ header {
 	position:relative;
 }
 
-.header-actions button {
+.header-actions button:where(:not(.settings-select button)) {
 	background:none;
 	border:0;
 	color:var(--header-text);
@@ -16822,7 +18408,7 @@ header {
 }
 
 @media (hover: hover) {
-	.header-actions button:hover {
+	.header-actions button:where(:not(.settings-select button)):hover {
 		background:var(--hover-tint);
 	}
 }
@@ -17270,47 +18856,157 @@ header {
 	flex-direction:column;
 }
 
+#comments:has(.discussion-loading) {
+	position:relative;
+}
+
 .discussion-loading {
-	display:flex;
-	flex:1 0 280px;
-	min-height:280px;
-	padding:12px 8px 0;
+	flex:1 0 124px;
+	min-height:124px;
 	box-sizing:border-box;
 	overflow:hidden;
 }
 
-.discussion-skeleton {
-	position:relative;
-	flex:1;
+.discussion-birds {
+	position:absolute;
+	top:var(--bird-stage-top, 50%);
+	left:50%;
+	width:min(100%, 156px);
+	height:156px;
+	transform:translate(-50%, -50%);
+	pointer-events:none;
+	--bird-cycle:7.2s;
+	--bird-paper-opacity:.72;
 }
 
-.discussion-skeleton-base, .discussion-skeleton-wave {
-	display:flex;
-	flex-direction:column;
+:host(.${DARK_CLASS}) .discussion-birds {
+	--bird-paper-opacity:.44;
 }
 
-.discussion-skeleton-base { opacity:.12; }
+.discussion-bird {
+	position:absolute;
+	top:calc(50% - 34px);
+	left:calc(50% - 42px);
+	width:84px;
+	height:68px;
+	--bird-side:1;
+	--bird-delay:calc((var(--bird-slot) - 6) * 1.2s - .18s);
+	--bird-mouth-x:64%;
+	--bird-mouth-y:48%;
+	--bird-bubble-reach:19px;
+	--bird-bubble-rise:20px;
+	--bird-nod:7deg;
+	--bird-neck:57% 60%;
+	--bird-body-clip:polygon(0 49%, 16% 39%, 27% 45%, 34% 62%, 55% 65%, 100% 58%, 100% 100%, 0 100%);
+	--bird-head-clip:polygon(0 0, 100% 0, 100% 65%, 55% 72%, 32% 69%, 25% 52%, 16% 46%, 0 56%);
+	animation:discussion-bird-turn var(--bird-cycle) cubic-bezier(.22,.61,.36,1) var(--bird-delay) infinite both;
+}
 
-.discussion-skeleton-wave {
+.discussion-bird:nth-child(even) {
+	--bird-side:-1;
+}
+
+.discussion-bird[data-pose="pigeon"] {
+	--bird-mouth-x:50%;
+	--bird-mouth-y:30%;
+	--bird-bubble-reach:12px;
+	--bird-bubble-rise:9px;
+	--bird-nod:6deg;
+	--bird-neck:50% 49%;
+	--bird-body-clip:inset(49% 0 0);
+	--bird-head-clip:inset(0 0 44%);
+}
+
+.discussion-bird[data-pose="pelican"] {
+	--bird-mouth-x:77%;
+	--bird-mouth-y:24%;
+	--bird-bubble-reach:7px;
+	--bird-bubble-rise:3px;
+	--bird-nod:9deg;
+	--bird-neck:29% 48%;
+	--bird-body-clip:polygon(0 46%, 41% 46%, 41% 100%, 0 100%);
+	--bird-head-clip:polygon(0 0, 100% 0, 100% 75%, 42% 75%, 42% 54%, 0 54%);
+}
+
+${Object.entries(DISCUSSION_BIRD_ART).map(([pose, [closed, open]]) => `.discussion-bird[data-pose="${pose}"] { --bird-closed:url(data:image/webp;base64,${closed}); --bird-open:url(data:image/webp;base64,${open}); }`).join("\n")}
+
+.discussion-bird-portrait,
+.discussion-bird-body,
+.discussion-bird-head,
+.discussion-bird-mark {
 	position:absolute;
 	inset:0;
-	opacity:.38;
-	pointer-events:none;
-	-webkit-mask-image:linear-gradient(135deg, transparent 38%, black 50%, transparent 62%);
-	mask-image:linear-gradient(135deg, transparent 38%, black 50%, transparent 62%);
-	-webkit-mask-size:200% 200%;
-	mask-size:200% 200%;
-	animation:discussion-skeleton-wave 2s linear infinite;
 }
-@keyframes discussion-skeleton-wave {
-	from { -webkit-mask-position:100% 100%; mask-position:100% 100%; }
-	to { -webkit-mask-position:0 0; mask-position:0 0; }
+
+.discussion-bird-portrait {
+	opacity:var(--bird-paper-opacity);
+	filter:grayscale(1) brightness(.76);
+	transform:scaleX(var(--bird-side));
 }
-.discussion-skeleton .comment { flex:0 0 auto; }
-.discussion-skeleton .comment.is-reply { margin-left:22px; }
-.discussion-skeleton .comment-vote-slot { cursor:default; }
+
+.discussion-bird-body {
+	background:var(--bird-closed) center / contain no-repeat;
+	clip-path:var(--bird-body-clip);
+}
+
+.discussion-bird-head {
+	transform-origin:var(--bird-neck);
+	animation:
+		discussion-bird-gesture var(--bird-cycle) ease-in-out var(--bird-delay) infinite both,
+		discussion-bird-speak var(--bird-cycle) step-end var(--bird-delay) infinite both;
+}
+
+.discussion-bird-mark {
+	background:var(--bird-head-image, var(--bird-closed)) center / contain no-repeat;
+	clip-path:var(--bird-head-clip);
+}
+
+.discussion-bird-bubble {
+	position:absolute;
+	left:var(--bird-mouth-x);
+	top:var(--bird-mouth-y);
+	width:29px;
+	aspect-ratio:183 / 205;
+	background:url(data:image/webp;base64,${DISCUSSION_BIRD_BUBBLE}) center / contain no-repeat;
+	visibility:var(--bird-speaking, hidden);
+	transform-origin:43% 96%;
+	filter:drop-shadow(0 1px 1px rgba(0,0,0,.28));
+	animation:discussion-bird-bubble var(--bird-cycle) ease-out var(--bird-delay) infinite both;
+}
+
+@keyframes discussion-bird-turn {
+	0% { opacity:0; transform:translate(calc(-22px * var(--bird-side)), 42px) scale(.82); }
+	7.5% { opacity:1; transform:translate(0, 0) scale(1); }
+	12% { opacity:.92; transform:translate(calc(-4px * var(--bird-side)), -6px) scale(1); animation-timing-function:linear; }
+	22%, 100% { opacity:0; transform:translate(calc(-22px * var(--bird-side)), -43px) scale(.84); }
+}
+
+@keyframes discussion-bird-gesture {
+	0% { transform:rotate(5deg); }
+	3% { transform:rotate(calc(-.6 * var(--bird-nod))); }
+	4.5% { transform:rotate(2deg); }
+	7.5% { transform:rotate(calc(-1 * var(--bird-nod))); }
+	10.5% { transform:rotate(2deg); }
+	13% { transform:rotate(calc(-.65 * var(--bird-nod))); }
+	22%, 100% { transform:rotate(4deg); }
+}
+
+@keyframes discussion-bird-speak {
+	0% { --bird-head-image:var(--bird-open); --bird-speaking:visible; }
+	17%, 100% { --bird-head-image:var(--bird-closed); --bird-speaking:hidden; }
+}
+
+@keyframes discussion-bird-bubble {
+	0% { opacity:0; transform:translate(-43%, -96%) rotate(-14deg) scale(.22); }
+	2.5% { opacity:.8; transform:translate(calc(-43% + var(--bird-bubble-reach)), calc(-96% - var(--bird-bubble-rise))) rotate(-6deg) scale(.61); }
+	7.5% { opacity:1; transform:translate(calc(-43% + var(--bird-bubble-reach) + 2px), calc(-96% - var(--bird-bubble-rise) - 4px)) rotate(5deg) scale(1.08); }
+	9.5% { opacity:1; transform:translate(calc(-43% + var(--bird-bubble-reach) + 3px), calc(-96% - var(--bird-bubble-rise) - 5px)) rotate(2deg) scale(.92); }
+	12% { opacity:.92; transform:translate(calc(-43% + var(--bird-bubble-reach) + 5px), calc(-96% - var(--bird-bubble-rise) - 7px)) rotate(-3deg) scale(1.01); }
+	17%, 100% { opacity:0; transform:translate(calc(-43% + var(--bird-bubble-reach) + 9px), calc(-96% - var(--bird-bubble-rise) - 14px)) rotate(8deg) scale(.83); }
+}
+
 .top-level-comments { position:relative; }
-.top-level-comments:has(> .discussion-loading) { min-height:280px; flex:1 0 280px; }
+.top-level-comments:has(> .discussion-loading) { min-height:124px; flex:1 0 124px; }
 .top-level-comments > .discussion-loading { position:absolute; inset:0; z-index:1; background:var(--bg); overflow-anchor:none; pointer-events:none; clip-path:inset(0 0 0 0); transition:clip-path .45s ease; }
 .top-level-comments > .discussion-loading.is-wiping { clip-path:inset(100% 0 0 0); }
 
@@ -17351,7 +19047,11 @@ header {
 	to { background-position:-150% 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-	.discussion-skeleton-wave { display:none; animation:none; }
+	.discussion-bird,
+	.discussion-bird-head,
+	.discussion-bird-bubble { animation:none; }
+	.discussion-bird-bubble,
+	.discussion-bird:not(:first-child) { display:none; }
 	.discussion-progress-strip { transition:none; }
 	.discussion-progress-label { background:none; color:var(--meta); animation:none; }
 	.top-level-comments > .discussion-loading { transition:none; }
@@ -17981,9 +19681,8 @@ header {
 
 .next-up {
 	display:block;
-	margin:auto -12px 10px;
-	padding-top:18px;
-	font-family:Verdana, Geneva, sans-serif;
+	margin:auto 0 4px;
+	padding:8px 0 0;
 	font-size:11px;
 	color:var(--meta);
 }
@@ -17992,8 +19691,9 @@ header {
 	display:flex;
 	flex-wrap:wrap;
 	align-items:baseline;
-	gap:6px;
-	padding:0 12px 0 26px;
+	gap:2px 6px;
+	padding:6px 8px 0;
+	border-top:1px solid var(--border-soft);
 }
 
 .next-up.hidden {
@@ -18009,7 +19709,7 @@ header {
 	min-width:0;
 	color:var(--text);
 	font-family:inherit;
-	font-size:13px;
+	font-size:inherit;
 	text-decoration:none;
 }
 
@@ -18018,10 +19718,6 @@ header {
 		text-decoration:underline;
 		text-underline-offset:2px;
 	}
-}
-
-.next-up-count {
-	flex:0 0 auto;
 }
 
 @media (hover: hover) {
@@ -18121,32 +19817,8 @@ header {
 	animation:hnewhere-subtitle-shimmer 1.6s linear infinite;
 }
 
-.settings-panel {
-	position:absolute;
-	top:calc(50% + 18px);
-	right:8px;
-	width:240px;
-	background:var(--surface);
-	color:var(--surface-text);
-	border:1px solid var(--surface-border);
-	border-radius:8px;
-	box-shadow:0 8px 24px rgba(0,0,0,.16);
-	padding:10px 10px 13px;
-	z-index:3;
-}
-
-.settings-group + .settings-group {
-	margin-top:10px;
-	padding-top:10px;
-	border-top:1px solid var(--surface-divider);
-}
-
 header button svg {
 	display:block;
-}
-
-header > .settings-panel {
-	font-weight:normal;
 }
 
 #settings-toggle.is-open,
@@ -18164,6 +19836,14 @@ header > .settings-panel {
 
 .settings-option + .settings-option {
 	margin-top:8px;
+}
+
+.settings-diagnostics-option {
+	cursor:pointer;
+}
+
+.settings-diagnostics-option .appearance-row-hint {
+	display:block;
 }
 
 .settings-option input[type="checkbox"] {
@@ -18432,25 +20112,32 @@ header > .settings-panel {
 	cursor:pointer;
 }
 
-.source-menu-option input[type="radio"] {
-	appearance:none;
-	-webkit-appearance:none;
-	box-sizing:border-box;
-	flex:0 0 auto;
-	width:13px;
-	height:13px;
+.source-menu-option input[type="checkbox"] {
 	margin:0;
-	border:1px solid var(--help-border);
-	border-radius:50%;
-	background:var(--help-bg);
-	cursor:pointer;
-	transition:border-color .14s ease, box-shadow .14s ease;
 }
 
-.source-menu-option input[type="radio"]:checked {
-	border-color:var(--accent);
-	box-shadow:inset 0 0 0 3px var(--surface);
+.source-menu-option input:indeterminate {
+	border-color:transparent;
 	background:var(--accent);
+}
+
+.source-menu-option input:indeterminate::after {
+	content:"";
+	width:7px;
+	height:1.5px;
+	background:var(--accent-ink);
+}
+
+.source-menu [data-source-group] {
+	font-weight:600;
+}
+
+.source-menu .choice-sub > .source-menu-entry:has([data-discussion-key]) {
+	margin-left:10px;
+}
+
+.source-filter-hidden {
+	display:none !important;
 }
 
 .choice-label {
@@ -18480,10 +20167,6 @@ header > .settings-panel {
 
 .source-menu .source-menu-hint + .source-menu-option {
 	margin-top:5px;
-}
-
-.source-menu-option-active .choice-label {
-	font-weight:600;
 }
 
 @media (hover: hover) {
@@ -18524,14 +20207,18 @@ header > .settings-panel {
 	color:var(--meta);
 }
 
-.page-sort-select {
-	font:inherit;
-	color:var(--text);
-	background:var(--bg);
-	border:1px solid var(--border);
-	border-radius:4px;
-	padding:2px 4px;
-	cursor:pointer;
+.page-sort .settings-select {
+	min-width:76px;
+}
+
+.page-sort .settings-select-toggle {
+	padding:2px 6px;
+	font-size:inherit;
+}
+
+.page-sort:focus-within {
+	position:relative;
+	z-index:6;
 }
 
 .page-sort-toggle {
@@ -18585,24 +20272,6 @@ header > .settings-panel {
 .more-replies:disabled {
 	cursor:default;
 	opacity:.7;
-}
-
-.discussion-source-status {
-	margin:3px 0 0 25px;
-	color:var(--meta);
-	font-size:10px;
-	line-height:1.4;
-}
-
-.discussion-source-badge {
-	position:absolute;
-	top:0;
-	right:0;
-	width:7px;
-	height:7px;
-	border-radius:50%;
-	background:var(--accent);
-	box-shadow:0 0 0 1px var(--bg);
 }
 
 @media (hover: hover) {
@@ -18766,9 +20435,7 @@ header > .settings-panel {
 }
 
 .source-picker-save,
-#settings-update-install,
-#settings-cache-clear,
-#settings-update-check {
+.settings-button {
 	font:600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 	padding:5px 10px;
 	border-radius:4px;
@@ -18778,36 +20445,69 @@ header > .settings-panel {
 	color:white;
 }
 
-#settings-cache-clear,
-#settings-update-check {
+.settings-button {
+	font-weight:400;
+}
+
+.settings-button:not(.settings-button--primary) {
 	border-color:var(--button-border);
 	background:var(--button-bg);
 	color:var(--button-text);
 }
 
 .source-picker-save:disabled,
+.settings-button:disabled,
 #settings-cache-clear[aria-disabled="true"] {
 	opacity:.6;
 	cursor:default;
+}
+
+.settings-button:focus-visible {
+	outline:2px solid var(--accent);
+	outline-offset:2px;
+}
+
+.settings-button:not(:disabled):hover {
+	filter:brightness(.93);
+}
+
+.settings-button--wide {
+	box-sizing:border-box;
+	width:100%;
+	padding-block:4px;
+}
+
+.settings-button--wide,
+.settings-form-control {
+	min-height:26px;
+}
+
+.settings-button--primary {
+	color:var(--accent-ink);
+}
+
+:is(#account-continue, #account-send-code):disabled:not([aria-busy="true"]) {
+	border-color:var(--button-border);
+	background:var(--button-bg);
+	color:var(--button-text);
+}
+
+.settings-button[aria-busy="true"] {
+	opacity:1;
 }
 
 .settings-installed {
 	margin-top:10px;
 }
 
-.settings-installed .manage-row > span:first-child {
+.settings-installed .appearance-row-label {
 	font-weight:600;
-}
-
-.settings-installed .manage-row > span + span {
-	text-align:right;
 }
 
 .settings-update-row {
 	display:flex;
 	align-items:center;
 	gap:10px;
-	margin-top:10px;
 }
 
 #settings-update-install,
@@ -18824,6 +20524,11 @@ header > .settings-panel {
 
 #settings-update-check {
 	transition:width .24s cubic-bezier(.3,.7,.3,1);
+}
+
+#settings-update-install[hidden],
+#settings-update-check[hidden] {
+	display:none;
 }
 
 #settings-update-check[aria-disabled="true"] {
@@ -18862,13 +20567,26 @@ header > .settings-panel {
 	}
 }
 
-.settings-update-glimmer {
-	background:linear-gradient(90deg, var(--button-text) 0%, var(--button-text) 35%, color-mix(in srgb, var(--button-text) 25%, var(--button-bg)) 50%, var(--button-text) 65%, var(--button-text) 100%);
+.settings-update-glimmer, .settings-button[aria-busy="true"] .settings-control-label {
+	--glimmer-ink:var(--button-text);
+	background:linear-gradient(90deg, var(--glimmer-ink) 0%, var(--glimmer-ink) 35%, color-mix(in srgb, var(--glimmer-ink) 28%, transparent) 50%, var(--glimmer-ink) 65%, var(--glimmer-ink) 100%);
 	background-size:250% 100%;
 	-webkit-background-clip:text;
 	background-clip:text;
 	color:transparent;
 	animation:settings-update-glimmer 1.3s linear infinite;
+}
+
+.settings-button--primary[aria-busy="true"] .settings-control-label {
+	--glimmer-ink:var(--accent-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.settings-button[aria-busy="true"] .settings-control-label {
+		animation:none;
+		background:none;
+		color:inherit;
+	}
 }
 
 @keyframes settings-update-glimmer {
@@ -18878,48 +20596,6 @@ header > .settings-panel {
 	to {
 		background-position:-150% 0;
 	}
-}
-
-.settings-update-tick {
-	width:11px;
-	height:11px;
-}
-
-.settings-update-tick path {
-	fill:none;
-	stroke:var(--accent);
-	stroke-width:2;
-	stroke-linecap:round;
-	stroke-linejoin:round;
-}
-
-#settings-update-install {
-	max-width:0;
-	padding-left:0;
-	padding-right:0;
-	border-width:0;
-	margin-right:-10px;
-	opacity:0;
-	visibility:hidden;
-	transition:max-width .24s cubic-bezier(.3,.7,.3,1), padding .24s cubic-bezier(.3,.7,.3,1), opacity .2s, margin-right .24s, visibility 0s linear .24s;
-}
-
-#settings-update-install.is-shown {
-	max-width:120px;
-	padding-left:10px;
-	padding-right:10px;
-	border-width:1px;
-	margin-right:0;
-	opacity:1;
-	visibility:visible;
-	transition:max-width .24s cubic-bezier(.3,.7,.3,1), padding .24s cubic-bezier(.3,.7,.3,1), opacity .2s, margin-right .24s, visibility 0s;
-}
-
-#settings-update-safari {
-	margin-top:8px;
-	color:var(--muted);
-	font-size:11px;
-	line-height:1.35;
 }
 
 .settings-update-notes {
@@ -18987,6 +20663,10 @@ header > .settings-panel {
 	max-height:384px;
 	overflow:hidden;
 	transition:max-height .25s ease, margin-top .25s ease, opacity .2s ease;
+}
+
+.settings-option-hint a {
+	color:var(--accent);
 }
 
 .settings-app-only {
@@ -19122,52 +20802,6 @@ header > .settings-panel {
 	margin-bottom:4px;
 }
 
-.settings-panel {
-	overflow-x:hidden;
-	max-height:calc(100vh - 120px);
-	overflow-y:auto;
-}
-
-.settings-panes + .settings-credits {
-	margin-top:10px;
-	padding-top:10px;
-	border-top:1px solid var(--surface-divider);
-}
-
-.settings-panes {
-	display:flex;
-	align-items:flex-start;
-	width:200%;
-	overflow:hidden;
-	transition:transform .26s ease, height .26s ease;
-}
-
-.settings-panes.is-secondary {
-	transform:translateX(-50%);
-}
-
-.settings-pane {
-	flex:0 0 50%;
-	width:50%;
-	min-width:0;
-	visibility:hidden;
-	transition:visibility 0s linear .26s;
-}
-
-.settings-panes:not(.is-secondary) > .settings-pane-primary,
-.settings-panes.is-secondary > .settings-pane-secondary.is-active {
-	visibility:visible;
-	transition-delay:0s;
-}
-
-.settings-pane-secondary {
-	display:none;
-}
-
-.settings-pane-secondary.is-active {
-	display:block;
-}
-
 .settings-section-hint,
 .sources-subhint {
 	color:var(--muted);
@@ -19177,6 +20811,10 @@ header > .settings-panel {
 
 #app-settings-modal:is([data-section="sources"], [data-section="appearance"]) #app-settings-heading {
 	margin-bottom:4px;
+}
+
+#app-settings-modal[data-section="account"] #app-settings-heading {
+	display:none;
 }
 
 .appearance-row {
@@ -19203,6 +20841,124 @@ header > .settings-panel {
 	color:var(--muted);
 	font-size:11px;
 	line-height:1.35;
+}
+
+.settings-sync-schedule {
+	margin-top:12px;
+	border-top:0;
+}
+
+.settings-action-row {
+	border-top:0;
+	padding:0;
+}
+
+.settings-action-row > :last-child {
+	justify-self:end;
+}
+
+.settings-installed.settings-action-row {
+	padding:10px;
+	border:1px solid var(--help-border);
+	border-radius:6px;
+	background:var(--help-bg);
+}
+
+.settings-cache {
+	margin-top:16px;
+	padding-top:12px;
+	border-top:1px solid var(--surface-divider);
+}
+
+.settings-cache .appearance-row-label {
+	font-weight:600;
+}
+
+.settings-privacy-body {
+	color:var(--muted);
+	font-size:11px;
+	line-height:1.5;
+}
+
+.settings-privacy-body h3 {
+	margin:12px 0 4px;
+	color:var(--surface-text);
+	font-size:11px;
+	font-weight:600;
+}
+
+.settings-privacy-body p,
+.settings-privacy-body ul {
+	margin:8px 0;
+}
+
+.settings-privacy-body ul {
+	padding-left:16px;
+}
+
+.settings-privacy-body li + li {
+	margin-top:4px;
+}
+
+.settings-privacy-body a {
+	color:var(--accent);
+	text-decoration:underline dotted;
+	text-underline-offset:2px;
+}
+
+.settings-select {
+	position:relative;
+	justify-self:end;
+	min-width:138px;
+}
+
+.settings-select-toggle {
+	display:flex;
+	align-items:center;
+	justify-content:space-between;
+	gap:10px;
+	box-sizing:border-box;
+	width:100%;
+	padding:5px 8px;
+	border:1px solid var(--button-border);
+	border-radius:5px;
+	background:var(--button-bg);
+	color:var(--button-text);
+	font:inherit;
+	font-size:11px;
+	font-weight:400;
+	text-align:left;
+	cursor:pointer;
+}
+
+.settings-select-toggle:focus-visible {
+	outline:2px solid var(--accent);
+	outline-offset:2px;
+}
+
+.settings-select-menu {
+	position:absolute;
+	top:calc(100% + 4px);
+	right:0;
+	z-index:4;
+	box-sizing:border-box;
+	min-width:100%;
+	overflow-y:auto;
+}
+
+.settings-select-menu.opens-up {
+	top:auto;
+	bottom:calc(100% + 4px);
+}
+
+.settings-select-menu [role="option"]::before {
+	display:inline-block;
+	width:16px;
+	content:"";
+}
+
+.settings-select-menu [aria-selected="true"]::before {
+	content:"✓";
 }
 
 .shortcut-controls {
@@ -19286,10 +21042,6 @@ button.shortcut-key {
 
 .shortcut-foot {
 	padding-top:10px;
-}
-
-.settings-link-button + .settings-link-button {
-	margin-top:6px;
 }
 
 .theme-tile input:focus-visible ~ .theme-tile-art,
@@ -19567,78 +21319,17 @@ button.shortcut-key {
 	align-items:start;
 }
 
-.settings-head {
+.app-sources-head {
 	display:flex;
 	align-items:baseline;
 	margin:0 0 8px;
 }
 
-.settings-back {
-	flex:0 0 auto;
-	width:0;
-	margin-right:0;
-	padding:0;
-	border:0;
-	overflow:hidden;
-	background:none;
-	color:var(--muted);
-	font-size:15px;
-	line-height:1;
-	opacity:0;
-	cursor:pointer;
-	align-self:center;
-	transition:width .2s ease, margin-right .2s ease, opacity .2s ease;
-}
-
-.settings-head.is-secondary .settings-back {
-	width:9px;
-	margin-right:5px;
-	opacity:1;
-}
-
-.settings-crumb-root {
-	padding:0;
-	border:0;
-	background:none;
+.app-sources-title {
 	color:inherit;
 	font-size:12px;
 	font-weight:600;
 	line-height:1.3;
-	cursor:default;
-	transition:color .2s ease, font-weight .2s ease;
-}
-
-.settings-crumb-root:enabled {
-	cursor:pointer;
-	font-weight:400;
-	color:var(--muted);
-	text-decoration:underline;
-	text-underline-offset:2px;
-}
-
-.settings-crumb-tail {
-	display:flex;
-	align-items:baseline;
-	gap:5px;
-	margin-left:5px;
-	font-size:12px;
-	font-weight:600;
-	line-height:1.3;
-	opacity:0;
-	transform:translateX(-4px);
-	pointer-events:none;
-	transition:opacity .2s ease, transform .2s ease;
-}
-
-.settings-head.is-secondary .settings-crumb-tail {
-	opacity:1;
-	transform:none;
-	pointer-events:auto;
-}
-
-.settings-crumb-sep {
-	font-weight:400;
-	color:var(--muted);
 }
 
 .front-page-card {
@@ -20230,26 +21921,6 @@ button.shortcut-key {
 	color:var(--muted);
 }
 
-.settings-link-button {
-	display:flex;
-	align-items:center;
-	justify-content:space-between;
-	width:100%;
-	padding:6px 8px;
-	border:1px solid var(--help-border);
-	border-radius:4px;
-	background:var(--help-bg);
-	color:var(--help-text);
-	font-size:12px;
-	text-align:left;
-	cursor:pointer;
-}
-
-.settings-link-chevron {
-	font-size:14px;
-	opacity:.6;
-}
-
 .manage-table {
 	display:flex;
 	flex-direction:column;
@@ -20419,11 +22090,11 @@ ${subtitle ? `<span id="header-subtitle" class="header-subtitle" role="status" a
 
 <div class="header-actions">
 ${title ? `<span id="app-discussion-sort" class="app-discussion-sort"></span><span id="app-discussion-meta" class="app-discussion-meta"></span><button id="app-discussion-sync-empty" class="app-head-icon" type="button" aria-label="Sync" title="Sync" hidden><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button>` : ""}
-<button id="comment-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="compose-dock" aria-label="Add a comment" title="Add a comment" hidden>
+${title ? "" : `<button id="comment-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="compose-dock" aria-label="Add a comment" title="Add a comment" hidden>
 <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>
 </svg>
-</button>
+</button>`}
 ${browse ? `<button id="browse-home-mark-read" type="button" aria-label="Mark all as read" title="Mark all as read" hidden>${APP_MARK_READ_ICON}</button><button id="browse-home-sync" type="button" aria-label="Sync" title="Sync" hidden><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button>` : ""}
 ${hide ? `<span class="hide-control">
 <button id="hide-site" class="has-scope" aria-haspopup="true" aria-expanded="false" aria-label="Disable Backchannel here" title="Disable Backchannel here">
@@ -20436,7 +22107,7 @@ ${hide ? `<span class="hide-control">
 </span>` : ""}
 ${
 	settings
-		? `<button id="settings-toggle" aria-label="Open Backchannel settings" title="Backchannel settings" aria-expanded="false" aria-controls="settings-panel">
+		? `<button id="settings-toggle" aria-label="Open Backchannel settings" title="Backchannel settings" aria-expanded="false" aria-controls="app-settings-modal" aria-haspopup="dialog">
 <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
 <path fill="currentColor" fill-rule="evenodd" d="M6.43 1.18A7 7 0 0 1 9.57 1.18L9.55 3.09A5.15 5.15 0 0 1 10.38 3.43L11.71 2.06A7 7 0 0 1 13.94 4.29L12.57 5.62A5.15 5.15 0 0 1 12.91 6.45L14.82 6.43A7 7 0 0 1 14.82 9.57L12.91 9.55A5.15 5.15 0 0 1 12.57 10.38L13.94 11.71A7 7 0 0 1 11.71 13.94L10.38 12.57A5.15 5.15 0 0 1 9.55 12.91L9.57 14.82A7 7 0 0 1 6.43 14.82L6.45 12.91A5.15 5.15 0 0 1 5.62 12.57L4.29 13.94A7 7 0 0 1 2.06 11.71L3.43 10.38A5.15 5.15 0 0 1 3.09 9.55L1.18 9.57A7 7 0 0 1 1.18 6.43L3.09 6.45A5.15 5.15 0 0 1 3.43 5.62L2.06 4.29A7 7 0 0 1 4.29 2.06L5.62 3.43A5.15 5.15 0 0 1 6.45 3.09ZM8 5.5A2.5 2.5 0 0 0 8 10.5A2.5 2.5 0 0 0 8 5.5Z"/>
 </svg>
@@ -20461,9 +22132,89 @@ ${
 <button id="close-pdf-reader" class="dropdown-item" type="button" role="menuitem" data-pdf-reader-only hidden>Close the PDF reader</button>
 </div>` : ""
 }
-${settings ? settingsPanelHTML() : ""}
 </header>
 `;
+	}
+
+	function settingsSelectHTML(id, setting, label, hint, options) {
+		return `<div class="settings-select" data-settings-select>
+<input type="hidden"${setting ? ` data-setting="${escapeHTML(setting)}"` : ""}>
+<button id="${escapeHTML(id)}" class="settings-select-toggle" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="${escapeHTML(id)}-options" aria-labelledby="${escapeHTML(label)} ${escapeHTML(id)}-value"${hint ? ` aria-describedby="${escapeHTML(hint)}"` : ""}><span id="${escapeHTML(id)}-value"></span><span aria-hidden="true">▾</span></button>
+<div id="${escapeHTML(id)}-options" class="dropdown settings-select-menu" role="listbox" aria-labelledby="${escapeHTML(label)}" hidden>${options.map(([value, text]) => `<button class="dropdown-item" type="button" role="option" tabindex="-1" data-value="${escapeHTML(String(value))}" aria-selected="false">${escapeHTML(text)}</button>`).join("")}</div>
+</div>`;
+	}
+
+	const openSelects = new WeakMap();
+
+	function wireSettingsSelect(root) {
+		if (!root) return () => {};
+		const input = root.querySelector("input");
+		const toggle = root.querySelector(".settings-select-toggle");
+		const valueLabel = toggle.querySelector("span");
+		const menu = root.querySelector('[role="listbox"]');
+		const options = [...menu.querySelectorAll('[role="option"]')];
+		let surface;
+		const paint = (value) => {
+			const selected = options.find((option) => option.dataset.value === String(value)) || options[0];
+			input.value = selected.dataset.value;
+			valueLabel.textContent = selected.textContent;
+			for (const option of options) option.setAttribute("aria-selected", String(option === selected));
+		};
+		const close = (focus = false) => {
+			menu.hidden = true;
+			toggle.setAttribute("aria-expanded", "false");
+			if (openSelects.get(surface) === close) openSelects.delete(surface);
+			surface?.removeEventListener("pointerdown", outside);
+			if (focus) toggle.focus({ preventScroll: true });
+		};
+		const outside = (event) => {
+			if (!event.composedPath().includes(root)) close();
+		};
+		const open = () => {
+			surface = root.getRootNode();
+			openSelects.get(surface)?.();
+			openSelects.set(surface, close);
+			surface.addEventListener("pointerdown", outside);
+			menu.hidden = false;
+			toggle.setAttribute("aria-expanded", "true");
+			menu.classList.remove("opens-up");
+			menu.style.maxHeight = "";
+			const button = toggle.getBoundingClientRect();
+			const pane = root.closest("[data-app-section]")?.getBoundingClientRect();
+			const scroll = root.closest(".app-settings-content")?.getBoundingClientRect();
+			const below = Math.min(window.innerHeight, pane?.bottom ?? Infinity, scroll?.bottom ?? Infinity) - button.bottom - 8;
+			const above = button.top - Math.max(0, pane?.top ?? 0, scroll?.top ?? 0) - 8;
+			const up = below < menu.getBoundingClientRect().height && above > below;
+			menu.classList.toggle("opens-up", up);
+			menu.style.maxHeight = Math.max(36, Math.floor(up ? above : below)) + "px";
+			(options.find((option) => option.getAttribute("aria-selected") === "true") || options[0]).focus({ preventScroll: true });
+		};
+		toggle.onmousedown = (event) => { if (event.button === 0) event.preventDefault(); };
+		toggle.onclick = () => menu.hidden ? open() : close(true);
+		menu.onclick = (event) => {
+			const option = event.target.closest('[role="option"]');
+			if (!option) return;
+			const changed = input.value !== option.dataset.value;
+			paint(option.dataset.value);
+			close(true);
+			if (changed) input.dispatchEvent(new Event("change", { bubbles: true }));
+		};
+		root.addEventListener("keydown", (event) => {
+			if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+				event.preventDefault();
+				event.stopPropagation();
+				if (menu.hidden) { open(); return; }
+				const current = options.indexOf(root.getRootNode().activeElement);
+				const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : Math.max(0, Math.min(options.length - 1, current + (event.key === "ArrowDown" ? 1 : -1)));
+				options[next].focus({ preventScroll: true });
+			} else if (event.key === "Escape" && !menu.hidden) {
+				event.preventDefault();
+				event.stopPropagation();
+				close(true);
+			} else if (event.key === "Tab" && !menu.hidden) close(true);
+		});
+		root.addEventListener("focusout", (event) => { if (!root.contains(event.relatedTarget)) close(); });
+		return paint;
 	}
 
 	function settingsUpdatesHTML() {
@@ -20471,38 +22222,94 @@ ${settings ? settingsPanelHTML() : ""}
 			return "";
 		}
 
-		return `<div class="settings-group settings-updates">
+		return `<div class="settings-group settings-updates" data-app-section="general">
 <div class="sources-subhead">Updates</div>
 <label class="settings-option">
 <input id="setting-update-check" data-setting="updateCheck" type="checkbox">
 <span>Check for new versions automatically</span>
 </label>
 <div class="settings-option-hint">Once a day, Backchannel will check if there are any available updates.</div>
-<div class="manage-table settings-installed"><div class="manage-row"><span>Installed</span><span>v${escapeHTML(SCRIPT_VERSION)}</span></div></div>
+<div class="appearance-row settings-action-row settings-installed">
+<div class="appearance-row-text"><div id="settings-update-status" class="appearance-row-label" role="status">Backchannel is up-to-date</div><div class="appearance-row-hint">v${escapeHTML(SCRIPT_VERSION)}</div></div>
 <div class="settings-update-row">
-<a id="settings-update-install" href="${escapeHTML(UPDATE_SCRIPT_URL)}" target="_blank" rel="noopener noreferrer" role="button" tabindex="-1" aria-hidden="true">Update</a>
-<button id="settings-update-check" type="button"><span class="settings-update-label">Check for updates</span></button>
+<a id="settings-update-install" class="settings-button settings-button--primary" href="${escapeHTML(UPDATE_SCRIPT_URL)}" target="_blank" rel="noopener noreferrer" role="button" tabindex="-1" aria-hidden="true" hidden>Update</a>
+<button class="settings-button" id="settings-update-check" type="button"><span class="settings-update-label">Check for updates</span></button>
 </div>
-<div id="settings-update-safari" hidden>Update from the Userscripts menu in Safari’s toolbar.</div>
+</div>
 <div id="settings-update-notes" class="settings-update-notes" role="region" aria-label="Release notes"></div>
+</div>`;
+	}
+
+	function wireDiagnosticSharing(shadow) {
+		const input = shadow.getElementById("account-share-diagnostics");
+		let updating = false;
+		let shownAccount = null;
+		const updateSharing = async (enabled) => {
+			if (updating || !input) return;
+			updating = true;
+			input.disabled = true;
+			const session = await load(ACCOUNT_SYNC_KEY, null);
+			const account = hasAccountSyncSession(session) && session.expiresAt > Date.now() ? session.account : null;
+			const key = account && ACCOUNT_DIAGNOSTICS_PREFIX + account;
+			if (key && account === shownAccount && typeof enabled === "boolean") {
+				try {
+					await save(key, enabled ? Date.now() : 0);
+				} catch {
+					showToast("Couldn’t save your diagnostics preference.", { kind: "system" });
+				}
+			}
+			input.checked = Boolean(key && diagnosticConsentEnabled(await load(key, 0)));
+			input.disabled = !key;
+			shownAccount = account;
+			updating = false;
+		};
+		input?.addEventListener("change", (event) => {
+			if (event.isTrusted) void updateSharing(input.checked);
+		});
+		return updateSharing;
+	}
+
+	function settingsPrivacyHTML() {
+		return `<div id="settings-privacy" class="settings-group settings-privacy" data-app-section="general">
+<div class="sources-subhead">Privacy</div>
+<div class="settings-privacy-body"><p class="privacy-meta">Triglavis LLC &middot; backchnnl.app &middot; Last updated 19 November 2026</p>
+
+        <h3>What this site collects</h3>
+        <p>The promotional page uses no cookies, analytics, tracking pixels or third-party scripts. <strong>Cloudflare</strong> hosts Backchannel, handles network requests, and records operational logs.</p>
+
+        <h3>What the script does</h3>
+        <p>Account sync and diagnostic sharing are optional.</p>
+        <ul>
+          <li>Your settings, queue, Collection, votes, notes, hidden sites and the comments you have seen are saved in your userscript manager on this device.</li>
+          <li>If you set up Account sync, Backchannel uploads an encrypted copy of your settings, reading queue, saved items and notes to Cloudflare. The service stores your passkey's public credential, session records, and browser and platform labels for linked devices. Backchannel stores your verified recovery email, uses it to label new passkeys, and sends verification and recovery codes through Cloudflare. Your recovery key stays on your devices.</li>
+          <li>To find discussions, it asks each source you have turned on about the page you are on. Most are told its address; Lobsters and Mastodon's search are told only its domain. A link you open in the reader from Mastodon's front page is looked up on mastodon.social by its address. A source you have turned off is asked nothing.</li>
+          <li>It checks the pages in your Collection for new discussion, each at most once an hour, by sending their addresses to Hacker News, Bluesky's link index and, when Reddit answers through its archive, that archive. A page with new discussion is then looked up like the page you are on. Choose Unwatch on a page to stop.</li>
+          <li><strong>Reddit</strong>, <strong>Wikipedia</strong> and <strong>Hacker News</strong> can tell who you are. Signed in to one, its requests can arrive as your account. Signed out, Reddit and Wikipedia still send a device identifier.</li>
+          <li>Voting and replying happen in a window on that source's own site, using the session you already have there.</li>
+          <li>An article opened in the reader loads from the site that published it, with no referrer. If the page does not respond inside that frame, the script fetches it once, without cookies, to see whether it can be shown there and, if not, to show its text.</li>
+          <li>Enhanced PDF support uses pdf.js, downloaded from <strong>cdn.jsdelivr.net</strong>. That request carries nothing about you.</li>
+        </ul>
+        <p>Every host the script can contact, and exactly what each is told, is listed in <a href="https://github.com/twalichiewicz/Backchannel/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+
+        <h3>Optional diagnostics</h3>
+        <p>If you choose to share diagnostics, Reader sends reliability reports to help us find slow or failed refreshes, discussion loads, and Account syncs. Each report contains the Backchannel version, operation, outcome, approximate duration, and the source name when relevant. Reports exclude account and device identifiers, email addresses, article URLs, searches, notes, and comment content. Cloudflare handles these requests and records operational logs. It retains the diagnostic reports for three months.</p>
+
+        <h3>Your choices</h3>
+        <p>Diagnostic sharing starts off. Your choice is included in encrypted Account sync and takes effect on each device when it syncs. In Reader, you can change your choice in Settings → Account → Manage account → Privacy. Reports are sent only while signed in with sharing enabled.</p>
+        <p>Signing out or deleting an account leaves your reading data in this browser profile. If you sign in to a different account in the same profile, Backchannel asks before syncing that data. Use separate browser profiles to keep reading data separate.</p>
+        <p>Turn any source off in Settings, or hide Backchannel on any site. Removing the script or clearing your userscript manager's data removes the local copy. Delete account in Settings → Account removes the active account and synced data. Cloudflare database backups may retain earlier copies for up to 30 days.</p>
+
+        <h3>Changes</h3>
+        <p>This policy changes in the open, alongside the code, and the date above moves with it. Questions go to <a href="https://github.com/twalichiewicz/Backchannel/issues">GitHub issues</a>.</p></div>
 </div>`;
 	}
 
 	function settingsPanelHTML() {
 		return `
-<div id="settings-panel" class="settings-panel hidden">
-<div id="settings-head" class="settings-head">
-<button id="settings-blocked-back" class="settings-back" type="button" aria-label="Back to settings" disabled>&lsaquo;</button>
-<button id="settings-crumb-root" class="settings-crumb-root" type="button" disabled>Settings</button>
-<span id="settings-crumb-tail" class="settings-crumb-tail" aria-hidden="true"><span class="settings-crumb-sep">/</span><span id="settings-crumb-name">Sources</span></span>
-</div>
-<div id="settings-panes" class="settings-panes">
-
-<div class="settings-pane settings-pane-primary">
-
+<div id="settings-panel" class="settings-panel">
 <div id="settings-pdf-notice" class="settings-notice" hidden>Backchannel not supported in Firefox's PDF viewer</div>
 
-<div class="settings-group">
+<div class="settings-group" data-app-section="sidebar">
 <div class="settings-app-only">
 <label class="settings-option settings-sidebar-head"><span class="settings-sidebar-title">Sidebar</span><input id="setting-sidebar-enabled" class="settings-switch" role="switch" data-setting="sidebarEnabled" type="checkbox" aria-describedby="settings-sidebar-hint"></label>
 <div id="settings-sidebar-hint" class="settings-sidebar-hint">Sidebar allows you to access Backchannel features like discussions and Front Pages directly onto the sites you visit.</div>
@@ -20542,7 +22349,7 @@ ${settings ? settingsPanelHTML() : ""}
 </div>
 </div>
 
-<div class="settings-group">
+<div class="settings-group" data-app-section="general">
 <label class="settings-option">
 <input id="setting-annotations" data-setting="annotations" type="checkbox">
 <span>Enable annotations <span class="op-pill">BETA</span></span>
@@ -20593,7 +22400,7 @@ All stored locally.
 </div>
 </div>
 
-<div class="settings-group">
+<div class="settings-group" data-app-section="appearance">
 <div class="settings-section-hint">How Backchannel looks in the Sidebar, the Reader and on the sites you visit.</div>
 <div class="appearance-row">
 <div class="appearance-row-text"><div class="appearance-row-label" id="appearance-theme-label">Theme</div><div class="appearance-row-hint">Light or dark, or Auto to match your device.</div></div>
@@ -20632,24 +22439,26 @@ All stored locally.
 
 ${settingsUpdatesHTML()}
 
-<div class="settings-group">
-<div class="sources-subhead">Cached data</div>
-<div class="sources-subhint">Clear temporary data used to find discussions and load Front Pages. Backchannel fetches fresh results when needed, without affecting your Notes, Collection, or settings.</div>
-<button id="settings-cache-clear" type="button">Clear cache</button>
-</div>
-
-<div class="settings-group">
-<button id="settings-manage-sources" class="settings-link-button" type="button" data-pane="sources" data-pane-name="Sources">Sources<span class="settings-link-chevron">&rsaquo;</span></button>
-<button id="settings-manage-shortcuts" class="settings-link-button" type="button" data-pane="shortcuts" data-pane-name="Shortcuts">Shortcuts<span class="settings-link-chevron">&rsaquo;</span></button>
+<div class="settings-group" data-app-section="general">
+<div class="appearance-row settings-action-row settings-cache">
+<div class="appearance-row-text"><div class="appearance-row-label">Cached data</div>
+<div class="appearance-row-hint">Clear temporary data used to find discussions and load Front Pages. Backchannel fetches fresh results when needed, without affecting your Notes, Collection, or settings.</div></div>
+<button class="settings-button" id="settings-cache-clear" type="button">Clear cache</button>
 </div>
 </div>
 
-<div class="settings-pane settings-pane-secondary" data-pane="sources">
+${settingsPrivacyHTML()}
+
+<div data-app-section="sources">
 <div class="settings-section-hint">Where Backchannel looks for discussions and links for Front Pages. <a href="${escapeHTML(REPO_URL)}#what-exactly-is-the-script-doing-with-my-information" target="_blank" rel="noopener noreferrer">How each source works</a></div>
 <div class="sources-grid">${sourceListHTML({ idPrefix: "setting-source-", cells: true, help: true })}</div>
 <div class="sources-subhead">Front Pages</div>
 <div class="sources-subhint">Choose what Backchannel shows in Front Pages. Links come only from the sources you've enabled above.</div>
 ${frontPageChooserHTML()}
+<div class="appearance-row settings-sync-schedule">
+<div class="appearance-row-text"><div id="setting-source-refresh-label" class="appearance-row-label">Sync schedule</div><div id="setting-source-refresh-hint" class="appearance-row-hint">Determine how often sources should automatically sync.</div></div>
+${settingsSelectHTML("setting-source-refresh", "sourceRefreshMinutes", "setting-source-refresh-label", "setting-source-refresh-hint", [[5, "Every 5 minutes"], [15, "Every 15 minutes"], [30, "Every 30 minutes"], [60, "Every hour"], [0, "Manual"]])}
+</div>
 <div id="settings-hidden-section">
 <div class="sources-subhead">Hidden links</div>
 <div class="sources-subhint">Links you've hidden from Front Pages.</div>
@@ -20661,7 +22470,7 @@ ${frontPageChooserHTML()}
 </div>
 </div>
 
-<div class="settings-pane settings-pane-secondary" data-pane="shortcuts">
+<div data-app-section="shortcuts">
 <label class="settings-option settings-sidebar-head"><span class="settings-sidebar-title">Shortcuts</span><input id="setting-shortcuts-enabled" class="settings-switch" role="switch" type="checkbox" aria-label="Keyboard shortcuts" aria-describedby="settings-shortcuts-hint" checked></label>
 <div id="settings-shortcuts-hint" class="settings-sidebar-hint">Click a key to change it: press the new keys, Delete to clear, Esc to cancel.</div>
 <div class="manage-table shortcut-table">
@@ -20670,23 +22479,14 @@ ${frontPageChooserHTML()}
 </div>
 <div class="shortcut-foot"><button id="settings-shortcuts-reset-all" class="settings-byline-action" type="button">Reset all</button></div>
 </div>
-
-</div>
-
-<div class="settings-credits">
-<a href="${escapeHTML(REPO_URL)}/issues" target="_blank" rel="noopener noreferrer">Report an issue</a>
-</div>
 </div>
 `;
 	}
 
-	async function wireSettingsPanel(shadow, { onAnnotationChange } = {}) {
+	function wireSettingsPanel(shadow, { onAnnotationChange } = {}) {
 		const settingsPanel = shadow.querySelector("#settings-panel");
 		const settingsToggle = shadow.querySelector("#settings-toggle");
-
-		if (!settingsPanel || !settingsToggle) {
-			return { setSettingsOpen: () => {} };
-		}
+		const shortcutsPane = wireShortcutsPane(shadow);
 
 		watchUpdateGear(settingsToggle);
 
@@ -20716,7 +22516,6 @@ ${frontPageChooserHTML()}
 			theme: [...settingsPanel.querySelectorAll("input[data-setting='theme']")],
 		};
 
-		const panes = shadow.querySelector("#settings-panes");
 		const preview = shadow.querySelector("#toggle-preview");
 		const previewMark = shadow.querySelector("#toggle-preview-mark");
 		const previewPage = shadow.querySelector(".toggle-page");
@@ -20733,71 +22532,6 @@ ${frontPageChooserHTML()}
 		const previewSpot = { right: 16, top: 16 };
 		let designerSettings = null;
 		let designerDraft = null;
-
-		const syncPanesHeight = () => {
-			if (!panes || settingsPanel.classList.contains("hidden")) {
-				return;
-			}
-
-			const active = panes.querySelector(
-				panes.classList.contains("is-secondary")
-					? ".settings-pane-secondary.is-active"
-					: ".settings-pane-primary",
-			);
-
-			if (active?.scrollHeight) {
-				panes.style.height = `${active.scrollHeight}px`;
-			}
-		};
-
-		const settlePanesHeight = () => {
-			syncPanesHeight();
-			window.setTimeout(syncPanesHeight, 300);
-		};
-
-		if (panes && typeof ResizeObserver === "function") {
-			const paneObserver = new ResizeObserver(() => syncPanesHeight());
-
-			for (const pane of panes.querySelectorAll(".settings-pane")) {
-				paneObserver.observe(pane);
-			}
-		}
-
-		const head = shadow.querySelector("#settings-head");
-		const crumbBack = shadow.querySelector("#settings-blocked-back");
-		const crumbRoot = shadow.querySelector("#settings-crumb-root");
-		const crumbTail = shadow.querySelector("#settings-crumb-tail");
-		const crumbName = shadow.querySelector("#settings-crumb-name");
-
-		const showSecondaryPane = (paneName) => {
-			const secondary = Boolean(paneName);
-
-			for (const pane of panes?.querySelectorAll(".settings-pane-secondary") ||
-				[]) {
-				pane.classList.toggle("is-active", pane.dataset.pane === paneName);
-			}
-
-			if (paneName && crumbName) {
-				crumbName.textContent =
-					shadow.querySelector(`[data-pane="${paneName}"][data-pane-name]`)
-						?.dataset.paneName || "";
-			}
-
-			panes?.classList.toggle("is-secondary", secondary);
-
-			head?.classList.toggle("is-secondary", secondary);
-			crumbTail?.setAttribute("aria-hidden", secondary ? "false" : "true");
-
-			if (crumbBack) {
-				crumbBack.disabled = !secondary;
-			}
-
-			if (crumbRoot) {
-				crumbRoot.disabled = !secondary;
-			}
-
-			syncPanesHeight();
-		};
 
 		const applyButtonDesigner = (settings) => {
 			designerSettings = settings;
@@ -20903,6 +22637,7 @@ ${frontPageChooserHTML()}
 		const suboptionGroups = [
 			...settingsPanel.querySelectorAll("[data-suboptions-of]"),
 		];
+		const syncSourceSchedule = wireSettingsSelect(settingsPanel.querySelector("[data-settings-select]"));
 
 		const applySettingsPanelState = (settings) => {
 			for (const [key, input] of Object.entries(settingsInputs)) {
@@ -20923,6 +22658,7 @@ ${frontPageChooserHTML()}
 
 			applyButtonDesigner(settings);
 			syncSettingsFrontPage?.(settings);
+			syncSourceSchedule(normalizeSourceRefreshMinutes(settings.sourceRefreshMinutes));
 
 			const sourceState = normalizeSourceSettings(
 				settings.sources,
@@ -20967,50 +22703,18 @@ ${frontPageChooserHTML()}
 			}
 		};
 
-		applySettingsPanelState(await loadSettings());
-
-		let setHideMenuOpen = () => {};
-		let refreshManageLists = () => Promise.resolve();
-
-		const shortcutsPane = wireShortcutsPane(shadow);
-
-		const setSettingsOpen = (open) => {
-			settingsPanel.classList.toggle("hidden", !open);
-			settingsToggle.classList.toggle("is-open", open);
-			settingsToggle.setAttribute("aria-expanded", open ? "true" : "false");
-
-			if (appState) {
-				placeAppSettings(open);
-			}
-
-			if (open) {
-				setHideMenuOpen(false);
-				refreshNotesCount?.().catch(console.error);
-				settingsPanel.dispatchEvent(new Event("general-shown"));
-				refreshManageLists().catch(console.error);
-			}
-
-			if (open) {
-				syncPanesHeight();
-				return;
-			}
-
-			shortcutsPane.close();
-			showSecondaryPane(null);
-		};
-
-		setSettingsOpen(false);
-
-		settingsToggle.onclick = (event) => {
-			event.preventDefault();
-			event.stopPropagation();
-			setSettingsOpen(settingsPanel.classList.contains("hidden"));
-		};
+		settingsPanel.inert = true;
+		const ready = loadSettings().then(applySettingsPanelState).finally(() => {
+			settingsPanel.inert = false;
+		});
+		settingsPanel.addEventListener("account-preferences-changed", () => {
+			loadSettings().then(applySettingsPanelState).catch(console.error);
+		});
 
 		const hideSiteButton = shadow.querySelector("#hide-site");
 		const hideMenu = shadow.querySelector("#hide-menu");
 
-		setHideMenuOpen = (open) => {
+		const setHideMenuOpen = (open) => {
 			if (!hideMenu || !hideSiteButton) {
 				return;
 			}
@@ -21031,13 +22735,7 @@ ${frontPageChooserHTML()}
 				event.preventDefault();
 				event.stopPropagation();
 
-				const opening = hideMenu.hidden;
-
-				if (opening) {
-					setSettingsOpen(false);
-				}
-
-				setHideMenuOpen(opening);
+				setHideMenuOpen(hideMenu.hidden);
 			};
 
 			for (const choice of hideMenu.querySelectorAll("[data-hide-scope]")) {
@@ -21086,8 +22784,6 @@ ${frontPageChooserHTML()}
 
 			notesCount.textContent = pluralize(total, "note");
 		};
-
-		refreshNotesCount().catch(console.error);
 
 		wireSettingsUpdates(shadow, settingsPanel);
 
@@ -21144,20 +22840,6 @@ ${frontPageChooserHTML()}
 			};
 		}
 
-		settingsPanel.addEventListener("click", (event) => {
-			event.stopPropagation();
-		});
-
-		shadow.addEventListener("click", (event) => {
-			const path = event.composedPath();
-
-			if (path.includes(settingsToggle) || path.includes(settingsPanel)) {
-				return;
-			}
-
-			setSettingsOpen(false);
-		});
-
 		settingsPanel.addEventListener("change", async (event) => {
 			const sourceInput = event.target.closest("input[data-source]");
 
@@ -21179,7 +22861,7 @@ ${frontPageChooserHTML()}
 				return;
 			}
 
-			const input = event.target.closest("input[data-setting]");
+			const input = event.target.closest("input[data-setting], select[data-setting]");
 
 			if (!input) {
 				return;
@@ -21187,11 +22869,10 @@ ${frontPageChooserHTML()}
 
 			const settings = await saveSettings({
 				[input.dataset.setting]:
-					input.type === "radio" ? input.value : input.checked,
+					input.tagName === "SELECT" || input.type === "hidden" ? Number(input.value) : input.type === "radio" ? input.value : input.checked,
 			});
 
 			applySettingsPanelState(settings);
-			settlePanesHeight();
 
 			const setting = input.dataset.setting;
 
@@ -21814,29 +23495,20 @@ ${frontPageChooserHTML()}
 			},
 		});
 
-		refreshManageLists = () => Promise.all([renderBlockedList(), renderHiddenList()]);
-
-		await refreshManageLists();
-
-		for (const entry of settingsPanel.querySelectorAll(
-			".settings-link-button[data-pane]",
-		)) {
-			entry.onclick = () => {
-				showSecondaryPane(entry.dataset.pane);
-
-				if (entry.dataset.pane === "shortcuts") {
-					shortcutsPane.refresh().catch(console.error);
-				}
-			};
-		}
-
-		for (const control of [crumbBack, crumbRoot]) {
-			if (control) {
-				control.onclick = () => showSecondaryPane(null);
-			}
-		}
-
-		return { setSettingsOpen };
+		return {
+			ready,
+			open() {
+				setHideMenuOpen(false);
+				refreshNotesCount().catch(console.error);
+			},
+			show(section) {
+				if (section === "shortcuts") shortcutsPane.refresh().catch(console.error);
+				else shortcutsPane.close();
+				if (section === "sidebar") renderBlockedList().catch(console.error);
+				if (section === "sources") renderHiddenList().catch(console.error);
+			},
+			close: shortcutsPane.close,
+		};
 	}
 
 	// -------------------------
@@ -21946,12 +23618,6 @@ ${frontPageChooserHTML()}
 	display:none;
 }
 
-#panel.page-mode .settings-panel {
-	position:fixed;
-	top:46px;
-	right:8px;
-}
-
 #panel.page-mode .toast-layer {
 	position:fixed;
 	top:42px;
@@ -22013,7 +23679,6 @@ ${CHROME_CSS}
 	padding-top:0;
 }
 
-.next-up::before,
 .submission-detail::before,
 .submission + .submission::before {
 	content:"";
@@ -22742,6 +24407,36 @@ ${CHROME_CSS}
 	min-width:0;
 }
 
+.comment-attribution {
+	display:flex;
+	align-items:baseline;
+	gap:4px;
+	white-space:nowrap;
+	overflow-x:auto;
+	scrollbar-width:none;
+}
+
+.comment-attribution :is(.comment-author, .comment-source, .item-age, .comment-vote-status) {
+	min-width:0;
+	overflow:hidden;
+	text-overflow:ellipsis;
+}
+
+.comment-attribution .comment-source {
+	max-width:35%;
+}
+
+.comment-attribution :is(.comment-author, .comment-vote-status):empty,
+.comment-attribution .saved-mark {
+	display:none;
+}
+
+.comment-attribution .item-age,
+.comment-attribution .comment-attribution-actions,
+.comment-attribution .op-pill {
+	flex:none;
+}
+
 .vote-button {
 	position:relative;
 	width:10px;
@@ -23369,7 +25064,7 @@ ${appMode ? appShellOpenHTML() : ""}<div id="panel"${appMode ? ' class="app-dock
 
 ${headerHTML({ subtitle: true, minimize: !docked, browse: !appMode, hide: !appMode, settings: !appMode, title: appMode ? "Discussion" : "" })}
 ${appMode ? "" : `<div class="toast-viewport">${TOAST_HTML}</div>`}
-<div class="toast-layer"><div id="compose-dock" class="compose-dock" hidden><button id="compose-dock-close" class="compose-dock-close" type="button" aria-label="Close the composer" title="Close">&times;</button><div id="compose-dock-slot" class="compose-dock-slot"></div></div></div>
+<div class="toast-layer">${appMode ? "" : `<div id="compose-dock" class="compose-dock" hidden><button id="compose-dock-close" class="compose-dock-close" type="button" aria-label="Close the composer" title="Close">&times;</button><div id="compose-dock-slot" class="compose-dock-slot"></div></div>`}</div>
 <div id="comments">
 <div id="filter-banner" class="filter-banner hidden">
 <div class="filter-banner-head">
@@ -23389,8 +25084,9 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 </div>
 <div id="next-up" class="next-up hidden"></div>
 </div>
+${appMode ? '<div id="app-discussion-compose"></div>' : ""}
 
-</div>${appMode ? "</div></div>" : ""}
+		</div>${appMode ? "</div>" + appChinHTML() + "</div>" : settingsModalHTML()}
 `;
 
 		adoptStyles(shadow);
@@ -23408,14 +25104,9 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			host.addEventListener(type, (event) => event.stopPropagation());
 		}
 
-		const { setSettingsOpen } = await wireSettingsPanel(shadow, {
-			onAnnotationChange: refreshArticleAnnotations,
-		});
-
-		if (!appMode) {
-			shadow.querySelector("#panel").insertAdjacentHTML("afterend", settingsModalHTML());
-			wireSettingsModal(shadow);
-		}
+		const settingsControls = wireSettingsPanel(shadow, { onAnnotationChange: refreshArticleAnnotations });
+		const closeSettings = wireSettingsModal(shadow, settingsControls);
+		await settingsControls.ready;
 
 		clearFilterButton.onclick = (event) => {
 			event.preventDefault();
@@ -23602,7 +25293,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				closeBrowseRowMenus(shadow);
 				host.style.display = "none";
 				clearArticleAnnotations();
-				setSettingsOpen(false);
+				closeSettings();
 
 				if (sidebarHasDiscussion) {
 					await saveSidebarState("collapsed");
@@ -23924,12 +25615,12 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 	function replyTargets(stories = renderedDiscussions || []) {
 		const filtered =
-			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
+			activeCommentFilter?.type === "discussion" ? activeCommentFilter.keys : null;
 
 		return stories.filter(
 			(story) =>
 				getSource(story.source)?.capabilities.reply &&
-				(!filtered || story.key === filtered),
+				(!filtered || filtered.has(story.key)),
 		);
 	}
 
@@ -23948,11 +25639,12 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 	function fitSourceMenuToRoom(menu) {
 		requestAnimationFrame(() => {
-			if (menu.classList.contains("hidden")) {
+			if (!menu.isConnected || menu.classList.contains("hidden")) {
 				return;
 			}
 
-			const panel = menu.getRootNode().querySelector("#panel").getBoundingClientRect();
+			const panel = menu.closest("#panel")?.getBoundingClientRect();
+			if (!panel) return;
 			menu.style.transform = "";
 			menu.style.maxWidth = `${Math.max(0, Math.floor(panel.width - 16))}px`;
 			const box = menu.getBoundingClientRect();
@@ -23983,7 +25675,8 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			dock &&
 			!dock.hidden &&
 			outside(dock) &&
-			outside(shadow.querySelector("#comment-toggle"))
+			outside(shadow.querySelector("#comment-toggle")) &&
+			!path.some((node) => node?.classList?.contains("page-sort"))
 		) {
 			closeComposeDock(shadow);
 		}
@@ -24016,6 +25709,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const written = Boolean(
 			box.querySelector(".composer-text")?.value.trim(),
 		);
+		box.classList.toggle("has-composer-text", written);
 
 		for (const button of box.querySelectorAll(".compose-send")) {
 			if (box.dataset.loading) {
@@ -24037,6 +25731,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 	function syncComposeBox() {
 		const box =
+			sidebarUI?.shadow?.querySelector("#app-discussion-compose .compose-box") ||
 			sidebarUI?.body?.querySelector(".compose-box") ||
 			sidebarUI?.shadow?.querySelector("#compose-dock-slot .compose-box");
 		const button = box?.querySelector(".compose-send-comment");
@@ -24069,15 +25764,18 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		}
 
 		const field = box.querySelector(".composer-text");
-		const placeholder = composePlaceholder(targets.length > 0, canNote);
+		const unavailable = targets.length === 0 && !canNote && Boolean(box.closest("#app-discussion-compose"));
+		const placeholder = unavailable ? "Select a discussion to comment" : composePlaceholder(targets.length > 0, canNote);
 
+		field.readOnly = unavailable;
 		field.placeholder = placeholder;
 		field.setAttribute("aria-label", placeholder);
 	}
 
 	function mountComposeBox(ui, stories, settings, before, kept = null, { anticipateReplies = false } = {}) {
+		const bar = ui.shadow.getElementById("app-discussion-compose");
 		if (kept) {
-			ui.body.insertBefore(kept._hnewhereDock.home(), before);
+			if (!bar) ui.body.insertBefore(kept._hnewhereDock.home(), before);
 			syncComposeBox();
 			return kept;
 		}
@@ -24107,7 +25805,8 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		const box = holder.firstElementChild;
 
-		ui.body.insertBefore(box, before);
+		if (bar) bar.replaceChildren(box);
+		else ui.body.insertBefore(box, before);
 
 		const textarea = box.querySelector(".composer-text");
 		const status = box.querySelector(".composer-status");
@@ -24128,16 +25827,8 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				Math.round((textarea.scrollHeight - padding) / line),
 			);
 
-			textarea.rows = Math.min(
-				COMPOSE_MAX_ROWS,
-				Math.max(textarea.dataset.opened ? 2 : 1, used + 1),
-			);
+			textarea.rows = bar ? Math.min(5, used) : Math.min(COMPOSE_MAX_ROWS, Math.max(textarea.dataset.opened ? 2 : 1, used + 1));
 		};
-
-		if (appState) {
-			textarea.dataset.opened = "1";
-			textarea.rows = 2;
-		}
 
 		textarea.addEventListener("focus", () => {
 			if (appState) {
@@ -24169,7 +25860,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			? wireComposer(box, {
 					source: first?.source || "hn",
 					storyID: first?.id,
-					onPosted: () => {},
+					onPosted: grow,
 					onRestored: () => {
 						syncComposeSendable(box);
 						grow();
@@ -24207,6 +25898,14 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		let offered = [];
 
 		if (canComment) {
+			box.addEventListener("keydown", (event) => {
+				if (event.key !== "Escape" || menu.classList.contains("hidden")) return;
+				event.preventDefault();
+				event.stopPropagation();
+				closeMenu();
+				commentButton.focus();
+			});
+
 			menu.addEventListener("click", (event) => {
 				const choice = event.target.closest(".compose-target");
 				const story = offered.find(
@@ -24224,7 +25923,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 					.finally(() => syncComposeSendable(box));
 			});
 
-			commentButton.onclick = () => {
+			commentButton.onclick = (event) => {
 				const targets = replyTargets();
 
 				if (!targets.length) {
@@ -24252,6 +25951,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 						`<button type="button" class="compose-target" data-discussion-key="${escapeHTML(story.key)}">${discussionChoiceHTML("", about)}</button>`,
 				);
 				openMenu();
+				if (event.detail === 0) menu.querySelector("button")?.focus();
 			};
 		}
 
@@ -24280,6 +25980,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				}
 
 				textarea.value = "";
+				grow();
 				say("");
 				box._hnewhereDock?.undock();
 				startComposeSend(noteButton, "saving…", "saved");
@@ -24294,14 +25995,14 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			};
 		}
 
-		if (canNote) {
+		if (canNote && !bar) {
 			holdComposeSendWidth(box.querySelector(".compose-send-note"), [
 				"saving…",
 				"saved",
 			]);
 		}
 
-		if (canComment) {
+		if (canComment && !bar) {
 			holdComposeSendWidth(box.querySelector(".compose-send-comment"), [
 				"comment\u2026",
 				"posting…",
@@ -24312,7 +26013,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		syncComposeBox();
 		syncComposeSendable(box);
 
-		box._hnewhereDock = wireComposeDock(ui, box, composeDockLabel(canComment));
+		if (!bar) box._hnewhereDock = wireComposeDock(ui, box, composeDockLabel(canComment));
 
 		return box;
 	}
@@ -24333,7 +26034,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			: ""
 	}${
 		canComment
-			? `<button type="submit" class="composer-submit compose-send compose-send-comment" title="Add this as a comment"><span class="compose-send-label">comment</span></button>`
+			? `<button type="submit" class="composer-submit compose-send compose-send-comment" aria-label="Add a comment" title="Add this as a comment">${appState ? APP_ICON('<path d="M8 12V4m-3 3 3-3 3 3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>') : ""}<span class="compose-send-label">comment</span></button>`
 			: ""
 	}<div class="compose-targets hidden" role="menu"></div></span>
 	</div>
@@ -24843,6 +26544,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const batchSize = 5;
 
 		for (let i = 0; i < replyKeys.length; i += batchSize) {
+			if (generation !== sidebarGeneration) return;
 			const batch = replyKeys.slice(i, i + batchSize);
 
 			await Promise.all(
@@ -25191,6 +26893,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const commentCanVote =
 			!isLocalSource && Boolean(getSource(voteSourceID)?.capabilities.vote);
 		const permalink = commentPermalink(comment, discussion);
+		const age = timeAgo(comment.createdAt);
 
 		div.innerHTML = commentLayoutHTML(`
       <span class="comment-vote-slot${threadCanVote && !isLocalSource ? "" : " comment-vote-slot-empty"}">
@@ -25199,9 +26902,9 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
       data-hn-vote-story-id="${escapeHTML(String(storyID))}"
       data-hn-vote-item-id="${escapeHTML(commentID)}"></span>
       </span>`, `
-      <div class="meta">
+      <div class="meta comment-attribution">
 
-		${isLocalSource ? "" : `<span class="comment-author">${authorLinkHTML(comment.source, comment.author, comment.authorName)}</span>`}
+		${isLocalSource ? "" : `<span class="comment-author" title="${escapeHTML(comment.authorName || comment.author || "")}">${authorLinkHTML(comment.source, comment.author, comment.authorName)}</span>`}
 
 		${comment.isOP ? `<span class="op-pill">OP</span>` : ""}
 
@@ -25210,7 +26913,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 					!isLocalSource &&
 					discussion.label &&
 					sidebarSourceKeys.size > 1
-					? `<span class="comment-source">${escapeHTML(
+					? `<span class="comment-source" title="${escapeHTML(discussion.label)}">${escapeHTML(
 							liveDiscussions.has(discussion.key)
 								? discussion.baseLabel || discussion.label
 								: discussion.label,
@@ -25220,10 +26923,11 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		${
 			permalink
-				? `<a class="item-age" data-age-id="${escapeHTML(commentID)}" target="_blank" rel="noopener noreferrer" href="${escapeHTML(permalink)}">${timeAgo(comment.createdAt)}</a>`
-				: `<span class="item-age" data-age-id="${escapeHTML(commentID)}">${timeAgo(comment.createdAt)}</span>`
+				? `<a class="item-age" title="${escapeHTML(age)}" data-age-id="${escapeHTML(commentID)}" target="_blank" rel="noopener noreferrer" href="${escapeHTML(permalink)}">${escapeHTML(commentAgeLabel(age))}</a>`
+				: `<span class="item-age" title="${escapeHTML(age)}" data-age-id="${escapeHTML(commentID)}">${escapeHTML(commentAgeLabel(age))}</span>`
 		}${isSaved ? ' <span class="saved-mark">saved</span>' : ""}<span class="comment-vote-status" data-vote-status-id="${escapeHTML(commentID)}"></span>
 
+		<span class="comment-attribution-actions">
 		${
 				capabilities.reply
 					? `|
@@ -25259,6 +26963,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
       <span class="toggle">
       [–]
       </span>
+		</span>
 
       </div>`, `
       <div class="comment-content">
@@ -25276,6 +26981,9 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
       </div>
     `);
 
+		if (activeCommentFilter?.type === "discussion" && !activeCommentFilter.keys.has(discussion.key) && !container.closest(".notepad-body")) {
+			div.classList.add("comment-filter-hidden");
+		}
 		container.appendChild(div);
 
 		const content = div.querySelector(".comment-content");
@@ -25498,7 +27206,9 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			button.disabled = true;
 			button.textContent = "loading…";
 
-			const { ok, added, remaining } = await thread.expandMore(pending, context.parentKey);
+			const operation = beginSyncOperation("expansion");
+			const result = await sourceReadJob(discussion.source, "expand", [discussion.key, context.parentKey, pending], () => thread.expandMore(pending, context.parentKey), { timeout: RECOVER_CEILING_MS, operation }).finally(() => operation.finish());
+			const { ok, added, remaining } = result.status === "ok" ? result.value : { ok: false, added: [], remaining: pending };
 
 			if (requestedGeneration !== sidebarGeneration) {
 				button.disabled = false;
@@ -25604,32 +27314,197 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		else window.setTimeout(() => strip.remove(), 220);
 	}
 
-	function discussionSkeleton() {
+	const ACCOUNT_BIRB_MASKS = [
+		"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",
+	];
+
+	const ACCOUNT_BIRB_PRESETS = {
+		shape: { round: ["Round"], wide: ["Wide"], "long-bill": ["Long bill"] },
+		color: { ink: ["Ink", "#35465b"], blue: ["Ocean", "#2e6293"], moss: ["Fern", "#356854"], plum: ["Plum", "#644477"], clay: ["Clay", "#a04734"] },
+		background: { stone: ["Stone", "#e4e4db"], sky: ["Sky", "#d6eaf5"], mint: ["Mint", "#d9e9d9"], peach: ["Peach", "#f8ddc8"], lilac: ["Lilac", "#e9def2"] },
+	};
+	const DEFAULT_ACCOUNT_AVATAR = { shape: "round", color: "ink", background: "stone" };
+	const ACCOUNT_AVATAR_ICON = "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";
+
+	function discussionLoading() {
 		const waiting = document.createElement("div");
 		waiting.className = "discussion-loading";
-		const lines = [
-			"···· ······· ····· ····, ····· ········ ····.",
-			"··· ······ ··· ·····, ··· ······ ·····.",
-			"······ ··· ········ ····· ··· ······· ····.",
-			"·········! ··· ···· ···· ······ ··· ·····.",
-			"·· ···· ··· ···· ··· ··· ··········?",
-			"···, ··· ··· ···· ··· ······· ··· ······.",
-			"·· ··· ···· ··· ······· ··· ····· ····. ·· ·····.",
-			"······ ···· ··· ··· ··· ······· ······.",
-		];
-		const rows = Array.from({ length: 28 }, (_, index) => {
-			const message = lines[index % lines.length];
-			return `<div class="comment${index % 2 ? " is-reply" : ""}">${commentLayoutHTML('<span class="comment-vote-slot comment-vote-slot-empty"></span>', '<div class="meta">········ · ···· ··· | ····· | ····· | ···· [–]</div>', `<div class="comment-content"><div class="text"><p>${message}</p></div><div class="children"></div></div>`)}</div>`;
-		}).join("");
-		waiting.innerHTML = `<div class="discussion-skeleton" aria-hidden="true"><div class="discussion-skeleton-base">${rows}</div><div class="discussion-skeleton-wave">${rows}</div></div>`;
+		const poses = Object.keys(DISCUSSION_BIRD_ART);
+		const birds = [...poses, ...poses].map((pose, slot) =>
+			`<span class="discussion-bird" data-pose="${pose}" style="--bird-slot:${slot}">
+				<span class="discussion-bird-portrait">
+					<span class="discussion-bird-body"></span>
+					<span class="discussion-bird-head">
+						<span class="discussion-bird-mark"></span>
+						<span class="discussion-bird-bubble"></span>
+					</span>
+				</span>
+			</span>`
+		).join("");
+		waiting.innerHTML = `<div class="discussion-birds" aria-hidden="true">${birds}</div>`;
 		return waiting;
 	}
 
-	async function renderDiscussions(stories, ui, { arrival = true, onThreadsLoaded = null } = {}) {
+	let discussionStreamRun = 0;
+	const discussionViewCache = new Map();
+
+	function createDiscussionStream(ui, { arrival = true, onThreadsLoaded = null, refresh = false, settings = null, operation = null, replace = false } = {}) {
+		const run = ++discussionStreamRun;
+		const opened = appState?.open;
+		const page = openPageKey();
+		const current = () => run === discussionStreamRun && sidebarUI === ui && openPageKey() === page && (!appState || appState.open === opened);
+		const stories = new Map();
+		const readers = new Map();
+		const jobs = new Map();
+		const versions = new Map();
+		let painting = Promise.resolve();
+		let paintingActive = false;
+		let paintInterrupted = false;
+		let revision = 0;
+		let paintedRevision = 0;
+		let painted = false;
+		let discovering = true;
+		let progress = null;
+		const updateProgress = () => {
+			if (!current()) return;
+			const completed = [...jobs.keys()].filter((key) => readers.has(key) && !readers.get(key).checking).length;
+			const pending = jobs.size - completed;
+			const text = pending ? `Loading discussions (${completed} of ${jobs.size})…` : discovering ? "Checking sources…" : "";
+			if (!text) { finishDiscussionProgress(progress); clearSidebarStage(ui); return; }
+			if (ui.headerSubtitle) setSidebarLoadingLabel(ui, text.toLowerCase());
+			else {
+				if (!progress?.isConnected || progress.getAttribute("aria-hidden") === "true") progress = startDiscussionProgress(ui);
+				if (progress) progress.querySelector(".discussion-progress-label").textContent = text;
+			}
+		};
+		const paint = () => {
+			if (paintingActive && !paintInterrupted) {
+				paintInterrupted = true;
+				discussionRenderRun++;
+				sidebarGeneration++;
+			}
+			painting = painting.then(async () => {
+				if (!current() || revision === paintedRevision) return;
+				paintedRevision = revision;
+				const ready = disambiguateLabels([...stories.values()].filter((story) => readers.has(story.key)).sort(compareStoriesByDiscussion));
+				if (!ready.length) return;
+				const reset = replace && !painted;
+				painted = true;
+				paintingActive = true;
+				paintInterrupted = false;
+				try {
+					if (!reset && canReconcileDiscussion(ui)) await syncDiscussions(ui, ready, null, { found: ready, refresh: false, readers, streaming: true });
+					else await renderDiscussionSnapshot(ready, ui, { arrival, readers });
+				} finally { paintingActive = false; }
+				for (const [key, reader] of readers) if (reader.incomplete || reader.refreshFailed) operation?.record("thread:" + key, { status: "partial" });
+				updateProgress();
+			});
+			painting.catch(() => {});
+			return painting;
+		};
+		const offer = (rows) => {
+			if (!current()) return;
+			for (const story of rows) {
+				if (sourceReadEnabled && !sourceReadEnabled.has(story.source)) continue;
+				const previousStory = stories.get(story.key);
+				stories.set(story.key, story);
+				const version = discussionThreadVersion(story);
+				if (jobs.has(story.key) && versions.get(story.key) === version) {
+					if (readers.has(story.key) && previousStory && ["title", "score", "commentCount", "label"].some((field) => story[field] !== previousStory[field])) { revision++; paint(); }
+					continue;
+				}
+				const changed = jobs.has(story.key);
+				versions.set(story.key, version);
+				const job = loadThread(story, { force: refresh || changed, operation }).then((reader) => {
+					if (!current() || jobs.get(story.key) !== job || sourceReadEnabled && !sourceReadEnabled.has(story.source)) return;
+					const previous = readers.get(story.key);
+					readers.set(story.key, previous?.checking ? mergeThreadReaders({ ...previous, checking: false }, reader, story) : reader);
+					revision++;
+					updateProgress();
+					paint();
+				});
+				jobs.set(story.key, job);
+			}
+			if (!painted && !readers.size && !ui.body.querySelector(".discussion-loading") && !canReconcileDiscussion(ui) && stories.size) prepareDiscussionStream([...stories.values()], ui, settings);
+			updateProgress();
+		};
+		for (const story of discussionViewCache.get(page) || []) {
+			if (replace) break;
+			if (settings && !enabledSourceIds(settings, registeredSourceIds()).includes(story.source)) continue;
+			const cached = threadCache.get(story.key);
+			if (!cached || cached.reader.empty) continue;
+			stories.set(story.key, story);
+			readers.set(story.key, { ...snapshotRenderedThread(story, cached.reader), checking: true });
+			revision++;
+		}
+		if (revision) paint();
+		return {
+			offer,
+			current,
+			async finish(rows) {
+				discovering = false;
+				offer(rows);
+				await Promise.all(jobs.values());
+				if (current()) rememberRedditPage([...stories.values()], [...stories.values()].map((story) => readers.get(story.key) || emptyThreadReader()), redditReadBatch);
+				await onThreadsLoaded?.();
+				if (current()) {
+					const keys = new Set(rows.map((story) => story.key));
+					let removed = false;
+					for (const key of stories.keys()) if (!keys.has(key)) { stories.delete(key); readers.delete(key); removed = true; }
+					for (const entry of renderedComments) if (!keys.has(entry.discussionKey)) entry.element?.remove();
+					renderedComments = renderedComments.filter((entry) => keys.has(entry.discussionKey));
+					discussionViewCache.delete(page);
+					discussionViewCache.set(page, rows);
+					while (discussionViewCache.size > THREAD_CACHE_MAX) discussionViewCache.delete(discussionViewCache.keys().next().value);
+					if (removed) { revision++; await paint(); }
+				}
+				await painting;
+				if (current()) { finishDiscussionProgress(progress); clearSidebarStage(ui); }
+				return current();
+			},
+		};
+	}
+
+	function prepareDiscussionStream(stories, ui, settings) {
+		const waiting = discussionLoading();
+		ui.body.replaceChildren(waiting);
+		renderedFor = openPageKey();
+		renderedDiscussions = stories;
+		renderedComments = [];
+		const header = renderPageHeader(stories, ui.body, { page: discussionsPageTitle(stories), sort: settings?.commentSort, onSortChange: () => renderDiscussionSnapshot(stories, ui) });
+		ui.body.insertBefore(header, waiting);
+		mountFilterBanner(header, ui);
+		const details = document.createElement("div");
+		details.className = "submission-details";
+		ui.body.insertBefore(details, waiting);
+		for (const story of stories) {
+			const block = renderStory(story, details, { compose: false, title: storyTitle(story, discussionsPageTitle(stories), stories.length > 1), showTitle: true });
+			if (block) { block.classList.add("submission-detail"); block.dataset.discussionKey = story.key; block.hidden = stories.length > 1; }
+		}
+		const sort = ui.body.querySelector(".page-sort");
+		if (sort) ui.body.insertBefore(sort, waiting);
+		const composer = mountComposeBox(ui, stories, settings || DEFAULT_SETTINGS, sort || waiting);
+		if (composer) {
+			composer._hnewhereProvisional = true;
+			composer._hnewhereProvisionalSource = stories[0]?.source;
+			composer._hnewhereProvisionalURL = pageAddress();
+		}
+		setComposeLoading(composer, true);
+		for (const control of (sort || ui.shadow?.querySelector("#app-discussion-sort"))?.querySelectorAll("select, button") || []) control.disabled = true;
+	}
+
+	async function renderDiscussions(stories, ui, options = {}) {
+		return createDiscussionStream(ui, { settings: await loadSettings(), replace: true, ...options }).finish(stories);
+	}
+
+	async function renderDiscussionSnapshot(stories, ui, { arrival = true, onThreadsLoaded = null, readers = null } = {}) {
 		const run = ++discussionRenderRun;
+		const bar = ui.shadow.getElementById("app-discussion-compose");
 		const provisional = ui.body.querySelector(".compose-box");
-		const docked = dockedComposeBox(ui.shadow) || (provisional?._hnewhereProvisional ? provisional : null);
-		const kept = docked && (stories.some((story) => story.key === docked._hnewhereStoryKey) || docked._hnewhereProvisional && appState && sameURL(docked._hnewhereProvisionalURL, pageAddress())) ? docked : null;
+		const docked = bar?.firstElementChild || dockedComposeBox(ui.shadow) || (provisional?._hnewhereProvisional ? provisional : null);
+		const kept = docked && (stories.some((story) => story.key === docked._hnewhereStoryKey) || docked._hnewhereProvisional && sameURL(docked._hnewhereProvisionalURL, pageAddress())) ? docked : null;
 		if (kept?._hnewhereProvisional) {
 			kept._hnewhereStoryKey = stories.find((story) => story.source === kept._hnewhereProvisionalSource)?.key || stories[0]?.key || null;
 			delete kept._hnewhereProvisional;
@@ -25639,23 +27514,26 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		if (!kept) {
 			closeComposeDock(ui.shadow);
+			bar?.replaceChildren();
 		}
 
+		const selection = renderedFor === openPageKey() && activeCommentFilter?.type === "discussion" ? activeCommentFilter : null;
 		renderedFor = stories === renderedDiscussions ? renderedFor : openPageKey();
 		renderedDiscussions = stories;
 		liveDiscussions.clear();
 		clearArticleAnnotations();
 		clearCommentFilter({ animate: false });
+		activeCommentFilter = selection;
 		setWordmarkLocation(ui, "Discussion");
 		stopObservingNewComments();
 		renderedComments = [];
 		ui.body.innerHTML = "";
 
-		if (kept) {
+		if (kept && !bar) {
 			ui.body.appendChild(kept._hnewhereDock.home());
 		}
 
-		const waiting = discussionSkeleton();
+		const waiting = discussionLoading();
 		ui.body.appendChild(waiting);
 
 		setSidebarRestingSubtitle(ui, "");
@@ -25665,7 +27543,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const settings = await loadSettings();
 		if (generation !== sidebarGeneration || run !== discussionRenderRun) return;
 		const page = discussionsPageTitle(stories);
-		const headerOptions = { page, sort: settings.commentSort, onSortChange: () => renderDiscussions(stories, ui) };
+		const headerOptions = { page, sort: settings.commentSort, onSortChange: () => renderDiscussionSnapshot(stories, ui) };
 		let headerElement = renderPageHeader(stories, ui.body, headerOptions);
 		ui.body.insertBefore(headerElement, waiting);
 		mountFilterBanner(headerElement, ui);
@@ -25705,7 +27583,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		const threads = await Promise.all(
 			stories.map((story) =>
-				loadThread(story).then((reader) => {
+				Promise.resolve(readers?.get(story.key) || loadThread(story)).then((reader) => {
 					pending.delete(story.key);
 					updateLoadingLabel();
 					return reader;
@@ -25741,10 +27619,10 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			}
 		});
 
-		const loadStatus = new Map(stories.flatMap((story, index) => threads[index].refreshFailed ? [[story.key, "refresh-failed"]]
-			: threads[index].refreshIncomplete ? [[story.key, "refresh-incomplete"]]
-			: threads[index].empty && Number(story.commentCount) > 0 ? [[story.key, "unavailable"]]
-			: threads[index].incomplete && !threads[index].empty ? [[story.key, "incomplete"]] : []));
+		const loadStatus = new Map(stories.flatMap((story, index) => threads[index].checking ? [[story.key, "checking"]] : threads[index].refreshFailed ? [[story.key, discussionStatus("refresh-failed", threads[index])]]
+			: threads[index].refreshIncomplete ? [[story.key, discussionStatus("refresh-incomplete", threads[index])]]
+			: threads[index].empty && Number(story.commentCount) > 0 ? [[story.key, discussionStatus("unavailable", threads[index])]]
+			: threads[index].incomplete && !threads[index].empty ? [[story.key, discussionStatus("incomplete", threads[index])]] : []));
 		headerElement.remove();
 		sortRow?.remove();
 		headerElement = renderPageHeader(stories, ui.body, { ...headerOptions, loadStatus });
@@ -25757,6 +27635,10 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const comments = document.createElement("div");
 
 		comments.className = "top-level-comments discussion-entering";
+		const stageTop = waiting.firstElementChild.offsetTop - waiting.offsetTop;
+		waiting.style.setProperty("--bird-stage-top", `${stageTop}px`);
+		waiting.style.height = `${waiting.offsetHeight}px`;
+		waiting.style.bottom = "auto";
 		waiting.replaceWith(comments);
 		comments.appendChild(waiting);
 		let revealed = false;
@@ -25925,9 +27807,15 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			});
 		}
 
+		let changedStatus = false;
+		for (const [index, story] of stories.entries()) if (threads[index].incomplete && !loadStatus.has(story.key)) { loadStatus.set(story.key, discussionStatus("incomplete", threads[index])); changedStatus = true; }
+		if (changedStatus) syncDiscussionHeader(ui, stories, settings, loadStatus);
 		await persistSharedThreads(stories).catch(console.error);
 		if (generation !== sidebarGeneration || run !== discussionRenderRun) return;
-		reconcileWholeThreads(stories, ui);
+		if (reconcileWholeThreads(stories, ui)) syncDiscussionHeader(ui, stories, settings, loadStatus);
+		syncNewCommentsFirstControl(ui, entries, settings);
+		if (activeCommentFilter?.type === "discussion") applyDiscussionSelection(activeCommentFilter.keys, { animate: false, scroll: false });
+		syncFilterAffordances();
 		refreshSaveControls().catch(console.error);
 		applyPendingFocus().catch(console.error);
 		await paintCollectionTag(ui, stories, seenTimes);
@@ -25980,7 +27868,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		let corrected = false;
 
 		for (const story of stories) {
-			if (!getSource(story.source)?.threadArrivesWhole) {
+			if (Number(story.commentCount) > 0 && (!getSource(story.source)?.threadArrivesWhole || threadCache.get(story.key)?.reader?.incomplete)) {
 				continue;
 			}
 
@@ -25992,8 +27880,8 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 			const newest = newestCommentTime(renderedComments, story.key);
 
+			corrected ||= story.commentCount !== count;
 			story.commentCount = count;
-			corrected = true;
 
 			for (const block of body.querySelectorAll(".submission-detail")) {
 				if (block.dataset.discussionKey !== story.key) {
@@ -26031,6 +27919,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				"comment",
 			);
 		}
+		return corrected;
 	}
 
 	function visibleLiveLabels() {
@@ -26044,9 +27933,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			return [];
 		}
 
-		const label = liveDiscussions.get(filter.key);
-
-		return liveDiscussions.has(filter.key) ? [label].filter(Boolean) : [];
+		return [...filter.keys].map((key) => liveDiscussions.get(key)).filter(Boolean);
 	}
 
 	// #region hnewhere-test-export
@@ -26224,11 +28111,8 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		const sortRow = document.createElement("div");
 
 		sortRow.className = "page-sort";
-		sortRow.innerHTML = `<label class="page-sort-label" for="comment-sort">Sort</label>
-<select class="page-sort-select" id="comment-sort">${SORT_MODES.map(
-			(mode) =>
-				`<option value="${mode.id}"${mode.id === sort ? " selected" : ""}>${mode.label}</option>`,
-		).join("")}</select>
+		sortRow.innerHTML = `<label id="comment-sort-label" class="page-sort-label" for="comment-sort">Sort</label>
+${settingsSelectHTML("comment-sort", "", "comment-sort-label", "", SORT_MODES.map(({ id, label }) => [id, label]))}
 <span id="sort-sep" class="page-sort-sep" hidden>|</span>
 <button id="sort-new-first" class="page-sort-toggle" type="button" hidden>prioritize unread</button>`;
 
@@ -26245,7 +28129,8 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			}
 		};
 
-		sortRow.querySelector(".page-sort-select").onchange = async (event) => {
+		wireSettingsSelect(sortRow.querySelector(".settings-select"))(sort);
+		sortRow.querySelector(".settings-select input").onchange = async (event) => {
 			const next = event.target.value;
 
 			if (next === sort) {
@@ -26274,7 +28159,15 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		}
 	}
 
+	function discussionChoices(stories) {
+		return stories.flatMap((story) => {
+			const count = Number(story.commentCount) || (renderedFor === openPageKey() ? renderedCommentCount(renderedComments, story.key) : 0);
+			return count > 0 ? [{ ...story, commentCount: count }] : [];
+		});
+	}
+
 	function renderPageHeader(stories, container, options = {}) {
+		stories = discussionChoices(stories);
 		const sort = options.sort || "best";
 		const loadStatus = options.loadStatus || new Map();
 		const page = options.page ?? discussionsPageTitle(stories);
@@ -26303,7 +28196,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 <div class="page-header-title">${single ? "" : escapeHTML(page)}</div>
 <div class="page-header-meta">${
 	hasMenu
-		? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <span class="source-menu-anchor"><button type="button" class="page-header-disclosure" aria-expanded="false" aria-haspopup="true" aria-controls="source-menu"${loadStatus.size ? ` aria-label="${escapeHTML(pluralize(stories.length, "discussion"))}. Some discussions could not be loaded completely. Open sources for details."` : ""}>${stories.length}${loadStatus.size ? "*" : ""} ${stories.length === 1 ? "discussion" : "discussions"}</button>${sourceMenuHTML(stories, loadStatus)}</span>${pageSave ? '<span class="page-header-sep">|</span>' : ""}`
+	? `<span class="page-header-total">${escapeHTML(pluralize(total, "comment"))}</span> across <span class="source-menu-anchor"><button type="button" class="page-header-disclosure" aria-expanded="false" aria-controls="source-menu">${stories.length} ${stories.length === 1 ? "discussion" : "discussions"}</button>${sourceMenuHTML(stories)}</span>${pageSave ? '<span class="page-header-sep">|</span>' : ""}`
 		: ""
 }${stories.length > 1 && pageSave ? pageSave : ""}</div>
 `;
@@ -26326,6 +28219,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				return;
 			}
 
+			syncSourceMenuState(menu);
 			menu.classList.remove("hidden");
 			disclosure.setAttribute("aria-expanded", "true");
 			fitSourceMenuToRoom(menu);
@@ -26335,35 +28229,41 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		disclosure.onclick = () => setMenuOpen(menu.classList.contains("hidden"));
 
-		menu.addEventListener("click", (event) => {
-			const option = event.target.closest("input")?.closest(".source-menu-option");
+		menu.addEventListener("change", (event) => {
+			const input = event.target;
+			const option = input.closest(".source-menu-option");
 
 			if (!option) {
 				return;
 			}
 
-			const key = option.dataset.discussionKey || "";
-			const already =
-				activeCommentFilter?.type === "discussion" && activeCommentFilter.key === key;
-
-			if (!key || already) {
-				clearCommentFilter({ restore: true });
-			} else {
-				applyDiscussionFilter(key);
+			const leaves = ".source-menu-option[data-discussion-key]";
+			const scope = option.hasAttribute("data-select-all") ? menu : option.closest(".choice-sub");
+			if (!option.dataset.discussionKey) {
+				for (const leaf of scope.querySelectorAll(leaves)) {
+					leaf.querySelector("input").checked = input.checked;
+				}
 			}
 
-			syncFilterAffordances();
+			const discussions = [...menu.querySelectorAll(leaves)];
+			const checked = discussions.filter((leaf) => leaf.querySelector("input").checked);
+			const options = { animate: false, scroll: false, restore: true };
+			if (checked.length === discussions.length) clearCommentFilter(options);
+			else applyDiscussionSelection(new Set(checked.map((leaf) => leaf.dataset.discussionKey)), options);
 		});
 
 		menu.addEventListener("keydown", (event) => {
 			if (event.key === "Escape") {
+				event.preventDefault();
+				event.stopPropagation();
 				setMenuOpen(false);
 				disclosure.focus();
 			}
 		});
 
-		wrapper.addEventListener("focusout", (event) => {
-			if (!wrapper.contains(event.relatedTarget)) {
+		const menuAnchor = disclosure.closest(".source-menu-anchor");
+		menuAnchor.addEventListener("focusout", (event) => {
+			if (!menuAnchor.contains(event.relatedTarget)) {
 				setMenuOpen(false);
 			}
 		});
@@ -26404,21 +28304,17 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 
 		const disclosure = anchor.querySelector(".page-header-disclosure");
 		const menu = anchor.querySelector(".source-menu");
-		const everything = menu.querySelector(".source-menu-option:not([data-discussion-key])");
+		const everything = menu.querySelector("[data-select-all]");
 		const hint = document.createElement("div");
 
 		disclosure.innerHTML = APP_DISCUSSIONS_ICON;
-		if (menu.querySelector(".discussion-source-status")) {
-			disclosure.insertAdjacentHTML("beforeend", '<span class="discussion-source-badge" aria-hidden="true"></span>');
-		}
 		disclosure.classList.add("app-head-icon");
-		const status = menu.querySelector(".discussion-source-status") ? ". Some discussions could not be loaded; open sources for details." : "";
-		disclosure.setAttribute("aria-label", summary + status);
-		disclosure.title = summary + status;
+		disclosure.setAttribute("aria-label", summary);
+		disclosure.title = summary;
 		const title = document.createElement("div");
 
-		title.className = "settings-head app-sources-head";
-		title.innerHTML = `<span class="settings-crumb-root">Sources</span><button type="button" class="app-head-icon app-sources-sync" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button>`;
+		title.className = "app-sources-head";
+		title.innerHTML = `<span class="app-sources-title">Sources</span><button type="button" class="app-head-icon app-sources-sync" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button>`;
 		title.querySelector(".app-sources-sync").onclick = () => shadow.querySelector("#app-list-sync")?.click();
 		menu.prepend(title);
 		hint.className = "settings-option-hint app-discussion-summary";
@@ -26460,7 +28356,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 	function paintAppDiscussionSync() {
 		const shadow = appState?.ui.shadow;
 		if (!shadow) return;
-		const busy = shadow.querySelector("#app-list-sync")?.classList.contains("is-syncing") || false;
+		const busy = [...syncOperations.values()].some((operation) => operation.kind === "sync" || operation.target === openPageKey());
 		for (const button of shadow.querySelectorAll(".app-sources-sync, #app-discussion-sync-empty")) {
 			button.classList.toggle("is-syncing", busy);
 			button.disabled = busy;
@@ -26476,13 +28372,17 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 			return;
 		}
 
-		if (blocks.length === 1) {
-			blocks[0].hidden = false;
+		const choices = discussionChoices(renderedDiscussions);
+		if (choices.length < 2 && activeCommentFilter?.type !== "discussion") {
+			for (const block of blocks) {
+				block.hidden = block.dataset.discussionKey !== choices[0]?.key;
+				block.classList.remove("submission-detail-banded");
+			}
 			return;
 		}
 
-		const active =
-			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
+		const selected = activeCommentFilter?.type === "discussion" ? activeCommentFilter.keys : null;
+		const active = selected?.size === 1 ? [...selected][0] : null;
 
 		for (const block of blocks) {
 			const show = block.dataset.discussionKey === active;
@@ -26523,18 +28423,21 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		syncSubmissionDetails();
 		syncSourceBadges();
 		syncComposeBox();
+
+		const selected = activeCommentFilter?.type === "discussion" ? activeCommentFilter.keys : null;
+		for (const more of sidebarUI?.body?.querySelectorAll(".more-replies[data-discussion-key]") || []) {
+			more.classList.toggle("source-filter-hidden", Boolean(selected && !selected.has(more.dataset.discussionKey)));
+		}
 	}
 
 	function syncSourceBadges() {
 		sidebarUI?.body?.classList.toggle(
 			"discussion-filtered",
-			activeCommentFilter?.type === "discussion",
+			activeCommentFilter?.type === "discussion" && activeCommentFilter.keys.size === 1,
 		);
 
-		sidebarUI?.body?.classList.toggle("list-filtered", Boolean(activeCommentFilter));
+		sidebarUI?.body?.classList.toggle("list-filtered", Boolean(activeCommentFilter && activeCommentFilter.type !== "discussion"));
 	}
-
-	let sourceMenuSeq = 0;
 
 	function discussionChoiceLabel(story) {
 		return (
@@ -26548,7 +28451,7 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		}${live ? `<span class="live-pill">LIVE</span>` : ""}`;
 	}
 
-	function discussionChoiceGroupsHTML(stories, row) {
+	function discussionChoiceGroupsHTML(stories, row, groupToggle = null) {
 		const groups = sourceMenuGroups(
 			stories,
 			liveDiscussions.keys(),
@@ -26564,7 +28467,9 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 				}${group.sources
 					.map(
 						(source) => `<div class="choice-sub">${
-							group.sources.length > 1
+							groupToggle
+								? groupToggle(source, group.live)
+								: group.sources.length > 1
 								? `<div class="choice-sub-head">${escapeHTML(source.label)}</div>`
 								: ""
 						}${source.stories
@@ -26594,33 +28499,41 @@ ${appMode ? `<div class="browse-tabs" role="tablist">
 		}</div>`;
 	}
 
-	function sourceMenuHTML(stories, loadStatus = new Map()) {
-		const name = `source-menu-${(sourceMenuSeq += 1)}`;
-		const option = (key, about, story = null) => `
-<div class="source-menu-entry"><label class="settings-option source-menu-option"${key ? ` data-discussion-key="${escapeHTML(key)}"` : ""}>${discussionChoiceHTML(
-			`<input type="radio" name="${name}"${key ? "" : " checked"}>`,
+	function sourceMenuHTML(stories) {
+		const option = (attributes, about, story = null) => `
+<div class="source-menu-entry"><label class="settings-option source-menu-option" ${attributes}>${discussionChoiceHTML(
+			'<input type="checkbox" checked>',
 			{ ...about, count: null },
-		)}</label>${story ? discussionHintHTML(story, about.count) : ""}${story && loadStatus.has(key) ? `<div class="discussion-source-status">${loadStatus.get(key) === "refresh-failed" ? "Couldn't refresh comments. Showing previously loaded comments." : loadStatus.get(key) === "refresh-incomplete" ? "Only some comments could be refreshed. Showing previously loaded comments too." : loadStatus.get(key) === "incomplete" ? "Only some comments could be loaded." : "Couldn't load comments."} Use Sync to retry.</div>` : ""}</div>`;
+		)}</label>${story ? discussionHintHTML(story, about.count) : ""}</div>`;
 
-		return `<div class="source-menu hidden" id="source-menu" role="menu">
-<div class="choice-group">${option("", { label: "All sources" })}</div>
-${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about, story))}
+		return `<div class="source-menu hidden" id="source-menu" role="group" aria-label="Filter discussions by source">
+<div class="choice-group">${option("data-select-all", { label: "All sources" })}</div>
+${discussionChoiceGroupsHTML(
+			stories,
+			(story, about) => option(`data-discussion-key="${escapeHTML(story.key)}"`, about, story),
+			(source, live) => option(`data-source-group="${escapeHTML((live ? "live:" : "other:") + source.id)}"`, { label: source.label }),
+		)}
 </div>`;
 	}
 
+	function discussionStatus(kind, reader) {
+		return Number.isSafeInteger(reader?.archiveCount) ? { kind, archiveCount: reader.archiveCount } : kind;
+	}
+
 	function syncSourceMenuState(menu) {
-		const active =
-			activeCommentFilter?.type === "discussion" ? activeCommentFilter.key : null;
-
-		for (const option of menu.querySelectorAll(".source-menu-option")) {
-			const mine = (option.dataset.discussionKey || "") === (active || "");
+		const keys = activeCommentFilter?.type === "discussion" ? activeCommentFilter.keys : null;
+		const leaves = ".source-menu-option[data-discussion-key]";
+		for (const leaf of menu.querySelectorAll(leaves)) {
+			leaf.querySelector("input").checked = !keys || keys.has(leaf.dataset.discussionKey);
+		}
+		for (const option of menu.querySelectorAll("[data-select-all], [data-source-group]")) {
+			const scope = option.hasAttribute("data-select-all") ? menu : option.closest(".choice-sub");
+			const inputs = [...scope.querySelectorAll(`${leaves} input`)];
+			const count = inputs.filter((input) => input.checked).length;
 			const input = option.querySelector("input");
-
-			option.classList.toggle("source-menu-option-active", mine && Boolean(active));
-
-			if (input) {
-				input.checked = mine;
-			}
+			input.checked = inputs.length > 0 && count === inputs.length;
+			input.indeterminate = count > 0 && count < inputs.length;
+			input.disabled = inputs.length === 0;
 		}
 	}
 
@@ -26639,7 +28552,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		);
 	}
 
-	async function loadStories(stories) {
+	async function loadStories(stories, { strict = false } = {}) {
 		const ids = [
 			...new Set(
 				normalizeStories(stories)
@@ -26648,7 +28561,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			),
 		];
 
-		const items = await Promise.all(ids.map((id) => getItem(id)));
+		const items = await Promise.all(ids.map((id) => getItem(id, { strict })));
 
 		return items
 			.filter((item) => item && item.type === "story")
@@ -26701,12 +28614,18 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		return fragment;
 	}
 
-	function showSyncComplete() {
+	function showSyncComplete(actionId, partial = false) {
+		if (!isCurrentRedditReadNotice({ actionId }, "complete")) return;
+		if (xHelpersAwaitingClose.size) { showXCleanupNotice(); return; }
+		if (pendingReadHelpers.size) { showReadHelperCleanupNotice(); return; }
 		const ui = sidebarUI;
+		const toast = ui?.shadow?.getElementById("toast");
+		const owner = toast && toastOwners.get(toast);
+		if (toast?.classList.contains("is-showing") && (owner && owner === redditReadDisplayedNotice || owner === readHelperCleanupToastOwner && !Number.isSafeInteger(actionId))) return;
 		if (!appState && ui && isBrowsing(ui)) {
-			ui.browseSynced = true;
+			ui.browseSynced = partial ? "Partial sync" : "Synced";
 			refreshSidebarSubtitle(ui);
-		} else showToast("Synced", { kind: "system", duration: TOAST_BRIEF_MS });
+		} else showToast(partial ? "Partial sync" : "Synced", { kind: "system", duration: TOAST_BRIEF_MS });
 	}
 
 	function refreshSidebarSubtitle(ui) {
@@ -26736,7 +28655,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		if (browsing && !ui.browseSyncing && ui.browseSynced) {
 			element.classList.remove("header-subtitle-stage", "header-subtitle-loading");
 			element.classList.add("header-subtitle-quiet");
-			writeSidebarSubtitle(element, "synced");
+			writeSidebarSubtitle(element, ui.browseSynced);
 			if (!ui.browseSyncedTimer) ui.browseSyncedTimer = window.setTimeout(() => {
 				ui.browseSyncedTimer = null;
 				ui.browseSynced = false;
@@ -26937,6 +28856,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 	async function runOpenSidebar(stories, options = {}) {
 		const generation = ++sidebarGeneration;
+		let operation;
 		try {
 			const ui = await createSidebar({ pageMode: options.pageMode });
 			sidebarUI = ui;
@@ -26990,26 +28910,40 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			}
 
 			setSidebarStage(ui, "discussion");
-
-			const found = options.liveDiscover ? await discoverAll(pageAddresses(), await loadSettings(), { force: true }) : [];
 			const previous = await resolveDiscussions(stories);
-			const loaded = options.liveDiscover ? await resolveDiscussions(dedupeDiscussions([...found, ...previous]).sort(compareStoriesByDiscussion)) : previous;
-			if (options.liveDiscover && redditReadBatch?.connected) forgetThreads(loaded.filter((story) => story.source === "reddit"));
+			if (generation !== sidebarGeneration) return;
+			operation = beginSyncOperation("discussion");
+			const settings = await loadSettings();
+			const stream = createDiscussionStream(ui, { arrival: options.arrival !== false, onThreadsLoaded: options.onThreadsLoaded, settings, refresh: Boolean(options.liveDiscover), operation });
+			options.onStream?.(stream);
+			stream.offer(previous);
+			const found = options.discoveryResult ? await options.discoveryResult : options.startHidden ? previous : await discoverAll(pageAddresses(), settings, {
+				force: true, saved: previous, operation, onPartial: stream.offer,
+				known: previous.filter((story) => typeof getSource(story.source)?.recover === "function").map((story) => ({ ...story, url: story.articleURL, descendants: story.commentCount, by: story.author, time: story.createdAt })),
+			});
+			const loaded = await resolveDiscussions(found);
 
 			if (!loaded.length) {
-				throw new Error("No discussions could be loaded");
+				await stream.finish([]);
+				if (stream.current()) {
+					sidebarHasDiscussion = false;
+					renderNoDiscussion(ui, operation.outcome() !== "ok" ? "Couldn't check the sources for this page. Try Sync again." : "");
+				}
+				return;
 			}
 
-			if (generation !== sidebarGeneration) {
+			if (!stream.current()) {
 				return;
 			}
 
 			setSidebarStage(ui, "comments");
 
-			await renderDiscussions(loaded, ui, { arrival: options.arrival !== false, onThreadsLoaded: options.onThreadsLoaded });
+			await stream.finish(loaded);
 		} catch (e) {
+			operation?.record("render", { status: "unavailable" });
 			console.error(e);
 		} finally {
+			operation?.finish();
 			if (generation === sidebarGeneration) clearSidebarStage(sidebarUI);
 			stopButtonSpinner(document.getElementById("hn-restore-button"));
 		}
@@ -27737,21 +29671,23 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 
 		const container = sidebarUI?.body;
 
+		if (container) {
+			clearTimeout(container._hnewhereTransitionTimer);
+			container._hnewhereTransitionTimer = null;
+			container.classList.remove("comments-transitioning");
+		}
+
 		if (!container || options.animate === false) {
 			update();
 			return;
 		}
 
-		if (container._hnewhereTransitionTimer) {
-			clearTimeout(container._hnewhereTransitionTimer);
-		}
-
 		container.classList.add("comments-transitioning");
 		container._hnewhereTransitionTimer = window.setTimeout(() => {
+			container._hnewhereTransitionTimer = null;
 			update();
 			requestAnimationFrame(() => {
-				container.classList.remove("comments-transitioning");
-				container._hnewhereTransitionTimer = null;
+				if (!container._hnewhereTransitionTimer) container.classList.remove("comments-transitioning");
 			});
 		}, 110);
 	}
@@ -27895,6 +29831,16 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		}
 	}
 
+	function resetFilterBanner() {
+		sidebarUI?.filterBanner?.classList.add("hidden");
+		sidebarUI?.filterBanner?.classList.remove("app-pinned");
+		if (sidebarUI?.filterBannerQuote) {
+			sidebarUI.filterBannerQuote.textContent = "";
+			sidebarUI.filterBannerQuote.classList.remove("filter-banner-quote-comment", "app-focus-post");
+		}
+		syncFocusControls();
+	}
+
 	function clearCommentFilter(options = {}) {
 		activeCommentFilter = null;
 
@@ -27921,17 +29867,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			updateSubmissionVisibility(null);
 			syncFilterAffordances();
 
-			if (!paintAppPinnedDiscussion()) {
-				sidebarUI?.filterBanner?.classList.add("hidden");
-				sidebarUI?.filterBanner?.classList.remove("app-pinned");
-				if (sidebarUI?.filterBannerQuote) {
-					sidebarUI.filterBannerQuote.textContent = "";
-					sidebarUI.filterBannerQuote.classList.remove(
-						"filter-banner-quote-comment",
-						"app-focus-post",
-					);
-				}
-			}
+			if (!paintAppPinnedDiscussion()) resetFilterBanner();
 
 			restoreReadingPosition(position);
 		}, options);
@@ -30990,28 +32926,29 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		);
 	}
 
-	function applyDiscussionFilter(discussionKey, options = {}) {
+	function applyDiscussionSelection(keys, options = {}) {
+		const selected = discussionChoices(renderedDiscussions).filter((story) => keys.has(story.key));
 		const roots = renderedComments.filter(
 			(rendered) =>
-				rendered.discussionKey === discussionKey && rendered.parentId === null,
+				keys.has(rendered.discussionKey) && rendered.parentId === null,
 		);
-
-		if (!roots.length) {
-			clearCommentFilter(options);
-			return;
-		}
-
-		const story = appState
-			? (renderedDiscussions || []).find((discussion) => discussion.key === discussionKey)
-			: null;
+		const story = selected.length === 1 ? selected[0] : null;
 
 		applyFocusedDiscussion(
 			{
-				filter: { type: "discussion", key: discussionKey },
+				filter: { type: "discussion", keys },
 				directMatchIds: new Set(roots.map((rendered) => rendered.id)),
 				anchorElement: null,
-				banner: Boolean(story),
-				paintBanner: (quote) => paintDiscussionAttribution(quote, story),
+				banner: !story || Boolean(appState),
+				paintBanner: (quote) => {
+					if (story) {
+						paintDiscussionAttribution(quote, story);
+					} else {
+						quote.classList.remove("filter-banner-quote-comment", "app-focus-post");
+						quote.textContent = selected.length ? `Showing ${pluralize(selected.length, "discussion")}` : "No discussions selected.";
+					}
+				},
+				onFiltered: () => setQuoteRedundancy(null, false),
 			},
 			options,
 		);
@@ -31068,11 +33005,13 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	}
 
 	function focusedDiscussion() {
-		const only = renderedDiscussions.length === 1 ? renderedDiscussions[0] : null;
+		const choices = discussionChoices(renderedDiscussions);
+		const only = choices.length === 1 ? choices[0] : null;
 		const byKey = (key) => renderedDiscussions.find((discussion) => discussion.key === key) || null;
 
 		if (activeCommentFilter?.type === "discussion") {
-			return byKey(activeCommentFilter.key);
+			const keys = activeCommentFilter.keys;
+			return keys.size === 1 ? byKey([...keys][0]) : null;
 		}
 
 		if (activeCommentFilter?.type === "comment") {
@@ -31113,14 +33052,21 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		}
 
 		close.hidden = !activeCommentFilter;
+		const title = sidebarUI.filterBanner?.querySelector(".filter-banner-title");
+		if (title) {
+			title.textContent = activeCommentFilter?.type === "discussion" && activeCommentFilter.keys.size !== 1 ? "Filtered discussions" : "Focused discussion";
+		}
 	}
 
 	function paintAppPinnedDiscussion() {
 		const banner = sidebarUI?.filterBanner;
 		const quote = sidebarUI?.filterBannerQuote;
-		const story = appState && !activeCommentFilter && renderedDiscussions.length === 1 ? renderedDiscussions[0] : null;
+		const choices = appState && !activeCommentFilter ? discussionChoices(renderedDiscussions) : [];
+		const story = choices.length === 1 ? choices[0] : null;
 
-		if (!banner || !quote || !story) {
+		if (!banner || !quote) return false;
+		if (!story) {
+			if (banner.classList.contains("app-pinned")) resetFilterBanner();
 			return false;
 		}
 
@@ -31806,9 +33752,15 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		}
 		const meta = rendered.element.querySelector(":scope > .comment-layout > .comment-main > .meta");
 		const author = meta?.querySelector(":scope > .comment-author");
-		if (author && (previous.author !== comment.author || previous.authorName !== comment.authorName)) author.innerHTML = authorLinkHTML(comment.source, comment.author, comment.authorName);
+		if (author && (previous.author !== comment.author || previous.authorName !== comment.authorName)) {
+			author.innerHTML = authorLinkHTML(comment.source, comment.author, comment.authorName);
+			author.title = comment.authorName || comment.author || "";
+		}
 		const age = meta?.querySelector(":scope > .item-age");
-		if (age && previous.createdAt !== comment.createdAt) age.textContent = timeAgo(comment.createdAt);
+		if (age && previous.createdAt !== comment.createdAt) {
+			age.title = timeAgo(comment.createdAt);
+			age.textContent = commentAgeLabel(age.title);
+		}
 		const save = meta?.querySelector('[data-item-action="save"]');
 		if (save) {
 			if (textChanged) {
@@ -31826,7 +33778,10 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			age.before(badge, document.createTextNode(" "));
 		}
 		if (badge) {
-			if (label) { if (badge.textContent !== label) badge.textContent = label; }
+			if (label) {
+				if (badge.textContent !== label) badge.textContent = label;
+				badge.title = label;
+			}
 			else badge.remove();
 		}
 		const voteSlot = rendered.element.querySelector(":scope > .comment-layout > .comment-vote-slot");
@@ -31896,8 +33851,15 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		const body = ui.body;
 		const oldHeader = body.querySelector(":scope > .page-header");
 		const oldSort = body.querySelector(":scope > .page-sort");
+		const oldMenu = ui.shadow.querySelector(".source-menu");
+		const oldDisclosure = ui.shadow.querySelector(".page-header-disclosure");
+		const menuOpen = oldMenu && !oldMenu.classList.contains("hidden");
+		const focused = ui.shadow.activeElement;
+		const optionKey = (option) => option.dataset.discussionKey ?? option.dataset.sourceGroup ?? "";
+		const focusedOption = oldMenu?.contains(focused) && focused.closest(".source-menu-option");
+		const focusSync = oldMenu?.contains(focused) && focused.classList.contains("app-sources-sync");
 		const filterAtHeader = oldHeader?.nextElementSibling === ui.filterBanner;
-		const header = renderPageHeader(stories, body, { page: discussionsPageTitle(stories), sort: settings.commentSort, loadStatus, onSortChange: () => renderDiscussions(stories, ui) });
+		const header = renderPageHeader(stories, body, { page: discussionsPageTitle(stories), sort: settings.commentSort, loadStatus, onSortChange: () => renderDiscussionSnapshot(stories, ui) });
 		if (oldHeader) oldHeader.replaceWith(header);
 		else body.prepend(header);
 		if (filterAtHeader) mountFilterBanner(header, ui);
@@ -31919,6 +33881,16 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			if (score && story.score != null) { score.textContent = String(story.score); score.dataset.storyScore = String(story.score); }
 		}
 		syncFilterAffordances();
+		paintAppPinnedDiscussion();
+		const menu = ui.shadow.querySelector(".source-menu");
+		const disclosure = ui.shadow.querySelector(".page-header-disclosure");
+		if (menuOpen && menu) {
+			menu.classList.remove("hidden");
+			disclosure?.setAttribute("aria-expanded", "true");
+			fitSourceMenuToRoom(menu);
+		}
+		const nextFocus = focusSync ? menu?.querySelector(".app-sources-sync") : focusedOption ? [...(menu?.querySelectorAll(".source-menu-option") || [])].find((option) => optionKey(option) === optionKey(focusedOption))?.querySelector("input") : null;
+		if (nextFocus || focused && focused === oldDisclosure) (nextFocus || disclosure)?.focus({ preventScroll: true });
 	}
 
 	function syncDiscussionBookends(comments, entries, settings, lookup) {
@@ -31967,11 +33939,35 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 		return Boolean(comments && renderedFor === openPageKey() && (comments.querySelector(".comment[data-comment-id]") || !comments.querySelector(":scope > .discussion-loading")));
 	}
 
-	async function syncDiscussions(ui, stories, onThreadsLoaded = null, { found: alreadyFound = null } = {}) {
+	async function syncDiscussions(ui, stories, onThreadsLoaded = null, { found: alreadyFound = null, refresh = true, readers = null, streaming = false } = {}) {
+		if (streaming) return reconcileDiscussionSnapshot(ui, stories, null, { found: alreadyFound, refresh, readers, streaming });
+		const operation = beginSyncOperation("discussion");
+		setSidebarStage(ui, "discussion");
+		try {
+			await flushComposerDrafts(ui.shadow);
+			const settings = await loadSettings();
+			if (refresh) forgetSyncedItems(stories);
+			const stream = createDiscussionStream(ui, { settings, refresh, onThreadsLoaded, operation });
+			stream.offer(stories);
+			const found = alreadyFound || await discoverAll(pageAddresses(), settings, { force: !sharedRefreshSince, saved: stories, onPartial: stream.offer, operation });
+			const next = disambiguateLabels(dedupeDiscussions([...found, ...stories]).sort(compareStoriesByDiscussion));
+			await stream.finish(next);
+			if (!next.length && stream.current()) {
+				renderedDiscussions = [];
+				sidebarHasDiscussion = false;
+				renderNoDiscussion(ui, operation.outcome() !== "ok" ? "Couldn't check the sources for this page. Try Sync again." : "");
+			}
+		} finally { operation.finish(); }
+	}
+
+	async function reconcileDiscussionSnapshot(ui, stories, onThreadsLoaded = null, { found: alreadyFound = null, refresh = true, readers = null, streaming = false } = {}) {
+		if (!streaming) discussionStreamRun++;
+		const operation = streaming ? null : beginSyncOperation("discussion");
 		const comments = ui.body.querySelector(":scope > .top-level-comments");
 		const preserve = canReconcileDiscussion(ui);
+		const displayed = new Set(renderedDiscussions.map((story) => story.key));
 		const savedEntries = new Map(stories.map((story) => [story.key, threadCache.get(story.key)]));
-		const saved = new Map(stories.map((story) => [story.key, snapshotRenderedThread(story, savedEntries.get(story.key)?.reader)]));
+		const saved = new Map(stories.map((story) => [story.key, displayed.has(story.key) ? snapshotRenderedThread(story, savedEntries.get(story.key)?.reader) : null]));
 		const page = openPageKey();
 		const generation = ++sidebarGeneration;
 		const run = ++discussionRenderRun;
@@ -31986,10 +33982,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			if (!current()) return;
 			const settings = await loadSettings();
 			if (!current()) return;
-			const found = alreadyFound || await discoverAll(pageAddresses(), settings, { force: !sharedRefreshSince });
+			if (refresh) forgetSyncedItems(stories);
+			const found = alreadyFound || await discoverAll(pageAddresses(), settings, { force: !sharedRefreshSince, operation });
 			if (!current()) return;
 			const nextStories = disambiguateLabels(dedupeDiscussions([...found, ...stories]).sort(compareStoriesByDiscussion));
-			forgetSyncedItems(nextStories);
+			if (refresh) forgetSyncedItems(nextStories);
 			if (!preserve) {
 				forgetThreads(nextStories);
 				setSidebarStage(ui, "comments");
@@ -32011,7 +34008,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				else if (progress) progress.querySelector(".discussion-progress-label").textContent = "Loading discussions (" + completed + " of " + nextStories.length + ")…";
 			};
 			updateProgress();
-			const fresh = await Promise.all(nextStories.map((story) => loadThread(story, { force: true }).then((reader) => { completed++; updateProgress(); return reader; })));
+			const fresh = await Promise.all(nextStories.map((story) => Promise.resolve(readers?.get(story.key) || loadThread(story, { force: refresh, operation })).then((reader) => { completed++; updateProgress(); return reader; })));
 			if (current()) rememberRedditPage(nextStories, fresh, redditReadBatch);
 			onThreadsLoaded?.()?.catch(console.error);
 			finishDiscussionProgress(progress);
@@ -32019,12 +34016,15 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			const threads = nextStories.map((story, index) => {
 				const previous = saved.get(story.key);
 				const merged = mergeThreadReaders(previous, fresh[index], story);
-				if (!story.local && merged && !merged.empty) rememberThread(threadCache, story.key, merged, fresh[index].empty ? savedEntries.get(story.key)?.at || ui.syncStatus?.checkedAt || Date.now() : Date.now());
+				const at = fresh[index].empty || fresh[index].checking || fresh[index].refreshFailed
+					? savedEntries.get(story.key)?.at || ui.syncStatus?.checkedAt || Date.now()
+					: threadCache.get(story.key)?.at || Date.now();
+				if (!story.local && merged && !merged.empty) rememberThread(threadCache, story.key, merged, at);
 				return merged;
 			});
-			const loadStatus = new Map(nextStories.flatMap((story, index) => fresh[index].empty && Number(story.commentCount) > 0
-				? [[story.key, saved.get(story.key) ? "refresh-failed" : "unavailable"]]
-				: fresh[index].incomplete && !fresh[index].empty ? [[story.key, saved.get(story.key) ? "refresh-incomplete" : "incomplete"]] : []));
+			const loadStatus = new Map(nextStories.flatMap((story, index) => fresh[index].checking ? [[story.key, "checking"]] : fresh[index].refreshFailed ? [[story.key, discussionStatus("refresh-failed", fresh[index])]] : fresh[index].empty && Number(story.commentCount) > 0
+				? [[story.key, discussionStatus(saved.get(story.key) ? "refresh-failed" : "unavailable", fresh[index])]]
+				: fresh[index].incomplete && !fresh[index].empty ? [[story.key, discussionStatus(saved.get(story.key) ? "refresh-incomplete" : "incomplete", fresh[index])]] : []));
 			renderedDiscussions = nextStories;
 			sidebarSourceKeys.clear();
 			for (const story of nextStories) sidebarSourceKeys.add(story.source);
@@ -32062,7 +34062,8 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			syncNewCommentsFirstControl(ui, entries, settings);
 			await persistSharedThreads(nextStories).catch(console.error);
 			if (!current()) return;
-			reconcileWholeThreads(nextStories, ui);
+			if (reconcileWholeThreads(nextStories, ui)) syncDiscussionHeader(ui, nextStories, settings, loadStatus);
+			syncNewCommentsFirstControl(ui, entries, settings);
 			refreshSaveControls().catch(console.error);
 			applyPendingFocus().catch(console.error);
 			await paintCollectionTag(ui, nextStories, seenTimes);
@@ -32077,10 +34078,11 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 			}
 			if (appState || settings.annotations && shouldShowArticleAnnotations(settings)) await refreshArticleAnnotations();
 			if (!current()) return;
-			if (activeCommentFilter?.type === "discussion") applyDiscussionFilter(activeCommentFilter.key, { animate: false, scroll: false });
+			if (activeCommentFilter?.type === "discussion") applyDiscussionSelection(activeCommentFilter.keys, { animate: false, scroll: false });
 			else if (activeCommentFilter?.type === "comment") applyCommentFocus(activeCommentFilter.id, { animate: false, scroll: false });
 			setSidebarSyncStatus(ui, { checkedAt: threadsCheckedAt(threadCache, nextStories.map((story) => story.key), Date.now()), onSync: (releaseRead) => syncDiscussions(ui, nextStories, releaseRead) });
 		} finally {
+			operation?.finish(current() ? operation.outcome() : "cancelled");
 			finishDiscussionProgress(progress);
 			if (current()) {
 				for (const control of sortControls) if (control.isConnected) control.disabled = false;
@@ -32195,7 +34197,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 				animate: false,
 			});
 		} else if (!redrawing && activeCommentFilter?.type === "discussion") {
-			applyDiscussionFilter(activeCommentFilter.key, {
+			applyDiscussionSelection(activeCommentFilter.keys, {
 				scroll: false,
 				animate: false,
 			});
@@ -32217,6 +34219,23 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	const APP_PULL_TRIGGER = 40;
 	const APP_ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 	const APP_PULL_MAX = 96;
+
+	const APP_ICON_THEME_CSS = `
+:host {
+	--icon-fill:#fff;
+	--icon-on:var(--text);
+	--icon-knock:var(--text);
+	--icon-solid:none;
+	--icon-hollow:inline;
+}
+
+:host(.${DARK_CLASS}) {
+	--icon-on:#fff;
+	--icon-knock:var(--bg);
+	--icon-solid:inline;
+	--icon-hollow:none;
+}
+`;
 
 	const APP_ICON_CSS = `
 .app-head-icon {
@@ -32285,20 +34304,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	}
 }
 
-:host {
-	--icon-fill:#fff;
-	--icon-on:var(--text);
-	--icon-knock:var(--text);
-	--icon-solid:none;
-	--icon-hollow:inline;
-}
-
-:host(.${DARK_CLASS}) {
-	--icon-on:#fff;
-	--icon-knock:var(--bg);
-	--icon-solid:inline;
-	--icon-hollow:none;
-}
+${APP_ICON_THEME_CSS}
 `;
 
 	const SETTINGS_MODAL_CSS = `
@@ -32512,7 +34518,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	justify-content:space-between;
 	gap:6px;
 	margin-top:auto;
-	padding:6px 0 0 8px;
+	padding:6px 0 0;
 }
 
 .app-settings-nav .settings-credits-label {
@@ -32527,8 +34533,7 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 	display:inline-flex;
 	align-items:center;
 	justify-content:center;
-	width:24px;
-	height:24px;
+	padding:5px 8px;
 	border-radius:5px;
 	color:var(--meta);
 	text-decoration:none;
@@ -32566,59 +34571,697 @@ ${discussionChoiceGroupsHTML(stories, (story, about) => option(story.key, about,
 }
 
 #app-settings-content .settings-panel {
-	position:static;
-	width:auto;
 	max-width:440px;
-	max-height:none;
-	overflow:visible;
-	padding:0;
-	border:0;
-	border-radius:0;
-	background:none;
-	box-shadow:none;
-	z-index:auto;
 }
 
-#app-settings-content .settings-head,
-#app-settings-content [data-app-section="links"],
-#app-settings-modal:not([data-section="general"]) [data-app-section="general"],
-#app-settings-modal:not([data-section="appearance"]) [data-app-section="appearance"],
-#app-settings-modal:not([data-section="sidebar"]) [data-app-section="sidebar"] {
+#app-settings-modal[data-section="account"] #settings-panel,
+#app-settings-modal:not([data-section="account"]) #settings-account-sync {
 	display:none;
-}
-
-#app-settings-content .settings-panes {
-	display:block;
-	width:100%;
-	height:auto !important;
-	overflow:visible;
-	transform:none !important;
-	transition:none;
-}
-
-#app-settings-content .settings-pane {
-	width:100%;
-	visibility:visible;
-}
-
-#app-settings-content .settings-panes.is-secondary > .settings-pane-primary,
-#app-settings-content .settings-panes:not(.is-secondary) > .settings-pane-secondary {
-	display:none;
-}
-
-#app-settings-content .settings-group + .settings-group {
-	margin-top:0;
-	padding-top:0;
-	border-top:0;
 }
 
 #app-settings-content .settings-group {
 	margin-bottom:12px;
 }
+
+
+.app-settings-tab.app-account-tab {
+	gap:8px;
+	margin-bottom:6px;
+	padding:8px;
+	border:0;
+	border-radius:8px;
+	white-space:normal;
+}
+
+.app-account-avatar {
+	--avatar-size:29px;
+	width:var(--avatar-size);
+	height:var(--avatar-size);
+	flex:0 0 var(--avatar-size);
+	display:grid;
+	place-items:center;
+	border-radius:50%;
+	background:var(--birb-background, #e4e4db);
+	color:var(--birb-color, #35465b);
+}
+
+.app-account-avatar::before {
+	content:"";
+	width:76%;
+	height:76%;
+	background:currentColor;
+	-webkit-mask:var(--birb-mask) center / contain no-repeat;
+	mask:var(--birb-mask) center / contain no-repeat;
+}
+
+.app-account-avatar.account-default-avatar {
+	background:#1d5a37 url(data:image/png;base64,${ACCOUNT_AVATAR_ICON}) center / cover no-repeat;
+}
+
+.account-default-avatar::before {
+	content:none;
+}
+
+${Object.keys(ACCOUNT_BIRB_PRESETS.shape).map((shape, index) => `[data-birb-shape="${shape}"] { --birb-mask:url(data:image/webp;base64,${ACCOUNT_BIRB_MASKS[index]}); }`).join("\n")}
+
+.app-account-tab-text {
+	min-width:0;
+	display:grid;
+	gap:2px;
+}
+
+.app-account-tab-title {
+	font-weight:600;
+	line-height:1.15;
+	overflow:hidden;
+	text-overflow:ellipsis;
+	white-space:nowrap;
+}
+
+.app-account-tab-subtitle {
+	color:var(--meta);
+	font-size:10px;
+	font-weight:400;
+	line-height:1.2;
+	overflow:hidden;
+	text-overflow:ellipsis;
+	white-space:nowrap;
+}
+
+#settings-account-sync {
+	--account-section-gap:12px;
+	display:flex;
+	flex-direction:column;
+	min-height:100%;
+}
+
+#settings-account-sync .account-section {
+	padding-block:var(--account-section-gap);
+	border-top:1px solid var(--surface-divider);
+	overflow-wrap:anywhere;
+}
+
+#settings-account-sync .account-section > :first-child {
+	margin-top:0;
+}
+
+#settings-account-sync .account-section > :last-child {
+	margin-bottom:0;
+}
+
+#settings-account-sync :is(.account-section-heading, .account-row-label) {
+	margin:0;
+	font-size:12px;
+	font-weight:600;
+	line-height:1.3;
+}
+
+#settings-account-sync :is(.account-section-heading, .account-step-heading) + .appearance-row-hint {
+	margin-top:4px;
+}
+
+#settings-account-sync .account-setting-row {
+	display:grid;
+	grid-template-columns:minmax(0, 1fr) auto;
+	align-items:center;
+	gap:6px 12px;
+}
+
+#settings-account-sync .account-setting-row p.appearance-row-hint {
+	margin:2px 0 0;
+}
+
+#settings-account-sync .account-setting-row :is(.account-row-label, .appearance-row-hint) {
+	display:block;
+}
+
+:is(#account-stage, #account-manage-stage) {
+	position:relative;
+	box-sizing:border-box;
+}
+
+#account-stage {
+	border-top:1px solid var(--surface-divider);
+	display:flex;
+	flex:1 0 auto;
+	flex-direction:column;
+}
+
+:is(#account-stage, #account-manage-stage).is-sliding {
+	overflow:hidden;
+}
+
+:is(#account-stage, #account-manage-stage) > .is-outgoing {
+	position:absolute;
+	inset:0 0 auto;
+}
+
+:is(#account-stage, #account-manage-stage) > [data-account-step]:focus {
+	outline:none;
+}
+
+#settings-account-sync #account-stage > .account-section,
+#settings-account-sync #account-signed-in > .account-section:first-child {
+	border-top:0;
+}
+
+#account-stage > .account-flow {
+	padding-inline:max(0px, calc((100% - 310px) / 2));
+}
+
+#account-signed-out:not([hidden]) {
+	display:flex;
+	flex:1 0 auto;
+	flex-direction:column;
+	justify-content:center;
+}
+
+#account-stage > #account-signed-out.is-outgoing {
+	bottom:0;
+}
+
+#account-sign-in-actions {
+	display:grid;
+	gap:12px;
+}
+
+#account-entry, #account-manage-email {
+	display:grid;
+	gap:8px;
+}
+
+#account-entry-email, #account-email-input, #account-key {
+	display:block;
+	width:100%;
+}
+
+#settings-account-sync #account-stage > .account-section .account-section-heading {
+	font-size:16px;
+}
+
+#settings-account-sync .account-flow .account-field {
+	max-width:none;
+}
+
+#settings-account-sync .account-actions.account-step-actions {
+	display:grid;
+}
+
+.account-step-secondary {
+	justify-self:center;
+	text-align:center;
+}
+
+#settings-account-sync .account-back {
+	margin:0 0 12px;
+	border-color:transparent;
+	background:transparent;
+	color:var(--surface-text);
+	padding-inline:0;
+}
+
+.account-step-heading {
+	display:flex;
+	align-items:center;
+	gap:8px;
+}
+
+#settings-account-sync .account-step-heading .account-back:not([hidden]) {
+	display:inline-grid;
+	place-items:center;
+	flex:0 0 26px;
+	box-sizing:border-box;
+	width:26px;
+	height:26px;
+	margin:0;
+	padding:0;
+	border-radius:50%;
+	border-color:var(--button-border);
+	background:var(--button-bg);
+}
+
+.account-step-heading .account-back svg {
+	width:14px;
+	height:14px;
+}
+
+#account-sign-in-divider {
+	display:flex;
+	align-items:center;
+	gap:8px;
+	color:var(--muted);
+	font-size:11px;
+}
+
+#account-sign-in-divider::before, #account-sign-in-divider::after {
+	content:"";
+	height:1px;
+	flex:1;
+	background:var(--surface-divider);
+}
+
+#account-profile {
+	padding-block:var(--account-section-gap);
+}
+
+.account-profile-identity {
+	display:grid;
+	justify-items:center;
+	gap:4px;
+	text-align:center;
+	overflow-wrap:anywhere;
+}
+
+.account-avatar-frame {
+	position:relative;
+}
+
+#account-profile-avatar {
+	--avatar-size:94px;
+}
+
+.account-profile-title {
+	margin:5px 0 0;
+	font-size:16px;
+	font-weight:650;
+	line-height:1.25;
+}
+
+#account-email-value {
+	margin:0;
+	color:var(--muted);
+	font-size:12px;
+	line-height:1.4;
+}
+
+#account-manage-stage {
+	margin-top:var(--account-section-gap);
+}
+
+#account-manage-code #account-code-field ::slotted(input) {
+	min-height:26px;
+}
+
+#account-manage-privacy .settings-option {
+	margin-top:8px;
+}
+
+#account-manage-email .settings-field-label {
+	display:block;
+}
+
+#account-email-hint {
+	margin:0;
+}
+
+#account-email-input::placeholder {
+	color:var(--muted);
+	opacity:1;
+}
+
+.account-email-row {
+	display:flex;
+	align-items:flex-start;
+}
+
+.account-email-row > :first-child {
+	flex:1;
+	min-width:0;
+}
+
+#account-email-update {
+	display:grid;
+	grid-template-columns:0fr;
+	opacity:0;
+	visibility:hidden;
+	transition:grid-template-columns .22s ease, margin-inline-start .22s ease, opacity .18s ease, visibility 0s .22s;
+}
+
+#account-email-update:not([inert]) {
+	grid-template-columns:1fr;
+	margin-inline-start:8px;
+	opacity:1;
+	visibility:visible;
+	transition-delay:0s;
+}
+
+#account-email-update > div {
+	min-width:0;
+	overflow:hidden;
+}
+
+#account-send-code {
+	min-width:64px;
+	white-space:nowrap;
+}
+
+#account-send-code:focus-visible {
+	outline-offset:-3px;
+}
+
+#account-status-send-code {
+	contain:inline-size;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	#account-email-update {
+		transition:none;
+	}
+}
+
+#account-avatar-editor .account-section-heading + fieldset {
+	margin-top:var(--account-section-gap);
+}
+
+.account-birb-editor fieldset {
+	min-width:0;
+	margin:0 0 9px;
+	padding:0;
+	border:0;
+}
+
+.account-birb-editor legend {
+	margin-bottom:5px;
+	padding:0;
+	font-size:11px;
+	font-weight:600;
+}
+
+.account-birb-options {
+	display:flex;
+	flex-wrap:wrap;
+	gap:6px;
+}
+
+.account-birb-option {
+	position:relative;
+	display:inline-grid;
+	place-items:center;
+	width:34px;
+	height:34px;
+}
+
+.account-birb-editor .account-birb-option input {
+	position:absolute;
+	inset:0;
+	width:100%;
+	height:100%;
+	margin:0;
+	opacity:0;
+	cursor:pointer;
+}
+
+.account-birb-option .app-account-avatar {
+	--avatar-size:24px;
+}
+
+.account-birb-option > span {
+	pointer-events:none;
+}
+
+.account-birb-swatch {
+	width:22px;
+	height:22px;
+	box-sizing:border-box;
+	border:1px solid var(--surface-divider);
+	border-radius:50%;
+	background:var(--birb-swatch);
+}
+
+.account-birb-option input:checked + span {
+	outline:2px solid var(--accent);
+	outline-offset:2px;
+}
+
+.account-birb-option:has(input:focus-visible) {
+	outline:2px solid var(--accent);
+	outline-offset:1px;
+	border-radius:5px;
+}
+
+#account-actions {
+	display:flex;
+	align-items:center;
+	gap:6px;
+	flex-wrap:wrap;
+}
+
+#account-manage {
+	margin-inline-end:auto;
+}
+
+#settings-account-sync .account-field {
+	display:grid;
+	margin:8px 0;
+	gap:4px;
+	max-width:32ch;
+}
+
+#settings-account-sync .account-device-list {
+	display:grid;
+	margin:4px 0 0;
+	padding:0;
+	list-style:none;
+}
+
+#settings-account-sync .account-device-list li {
+	padding:7px 0;
+}
+
+#settings-account-sync .account-device-list li:last-child {
+	padding-bottom:0;
+}
+
+#settings-account-sync .account-device-list li + li {
+	border-top:1px solid var(--surface-divider);
+}
+
+.account-device-status {
+	grid-column:1 / -1;
+}
+
+@media (max-width:700px) {
+	.app-settings-tab.app-account-tab {
+		max-width:186px;
+		margin-bottom:0;
+		padding:5px 7px;
+	}
+	.app-account-tab-subtitle {
+		display:none;
+	}
+	.app-account-avatar {
+		--avatar-size:23px;
+	}
+}
+
+#settings-account-sync .account-actions {
+	display:flex;
+	flex-wrap:wrap;
+	gap:6px;
+	margin-top:10px;
+}
+
+#settings-account-sync input:not([type="checkbox"]),
+#account-code-field ::slotted(input) {
+	box-sizing:border-box;
+	min-width:0;
+	padding:4px 7px;
+	border:1px solid var(--button-border);
+	border-radius:5px;
+	background:var(--button-bg);
+	color:var(--button-text);
+	font:inherit;
+	line-height:1.25;
+}
+
+#settings-account-sync input:not([type="checkbox"], .settings-form-control) {
+	min-height:30px;
+}
+
+#account-code-field ::slotted(input) {
+	display:block;
+	width:100%;
+	min-height:50px;
+	font:600 24px/1.1 ui-monospace, SFMono-Regular, monospace;
+	font-variant-numeric:tabular-nums;
+	text-align:center;
+	letter-spacing:.12em;
+}
+
+#account-manage-code #account-code-field ::slotted(input) {
+	font:inherit;
+	line-height:1.25;
+}
+
+#account-resend-control[data-tip] button {
+	pointer-events:none;
+}
+
+#account-recovery-code {
+	display:block;
+	box-sizing:border-box;
+	margin:8px 0 4px;
+	padding:8px 12px;
+	border:1px solid var(--surface-divider);
+	border-radius:8px;
+	background:var(--button-bg);
+	color:var(--surface-text);
+	font:600 15px/1.5 ui-monospace, SFMono-Regular, monospace;
+	overflow-wrap:anywhere;
+	user-select:all;
+}
+
+.account-key-links {
+	display:grid;
+	justify-items:end;
+	margin-bottom:12px;
+}
+
+.account-key-links button,
+#settings-account-sync .settings-button.account-text-action {
+	padding:4px 0;
+	background:none;
+	border:0;
+	color:var(--muted);
+	font:inherit;
+	cursor:pointer;
+	text-decoration:underline;
+	text-decoration-style:dotted;
+	text-underline-offset:2px;
+}
+
+#settings-account-sync .settings-button.account-text-action {
+	font-size:11px;
+}
+
+#settings-account-sync .account-feedback[data-error]:not(:empty) {
+	box-sizing:border-box;
+	width:100%;
+	margin:0;
+	padding:5px 8px;
+	border-radius:0 0 7px 7px;
+	background:#191919;
+	color:#fff;
+	font-size:11px;
+	line-height:1.35;
+}
+
+:is(#account-status-email, #account-status-send-code) {
+	overflow:hidden;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	:is(#account-status-email, #account-status-send-code) .account-feedback[data-error]:not(:empty) {
+		animation:account-field-toast-in .32s cubic-bezier(.16,1,.3,1) both;
+	}
+}
+
+@keyframes account-field-toast-in {
+	from { opacity:0; transform:translateY(-100%); }
+	to { opacity:1; transform:translateY(0); }
+}
+
+.account-chin-anchor {
+	width:0;
+	min-width:100%;
+}
+
+.account-sync-control {
+	display:grid;
+}
+
+#account-sync-now {
+	min-width:78px;
+	white-space:nowrap;
+}
+
+#settings-account-sync #account-avatar-edit {
+	position:absolute;
+	inset:0;
+	width:100%;
+	padding:0;
+	border:0;
+	border-radius:50%;
+	background:none;
+	overflow:hidden;
+}
+
+#account-avatar-edit .account-avatar-edit-label {
+	position:absolute;
+	inset:auto 0 0;
+	padding:3px 0 5px;
+	background:rgba(20,20,20,.72);
+	color:white;
+	font-size:11px;
+	line-height:1.25;
+	opacity:0;
+	pointer-events:none;
+}
+
+#account-avatar-edit:is(:hover, :focus-visible) .account-avatar-edit-label {
+	opacity:1;
+}
+
+#account-delete-section button.account-danger {
+	border-color:#c12b24;
+	color:white;
+	background:#c12b24;
+}
+
+#account-delete-section button.account-danger:not(:disabled):hover {
+	border-color:#a5221c;
+	background:#a5221c;
+}
+
+.account-confirmation-row {
+	display:flex;
+	align-items:flex-start;
+	gap:6px;
+	flex-wrap:wrap;
+}
+
+.account-confirmation-row > p {
+	flex:1 1 13ch;
+	align-self:center;
+	margin:0 auto 0 0;
+}
+
+.account-confirmation-row .account-confirmation-action {
+	display:grid;
+	min-width:0;
+}
+
+#settings-account-sync .account-inner-section {
+	margin-top:var(--account-section-gap);
+	padding-top:var(--account-section-gap);
+	border-top:1px solid var(--surface-divider);
+}
+
+#settings-account-sync a {
+	cursor:pointer;
+	color:var(--surface-text);
+}
+
+#account-conflict {
+	margin:var(--account-section-gap) 0 0;
+}
+
+#account-conflict .appearance-row-label {
+	margin:0;
+}
+
+#account-status:empty {
+	display:none;
+}
+
 `;
 
 	const SETTINGS_MODAL_PHONE_CSS = `
-	#app-settings-content .appearance-row {
+	#account-code-field ::slotted(input) {
+		font-size:inherit;
+	}
+
+	#app-settings-content .appearance-row:not(.settings-sync-schedule):not(.settings-action-row) {
 		grid-template-columns:minmax(0, 1fr);
 		gap:10px;
 	}
@@ -33479,7 +36122,15 @@ ${SEARCH_CSS}
 }
 `;
 
+	const APP_CONTROL_PATHS = {
+		save: '<path fill="currentColor" d="M3 2.75C3 1.784 3.784 1 4.75 1h6.5c.966 0 1.75.784 1.75 1.75v11.5a.75.75 0 0 1-1.227.579L8 11.722l-3.773 3.107A.75.75 0 0 1 3 14.25V2.75Z"/>',
+		discussion: '<path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/>',
+		style: '<path fill="currentColor" d="M6.71 10H2.332l-.874 2.498a.75.75 0 0 1-1.415-.496l3.39-9.688a1.217 1.217 0 0 1 2.302.018l3.227 9.681a.75.75 0 0 1-1.423.474Zm3.13-4.358C10.53 4.374 11.87 4 13 4c1.5 0 3 .939 3 2.601v5.649a.75.75 0 0 1-1.448.275C13.995 12.82 13.3 13 12.5 13c-.77 0-1.514-.231-2.078-.709-.577-.488-.922-1.199-.922-2.041 0-.694.265-1.411.887-1.944C11 7.78 11.88 7.5 13 7.5h1.5v-.899c0-.54-.5-1.101-1.5-1.101-.869 0-1.528.282-1.84.858a.75.75 0 1 1-1.32-.716ZM6.21 8.5 4.574 3.594 2.857 8.5Zm8.29.5H13c-.881 0-1.375.22-1.637.444-.253.217-.363.5-.363.806 0 .408.155.697.39.896.249.21.63.354 1.11.354.732 0 1.26-.209 1.588-.449.35-.257.412-.495.412-.551Z"/>',
+	};
+	const APP_CONTROL_MASK = (name) => `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">${APP_CONTROL_PATHS[name]}</svg>`)}")`;
+
 	const APP_CSS = `
+${[THEME_CSS, APP_ICON_THEME_CSS].join("\n").replace(/:host(?:\(([^)]+)\))?/g, (_, state = "") => "#panel.app-docked" + state)}
 :host {
 	display:block;
 	position:absolute;
@@ -33519,6 +36170,156 @@ ${SEARCH_CSS}
 
 #app [hidden] {
 	display:none !important;
+}
+
+#app-chin {
+	display:none;
+}
+
+@media (min-width: 701px) {
+	#app-chin {
+		position:fixed;
+		right:calc(6px + env(safe-area-inset-right, 0px));
+		bottom:0;
+		left:env(safe-area-inset-left, 0px);
+		z-index:20;
+		display:flex;
+		align-items:center;
+		justify-content:space-between;
+		box-sizing:border-box;
+		height:calc(30px + env(safe-area-inset-bottom, 0px));
+		padding-bottom:env(safe-area-inset-bottom, 0px);
+		background:var(--rail-bg);
+		color:var(--rail-fg);
+	}
+
+	#app-chin-brand {
+		flex:0 0 var(--rail-column);
+		display:flex;
+		align-items:center;
+		justify-content:center;
+		gap:3px;
+		box-sizing:border-box;
+		width:var(--rail-column);
+		height:30px;
+		color:inherit;
+		font:8px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		text-decoration:none;
+		white-space:nowrap;
+	}
+
+	#app-chin-brand svg {
+		flex:0 0 12px;
+		width:12px;
+		height:12px;
+		color:rgba(0,0,0,.26);
+		filter:drop-shadow(0 1px 0 rgba(255,255,255,.12));
+	}
+
+	#app-chin-brand:focus-visible {
+		outline:1px solid currentColor;
+		outline-offset:-2px;
+	}
+
+	#app-chin-actions {
+		--chin-gap:6px;
+		display:flex;
+		align-items:center;
+		gap:var(--chin-gap);
+		height:30px;
+		padding-right:6px;
+	}
+
+	#app #app-chin .app-pane-middle {
+		position:static;
+		display:flex;
+		flex-direction:row;
+		align-items:center;
+		gap:var(--chin-gap);
+		height:30px;
+		pointer-events:auto;
+	}
+
+	#app-chin .app-head-group {
+		gap:var(--chin-gap);
+	}
+
+	#app #app-chin #app-toggle-discussion {
+		position:relative;
+		display:inline-flex;
+		top:auto;
+		right:auto;
+		left:auto;
+		gap:5px;
+		width:auto;
+		min-width:24px;
+		padding:0 5px;
+	}
+
+	#app-chin #app-toggle-discussion .rail-badge {
+		position:static;
+		display:block;
+		min-width:0;
+		padding:0;
+		border-radius:0;
+		background:none;
+		box-shadow:none;
+		color:inherit;
+		font-size:11px;
+		font-weight:600;
+		line-height:1;
+		font-variant-numeric:tabular-nums;
+	}
+
+	#app-chin #app-toggle-discussion .rail-badge:empty {
+		display:none;
+	}
+
+	#app #app-chin #app-toggle-discussion:disabled {
+		display:none;
+	}
+
+	#app #app-chin .app-head-icon {
+		display:inline-flex;
+		align-items:center;
+		justify-content:center;
+		border-radius:4px;
+		background:none;
+		box-shadow:none;
+		color:var(--rail-fg);
+		--icon-on:var(--rail-fg);
+		--icon-fill:var(--rail-fg);
+		--icon-knock:var(--rail-bg);
+	}
+
+	#app #app-chin .app-head-icon:is(:hover, :active, .item-action-on, [aria-pressed="true"], [aria-expanded="true"]) {
+		background:rgba(255,255,255,.18);
+	}
+
+	#app-chin .app-head-icon > svg {
+		flex:none;
+		width:13px;
+		height:13px;
+	}
+
+	#app-chin #app-toggle-discussion > svg {
+		width:15px;
+		height:15px;
+	}
+
+	#app-chin #app-view-toggle > svg {
+		transform:translateY(.6px);
+	}
+
+	#app-chin #app-article-actions [data-item-action="save"]::after {
+		width:11px;
+		height:11px;
+	}
+
+	#app #app-chin #app-article-actions .item-action-on {
+		background:var(--rail-fg);
+		color:var(--rail-bg);
+	}
 }
 
 .app-onboarding {
@@ -33761,6 +36562,21 @@ ${TIP_CSS}
 
 #app-rail-sources .rail-button {
 	box-shadow:none;
+	cursor:grab;
+	touch-action:pan-y;
+	user-select:none;
+	-webkit-user-select:none;
+	-webkit-touch-callout:none;
+}
+
+#app-rail-sources.is-reordering,
+#app-rail-sources.is-reordering .rail-button {
+	cursor:grabbing;
+}
+
+#app-rail-sources .rail-button.is-dragging {
+	opacity:.5;
+	outline:1px dashed var(--rail-fg);
 }
 
 #app-rail-sources::-webkit-scrollbar {
@@ -33833,6 +36649,7 @@ ${TIP_CSS}
 
 #app-list {
 	position:relative;
+	box-sizing:border-box;
 	border-radius:12px 0 0 12px;
 	overflow:hidden;
 	display:flex;
@@ -33888,85 +36705,22 @@ ${APP_ICON_CSS}
 	display:none;
 }
 
-#app-article-actions .app-head-votes {
-	display:inline-flex;
-	align-items:center;
-	width:auto;
+#app-article-actions .app-head-icon::before {
+	content:none;
 }
 
-#app-article-actions .app-head-votes.hidden {
-	display:none;
-}
-
-#app-article-actions .vote-button {
-	display:inline-flex;
-	align-items:center;
-	justify-content:center;
-	box-sizing:border-box;
-	width:24px;
-	min-width:24px;
-	height:24px;
-	margin:0;
-	border-radius:5px;
-	color:var(--meta);
-	cursor:pointer;
-}
-
-#app-article-actions .app-head-icon::before,
 #app-article-actions .app-head-icon::after {
 	content:"";
 	position:absolute;
 	top:50%;
 	left:50%;
-	width:15px;
-	height:15px;
-	margin:-7.5px 0 0 -7.5px;
-	border:0;
-	pointer-events:none;
-}
-
-#app-article-actions .app-head-icon::before {
-	display:var(--pressed-layer);
-	background:var(--icon-fill);
-	-webkit-mask:var(--head-fill) center / 15px 15px no-repeat;
-	mask:var(--head-fill) center / 15px 15px no-repeat;
-}
-
-#app-article-actions .app-head-icon::after {
+	width:13px;
+	height:13px;
+	transform:translate(-50%, -50%);
 	background:currentColor;
-	-webkit-mask:var(--head-outline) center / 15px 15px no-repeat;
-	mask:var(--head-outline) center / 15px 15px no-repeat;
-}
-
-#app-article-actions .app-head-thumb-up {
-	--head-fill:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.77 7.43 7.24 2.58c0.95 0 1.8 0.76 1.8 1.8 0 0.57 -0.19 1.33 -0.38 1.99h3.52c0.95 0 1.61 0.85 1.42 1.8l-0.85 4.27c-0.19 0.76 -0.76 1.23 -1.52 1.23H4.77z' fill='black' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E");
-	--head-outline:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.77 7.43 7.24 2.58c0.95 0 1.8 0.76 1.8 1.8 0 0.57 -0.19 1.33 -0.38 1.99h3.52c0.95 0 1.61 0.85 1.42 1.8l-0.85 4.27c-0.19 0.76 -0.76 1.23 -1.52 1.23H4.77zM2.11 7.43h2.66v6.27H2.68a0.57 0.57 0 0 1 -0.57 -0.57z' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3C/svg%3E");
-}
-
-#app-article-actions .app-head-thumb-down {
-	--head-fill:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.77 7.43 7.24 2.58c0.95 0 1.8 0.76 1.8 1.8 0 0.57 -0.19 1.33 -0.38 1.99h3.52c0.95 0 1.61 0.85 1.42 1.8l-0.85 4.27c-0.19 0.76 -0.76 1.23 -1.52 1.23H4.77z' fill='black' stroke='black' stroke-width='1.4' stroke-linejoin='round' transform='rotate%28180 8 8%29'/%3E%3C/svg%3E");
-	--head-outline:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.77 7.43 7.24 2.58c0.95 0 1.8 0.76 1.8 1.8 0 0.57 -0.19 1.33 -0.38 1.99h3.52c0.95 0 1.61 0.85 1.42 1.8l-0.85 4.27c-0.19 0.76 -0.76 1.23 -1.52 1.23H4.77zM2.11 7.43h2.66v6.27H2.68a0.57 0.57 0 0 1 -0.57 -0.57z' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round' transform='rotate%28180 8 8%29'/%3E%3C/svg%3E");
-}
-
-#app-article-actions .app-vote-more {
-	position:fixed;
-	z-index:30;
-	padding-top:8px;
-	transform:translateX(-50%);
-	pointer-events:auto;
-}
-
-#app-article-actions .app-vote-more[hidden] {
-	display:none;
-}
-
-#app-article-actions .app-vote-more .vote-button {
-	width:30px;
-	height:30px;
-	border:1px solid var(--surface-border);
-	border-radius:7px;
-	background:var(--surface);
-	box-shadow:0 6px 18px rgba(0,0,0,.16);
+	-webkit-mask:var(--head-icon) center / contain no-repeat;
+	mask:var(--head-icon) center / contain no-repeat;
+	pointer-events:none;
 }
 
 .app-head-group {
@@ -33986,8 +36740,7 @@ ${APP_ICON_CSS}
 }
 
 #app-article-actions [data-item-action="save"] {
-	--head-fill:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.8 2.5h6.4a.8.8 0 0 1 .8.8v10.1L8 10.8l-4 2.6V3.3a.8.8 0 0 1 .8-.8z' fill='black' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-	--head-outline:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.8 2.5h6.4a.8.8 0 0 1 .8.8v10.1L8 10.8l-4 2.6V3.3a.8.8 0 0 1 .8-.8z' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+	--head-icon:${APP_CONTROL_MASK("save")};
 }
 
 .app-view-toggle {
@@ -34046,6 +36799,16 @@ ${APP_ICON_CSS}
 .app-view-menu .appearance-row-hint {
 	width:0;
 	min-width:100%;
+}
+
+.app-view-original {
+	padding-top:10px;
+	border-top:1px solid var(--surface-divider);
+}
+
+.app-view-original a {
+	color:inherit;
+	text-underline-offset:2px;
 }
 
 .app-view-menu .settings-field[hidden] {
@@ -34137,6 +36900,10 @@ ${APP_ICON_CSS}
 }
 
 @media (min-width: 701px) {
+	#app-list > .app-pane-head {
+		padding-right:24px;
+	}
+
 	#app-article > .app-pane-head {
 		position:absolute;
 		top:0;
@@ -34144,10 +36911,12 @@ ${APP_ICON_CSS}
 		left:0;
 		z-index:3;
 		display:block;
-		height:0;
+		bottom:0;
+		height:auto;
 		padding:0;
 		border:0;
 		overflow:visible;
+		pointer-events:none;
 	}
 
 	#app-article:has(#app-article-body[data-mode="reader"]) > .app-pane-head::before {
@@ -34163,10 +36932,16 @@ ${APP_ICON_CSS}
 
 	.app-pane-middle {
 		position:absolute;
-		top:5.5px;
-		right:0;
-		left:0;
+		bottom:12px;
+		right:12px;
+		flex-direction:column;
+		gap:8px;
 		pointer-events:none;
+	}
+
+	.app-pane-middle .app-article-actions,
+	.app-pane-middle .app-head-reading {
+		display:contents;
 	}
 
 	.app-pane-middle :is(button, a) {
@@ -34176,13 +36951,23 @@ ${APP_ICON_CSS}
 	#app-toggle-list {
 		position:absolute;
 		top:5.5px;
-		left:13.5px;
+		left:-12px;
+		pointer-events:auto;
 	}
 
 	#app-toggle-discussion {
 		position:absolute;
 		top:5.5px;
-		right:13.5px;
+		right:-12px;
+		pointer-events:auto;
+	}
+
+	#app.list-hidden #app-toggle-list {
+		left:12px;
+	}
+
+	#app.discussion-hidden #app-toggle-discussion {
+		right:12px;
 	}
 }
 
@@ -34195,25 +36980,21 @@ ${APP_ICON_CSS}
 	display:none;
 }
 
-#app.list-hidden #app-article {
+#app.list-hidden #app-reading {
 	border-radius:12px 0 0 12px;
-	overflow:hidden;
+	overflow:clip;
 }
 
-#app.list-moving #app-list,
-#app.discussion-moving #panel.app-docked {
+#app.list-moving #app-list {
+	display:flex;
 	position:absolute;
 	top:0;
 	bottom:0;
+	left:0;
 	z-index:6;
 	width:var(--pane-width) !important;
 	max-width:none;
 	height:auto;
-	transition:transform .22s ease;
-}
-
-#app.list-moving #app-list {
-	left:var(--rail-column);
 }
 
 #app.list-moving #app-rail {
@@ -34222,15 +37003,7 @@ ${APP_ICON_CSS}
 }
 
 #app.discussion-moving #panel.app-docked {
-	right:0;
-}
-
-#app.list-out #app-list {
-	transform:translateX(calc(-100% - var(--rail-column)));
-}
-
-#app.discussion-out #panel.app-docked {
-	transform:translateX(100%);
+	display:flex;
 }
 
 .app-pane-actions {
@@ -34239,37 +37012,11 @@ ${APP_ICON_CSS}
 	gap:10px;
 }
 
-.app-pane-actions .item-action-link,
-#app-article-open {
+.app-pane-actions .item-action-link {
 	font-size:10px;
 }
 
 ${SETTINGS_MODAL_CSS}
-
-#app > .settings-panel {
-	position:fixed;
-	top:auto;
-	right:auto;
-	z-index:30;
-}
-
-.app-settings-arrow {
-	position:fixed;
-	z-index:31;
-	width:12px;
-	height:12px;
-	box-sizing:border-box;
-	background:var(--surface);
-	border-left:1px solid var(--surface-border);
-	border-bottom:1px solid var(--surface-border);
-	transform:rotate(45deg);
-	pointer-events:none;
-}
-
-.app-settings-arrow.is-down {
-	border-left:0;
-	border-right:1px solid var(--surface-border);
-}
 
 #app-list-body {
 	flex:1 1 auto;
@@ -34630,9 +37377,8 @@ ${READER_LIST_CSS}
 	letter-spacing:0;
 }
 
-#panel.app-docked .app-discussion-sort .page-sort-select {
-	padding:1px 2px;
-	font-size:10px;
+#panel.app-docked .app-discussion-sort .settings-select {
+	min-width:67px;
 }
 
 #panel.app-docked:has(#comments-content.list-filtered) .app-discussion-sort {
@@ -34746,31 +37492,6 @@ ${READER_LIST_CSS}
 	display:none;
 }
 
-#app-article-actions .app-vote-more::after,
-#panel.app-docked .compose-dock::before {
-	content:"";
-	position:absolute;
-	z-index:1;
-	box-sizing:border-box;
-	width:10px;
-	height:10px;
-	border-top:1px solid var(--surface-border);
-	border-left:1px solid var(--surface-border);
-	background:var(--surface);
-	transform:rotate(45deg);
-	pointer-events:none;
-}
-
-#app-article-actions .app-vote-more::after {
-	top:3px;
-	left:calc(50% - 5px);
-}
-
-#panel.app-docked .compose-dock::before {
-	top:-6px;
-	right:var(--arrow-right, 10px);
-}
-
 .app-discussion-meta svg {
 	display:block;
 }
@@ -34809,30 +37530,6 @@ ${READER_LIST_CSS}
 	#panel.app-docked .app-discussion-meta .source-menu-entry:hover {
 		background:none;
 	}
-}
-
-#panel.app-docked .app-discussion-meta .source-menu-option input[type="radio"] {
-	display:inline-grid;
-	place-content:center;
-	width:15px;
-	height:15px;
-	border:1px solid var(--help-border);
-	background:var(--help-bg);
-	box-shadow:none;
-}
-
-#panel.app-docked .app-discussion-meta .source-menu-option input[type="radio"]:checked {
-	border-color:transparent;
-	background:var(--accent);
-	box-shadow:none;
-}
-
-#panel.app-docked .app-discussion-meta .source-menu-option input[type="radio"]:checked::after {
-	content:"";
-	width:5px;
-	height:5px;
-	border-radius:50%;
-	background:var(--accent-ink);
 }
 
 #panel.app-docked .app-discussion-meta .choice-label {
@@ -34991,85 +37688,143 @@ ${READER_LIST_CSS}
 	gap:2px;
 }
 
-#panel.app-docked #comment-toggle {
-	display:inline-flex;
+#panel.app-docked > header:has(.source-menu:not(.hidden)) {
+	z-index:6;
+}
+
+#app-discussion-compose {
+	position:relative;
+	z-index:5;
+	flex:none;
+	padding:5px 10px max(5px, env(safe-area-inset-bottom, 0px));
+	border-top:1px solid var(--border-soft);
+	background:var(--bg);
+}
+
+#app-discussion-compose:empty {
+	display:none;
+}
+
+#app-discussion-compose .compose-box {
+	margin:0 auto;
+}
+
+#app-discussion-compose .compose-field {
+	display:grid;
+	grid-template-columns:minmax(0, 1fr) auto;
+	align-items:end;
+	gap:0 3px;
+	border-radius:15px;
+	padding:2px 3px;
+}
+
+#app-discussion-compose .composer-text {
+	padding:3px 7px;
+	resize:none;
+	border-radius:16px;
+	font-size:12px;
+	line-height:17px;
+}
+
+#app-discussion-compose .composer-actions {
+	display:contents;
+}
+
+#app-discussion-compose .compose-send-row {
+	grid-column:2;
+	grid-row:1;
 	align-items:center;
-	justify-content:center;
-	box-sizing:border-box;
-	width:24px;
-	height:24px;
-	padding:0;
-	border:0;
-	border-radius:5px;
-	cursor:pointer;
+	gap:3px;
+	max-width:0;
+	opacity:0;
+	visibility:hidden;
+	transform:translateX(4px);
+	transition:max-width .18s ease, opacity .16s ease, transform .16s ease, visibility 0s .18s;
 }
 
-#panel.app-docked #comment-toggle svg {
-	width:15px;
-	height:15px;
-}
-
-#panel.app-docked #comment-toggle[hidden] {
-	display:none;
-}
-
-#panel.app-docked #comment-toggle .app-icon-on {
-	display:var(--pressed-solid);
-}
-
-#panel.app-docked #comment-toggle .app-icon-off {
-	display:var(--pressed-hollow);
-}
-
-#panel.app-docked #comment-toggle .app-icon-off path {
-	fill:var(--pressed-fill);
-}
-
-#panel.app-docked .compose-dock {
-	top:45px;
-	left:auto;
-	right:8px;
-	bottom:auto;
-	width:calc(100% - 16px);
-	max-width:520px;
+#app-discussion-compose .compose-box:is(.has-composer-text, :has(.is-sending)) .compose-send-row {
+	max-width:180px;
+	opacity:1;
+	visibility:visible;
 	transform:none;
-	transform-origin:calc(100% - 12px) 0;
-	box-shadow:0 10px 28px rgba(0,0,0,.22);
+	transition-delay:0s;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-	#panel.app-docked .compose-dock:not([hidden]) {
-		animation:bc-app-composer-grow .18s ease-out;
-	}
+#app-discussion-compose .compose-send {
+	height:23px;
+	padding:0 7px;
+	font-size:10px;
 }
 
-@keyframes bc-app-composer-grow {
-	from {
-		opacity:0;
-		transform:scale(.2);
-	}
-
-	to {
-		opacity:1;
-		transform:none;
-	}
+#app-discussion-compose .compose-send-comment {
+	padding:0 4px;
+	min-width:23px;
 }
 
-#panel.app-docked .compose-dock-close {
+#app-discussion-compose .compose-send-comment > svg {
+	flex:none;
+	width:14px;
+	height:14px;
+}
+
+#app-discussion-compose .compose-send-comment:not(.is-sending) .compose-send-label {
+	position:absolute;
+	width:1px;
+	height:1px;
+	overflow:hidden;
+	clip-path:inset(50%);
+}
+
+#app-discussion-compose .compose-send-comment.is-sending > svg {
 	display:none;
 }
 
-#panel.app-docked #comments-content > .compose-box,
-#panel.app-docked #comments-content > .compose-spacer {
+#app-discussion-compose .composer-help-toggle,
+#app-discussion-compose .composer-status {
+	grid-row:2;
+	margin:2px 8px 4px;
+}
+
+#app-discussion-compose .composer-help-toggle {
+	justify-self:start;
+}
+
+#app-discussion-compose .composer-status {
+	grid-column:1 / -1;
+}
+
+#app-discussion-compose .compose-field:has(.composer-status:not(.hidden)) .composer-help-toggle {
+	grid-row:3;
+}
+
+#app-discussion-compose .compose-box:not(.has-composer-text, :has(.composer-help:not(.hidden))) .composer-help-toggle {
 	display:none;
 }
 
-#panel.app-docked .header-actions button:not(.app-head-icon) {
+#app-discussion-compose .compose-targets {
+	top:auto;
+	bottom:calc(100% + 6px);
+}
+
+@media (max-width:700px) {
+	#app-discussion-compose .composer-text {
+		font-size:16px;
+		line-height:19px;
+	}
+}
+
+@media (prefers-reduced-motion:reduce) {
+	#app-discussion-compose .compose-send-row {
+		transition:none;
+	}
+}
+
+#panel.app-docked .header-actions button:not(.app-head-icon):where(:not(.settings-select button)) {
 	color:var(--meta);
 }
 
 @media (hover: hover) {
-	#panel.app-docked .header-actions button:not(.app-head-icon):hover {
+	#panel.app-docked .header-actions button:not(.app-head-icon):where(:not(.settings-select button)):hover {
 		color:var(--text);
 	}
 }
@@ -35099,7 +37854,7 @@ ${READER_LIST_CSS}
 	flex:0 0 auto;
 	height:100%;
 	min-height:0;
-	max-width:calc(100vw - 428px - var(--app-list-width, 300px));
+	max-width:calc(100% - 372px);
 	box-shadow:none;
 	z-index:auto;
 }
@@ -35160,14 +37915,10 @@ ${READER_LIST_CSS}
 		background:var(--hover-tint);
 		color:var(--text);
 	}
-
-	#app-article-actions .app-vote-more .app-head-icon:hover:where(:not(:disabled)) {
-		background:linear-gradient(var(--hover-tint), var(--hover-tint)) var(--surface);
-	}
 }
 
 #app .app-head-icon:active:where(:not(:disabled)),
-#app .app-head-icon:is([aria-pressed="true"], [aria-expanded="true"], .item-action-on, .vote-button-active, .is-on, .is-open, .is-filtered):where(:not(:disabled)) {
+#app .app-head-icon:is([aria-pressed="true"], [aria-expanded="true"], .item-action-on, .is-on, .is-open, .is-filtered):where(:not(:disabled)) {
 	background:var(--active-tint);
 	color:var(--icon-on);
 	--pressed-fill:var(--icon-fill);
@@ -35177,18 +37928,9 @@ ${READER_LIST_CSS}
 	--pressed-hollow:var(--icon-hollow);
 }
 
-#app-article-actions .app-vote-more .app-head-icon:active:where(:not(:disabled)),
-#app-article-actions .app-vote-more .app-head-icon.vote-button-active:where(:not(:disabled)) {
-	background:linear-gradient(var(--active-tint), var(--active-tint)) var(--surface);
-}
-
 @media (hover: hover) {
-	#app .app-head-icon:is([aria-pressed="true"], [aria-expanded="true"], .item-action-on, .vote-button-active, .is-on, .is-open, .is-filtered):is(:hover, :active):where(:not(:disabled)) {
+	#app .app-head-icon:is([aria-pressed="true"], [aria-expanded="true"], .item-action-on, .is-on, .is-open, .is-filtered):is(:hover, :active):where(:not(:disabled)) {
 		background:linear-gradient(var(--hover-tint), var(--hover-tint)) var(--active-tint);
-	}
-
-	#app-article-actions .app-vote-more .app-head-icon.vote-button-active:is(:hover, :active):where(:not(:disabled)) {
-		background:linear-gradient(var(--hover-tint), var(--hover-tint)), linear-gradient(var(--active-tint), var(--active-tint)) var(--surface);
 	}
 }
 
@@ -35204,7 +37946,7 @@ ${READER_LIST_CSS}
 #app-bar-like[aria-pressed="true"],
 #app-bar-discussion[aria-pressed="true"],
 #app-bar-view[aria-expanded="true"],
-#app #app-article .app-article-disc:is(.item-action-on, .vote-button-active, [aria-expanded="true"]) {
+#app #app-article .app-article-disc:is(.item-action-on, [aria-expanded="true"]) {
 	background:var(--rail-bg);
 	box-shadow:0 1px 2px rgba(0,0,0,.16), 0 6px 14px rgba(0,0,0,.16);
 	color:var(--rail-fg);
@@ -35222,7 +37964,7 @@ ${READER_LIST_CSS}
 		background:linear-gradient(var(--hover-tint), var(--hover-tint)) var(--surface);
 	}
 
-	#app #app-article .app-article-disc:is(.item-action-on, .vote-button-active, [aria-expanded="true"]):hover,
+	#app #app-article .app-article-disc:is(.item-action-on, [aria-expanded="true"]):hover,
 	#app #app-article .app-stack-button:is([aria-pressed="true"], [aria-expanded="true"]):hover {
 		background:linear-gradient(var(--hover-tint), var(--hover-tint)) var(--rail-bg);
 	}
@@ -35234,7 +37976,7 @@ ${READER_LIST_CSS}
 	--pressed-layer:none;
 }
 
-#app #app-article .app-article-disc:is(.item-action-on, .vote-button-active, [aria-expanded="true"]):active,
+#app #app-article .app-article-disc:is(.item-action-on, [aria-expanded="true"]):active,
 #app #app-article .app-stack-button:is([aria-pressed="true"], [aria-expanded="true"]):active {
 	background:linear-gradient(var(--active-tint), var(--active-tint)) var(--rail-bg);
 	--pressed-layer:block;
@@ -35312,15 +38054,6 @@ header .item-action-link {
 		flex:1 1 0;
 	}
 
-	#app.list-hidden #app-reading {
-		border-radius:12px 0 0 12px;
-		overflow:hidden;
-	}
-
-	#app.list-hidden.has-story:not(.discussion-hidden) #app-article {
-		border-bottom-left-radius:0;
-	}
-
 	#app-article > .app-pane-head {
 		bottom:0;
 		height:auto;
@@ -35372,13 +38105,8 @@ header .item-action-link {
 	}
 
 	#app.discussion-moving #panel.app-docked {
-		top:var(--app-article-height);
-		left:0;
-		width:auto !important;
-	}
-
-	#app.discussion-out #panel.app-docked {
-		transform:translateY(100%);
+		flex:0 0 var(--pane-height);
+		height:var(--pane-height);
 	}
 }
 
@@ -35723,7 +38451,7 @@ header .item-action-link {
 		position:fixed;
 		top:calc(72px + env(safe-area-inset-top, 0px));
 		right:0;
-		bottom:0;
+		bottom:var(--app-keyboard, 0px);
 		left:0;
 		z-index:20;
 		flex-direction:column;
@@ -35860,8 +38588,12 @@ header .item-action-link {
 		padding-bottom:calc(88px + env(safe-area-inset-bottom, 0px));
 	}
 
-	#app[data-stage="discussion"] #panel.app-docked .compose-dock {
-		top:45px;
+	#app[data-stage="discussion"] :is(#app-bar, #app-bar-back) {
+		bottom:calc(var(--app-keyboard, 0px) + max(calc(16px + env(safe-area-inset-bottom, 0px)), calc(var(--app-compose-height, 0px) + 8px)));
+	}
+
+	#app[data-stage="discussion"]:has(#panel :is(.source-menu, .compose-targets):not(.hidden)) :is(#app-bar, #app-bar-back) {
+		visibility:hidden;
 	}
 
 	#app[data-moving="article"] #app-article {
@@ -36560,9 +39292,6 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	const APP_MARK_READ_ICON =
 		'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><circle cx="4.55" cy="9.3" r="2.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11.45" cy="9.3" r="2.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M7.01 7.76Q8 6.76 8.99 7.76" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M1.92 8.07L4.15 3.8l0.85 0.6M14.08 8.07L11.85 3.8l-0.85 0.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-	const APP_COMMENT_ICON =
-		'<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><g class="app-icon-off"><path d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><circle cx="5.3" cy="6.75" r=".85" fill="currentColor"/><circle cx="8" cy="6.75" r=".85" fill="currentColor"/><circle cx="10.7" cy="6.75" r=".85" fill="currentColor"/></g><g class="app-icon-on"><path fill="currentColor" fill-rule="evenodd" d="M3.7 2.5h8.6A1.5 1.5 0 0 1 13.8 4v5.5A1.5 1.5 0 0 1 12.3 11H7.6l-2.5 2.4V11H3.7A1.5 1.5 0 0 1 2.2 9.5V4A1.5 1.5 0 0 1 3.7 2.5ZM5.3 5.8a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Zm2.7 0a.95.95 0 1 0 0 1.9.95.95 0 0 0 0-1.9Z"/></g></svg>';
-
 	const APP_DISCUSSIONS_ICON = '<span class="app-people" aria-hidden="true"></span>';
 
 	const APP_CLOSE_ICON =
@@ -36580,7 +39309,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		`<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="${divider}" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>`;
 
 	const APP_LIST_TOGGLE_ICON = APP_PANE_ICON("M6.3 3.3v9.4");
-	const APP_DISCUSSION_TOGGLE_ICON = APP_PANE_ICON("M9.7 3.3v9.4");
+	const APP_DISCUSSION_TOGGLE_ICON = APP_ICON(APP_CONTROL_PATHS.discussion);
 
 	const APP_BRAND_ICON = (d, rule = "nonzero", size = 18) =>
 		`<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" focusable="false"><path fill="currentColor" fill-rule="${rule}" d="${d}"/></svg>`;
@@ -36622,6 +39351,2217 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		return `<button class="rail-button${APP_FILLED_VIEWS.includes(id) ? " rail-empty" : ""}" type="button" data-app-view="${escapeHTML(id)}" data-tip="${escapeHTML(label)}" aria-label="${escapeHTML(label)}" aria-pressed="false"><span class="rail-icon">${inner}<span class="rail-badge" data-app-badge="${escapeHTML(id)}"></span></span><span class="rail-label" aria-hidden="true">${escapeHTML(label)}</span></button>`;
 	}
 
+	// -------------------------
+	// Account sync
+	// -------------------------
+
+	function emptyAccountSnapshot() {
+		return { version: 1, settings: {}, preferences: {}, collection: { folders: [], saved: [], notes: [] } };
+	}
+
+	function accountObject(value) {
+		return value !== null && typeof value === 'object' && !Array.isArray(value);
+	}
+
+	function accountValuesEqual(a, b) {
+		if (a === b) return true;
+		if (Array.isArray(a)) {
+			return Array.isArray(b) && a.length === b.length && a.every((value, index) => accountValuesEqual(value, b[index]));
+		}
+		if (!accountObject(a) || !accountObject(b)) return false;
+		const keys = Object.keys(a);
+		return keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && accountValuesEqual(a[key], b[key]));
+	}
+
+	function accountRecordMap(records, field) {
+		const entries = new Map();
+		for (const record of records ?? []) {
+			if (record?.[field]) entries.set(record[field], record);
+		}
+		return entries;
+	}
+
+	function accountNoteIndexFields(document) {
+		const { notes, count, updated, excerpt, ...fields } = document ?? {};
+		return fields;
+	}
+
+	function accountLatestNote(notes) {
+		let latest;
+		let latestTime = -Infinity;
+		for (const note of notes ?? []) {
+			const timestamp = Number(note.edited || note.created) || 0;
+			const time = timestamp > 1e11 ? Math.floor(timestamp / 1000) : timestamp;
+			if (time > latestTime) {
+				latest = note;
+				latestTime = time;
+			}
+		}
+		return latest;
+	}
+
+	function mergeAccountSnapshots(base, local, remote, preference = '') {
+		const conflicts = [];
+
+		function mergeValue(before, here, there, path) {
+			if (accountValuesEqual(here, there) || accountValuesEqual(before, there)) return here;
+			if (accountValuesEqual(before, here)) return there;
+			conflicts.push({
+				path,
+				local: here === undefined ? 'deleted' : 'changed',
+				remote: there === undefined ? 'deleted' : 'changed',
+			});
+			return preference === 'remote' ? there : here;
+		}
+
+		function mergeEntries(before, here, there, path, merge) {
+			const entries = [];
+			for (const key of new Set([...here.keys(), ...there.keys(), ...before.keys()])) {
+				const value = merge(before.get(key), here.get(key), there.get(key), [...path, String(key)]);
+				if (value !== undefined) entries.push([key, value]);
+			}
+			return entries;
+		}
+
+		function mergeFields(before, here, there, path, merge = mergeValue) {
+			const maps = [before, here, there].map((fields) => new Map(Object.entries(fields ?? {})));
+			return Object.fromEntries(mergeEntries(...maps, path, merge));
+		}
+
+		function mergeRecords(before, here, there, path, field, merge = mergeValue) {
+			const maps = [before, here, there].map((records) => accountRecordMap(records, field));
+			return mergeEntries(...maps, path, merge).map(([, value]) => value);
+		}
+
+		function mergeSetting(before, here, there, path) {
+			if (path[1] !== 'sources' || [before, here, there].some((value) => value !== undefined && !accountObject(value))) {
+				return mergeValue(before, here, there, path);
+			}
+			const sources = mergeFields(before, here, there, path);
+			const present = mergeValue(before !== undefined, here !== undefined, there !== undefined, path);
+			return present || Object.keys(sources).length ? sources : undefined;
+		}
+
+		function mergeNoteDocument(before, here, there, path) {
+			const notes = mergeRecords(before?.notes, here?.notes, there?.notes, [...path, 'notes'], 'id');
+			if (!notes.length) return undefined;
+
+			const fields = mergeFields(
+				accountNoteIndexFields(before),
+				accountNoteIndexFields(here ?? before),
+				accountNoteIndexFields(there ?? before),
+				path,
+			);
+			const documents = [here, there].filter(Boolean);
+			const latest = accountLatestNote(notes);
+			const excerptSources = documents.filter((document) => Object.hasOwn(document, 'excerpt'));
+			if (excerptSources.length) {
+				const match = excerptSources.find((document) => accountValuesEqual(accountLatestNote(document.notes), latest));
+				fields.excerpt = match?.excerpt ?? latestNoteExcerpt([latest]);
+			}
+			for (const document of documents) {
+				if (document.updated !== undefined && (fields.updated === undefined || Number(document.updated) > Number(fields.updated))) {
+					fields.updated = document.updated;
+				}
+			}
+			return { ...fields, count: notes.length, notes };
+		}
+
+		const document = {
+			version: 1,
+			settings: mergeFields(base?.settings, local?.settings, remote?.settings, ['settings'], mergeSetting),
+			preferences: mergeFields(base?.preferences, local?.preferences, remote?.preferences, ['preferences']),
+			collection: {
+				folders: mergeRecords(base?.collection?.folders, local?.collection?.folders, remote?.collection?.folders, ['collection', 'folders'], 'key'),
+				saved: mergeRecords(base?.collection?.saved, local?.collection?.saved, remote?.collection?.saved, ['collection', 'saved'], 'key'),
+				notes: mergeRecords(base?.collection?.notes, local?.collection?.notes, remote?.collection?.notes, ['collection', 'notes'], 'key', mergeNoteDocument),
+			},
+		};
+		const baseQueue = base?.collection?.queue;
+		const localQueue = local?.collection?.queue;
+		const remoteQueue = remote?.collection?.queue;
+		if (baseQueue || localQueue || remoteQueue) {
+			document.collection.queue = mergeRecords(baseQueue, localQueue ?? baseQueue, remoteQueue ?? baseQueue, ['collection', 'queue'], 'key', (before, here, there, path) => {
+				if (!here || !there || here.addedAt !== there.addedAt) return mergeValue(before, here, there, path);
+				return { ...there, ...here, readAt: Math.max(Number(here.readAt) || 0, Number(there.readAt) || 0) || null };
+			});
+		}
+		return { document, conflicts };
+	}
+
+	const ACCOUNT_SYNC_KEY = "HNewhere:account_sync";
+	const ACCOUNT_SYNC_PROTOCOL = 2;
+	const ACCOUNT_EDIT_KEY = "HNewhere:account_pending_edit";
+	const ACCOUNT_CHECKPOINT_KEY = "HNewhere:account_sync_checkpoint";
+	const ACCOUNT_DATA_OWNER_KEY = "HNewhere:account_data_owner";
+	const ACCOUNT_DEVICE_KEY = "HNewhere:account_device";
+	const ACCOUNT_AVATAR_PREFIX = "HNewhere:account_avatar:";
+	const ACCOUNT_DIAGNOSTICS_PREFIX = "HNewhere:account_diagnostics:";
+	const ACCOUNT_PREFERENCES = {
+		blockedSites: STORAGE.blocked,
+		railOrder: STORAGE.appRailOrder,
+		readerFont: STORAGE.readerFont,
+		readerPage: STORAGE.readerPage,
+		shortcuts: STORAGE.shortcuts,
+	};
+	const ACCOUNT_SETTINGS = [...Object.keys(DEFAULT_SETTINGS), "readerCompact"];
+	const ACCOUNT_SETTING_STORE_KEYS = new Set([STORAGE.settings, ...Object.values(ACCOUNT_PREFERENCES)]);
+	const ACCOUNT_COLLECTION_STORE_KEYS = new Set([STORAGE.saved, STORAGE.collected, STORAGE.queue, NOTES_INDEX_KEY]);
+	const ACCOUNT_FOLDER_FIELDS = ["key", "url", "title", "site", "addedAt", "unwatched"];
+	const ACCOUNT_SAVED_FIELDS = ["key", "url", "title", "site", "kind", "context", "by", "time", "focus", "source", "id", "parent", "text", "page", "addedAt"];
+	const ACCOUNT_NOTE_INDEX_FIELDS = ["key", "kind", "id", "url", "title", "excerpt", "count", "updated", "page"];
+	const ACCOUNT_NOTE_FIELDS = ["id", "created", "edited", "text", "exact", "prefix", "suffix", "page", "url"];
+	const ACCOUNT_QUEUE_STATE = ["key", "id", "url", "source", "permalink", "addedAt", "readAt"];
+	const ACCOUNT_QUEUE_FIELDS = [...ACCOUNT_QUEUE_STATE, "title", "by", "time", "site", "score", "descendants"];
+	const ACCOUNT_CIPHERTEXT_LIMIT = 1_398_102;
+	const ACCOUNT_DOCUMENT_LIMIT = 32 * 1024 * 1024;
+	let queueAccountEditSync = () => {};
+
+	async function accountDataOwner(session) {
+		const owner = await GM.getValue(ACCOUNT_DATA_OWNER_KEY, null);
+		if (owner) return owner;
+		if (session?.base) return session.account;
+		return (await GM.getValue(ACCOUNT_CHECKPOINT_KEY, null))?.account || session?.account || null;
+	}
+
+	function accountScopedPreference(key) {
+		return [ACCOUNT_AVATAR_PREFIX, ACCOUNT_DIAGNOSTICS_PREFIX].find((prefix) => key.startsWith(prefix));
+	}
+
+	function accountSettingsStoreKey(key) {
+		return ACCOUNT_SETTING_STORE_KEYS.has(key) || Boolean(accountScopedPreference(key));
+	}
+
+	function accountPortableStoreKey(key) {
+		return accountSettingsStoreKey(key) || ACCOUNT_COLLECTION_STORE_KEYS.has(key) || key.startsWith(NOTES_PREFIX);
+	}
+
+	function accountPreferenceKeys(account) {
+		return { ...ACCOUNT_PREFERENCES, avatar: ACCOUNT_AVATAR_PREFIX + account, shareDiagnostics: ACCOUNT_DIAGNOSTICS_PREFIX + account };
+	}
+
+	function accountQueueRecords(value) {
+		return migrateQueueKeys(withoutLegacyPlaceholders(value), normalizeURL)
+			.filter((entry) => entry?.id && typeof entry.key === "string" && entry.key && /^https?:\/\//i.test(entry.url))
+			.map((entry) => ({ ...accountFields(entry, ACCOUNT_QUEUE_FIELDS), readAt: entry.readAt || null }));
+	}
+
+	function accountEditValue(key, value) {
+		if (key === STORAGE.settings) return accountSettingsShape(value);
+		if (key === STORAGE.queue) return accountQueueRecords(value).map((entry) => accountFields(entry, ACCOUNT_QUEUE_STATE));
+		if (key === STORAGE.collected) return (Array.isArray(value) ? value : []).map((entry) => accountFields(entry, ACCOUNT_FOLDER_FIELDS));
+		return value;
+	}
+
+	function accountQueuesEqual(left = [], right = []) {
+		const indexed = accountRecordMap(right, "key");
+		return left.length === right.length && left.every((entry) => accountValuesEqual(accountFields(entry, ACCOUNT_QUEUE_STATE), accountFields(indexed.get(entry.key), ACCOUNT_QUEUE_STATE)));
+	}
+
+	function accountSnapshotsEqual(left, right) {
+		if (!accountValuesEqual(left.settings, right.settings) || !accountValuesEqual(left.preferences, right.preferences)) return false;
+		const recordsEqual = (a, b, field, equal = accountValuesEqual) => {
+			const byKey = accountRecordMap(b, field);
+			return a.length === b.length && a.every((entry) => equal(entry, byKey.get(entry[field])));
+		};
+		const { saved, folders, notes } = left.collection;
+		return recordsEqual(saved, right.collection.saved, "key") &&
+			recordsEqual(folders, right.collection.folders, "key") &&
+			accountQueuesEqual(left.collection.queue, right.collection.queue) &&
+			recordsEqual(notes, right.collection.notes, "key", (a, b) => b &&
+				accountValuesEqual(accountNoteIndexFields(a), accountNoteIndexFields(b)) &&
+				recordsEqual(a.notes, b.notes, "id"));
+	}
+
+	function accountFields(record, fields) {
+		return Object.fromEntries(fields.filter((field) => record && Object.hasOwn(record, field) && record[field] !== undefined).map((field) => [field, record[field]]));
+	}
+
+	function accountNoteKey(entry) {
+		return ["url", "pdf"].includes(entry?.kind) && typeof entry.id === "string" &&
+			entry.id.length > 0 && entry.key === NOTES_PREFIX + entry.kind + ":" + entry.id;
+	}
+
+	function accountPreferenceShape(name, value) {
+		if (name === "avatar") return validAccountAvatar(value);
+		if (name === "shareDiagnostics") return typeof value === "boolean";
+		if (name === "readerFont" || name === "readerPage") return typeof value === "string";
+		if (name === "shortcuts") return accountObject(value);
+		return Array.isArray(value) && value.every((item) => typeof item === "string");
+	}
+
+	function accountSettingsShape(settings) {
+		const portable = accountFields(settings, ACCOUNT_SETTINGS);
+		for (const [key, value] of Object.entries(portable)) {
+			if (key === "sources" && accountObject(value)) {
+				portable.sources = Object.fromEntries(Object.entries(value).filter(([id, enabled]) => /^[a-z][a-z0-9]+$/.test(id) && typeof enabled === "boolean"));
+			} else if (accountValuesEqual(value, DEFAULT_SETTINGS[key])) {
+				delete portable[key];
+			}
+		}
+		return portable;
+	}
+
+	function accountPortableDocument(input) {
+		const collection = input?.collection;
+		if (input?.version !== 1 || !accountObject(input.settings) || !accountObject(input.preferences) ||
+			!Array.isArray(collection?.saved) || !Array.isArray(collection?.folders) || !Array.isArray(collection?.notes) ||
+			(collection.queue !== undefined && !Array.isArray(collection.queue))) {
+			throw new Error("invalid-snapshot");
+		}
+		const entries = (list, fields) => list.map((entry) => {
+			if (typeof entry?.key !== "string" || !entry.key || (entry.url && !/^https?:\/\//i.test(entry.url))) throw new Error("invalid-snapshot");
+			return accountFields(entry, fields);
+		});
+		const notes = collection.notes.map((entry) => {
+			if (!accountNoteKey(entry) || !Array.isArray(entry.notes) ||
+				(entry.url && !/^https?:\/\//i.test(entry.url)) ||
+				entry.notes.some((note) => typeof note?.id !== "string" || !note.id)) throw new Error("invalid-snapshot");
+			if (entry.notes.length > NOTES_PER_DOCUMENT) throw new Error("too-many-notes");
+			return { ...accountFields(entry, ACCOUNT_NOTE_INDEX_FIELDS), notes: entry.notes.map((note) => accountFields(note, ACCOUNT_NOTE_FIELDS)) };
+		});
+		return {
+			version: 1,
+			settings: accountSettingsShape(input.settings),
+			preferences: Object.fromEntries(Object.entries(accountFields(input.preferences, [...Object.keys(ACCOUNT_PREFERENCES), "avatar", "shareDiagnostics"])).filter(([name, value]) => accountPreferenceShape(name, value))),
+			collection: {
+				saved: entries(collection.saved, ACCOUNT_SAVED_FIELDS), folders: entries(collection.folders, ACCOUNT_FOLDER_FIELDS), notes,
+				...(collection.queue !== undefined && { queue: accountQueueRecords(collection.queue) }),
+			},
+		};
+	}
+
+	async function readAccountSnapshot(account) {
+		const get = (key, fallback) => GM.getValue(key, fallback);
+		const [settings, saved, folders, index, queue, preferences] = await Promise.all([
+			get(STORAGE.settings, {}), get(STORAGE.saved, []), get(STORAGE.collected, []), get(NOTES_INDEX_KEY, []), get(STORAGE.queue, []),
+			Promise.all(Object.entries(accountPreferenceKeys(account)).map(async ([name, key]) => {
+				const value = await get(key, undefined);
+				return [name, name === "shareDiagnostics" && value !== undefined ? diagnosticConsentEnabled(value) : value];
+			})),
+		]);
+		const notes = await Promise.all((Array.isArray(index) ? index : []).filter(accountNoteKey).map(async (entry) => {
+			const stored = await get(entry.key, null);
+			const kept = (Array.isArray(stored?.notes) ? stored.notes : [])
+				.filter((note) => note?.id && (String(note.text || "").trim() || String(note.exact || "").trim()))
+				.map((note) => ({ ...note, created: noteSeconds(note.created), edited: note.edited ? noteSeconds(note.edited) : note.edited }));
+			return kept.length ? { ...entry, notes: kept } : null;
+		}));
+		return accountPortableDocument({
+			version: 1, settings: settings || {}, preferences: Object.fromEntries(preferences),
+			collection: { saved: Array.isArray(saved) ? saved.filter((entry) => entry?.key) : [], folders: Array.isArray(folders) ? folders.filter((entry) => entry?.key) : [], notes: notes.filter(Boolean), queue: Array.isArray(queue) ? queue : [] },
+		});
+	}
+
+	async function applyAccountSnapshot(account, previous, next, lease) {
+		const write = (key, value) => lease.commit(() => GM.setValue(key, value));
+		const prefs = next.preferences;
+		for (const [name, key] of Object.entries(accountPreferenceKeys(account))) {
+			if (accountValuesEqual(previous.preferences[name], prefs[name])) continue;
+			if (Object.hasOwn(prefs, name)) await write(key, name === "shareDiagnostics" ? (prefs[name] ? Date.now() : 0) : prefs[name]);
+			else await lease.commit(() => removeStoredValue(key));
+		}
+		if (!accountValuesEqual(previous.settings, next.settings)) {
+			const settings = { ...(await GM.getValue(STORAGE.settings, {}) || {}) };
+			for (const field of ACCOUNT_SETTINGS) delete settings[field];
+			await write(STORAGE.settings, { ...settings, ...next.settings });
+		}
+		if (!accountValuesEqual(previous.collection.saved, next.collection.saved)) await write(STORAGE.saved, next.collection.saved);
+		if (!accountQueuesEqual(previous.collection.queue, next.collection.queue)) {
+			const cached = accountRecordMap(await loadQueue(), "key");
+			await write(STORAGE.queue, next.collection.queue.map((entry) => ({
+				...entry,
+				...accountFields(cached.get(entry.key), ["title", "by", "time", "score", "descendants"]),
+			})));
+		}
+		if (!accountValuesEqual(previous.collection.folders, next.collection.folders)) {
+			const local = new Map((await GM.getValue(STORAGE.collected, []) || []).map((entry) => [entry.key, entry]));
+			const folders = next.collection.folders.map((entry) => {
+				const preserved = { ...local.get(entry.key) };
+				for (const field of ACCOUNT_FOLDER_FIELDS) delete preserved[field];
+				return { ...preserved, ...entry };
+			});
+			await write(STORAGE.collected, folders);
+			await write(COLLECTED_MIGRATED_KEY, true);
+		}
+		if (!accountValuesEqual(previous.collection.notes, next.collection.notes)) {
+			const held = new Map(previous.collection.notes.map((entry) => [entry.key, entry.notes]));
+			const nextIndex = [];
+			for (const { notes, ...entry } of next.collection.notes) {
+				if (!accountValuesEqual(held.get(entry.key), notes)) await write(entry.key, { version: 1, notes });
+				held.delete(entry.key);
+				nextIndex.push({ ...entry, count: notes.length, excerpt: latestNoteExcerpt(notes) });
+			}
+			await write(NOTES_INDEX_KEY, nextIndex);
+			for (const key of held.keys()) await lease.commit(() => removeStoredValue(key));
+		}
+	}
+
+	function accountBase64(bytes) {
+		if (bytes.toBase64) return bytes.toBase64({ alphabet: "base64url", omitPadding: true });
+		const chunks = [];
+		for (let start = 0; start < bytes.length; start += 8192) chunks.push(String.fromCharCode(...bytes.subarray(start, start + 8192)));
+		return btoa(chunks.join("")).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+	}
+
+	function accountUnbase64(value) {
+		if (Uint8Array.fromBase64) return Uint8Array.fromBase64(value, { alphabet: "base64url" });
+		return Uint8Array.from(atob(value.replace(/-/g, "+").replace(/_/g, "/")), (character) => character.charCodeAt(0));
+	}
+
+	function accountRecoveryKey() {
+		return accountBase64(crypto.getRandomValues(new Uint8Array(32)));
+	}
+
+	function validAccountRecoveryKey(value) {
+		return /^[A-Za-z0-9_-]{43}$/.test(value || "");
+	}
+
+	async function accountEncryptionKey(key, usage) {
+		if (!validAccountRecoveryKey(key)) throw new Error("invalid-recovery-key");
+		return crypto.subtle.importKey("raw", accountUnbase64(key), "AES-GCM", false, [usage]);
+	}
+
+	function accountCipherParameters(account, revision, iv) {
+		return { name: "AES-GCM", iv, additionalData: new TextEncoder().encode(JSON.stringify(["backchannel-snapshot", 1, account, revision])) };
+	}
+
+	function accountBlobStream(blob) {
+		return blob.stream().pipeThrough(new TransformStream({
+			transform(bytes, controller) {
+				controller.enqueue(new Uint8Array(bytes));
+			},
+		}));
+	}
+
+	async function accountSeal(document, state, revision) {
+		const key = await accountEncryptionKey(state.recoveryKey, "encrypt");
+		const plain = new Blob([JSON.stringify(document)]);
+		if (plain.size > ACCOUNT_DOCUMENT_LIMIT) throw new Error("snapshot-too-large");
+		const compressed = await new Response(accountBlobStream(plain).pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
+		const iv = crypto.getRandomValues(new Uint8Array(12));
+		const encrypted = new Uint8Array(await crypto.subtle.encrypt(accountCipherParameters(state.account, revision, iv), key, compressed));
+		const bytes = new Uint8Array(iv.length + encrypted.length);
+		bytes.set(iv);
+		bytes.set(encrypted, iv.length);
+		const ciphertext = accountBase64(bytes);
+		if (ciphertext.length > ACCOUNT_CIPHERTEXT_LIMIT) throw new Error("snapshot-too-large");
+		return ciphertext;
+	}
+
+	async function accountOpen(ciphertext, state, revision) {
+		if (typeof ciphertext !== "string" || ciphertext.length > ACCOUNT_CIPHERTEXT_LIMIT || ciphertext.length < 38) throw new Error("invalid-snapshot");
+		const key = await accountEncryptionKey(state.recoveryKey, "decrypt");
+		const bytes = accountUnbase64(ciphertext);
+		const compressed = await crypto.subtle.decrypt(accountCipherParameters(state.account, revision, bytes.subarray(0, 12)), key, bytes.subarray(12));
+		const reader = accountBlobStream(new Blob([compressed])).pipeThrough(new DecompressionStream("gzip")).getReader();
+		const chunks = [];
+		let size = 0;
+		for (;;) {
+			const { value, done } = await reader.read();
+			if (done) break;
+			size += value.length;
+			if (size > ACCOUNT_DOCUMENT_LIMIT) {
+				await reader.cancel();
+				throw new Error("snapshot-too-large");
+			}
+			chunks.push(value);
+		}
+		return accountPortableDocument(JSON.parse(await new Blob(chunks).text()));
+	}
+
+	async function accountRequest(path, { method = "GET", token, body, revision, syncProof, restoreRevision } = {}) {
+		if (!onStartPage() || window.top !== window.self) throw new Error("account-unavailable");
+		const headers = {};
+		if (token) headers.Authorization = "Bearer " + token;
+		if (body) headers["Content-Type"] = "application/json";
+		if (revision !== undefined) headers["If-Match"] = JSON.stringify(String(revision));
+		if (syncProof) headers["X-Backchannel-Sync-Proof"] = syncProof;
+		if (restoreRevision != null) headers["X-Backchannel-Restore-Revision"] = String(restoreRevision);
+		// With no-referrer, WebKit sends Origin: null on same-origin writes.
+		const response = await fetch(START_PAGE_ORIGIN + "/account" + path, {
+			method, headers, body: body ? JSON.stringify(body) : undefined,
+			mode: "same-origin", credentials: "omit", referrerPolicy: "strict-origin",
+			cache: "no-store", redirect: "error", signal: AbortSignal.timeout(12000),
+		});
+		if (response.status === 204) return null;
+		const value = await response.json().catch(() => ({}));
+		if (!response.ok) throw Object.assign(new Error(value.error || "account-unavailable"), { status: response.status, retryAfter: value.retryAfter, remainingResends: value.remainingResends });
+		return value;
+	}
+
+	const diagnosticNextSend = new Map();
+	const diagnosticDurationBuckets = [250, 1000, 3000, 10000, 30000, 120000];
+
+	function diagnosticConsentEnabled(value) {
+		return Number.isSafeInteger(value) && value > 0;
+	}
+
+	async function reportDiagnostics(operation, source, outcome, startedAt, finishedAt = Date.now()) {
+		if (!onStartPage() || window.top !== window.self || (source && !getSource(source))) return;
+		const key = `${operation}:${source}:${outcome}`;
+		if (Date.now() < (diagnosticNextSend.get(key) ?? 0)) return;
+		const account = await load(ACCOUNT_SYNC_KEY, null);
+		const now = Date.now();
+		if (!hasAccountSyncSession(account) || account.keyBackupPending || !(account.expiresAt > now) || now < (diagnosticNextSend.get(key) ?? 0)) return;
+		const consent = await load(ACCOUNT_DIAGNOSTICS_PREFIX + account.account, 0);
+		if (!diagnosticConsentEnabled(consent) || startedAt < consent) return;
+		if ((await accountDataOwner(account).catch(() => null)) !== account.account) return;
+		diagnosticNextSend.set(key, now + 60_000);
+		const elapsed = finishedAt - startedAt;
+		const duration = diagnosticDurationBuckets.find((limit) => elapsed <= limit) ?? diagnosticDurationBuckets.at(-1);
+		const version = /^\d{1,3}\.\d{1,3}\.\d{1,3}(?:-(?:alpha|beta|rc)(?:\.\d{1,2})?)?$/.test(SCRIPT_VERSION) ? SCRIPT_VERSION : "unknown";
+		await accountRequest("/diagnostics", { method: "POST", body: { operation, source, outcome, duration, version } }).catch(() => {});
+	}
+
+	function accountPasskeysSupported() {
+		return typeof window.PublicKeyCredential === "function" &&
+			typeof navigator.credentials?.create === "function" && typeof navigator.credentials?.get === "function" &&
+			typeof CompressionStream === "function" && typeof DecompressionStream === "function";
+	}
+
+	function validAccountEmail(input) {
+		// Match the Account Worker's email format before sending a code or opening a passkey prompt.
+		const email = input.trim().toLowerCase();
+		const [local, domain, extra] = email.split("@");
+		if (email.length > 254 || !domain || extra !== undefined || local.length > 64) return false;
+		return /^[a-z0-9.!#$%&'*+\/=?^_`{|}~-]+$/.test(local) &&
+			!local.startsWith(".") && !local.endsWith(".") && !local.includes("..") &&
+			/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(domain);
+	}
+
+	function accountCredentialOptions(options, create) {
+		const parse = create ? PublicKeyCredential.parseCreationOptionsFromJSON : PublicKeyCredential.parseRequestOptionsFromJSON;
+		if (parse) return parse.call(PublicKeyCredential, options);
+		const decoded = { ...options, challenge: accountUnbase64(options.challenge) };
+		const credentialField = create ? "excludeCredentials" : "allowCredentials";
+		if (options[credentialField]) decoded[credentialField] = options[credentialField].map((credential) => ({ ...credential, id: accountUnbase64(credential.id) }));
+		if (create) decoded.user = { ...options.user, id: accountUnbase64(options.user.id) };
+		return decoded;
+	}
+
+	function accountCredentialJSON(credential, create) {
+		if (credential.toJSON) return credential.toJSON();
+		const encode = (bytes) => accountBase64(new Uint8Array(bytes));
+		const response = credential.response;
+		return {
+			id: credential.id, rawId: encode(credential.rawId), type: credential.type,
+			authenticatorAttachment: credential.authenticatorAttachment || undefined,
+			clientExtensionResults: credential.getClientExtensionResults(),
+			response: {
+				clientDataJSON: encode(response.clientDataJSON),
+				...(create ? {
+					attestationObject: encode(response.attestationObject),
+					transports: response.getTransports?.() || [],
+				} : {
+					authenticatorData: encode(response.authenticatorData), signature: encode(response.signature),
+					userHandle: response.userHandle ? encode(response.userHandle) : null,
+				}),
+			},
+		};
+	}
+
+	async function accountPasskeyProof({ ceremony, options }, create, { controller = new AbortController(), unlock = false, mediation } = {}) {
+		const publicKey = accountCredentialOptions(options, create);
+		if (unlock) {
+			const first = new TextEncoder().encode("Backchannel account encryption key v1");
+			publicKey.extensions = { ...publicKey.extensions, prf: { eval: { first } } };
+		}
+		const { signal } = controller;
+		signal.throwIfAborted();
+		const timer = window.setTimeout(() => controller.abort(new Error("passkey-timeout")), 60_000);
+		let abort;
+		const cancelled = new Promise((_, reject) => {
+			abort = () => reject(signal.reason);
+			signal.addEventListener("abort", abort, { once: true });
+		});
+		try {
+			const pending = create ? navigator.credentials.create({ publicKey, signal }) : navigator.credentials.get({ publicKey, signal, mediation });
+			const credential = await Promise.race([cancelled, pending]);
+			signal.throwIfAborted();
+			if (!credential) throw new Error("invalid-credential");
+			const encoded = accountCredentialJSON(credential, create);
+			const { prf, ...clientExtensionResults } = encoded.clientExtensionResults || {};
+			const first = unlock && credential.getClientExtensionResults?.().prf?.results?.first;
+			const seed = first && new Uint8Array(first);
+			return {
+				body: { ceremony, credential: { ...encoded, clientExtensionResults } },
+				passkey: seed?.byteLength === 32 ? { id: encoded.id, seed } : null,
+			};
+		} catch (error) {
+			if (["AbortError", "NotAllowedError"].includes(error.name)) throw new Error("passkey-cancelled");
+			throw error;
+		} finally {
+			window.clearTimeout(timer);
+			signal.removeEventListener("abort", abort);
+		}
+	}
+
+	async function accountAuthenticate(mode, details, prepared) {
+		const create = mode === "register" || mode === "recover";
+		const challenge = prepared ?? await accountRequest("/" + mode + "/options", { method: "POST" });
+		if (create) {
+			if (!challenge.attestation) {
+				const { body } = await accountPasskeyProof(challenge, true, { unlock: true });
+				challenge.attestation = body;
+			}
+			const { credential } = challenge.attestation;
+			const { body: { credential: assertion }, passkey } = await accountPasskeyProof({
+				ceremony: challenge.ceremony,
+				options: {
+					challenge: challenge.options.challenge, rpId: challenge.options.rp.id, userVerification: "required",
+					allowCredentials: [{ type: "public-key", id: credential.id }],
+				},
+			}, false, { unlock: true });
+			if (!passkey || passkey.id !== credential.id) {
+				delete challenge.attestation;
+				signalRemovedAccountPasskey(credential.id);
+				throw new Error("passkey-sync-required");
+			}
+			const account = new TextDecoder().decode(accountUnbase64(challenge.options.user.id));
+			const recoveryKey = mode === "register" ? accountRecoveryKey() : details?.recoveryKey;
+			const envelope = await accountPasskeyEnvelope(account, passkey, { recoveryKey });
+			const syncKeyVerifier = await accountSyncKeyVerifier(recoveryKey);
+			const result = await accountRequest("/" + mode + "/verify", {
+				method: "POST", body: { ...challenge.attestation, assertion, envelope, syncKeyVerifier },
+			});
+			return mode === "register" ? { signup: result, recoveryKey } : { signed: result, recoveryKey };
+		}
+
+		const { body, passkey } = await accountPasskeyProof(challenge, false, { unlock: true });
+		if (!passkey) throw new Error("passkey-sync-required");
+		let proof;
+		try {
+			proof = await accountRequest("/login/verify", { method: "POST", body: { ...body, reportUnknownPasskey: true } });
+		} catch (error) {
+			if (error.message === "unknown-passkey") signalRemovedAccountPasskey(body.credential.id);
+			throw error;
+		}
+		const { account, unlock, envelope } = proof ?? {};
+		if (typeof account !== "string" || !validAccountRecoveryKey(unlock)) throw new Error("passkey-sync-unavailable");
+		const recoveryKey = await accountPasskeyEnvelope(account, passkey, { envelope });
+		const syncKeyVerifier = await accountSyncKeyVerifier(recoveryKey);
+		const signed = await accountRequest("/login/complete", { method: "POST", body: { unlock, syncKeyVerifier } });
+		return { signed, recoveryKey };
+	}
+
+	async function signalRemovedAccountPasskey(credentialId, account) {
+		const rpId = new URL(START_PAGE_ORIGIN).hostname;
+		if (account && typeof PublicKeyCredential.signalAllAcceptedCredentials === "function") {
+			try {
+				const userId = accountBase64(new TextEncoder().encode(account));
+				await PublicKeyCredential.signalAllAcceptedCredentials({ rpId, userId, allAcceptedCredentialIds: [] });
+				return;
+			} catch {}
+		}
+		try {
+			await PublicKeyCredential.signalUnknownCredential?.({ rpId, credentialId });
+		} catch {}
+	}
+
+	async function accountSyncKeyVerifier(recoveryKey) {
+		if (!validAccountRecoveryKey(recoveryKey)) throw new Error("invalid-recovery-key");
+		const proof = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("Backchannel recovery key v1:" + recoveryKey));
+		return accountBase64(new Uint8Array(proof));
+	}
+
+	async function signAccountSnapshot(state, revision, restoreRevision, ciphertext) {
+		const encoder = new TextEncoder();
+		const [verifier, digest] = await Promise.all([
+			accountSyncKeyVerifier(state.recoveryKey),
+			crypto.subtle.digest("SHA-256", encoder.encode(state.token)),
+		]);
+		const key = await crypto.subtle.importKey("raw", accountUnbase64(verifier), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+		const tokenHash = accountBase64(new Uint8Array(digest));
+		const message = encoder.encode(JSON.stringify(["backchannel-snapshot-write", 1, state.account, tokenHash, revision, restoreRevision, ciphertext]));
+		return accountBase64(new Uint8Array(await crypto.subtle.sign("HMAC", key, message)));
+	}
+
+	async function accountPasskeyEnvelope(account, passkey, { envelope, recoveryKey }) {
+		const additionalData = new TextEncoder().encode(JSON.stringify(["backchannel-key-envelope", 1, account, passkey.id]));
+		if (validAccountRecoveryKey(recoveryKey)) {
+			const cipher = await crypto.subtle.importKey("raw", passkey.seed, "AES-GCM", false, ["encrypt"]);
+			const bytes = new Uint8Array(60);
+			const iv = crypto.getRandomValues(bytes.subarray(0, 12));
+			const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData }, cipher, accountUnbase64(recoveryKey));
+			bytes.set(new Uint8Array(encrypted), iv.length);
+			return accountBase64(bytes);
+		}
+		if (typeof envelope !== "string" || !/^[A-Za-z0-9_-]{80}$/.test(envelope)) throw new Error("passkey-sync-unavailable");
+		try {
+			const cipher = await crypto.subtle.importKey("raw", passkey.seed, "AES-GCM", false, ["decrypt"]);
+			const bytes = accountUnbase64(envelope);
+			const opened = await crypto.subtle.decrypt({ name: "AES-GCM", iv: bytes.subarray(0, 12), additionalData }, cipher, bytes.subarray(12));
+			return accountBase64(new Uint8Array(opened));
+		} catch {
+			throw new Error("passkey-sync-unavailable");
+		}
+	}
+
+	function accountSyncLock(task) {
+		return withSharedStorageLock("account-sync", task, { required: true });
+	}
+
+	async function accountHasPendingEdits(state) {
+		return !state.base || await load(ACCOUNT_EDIT_KEY, null) === state.account ||
+			(state.base.collection?.queue === undefined && accountQueueRecords(await load(STORAGE.queue, [])).length > 0);
+	}
+
+	async function clearAccountEdit(account, lease) {
+		if (await load(ACCOUNT_EDIT_KEY, null) === account) await lease.commit(() => removeStoredValue(ACCOUNT_EDIT_KEY));
+	}
+
+	async function refreshAccountLocal({ changedSettings, changedCollection, changedPreferences, changedQueue }) {
+		if (changedSettings) {
+			frontPageCacheEpoch++;
+			frontPageLoads.clear();
+			frontPageJobs.clear();
+			const settings = await loadSettings();
+			appState.ui.shadow.getElementById("settings-panel")?.dispatchEvent(new Event("account-preferences-changed"));
+			watchNoteSelection(settings);
+			await refreshAppSources();
+			scheduleFrontPageRefresh();
+		}
+		if (changedCollection) await refreshCollectionViews();
+		if (changedQueue) {
+			if (appState.view === "queue") await renderAppList();
+			await paintAppCounts();
+			await refreshNextUp(appState.ui.shadow);
+		}
+		if (changedPreferences) {
+			await loadAppShortcuts();
+			await loadReaderLook();
+			if (!changedSettings) await refreshAppSources();
+		}
+	}
+
+	function hasAccountSyncSession(state) {
+		return state?.protocol === ACCOUNT_SYNC_PROTOCOL && Boolean(state.token) && validAccountRecoveryKey(state.recoveryKey);
+	}
+
+	async function syncAccount(preference = "", confirmed = null, trigger = "manual") {
+		const result = await accountSyncLock(async (lease) => {
+			const stored = await GM.getValue(ACCOUNT_SYNC_KEY, null);
+			if (!hasAccountSyncSession(stored) || stored.expiresAt <= Date.now()) throw new Error("session-expired");
+			if (stored.keyBackupPending || (await accountDataOwner(stored)) !== stored.account) return null;
+			if (trigger === "edit" && !(await accountHasPendingEdits(stored))) return null;
+			const state = { ...stored };
+			let restore = trigger === "restore" ? confirmed?.recovery : null;
+			if (trigger === "restore" && restore?.account !== state.account) throw new Error("snapshot-restore-changed");
+			let restored = false;
+			await loadCollected();
+			if (!state.base) {
+				const checkpoint = await GM.getValue(ACCOUNT_CHECKPOINT_KEY, null);
+				if (checkpoint?.account === state.account && checkpoint.ciphertext) {
+					state.base = await accountOpen(checkpoint.ciphertext, state, checkpoint.revision);
+					state.revision = checkpoint.revision;
+				}
+			}
+
+			for (let attempt = 0; attempt < 3; attempt++) {
+				const local = await readAccountSnapshot(state.account);
+				if (trigger === "edit" && stored.base && accountSnapshotsEqual(local, stored.base)) {
+					const clean = await withSharedStorageLock("account-storage", async (localLease) => {
+						if (!accountSnapshotsEqual(local, await readAccountSnapshot(state.account))) return false;
+						await clearAccountEdit(state.account, localLease);
+						return true;
+					}, { required: true });
+					if (clean) return null;
+					continue;
+				}
+				const snapshot = await accountRequest("/snapshot", { token: state.token });
+				if (!Number.isSafeInteger(snapshot?.revision) || snapshot.revision < 0 || snapshot.revision < (state.revision || 0)) throw new Error("invalid-snapshot");
+				if (restore && restore.revision !== snapshot.revision) throw new Error("snapshot-restore-changed");
+				let remote;
+				let restoreRevision = null;
+				try {
+					remote = snapshot.revision === 0 && snapshot.ciphertext === null
+						? emptyAccountSnapshot() : await accountOpen(snapshot.ciphertext, state, snapshot.revision);
+				} catch {
+					const previous = await accountRequest("/snapshot/previous", { token: state.token }).catch((error) => {
+						if (error.status === 404) return null;
+						throw error;
+					});
+					if (!Number.isSafeInteger(previous?.revision) || previous.revision <= 0 || previous.revision >= snapshot.revision) {
+						throw new Error(restore ? "snapshot-restore-changed" : "invalid-snapshot");
+					}
+					try {
+						remote = await accountOpen(previous.ciphertext, state, previous.revision);
+					} catch {
+						throw new Error("invalid-snapshot");
+					}
+					const recovery = { account: state.account, revision: snapshot.revision, previousRevision: previous.revision };
+					if (!restore) return { recovery };
+					if (!accountValuesEqual(restore, recovery)) throw new Error("snapshot-restore-changed");
+					restoreRevision = previous.revision;
+				}
+				if (restore && restoreRevision === null) throw new Error("snapshot-restore-changed");
+				const merge = restore
+					? mergeAccountSnapshots(null, local, remote, "local")
+					: mergeAccountSnapshots(state.base || null, local, remote, preference);
+				if (!restore && merge.conflicts.length && (!preference || !accountValuesEqual(confirmed?.confirmation, { local, revision: snapshot.revision }))) {
+					return { conflicts: merge.conflicts, confirmation: { local, revision: snapshot.revision } };
+				}
+
+				const document = accountPortableDocument(merge.document);
+				let revision = snapshot.revision;
+				if (restore || !revision || !accountSnapshotsEqual(remote, document)) {
+					const ciphertext = await accountSeal(document, state, revision + 1);
+					const syncProof = await signAccountSnapshot(state, revision, restoreRevision, ciphertext);
+					await lease.check();
+					try {
+						const written = await accountRequest("/snapshot", {
+							method: "PUT", token: state.token, body: { ciphertext }, revision, syncProof, restoreRevision,
+						});
+						if (written?.revision !== revision + 1) throw new Error("invalid-snapshot");
+						revision = written.revision;
+						if (restore) {
+							restored = true;
+							restore = null;
+						}
+					} catch (error) {
+						if (error.message === "revision-conflict") continue;
+						throw error;
+					}
+				}
+
+				const applied = await withSharedStorageLock("account-storage", async (localLease) => {
+					if (!accountValuesEqual(local, await readAccountSnapshot(state.account))) return false;
+					await applyAccountSnapshot(state.account, local, document, localLease);
+					await localLease.commit(() => GM.setValue(ACCOUNT_SYNC_KEY, { ...state, base: document, revision, lastSync: Date.now() }));
+					await clearAccountEdit(state.account, localLease);
+					return true;
+				}, { required: true });
+				if (!applied) continue;
+				return {
+					revision, restored, changedSettings: !accountValuesEqual(local.settings, document.settings),
+					changedCollection: !accountValuesEqual(local.collection, document.collection),
+					changedQueue: !accountQueuesEqual(local.collection.queue, document.collection.queue) ||
+						!accountQueuesEqual(stored.base?.collection?.queue, document.collection.queue),
+					changedPreferences: Object.keys(ACCOUNT_PREFERENCES).some((name) => !accountValuesEqual(local.preferences[name], document.preferences[name])),
+				};
+			}
+			throw new Error("sync-busy");
+		});
+		if (result?.revision) await refreshAccountLocal(result).catch(console.error);
+		return result;
+	}
+
+	function validAccountAvatar(value) {
+		return accountObject(value) && Object.keys(value).length === 3 &&
+			Object.entries(ACCOUNT_BIRB_PRESETS).every(([field, presets]) => typeof value[field] === "string" && Object.hasOwn(presets, value[field]));
+	}
+
+	function paintAccountAvatar(element, avatar) {
+		const customized = validAccountAvatar(avatar);
+		element.classList.toggle("account-default-avatar", !customized);
+		if (!customized) {
+			delete element.dataset.birbShape;
+			element.style.removeProperty("--birb-color");
+			element.style.removeProperty("--birb-background");
+			return;
+		}
+		const { shape, color, background } = avatar;
+		element.dataset.birbShape = shape;
+		element.style.setProperty("--birb-color", ACCOUNT_BIRB_PRESETS.color[color][1]);
+		element.style.setProperty("--birb-background", ACCOUNT_BIRB_PRESETS.background[background][1]);
+	}
+
+	function accountBirbOptions(field, legend, group) {
+		const options = Object.entries(ACCOUNT_BIRB_PRESETS[field]).map(([value, [label, color]]) => {
+			const preview = field === "shape" ? `<span class="app-account-avatar" data-birb-shape="${value}" aria-hidden="true"></span>`
+				: `<span class="account-birb-swatch" style="--birb-swatch:${color}" aria-hidden="true"></span>`;
+			return `<label class="account-birb-option" title="${label}"><input type="radio" name="${group}-${field}" data-birb-option="${field}" value="${value}" aria-label="${label}">${preview}</label>`;
+		}).join("");
+		return `<fieldset><legend>${legend}</legend><div class="account-birb-options">${options}</div></fieldset>`;
+	}
+
+	function accountBirbPicker(group) {
+		return accountBirbOptions("shape", "Shape", group) + accountBirbOptions("color", "Birb color", group) + accountBirbOptions("background", "Background", group);
+	}
+
+	function accountBackButton(id, iconOnly = false) {
+		const label = iconOnly ? APP_ICON('<path d="M13 8H3m4.5-4.5L3 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') : "&#8592; Back";
+		return `<button type="button" ${id ? `id="${id}"` : "data-account-email-back"} class="settings-button account-back" aria-label="Back">${label}</button>`;
+	}
+
+	function accountStepHeading(title, { backId, headingId } = {}) {
+		return `<div class="account-step-heading">${accountBackButton(backId, true)}<h3 class="account-section-heading"${headingId ? ` id="${headingId}" tabindex="-1"` : ""}>${title}</h3></div>`;
+	}
+
+	const ACCOUNT_SIGN_IN_HINT = "Sync your reading experience across all your devices.";
+	const ACCOUNT_RECOVERY_KEY_HINT = "Keep this key somewhere safe. It unlocks your account if you lose access to your passkey.";
+
+	const ACCOUNT_PASSKEY_ACTIONS = {
+		register: ["Create passkey", "Creating passkey…"],
+		login: ["Sign in with passkey", "Signing in…"],
+		recover: ["Replace passkey", "Replacing passkey…"],
+	};
+
+	const ACCOUNT_FLOW_ACTIONS = [
+		["login", "login", "Sign in with passkey", "Signing in…"],
+		["entry", "continue", "Continue", "Sending verification code…"],
+		["send-code", "send-code", "Update", "Sending verification code…"],
+		["resend", "resend-code", "Send another code", "Sending verification code…"],
+		["code", "verify-code", "Verify email", "Verifying email…"],
+		["recovery-key", "recovery-continue", "Continue", "Checking recovery key…"],
+		["key", "key-done", "Finish sign up", "Finishing sign up…"],
+		["logout", "logout", "Sign out", "Signing out…"],
+	];
+
+	function accountPasskeyButton(mode) {
+		const [label] = ACCOUNT_PASSKEY_ACTIONS[mode];
+		return `<button type="button" id="account-passkey-${mode}-submit" class="settings-button settings-button--primary settings-button--wide" aria-describedby="account-status-passkey-${mode}"><span class="settings-control-label">${label}</span></button><div id="account-status-passkey-${mode}"></div>`;
+	}
+
+	function accountSettingsHTML() {
+		return `<div id="settings-account-sync" class="settings-panel">
+<section id="account-profile" class="account-profile-identity" aria-labelledby="account-profile-name">
+<div class="account-avatar-frame">
+<span id="account-profile-avatar" class="app-account-avatar account-default-avatar" aria-hidden="true"></span>
+<button type="button" id="account-avatar-edit" aria-label="Edit birb" aria-expanded="false" aria-controls="account-avatar-editor" class="settings-button" hidden><span class="account-avatar-edit-label" aria-hidden="true">Edit</span></button>
+</div>
+<h3 id="account-profile-name" class="account-profile-title">Backchannel Account</h3>
+<p id="account-email-value" class="appearance-row-hint">${ACCOUNT_SIGN_IN_HINT}</p>
+</section>
+<div id="account-stage">
+<section id="account-signed-out" class="account-section account-flow" data-account-step="0" tabindex="-1" hidden>
+<div id="account-sign-in-actions" hidden>
+<div><button type="button" id="account-login" class="settings-button settings-button--wide" aria-describedby="account-status-login"><span class="settings-control-label">Sign in with passkey</span></button><div id="account-status-login"></div></div>
+<div id="account-sign-in-divider">or</div>
+<form id="account-entry">
+<div><input id="account-entry-email" class="settings-form-control" type="email" autocomplete="email" aria-label="Email address" aria-describedby="account-status-entry" placeholder="Email address" maxlength="254" required><div id="account-status-entry"></div></div>
+<button type="submit" id="account-continue" class="settings-button settings-button--primary settings-button--wide"><span class="settings-control-label">Continue</span></button>
+</form>
+<p id="account-create-unavailable" class="appearance-row-hint" hidden>Email verification is temporarily unavailable.</p>
+</div>
+<div id="account-status-signed-out"></div>
+</section>
+<section id="account-code-screen" class="account-section account-flow" data-account-step="3" tabindex="-1" hidden>
+${accountStepHeading("Check your email")}
+<div id="account-code-content">
+<p id="account-code-hint" class="appearance-row-hint"></p>
+<div id="account-code-field" class="account-field"><span>Verification code</span><div><slot name="account-verification-code"></slot><div id="account-status-code"></div></div></div>
+<div class="account-actions account-step-actions">
+<button type="button" id="account-verify-code" class="settings-button settings-button--primary settings-button--wide"><span class="settings-control-label">Verify email</span></button>
+<div id="account-resend-control" class="account-step-secondary settings-tooltip-anchor" role="group"><button type="button" id="account-resend-code" class="settings-button account-text-action" aria-describedby="account-status-resend"><span class="settings-control-label">Send another code</span></button><div id="account-status-resend"></div></div>
+</div>
+</div>
+</section>
+<section id="account-passkey-register" class="account-section account-flow" data-account-step="4" tabindex="-1" hidden>
+${accountStepHeading("Create a passkey")}
+<p class="appearance-row-hint">Create and confirm a passkey to secure your account.</p>
+${accountPasskeyButton("register")}
+</section>
+<section id="account-signup-birb" class="account-section account-flow account-birb-editor" data-account-step="5" tabindex="-1" hidden>
+${accountStepHeading("Create your birb")}
+<p class="appearance-row-hint">Choose a shape and colors for your account avatar.</p>
+${accountBirbPicker("signup-birb")}
+<button type="button" id="account-signup-birb-next" class="settings-button settings-button--primary settings-button--wide">Continue</button>
+</section>
+<section id="account-passkey-login" class="account-section account-flow" data-account-step="4" tabindex="-1" hidden>
+${accountStepHeading("Sign in")}
+<p id="account-login-hint" class="appearance-row-hint"></p>
+<div class="account-actions account-step-actions">
+<div>${accountPasskeyButton("login")}</div>
+<div class="account-step-secondary"><button type="button" id="account-recover-passkey" class="settings-button account-text-action" aria-describedby="account-status-recover-passkey"><span class="settings-control-label">Can’t use your passkey?</span></button><div id="account-status-recover-passkey"></div></div>
+</div>
+</section>
+<section id="account-recovery-key" class="account-section account-flow" data-account-step="5" tabindex="-1" hidden>
+${accountStepHeading("Recover your account")}
+<p class="appearance-row-hint">Enter your recovery key to keep your synced data when you replace your passkey.</p>
+<div class="account-field"><label for="account-key">Recovery key</label><div><input id="account-key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="128" aria-describedby="account-status-recovery-key"><div id="account-status-recovery-key"></div></div></div>
+<button type="button" id="account-recovery-continue" class="settings-button settings-button--primary settings-button--wide"><span class="settings-control-label">Continue</span></button>
+</section>
+<section id="account-passkey-recover" class="account-section account-flow" data-account-step="5" tabindex="-1" hidden>
+${accountStepHeading("Replace your passkey")}
+<p class="appearance-row-hint">Replacing your passkey signs out your other devices.</p>
+${accountPasskeyButton("recover")}
+</section>
+<section id="account-signup-diagnostics" class="account-section account-flow" data-account-step="6" tabindex="-1" aria-labelledby="account-diagnostics-heading" hidden>
+${accountStepHeading("Help improve Backchannel", { backId: "account-diagnostics-back", headingId: "account-diagnostics-heading" })}
+<p class="appearance-row-hint">You can help improve Backchannel by sharing anonymized diagnostics. These details help us develop new features and improve functionality for everyone. You can change your choice any time in Settings → Account → Manage account → Privacy</p>
+<p class="appearance-row-hint">This choice applies to devices synced with your account.</p>
+<div class="account-actions account-step-actions">
+<button type="button" id="account-diagnostics-share" class="settings-button settings-button--wide">Share diagnostics</button>
+<button type="button" id="account-diagnostics-decline" class="settings-button settings-button--wide">Don’t share</button>
+</div>
+</section>
+<section id="account-key-setup" class="account-section account-flow" data-account-step="7" tabindex="-1" aria-labelledby="account-key-heading" hidden>
+${accountStepHeading("Save your recovery key", { backId: "account-key-back", headingId: "account-key-heading" })}
+<p class="appearance-row-hint">${ACCOUNT_RECOVERY_KEY_HINT}</p>
+<code id="account-recovery-code"></code>
+<div class="account-key-links"><button type="button" id="account-key-save" aria-describedby="account-status-key-action">Save</button><div id="account-status-key-action"></div></div>
+<button type="button" id="account-key-done" class="settings-button settings-button--primary settings-button--wide"><span class="settings-control-label">Finish sign up</span></button>
+<div id="account-status-key"></div>
+</section>
+<section id="account-avatar-editor" class="account-section account-birb-editor" data-account-step="1" tabindex="-1" hidden>
+${accountBackButton("account-avatar-cancel")}
+<h3 class="account-section-heading">Edit your birb</h3>
+${accountBirbPicker("account-birb")}
+<div id="account-status-avatar"></div>
+</section>
+<section id="account-manage-page" class="account-section account-flow" data-account-step="1" tabindex="-1" hidden>
+${accountBackButton("account-manage-back")}
+<h3 class="account-row-label" id="account-manage-heading" tabindex="-1">Manage account</h3>
+<div id="account-manage-stage">
+<form id="account-manage-email" data-account-step="0" tabindex="-1">
+<div class="settings-field">
+<label class="settings-field-label" for="account-email-input">Email address</label>
+<div class="account-email-row">
+<div>
+<input id="account-email-input" class="settings-form-control" type="email" autocomplete="email" maxlength="254" placeholder="No email on file" aria-describedby="account-status-email" required>
+<div id="account-status-email"></div>
+</div>
+<div id="account-email-update" inert><div>
+<button type="button" id="account-send-code" class="settings-button settings-button--primary settings-button--wide" aria-describedby="account-status-send-code" disabled><span class="settings-control-label">Update</span></button>
+<div id="account-status-send-code"></div>
+</div></div>
+</div>
+</div>
+<p id="account-email-hint" class="appearance-row-hint" hidden>You’ll be asked to confirm your identity with your passkey before we send a code to your new email address.</p>
+</form>
+<div id="account-manage-code" data-account-step="1" tabindex="-1" hidden></div>
+</div>
+<section id="account-manage-privacy" class="account-inner-section" aria-labelledby="account-manage-privacy-heading">
+<h4 id="account-manage-privacy-heading" class="account-row-label">Privacy</h4>
+<label class="settings-option settings-diagnostics-option">
+<input id="account-share-diagnostics" type="checkbox" aria-labelledby="account-diagnostics-label" aria-describedby="account-diagnostics-hint" disabled>
+<span><span id="account-diagnostics-label">Share diagnostics</span><span id="account-diagnostics-hint" class="appearance-row-hint">Help improve Backchannel by sharing anonymized usage data.</span></span>
+</label>
+</section>
+</section>
+<section id="account-import" class="account-section account-flow" data-account-step="1" tabindex="-1" hidden>
+<h3 class="account-section-heading">Use this device’s reading data?</h3>
+<p class="appearance-row-hint">This browser profile has settings, Collection items, notes, or a reading queue from a previous account. Importing will add that data to this account. Use separate browser profiles to keep the two libraries apart.</p>
+<div class="account-actions">
+<button type="button" id="account-import-sign-out" class="settings-button">Sign out</button>
+<div><button type="button" id="account-import-continue" class="settings-button settings-button--primary" aria-describedby="account-status-import">Import and sync</button><div id="account-status-import"></div></div>
+</div>
+</section>
+<div id="account-signed-in" data-account-step="0" tabindex="-1" hidden>
+<section class="account-section">
+<div class="account-setting-row">
+<div><h3 class="account-row-label">Sync</h3><p id="account-last-sync" class="appearance-row-hint">Last synced <time hidden></time><span>Never</span></p></div>
+<div class="account-sync-control"><button type="button" id="account-sync-now" class="settings-button" aria-describedby="account-status-sync"><span class="settings-control-label">Sync now</span></button><div id="account-status-sync" class="account-chin-anchor"></div></div>
+</div>
+<div id="account-conflict" class="settings-notice" role="group" aria-labelledby="account-conflict-summary" hidden>
+<p id="account-conflict-summary" class="appearance-row-label">Some changes on this device conflict with changes in your account. Which should Backchannel keep?</p>
+<div class="account-actions"><button type="button" id="account-keep-local" class="settings-button" aria-describedby="account-status-conflict">Keep this device’s changes</button><button type="button" id="account-keep-remote" class="settings-button" aria-describedby="account-status-conflict">Keep account changes</button></div>
+<div id="account-status-conflict"></div>
+</div>
+<div id="account-snapshot-restore" class="account-inner-section" hidden>
+<p class="account-row-label">The latest account data couldn’t be read.</p>
+<p class="appearance-row-hint">Restore the previous version and keep your local changes. Some older items may reappear.</p>
+<div class="account-actions"><button type="button" id="account-restore-snapshot" class="settings-button" aria-describedby="account-status-snapshot-restore"><span class="settings-control-label">Restore previous version</span></button></div>
+<div id="account-status-snapshot-restore"></div>
+</div>
+</section>
+<section id="account-devices-section" class="account-section" hidden>
+<h3 class="account-section-heading">Linked devices</h3>
+<ul id="account-device-list" class="account-device-list"></ul>
+<div id="account-status-devices"></div>
+</section>
+<section class="account-section" id="account-delete-section">
+<div id="account-actions">
+<button type="button" id="account-manage" class="settings-button">Manage account</button>
+<div class="account-confirmation-action"><button type="button" id="account-logout" class="settings-button" aria-describedby="account-status-logout"><span class="settings-control-label">Sign out</span></button><div id="account-status-logout" class="account-chin-anchor"></div></div>
+<button type="button" id="account-delete" class="settings-button account-danger" aria-expanded="false" aria-controls="account-delete-confirm">Delete account…</button>
+</div>
+<div id="account-delete-confirm" class="account-confirmation-row" hidden>
+<p class="appearance-row-hint">Delete your account and its synced data? This device keeps its local data.</p>
+<button type="button" id="account-delete-cancel" class="settings-button">Cancel</button>
+<div class="account-confirmation-action"><button type="button" id="account-delete-final" class="settings-button account-danger" aria-describedby="account-status-delete">Delete account</button><div id="account-status-delete" class="account-chin-anchor"></div></div>
+</div>
+</section>
+</div>
+</div>
+<div id="account-feedback-parking" hidden><p id="account-status" class="appearance-row-hint account-feedback" role="status"></p></div>
+</div>`;
+	}
+
+	function friendlyAccountError(error, fallback) {
+		if (error.name === "OperationError") return fallback ?? "This recovery key couldn’t unlock the account. Check the key and try again.";
+		if (error.status === 429) {
+			const minutes = Math.max(1, Math.ceil((error.retryAfter || 60) / 60));
+			if (error.remainingResends === 0) {
+				return `Verification email limit reached. Try again in ${minutes} ${minutes === 1 ? "minute" : "minutes"}.`;
+			}
+			return `Too many attempts. Try again in ${minutes === 1 ? "a minute" : minutes + " minutes"}.`;
+		}
+		return {
+			"session-expired": "Your session expired. Sign in with your passkey to continue syncing.",
+			"sign-in-required": "Sign in with your passkey to continue syncing.",
+			"invalid-recovery-key": "Enter the 43-character recovery key from your connected device.",
+			"incorrect-recovery-key": "That recovery key is incorrect. Check the key and try again.",
+			"passkey-sync-required": "This passkey provider can’t unlock sync. Use a passkey provider that supports encrypted sync.",
+			"passkey-sync-unavailable": "This passkey couldn’t unlock sync. Try again with the passkey you set up for Backchannel.",
+			"retry-sign-in": "Sign-in could not finish. Try again.",
+			"signup-expired": "This sign-up expired. Verify your email to start again.",
+			"recovery-save-blocked": "Allow pop-ups to save your recovery key.",
+			"invalid-email": "Enter a valid email address.",
+			"invalid-email-code": "This verification code is incorrect or expired. Request a new code.",
+			"invalid-origin": "Backchannel couldn’t verify this page. Reload Reader and try again.",
+			"email-unavailable": "Email verification is unavailable right now.",
+			"email-required": "Verify your email address in Account to continue syncing.",
+			"email-in-use": "This email address already belongs to a Backchannel account. Sign in or recover that account.",
+			"invalid-credential": "Backchannel couldn’t verify the passkey. Try again.",
+			"unknown-passkey": "This passkey is no longer linked to Backchannel. Use your email to continue.",
+			"passkey-timeout": "Passkey confirmation timed out. Try again.",
+			"expired-ceremony": "Passkey confirmation expired. Try again.",
+			"retry-account-deletion": "Account deletion couldn’t finish. Try again.",
+			"snapshot-too-large": "This Collection is too large to sync.",
+			"too-many-notes": "A page has more than 200 notes across your devices. Remove a few notes from that page before syncing.",
+			"invalid-snapshot": "The account snapshot couldn’t be read. Your local data is still here.",
+			"snapshot-proof-required": "Update Backchannel to continue syncing your changes.",
+			"snapshot-proof-invalid": "Sign in again to continue syncing your changes.",
+			"snapshot-restore-changed": "The account changed. Select Sync now to check the latest version.",
+			"sync-busy": "Another sync or local edit is in progress. Try Sync now again.",
+		}[error.message] || fallback || "Account sync couldn’t finish. Try again shortly.";
+	}
+
+	function accountDeviceName() {
+		const agent = navigator.userAgent;
+		const platform = /iPhone/.test(agent) ? "iPhone" :
+			/iPad/.test(agent) || (/Macintosh/.test(agent) && navigator.maxTouchPoints > 1) ? "iPad" :
+			/Android/.test(agent) ? "Android" : /Macintosh/.test(agent) ? "Mac" :
+			/Windows/.test(agent) ? "Windows" : /Linux/.test(agent) ? "Linux" : "Device";
+		const browser = /Edg\//.test(agent) ? "Edge" : /Firefox|FxiOS/.test(agent) ? "Firefox" :
+			/Chrome|CriOS/.test(agent) ? "Chrome" : /Safari/.test(agent) ? "Safari" : "";
+		return browser ? platform + " · " + browser : platform;
+	}
+
+	async function linkedAccountDevices(token) {
+		let id = await GM.getValue(ACCOUNT_DEVICE_KEY, "");
+		if (!id) id = await withSharedStorageLock("account-device", async (lease) => {
+			const held = await GM.getValue(ACCOUNT_DEVICE_KEY, "");
+			if (held) return held;
+			const created = crypto.randomUUID();
+			await lease.commit(() => GM.setValue(ACCOUNT_DEVICE_KEY, created));
+			return created;
+		});
+		await accountRequest("/devices/current", { method: "PUT", token, body: { id, name: accountDeviceName() } });
+		const result = await accountRequest("/devices", { token });
+		return Array.isArray(result?.devices) ? result.devices : [];
+	}
+
+	function writeAccountTime(element, timestamp) {
+		const date = new Date(timestamp);
+		if (!Number.isFinite(timestamp) || !Number.isFinite(date.getTime())) {
+			element.hidden = true;
+			return false;
+		}
+		element.dateTime = date.toISOString();
+		element.textContent = date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+		element.title = date.toLocaleString();
+		element.hidden = false;
+		return true;
+	}
+
+	function wireAccountSettings(shadow, updateDiagnosticSharing) {
+		const panel = shadow.getElementById("settings-account-sync");
+		if (!onStartPage() || window.top !== window.self) {
+			panel.innerHTML = `<p class="settings-section-hint">${ACCOUNT_SIGN_IN_HINT}</p><a href="${START_PAGE_ORIGIN}/#account-sync" target="_blank" rel="noopener noreferrer">Open Reader</a>`;
+			return () => {};
+		}
+
+		const find = (id) => shadow.getElementById("account-" + id);
+		const stage = find("stage");
+		const manageStage = find("manage-stage");
+		const status = find("status");
+		const key = find("key");
+		const entryEmail = find("entry-email");
+		const emailInput = find("email-input");
+		const emailCode = document.createElement("input");
+		emailCode.id = "account-email-code";
+		emailCode.name = "verification-code";
+		emailCode.slot = "account-verification-code";
+		emailCode.type = "text";
+		emailCode.autocomplete = "one-time-code";
+		emailCode.autocapitalize = "none";
+		emailCode.spellcheck = false;
+		emailCode.required = true;
+		emailCode.setAttribute("aria-label", "Verification code");
+		shadow.host.append(emailCode);
+		const buttons = [...panel.querySelectorAll("button")];
+		const avatarEditor = find("avatar-editor");
+		const avatarInputs = [...avatarEditor.querySelectorAll("input")];
+		const signupEditor = find("signup-birb");
+		const signupInputs = [...signupEditor.querySelectorAll("input")];
+		let state = null;
+		let localDataOwner = null;
+		let accountLoaded = false;
+		let available = false;
+		let emailAvailable = false;
+		let busy = false;
+		let accountAvailabilityPending = false;
+		let expired = false;
+		let conflict = null;
+		let deviceCheckedAt = 0;
+		let shownAccount = null;
+		let profile = null;
+		let lastPasskeyEmail = null;
+		let emailFlow = null;
+		let emailPasskey = null;
+		let emailPrompt = null;
+		let sendingEmailChangeCode = false;
+		let avatar = null;
+		let accountAction = "";
+		let deletePreparation = null;
+		let deletePrompt = null;
+		let deleteFade = null;
+		let statusArea = "sync";
+		let syncing = false;
+		let resendTimer = 0;
+		let pendingEdit = false;
+		let editTimer = 0;
+		let shownScreen = null;
+		let shownManageScreen = find("manage-email");
+		const slides = new Map();
+
+		function finishSlide(container) {
+			const slide = slides.get(container);
+			if (!slide) return;
+			const { outgoing, animations } = slide;
+			slides.delete(container);
+			outgoing.hidden = true;
+			outgoing.inert = false;
+			outgoing.removeAttribute("aria-hidden");
+			outgoing.classList.remove("is-outgoing");
+			container.classList.remove("is-sliding");
+			for (const animation of animations) animation.cancel();
+		}
+
+		function slideAccountContent(container, outgoing, next, forceForward = false) {
+			if (outgoing === next) return;
+			finishSlide(container);
+			const oldHeight = container.getBoundingClientRect().height;
+			next.hidden = false;
+			if (!outgoing) return;
+			const active = shadow.activeElement;
+			if (outgoing.contains(active) || (document.activeElement === emailCode && outgoing.contains(emailCode.assignedSlot))) {
+				next.focus({ preventScroll: true });
+			}
+			if (!oldHeight || !container.getClientRects().length || prefersReducedMotion() || typeof container.animate !== "function") {
+				outgoing.hidden = true;
+				return;
+			}
+			const direction = forceForward || Number(next.dataset.accountStep) >= Number(outgoing.dataset.accountStep) ? 1 : -1;
+			outgoing.inert = true;
+			outgoing.setAttribute("aria-hidden", "true");
+			outgoing.classList.add("is-outgoing");
+			container.classList.add("is-sliding");
+			const newHeight = container.getBoundingClientRect().height;
+			const motion = { duration: 230, easing: "cubic-bezier(.22,.61,.36,1)", fill: "both" };
+			const animations = [
+				outgoing.animate([{ transform: "translateX(0)" }, { transform: `translateX(${-100 * direction}%)` }], motion),
+				next.animate([{ transform: `translateX(${100 * direction}%)` }, { transform: "translateX(0)" }], motion),
+				container.animate([{ height: `${oldHeight}px` }, { height: `${newHeight}px` }], motion),
+			];
+			const transition = { outgoing, animations };
+			slides.set(container, transition);
+			const settled = () => { if (slides.get(container) === transition) finishSlide(container); };
+			Promise.all(animations.map((animation) => animation.finished)).then(settled, settled);
+		}
+
+		function showScreen(next) {
+			const outgoing = shownScreen;
+			shownScreen = next;
+			const completingSetup = next === find("signed-in") && (outgoing === find("key-setup") || outgoing === find("passkey-recover"));
+			slideAccountContent(stage, outgoing, next, completingSetup);
+		}
+
+		function paintLoadingButton(id, loading, idle, working) {
+			const button = find(id);
+			if (loading) button.setAttribute("aria-busy", "true");
+			else button.removeAttribute("aria-busy");
+			const label = button.querySelector(".settings-control-label");
+			const text = loading ? working : idle;
+			if (label.textContent !== text) label.textContent = text;
+		}
+
+		function closeAccountAction() {
+			if (deleteFade) {
+				deleteFade.element.inert = false;
+				deleteFade.animation.cancel();
+				deleteFade = null;
+			}
+			if (accountAction === "delete") {
+				deletePreparation = null;
+				deletePrompt?.abort();
+			}
+			if (accountAction === "manage") {
+				emailPasskey = null;
+				emailPrompt?.abort();
+			}
+			if (!busy && emailFlow?.mode === "email") closeEmail();
+			accountAction = "";
+		}
+
+		async function refreshLocalAccount() {
+			const saved = await load(ACCOUNT_SYNC_KEY, null);
+			state = hasAccountSyncSession(saved) ? saved : null;
+			localDataOwner = state ? await accountDataOwner(state).catch(() => null) : null;
+			avatar = state?.account ? await load(ACCOUNT_AVATAR_PREFIX + state.account, null) : null;
+			if (accountAction === "manage") void updateDiagnosticSharing();
+			accountLoaded = true;
+		}
+
+		function paintDevices(signedIn) {
+			const devices = profile?.account === state?.account ? profile?.devices : null;
+			find("devices-section").hidden = !signedIn || !Array.isArray(devices);
+			const list = find("device-list");
+			list.replaceChildren();
+			if (!signedIn || !Array.isArray(devices)) return null;
+			let anchor = null;
+			for (const device of devices) {
+				const row = document.createElement("li");
+				row.className = "account-setting-row";
+				const info = document.createElement("div");
+				const label = document.createElement("div");
+				label.className = "account-row-label";
+				label.textContent = device.name + (device.current ? " · This device" : "");
+				info.append(label);
+				const seen = document.createElement("time");
+				if (writeAccountTime(seen, device.lastSeenAt)) {
+					const detail = document.createElement("div");
+					detail.className = "appearance-row-hint";
+					detail.append("Last active ", seen);
+					info.append(detail);
+				}
+				row.append(info);
+				if (!device.current) {
+					const disconnect = document.createElement("button");
+					disconnect.type = "button";
+					disconnect.className = "settings-button";
+					disconnect.textContent = "Sign out";
+					disconnect.setAttribute("aria-label", "Sign out " + device.name);
+					disconnect.disabled = busy || !available;
+					disconnect.onclick = (event) => {
+						if (!event.isTrusted) return;
+						run(async () => {
+							await accountRequest("/devices/" + encodeURIComponent(device.id), { method: "DELETE", token: state.token });
+							await refreshProfile(state, true);
+							return "Device signed out.";
+						}, "Signing out device…", "device:" + device.id);
+					};
+					row.append(disconnect);
+				}
+				if (statusArea === "device:" + device.id) {
+					anchor = document.createElement("div");
+					anchor.className = "account-device-status";
+					row.append(anchor);
+				}
+				list.append(row);
+			}
+			return anchor;
+		}
+
+		function paint() {
+			if (!accountLoaded) return;
+			const localSession = Boolean(state?.token);
+			const signedIn = Boolean(localSession && state.expiresAt > Date.now() && !expired);
+			const importRequired = signedIn && localDataOwner !== state.account;
+			const email = profile?.account === state?.account ? profile?.email : undefined;
+			const needsEmail = signedIn && emailAvailable && email === null;
+			const signup = signedIn ? null : emailFlow?.signup;
+			const backingUp = Boolean(signup?.screen === "key-setup" || (signedIn && state.keyBackupPending));
+			if (shownAccount !== state?.account) {
+				key.value = "";
+				closeAccountAction();
+				shownAccount = state?.account;
+			}
+			const editingAvatar = signedIn && accountAction === "avatar";
+			const selectedAvatar = validAccountAvatar(avatar) ? avatar : DEFAULT_ACCOUNT_AVATAR;
+			const managing = signedIn && accountAction === "manage";
+			const preparingEmailPasskey = managing && Boolean(emailPasskey?.request);
+			const enrolling = !signedIn && emailFlow?.mode === "register" && Boolean(emailFlow.address);
+			const verifyingEmailChange = managing && emailFlow?.mode === "email" && Boolean(emailFlow.address);
+			const passkey = enrolling && !(busy && statusArea === "code") ? emailFlow.passkey : null;
+			const signingUp = Boolean(signup || passkey?.mode === "register" || backingUp);
+			let screen = signedIn ? "signed-in" : "signed-out";
+			if (backingUp) screen = "key-setup";
+			else if (importRequired) screen = "import";
+			else if (editingAvatar) screen = "avatar-editor";
+			else if (enrolling) {
+				if (signup) screen = signup.screen || "signup-birb";
+				else if (passkey?.mode === "login" && emailFlow.recovering) screen = "recovery-key";
+				else screen = passkey ? "passkey-" + passkey.mode : "code-screen";
+			}
+			else if (managing) screen = "manage-page";
+			const navigationName = signedIn && email ? email : "Account";
+			find("nav-title").textContent = navigationName;
+			find("nav-title").title = navigationName;
+			find("nav-status").textContent = signedIn ? "Backchannel Account" : "Sign in to Backchannel";
+			const navTab = find("nav-tab");
+			if (signedIn && email) navTab.setAttribute("aria-describedby", "account-nav-title");
+			else navTab.removeAttribute("aria-describedby");
+			find("sign-in-actions").hidden = !available;
+			find("create-unavailable").hidden = !available || emailAvailable;
+			find("profile-name").textContent = signingUp ? "Create your account" : "Backchannel Account";
+			find("email-value").textContent = signedIn && !backingUp ? email || "" : ACCOUNT_SIGN_IN_HINT;
+			emailInput.placeholder = email || "No email on file";
+			find("avatar-edit").hidden = !signedIn || backingUp || importRequired;
+			const last = find("last-sync");
+			last.querySelector("span").hidden = writeAccountTime(last.querySelector("time"), state?.lastSync);
+			const deleting = signedIn && accountAction === "delete";
+			find("recovery-code").textContent = backingUp ? signupRecoveryKey() : "";
+			find("key-back").hidden = !signup;
+			find("avatar-edit").setAttribute("aria-expanded", String(editingAvatar));
+			find("actions").hidden = deleting;
+			find("delete-confirm").hidden = !deleting;
+			find("delete").setAttribute("aria-expanded", String(deleting));
+			paintAccountAvatar(find("nav-avatar"), signedIn ? avatar : null);
+			paintAccountAvatar(find("profile-avatar"), signup ? emailFlow.avatar : editingAvatar ? selectedAvatar : signedIn ? avatar : null);
+			for (const button of buttons) button.disabled = busy || !available;
+			entryEmail.disabled = busy || !available || !emailAvailable;
+			find("continue").disabled = entryEmail.disabled || !validAccountEmail(entryEmail.value);
+			emailInput.disabled = busy || !available || !emailAvailable;
+			const sendCode = find("send-code");
+			const newEmail = emailInput.value.trim().toLowerCase();
+			const hasNewEmail = Boolean(newEmail) && newEmail !== email?.toLowerCase();
+			const showUpdate = available && emailAvailable && hasNewEmail;
+			const showEmailHint = showUpdate && validAccountEmail(newEmail);
+			find("email-update").inert = !showUpdate;
+			sendCode.disabled = emailInput.disabled || preparingEmailPasskey || !showEmailHint;
+			find("email-hint").hidden = !showEmailHint;
+			const emailHint = showEmailHint ? " account-email-hint" : "";
+			emailInput.setAttribute("aria-describedby", "account-status-email" + emailHint);
+			sendCode.setAttribute("aria-describedby", "account-status-send-code" + emailHint);
+			for (const [area, id, idle, working] of ACCOUNT_FLOW_ACTIONS) {
+				const confirming = managing && !sendingEmailChangeCode && (area === "send-code" || area === "resend");
+				paintLoadingButton(id, busy && statusArea === area, idle, confirming ? "Confirming passkey…" : working);
+			}
+			paintLoadingButton("sync-now", syncing, "Sync now", "Syncing…");
+			paintLoadingButton("restore-snapshot", busy && statusArea === "snapshot-restore", "Restore previous version", "Restoring…");
+			key.disabled = busy;
+			for (const input of avatarInputs) {
+				input.disabled = busy;
+				if (editingAvatar) input.checked = selectedAvatar[input.dataset.birbOption] === input.value;
+			}
+			for (const input of signupInputs) input.disabled = busy;
+			find("recovery-continue").disabled = busy || !available || !validAccountRecoveryKey(key.value.trim());
+			find("sync-now").disabled = busy || !available || !signedIn || backingUp || importRequired || needsEmail || Boolean(conflict?.conflicts);
+			find("import-continue").disabled ||= !localDataOwner;
+			find("restore-snapshot").disabled = busy || !available || !signedIn || !conflict?.recovery;
+			for (const id of ["logout", "import-sign-out", "manage", "manage-back", "key-done", "key-save", "avatar-cancel"]) find(id).disabled = busy;
+			find("avatar-edit").disabled = busy || !signedIn;
+			for (const id of ["delete", "delete-final", "keep-local", "keep-remote"]) find(id).disabled = busy || !available || !signedIn;
+			find("delete-final").disabled ||= Boolean(deletePreparation && !deletePreparation.challenge);
+			find("delete-cancel").disabled = busy && !deletePrompt;
+			find("snapshot-restore").hidden = !conflict?.recovery;
+			find("conflict").hidden = !conflict?.conflicts;
+			if (enrolling || verifyingEmailChange) {
+				const codeContent = find("code-content");
+				const codeHost = find(verifyingEmailChange ? "manage-code" : "code-screen");
+				if (codeContent.parentNode !== codeHost) codeHost.append(codeContent);
+				const { address } = emailFlow;
+				find("code-hint").textContent = address ? "Enter the code sent to " + address + "." : "";
+				find("login-hint").textContent = address ? "Sign in with the passkey for " + address + "." : "";
+				emailCode.disabled = busy;
+				find("verify-code").disabled = busy || !emailCode.value.trim() || !emailCode.validity.valid;
+				const resend = find("resend-control");
+				const locked = emailFlow.remainingResends === 0;
+				const waitMinutes = Math.ceil((emailFlow.resendAt - Date.now()) / 60_000);
+				const tip = locked ? "You’ve sent three more codes. If needed, start again after the 15-minute limit resets."
+					: waitMinutes > 1 ? `Try again in ${waitMinutes} minutes.`
+					: waitMinutes === 1 ? "Wait a minute between verification codes." : "";
+				find("resend-code").disabled ||= preparingEmailPasskey || Boolean(tip);
+				if (tip) {
+					resend.dataset.tip = tip;
+					resend.setAttribute("aria-label", "Send another code. " + tip);
+					resend.tabIndex = 0;
+				} else {
+					delete resend.dataset.tip;
+					resend.removeAttribute("aria-label");
+					resend.removeAttribute("tabindex");
+				}
+				if (passkey) {
+					const [label, progress] = passkey.challenge.attestation
+						? ["Confirm passkey", "Confirming passkey…"] : ACCOUNT_PASSKEY_ACTIONS[passkey.mode];
+					const area = "passkey-" + passkey.mode;
+					paintLoadingButton(area + "-submit", busy && statusArea === area, label, progress);
+				}
+			}
+			if (managing) {
+				const outgoing = shownManageScreen;
+				shownManageScreen = find(verifyingEmailChange ? "manage-code" : "manage-email");
+				slideAccountContent(manageStage, outgoing, shownManageScreen);
+			}
+			showScreen(find(screen));
+			const deviceStatus = paintDevices(signedIn);
+			const requestedHost = deviceStatus || find(statusArea.startsWith("device:") ? "status-devices" : "status-" + statusArea);
+			const availabilityHost = find(backingUp ? "status-key" : importRequired ? "status-import" : signedIn ? "status-sync" : "status-signed-out");
+			const host = statusArea === "availability" ? availabilityHost : requestedHost;
+			const statusHost = shownScreen.contains(host) && !host.closest("[hidden]") ? host : find("feedback-parking");
+			const isError = status.hasAttribute("data-error") && Boolean(status.textContent);
+			for (const [field, host] of [[entryEmail, "status-entry"], [emailInput, "status-email"], [emailCode, "status-code"], [key, "status-recovery-key"]]) {
+				if (isError && statusHost === find(host)) field.setAttribute("aria-invalid", "true");
+				else field.removeAttribute("aria-invalid");
+			}
+			if (status.parentNode !== statusHost) statusHost.append(status);
+		}
+
+		function dismissAccountError(event) {
+			const control = event.composedPath()[0];
+			if (!status.hasAttribute("data-error") || !control.matches?.("input, button, select, textarea") ||
+				control.getAttribute("aria-describedby")?.split(/\s+/).includes(status.parentElement.id) || (control === emailCode && statusArea === "code")) return;
+			status.textContent = "";
+			status.removeAttribute("data-error");
+			for (const field of [entryEmail, emailInput, emailCode, key]) field.removeAttribute("aria-invalid");
+		}
+
+		panel.addEventListener("focusin", (event) => {
+			if (event.composedPath()[0].matches?.(":focus-visible")) dismissAccountError(event);
+		});
+		panel.addEventListener("click", dismissAccountError);
+
+		async function run(action, working = "", area = "sync", errorFallback) {
+			if (busy) return;
+			busy = true;
+			statusArea = area;
+			status.removeAttribute("data-error");
+			status.textContent = working;
+			paint();
+			try {
+				const message = await action();
+				if (message !== undefined) status.textContent = message;
+			} catch (error) {
+				if (error.message === "passkey-cancelled") return;
+				if (["sign-in-required", "session-expired"].includes(error.message)) {
+					expired = true;
+					if (area !== "delete") statusArea = "signed-out";
+				}
+				if (error.message === "email-required") {
+					emailAvailable = true;
+					profile = { ...profile, account: state?.account, email: null };
+				}
+				const fallback = statusArea === "login" || statusArea === "passkey-login"
+					? "Couldn’t sign in with your passkey. Try again." : errorFallback;
+				status.textContent = friendlyAccountError(error, fallback);
+				status.setAttribute("data-error", "");
+			} finally {
+				await refreshLocalAccount();
+				if (emailFlow?.mode === "email" && accountAction !== "manage") closeEmail();
+				if (area === "delete" && !state?.token) status.textContent = "";
+				busy = false;
+				paint();
+				if (accountAvailabilityPending) showAccount();
+				if (pendingEdit && !editTimer && !conflict && !expired && !document.hidden) queueAccountEditSync();
+			}
+		}
+
+		async function signalPasskeyEmail({ account, email }) {
+			if (!account || !email || typeof window.PublicKeyCredential?.signalCurrentUserDetails !== "function") return;
+			if (lastPasskeyEmail?.account === account && lastPasskeyEmail.email === email) return;
+			const current = { account, email };
+			lastPasskeyEmail = current;
+			try {
+				await PublicKeyCredential.signalCurrentUserDetails({
+					rpId: START_PAGE_HOST,
+					userId: accountBase64(new TextEncoder().encode(account)),
+					name: email,
+					displayName: "Backchannel account",
+				});
+			} catch {
+				if (lastPasskeyEmail === current) lastPasskeyEmail = null;
+			}
+		}
+
+		async function refreshProfile(held, force = false) {
+			if (!held?.token || held.expiresAt <= Date.now()) return;
+			const known = profile?.account === held.account ? profile : { account: held.account, devices: null };
+			const getEmail = force || known.email === undefined
+				? accountRequest("/email", { token: held.token }).then((result) => result?.email).catch(() => known.email)
+				: known.email;
+			const getDevices = force || Date.now() - deviceCheckedAt > 300000
+				? linkedAccountDevices(held.token).then((result) => { deviceCheckedAt = Date.now(); return result; }).catch(() => known.devices)
+				: known.devices;
+			const [email, devices] = await Promise.all([getEmail, getDevices]);
+			profile = { account: held.account, email, devices };
+			signalPasskeyEmail(profile);
+		}
+
+		panel.addEventListener("account-settings-shown", async () => {
+			const held = await load(ACCOUNT_SYNC_KEY, null);
+			if (busy) return;
+			if (!hasAccountSyncSession(held)) {
+				state = null;
+				avatar = null;
+				profile = null;
+				paint();
+				return;
+			}
+			if (expired || held.expiresAt <= Date.now()) return;
+			const result = await accountRequest("/email", { token: held.token }).catch(() => null);
+			if ((await load(ACCOUNT_SYNC_KEY, null))?.token !== held.token || busy || !result) return;
+			profile = { account: held.account, devices: profile?.account === held.account ? profile.devices : null, email: result.email };
+			signalPasskeyEmail(profile);
+			await refreshLocalAccount();
+			paint();
+		});
+
+		function closeEmail() {
+			window.clearTimeout(resendTimer);
+			hideSourceHelpTip(shadow);
+			emailFlow = null;
+			emailInput.value = "";
+			emailCode.value = "";
+			key.value = "";
+		}
+
+		function openEmail(mode, email = "") {
+			closeEmail();
+			emailFlow = { mode, address: "", passkey: null, remainingResends: 3, resendAt: 0 };
+			emailInput.value = email;
+			statusArea = "email";
+			status.textContent = "";
+		}
+
+		async function authenticate(mode, prepared) {
+			const details = mode === "recover" ? { recoveryKey: emailFlow?.recoveryKey } : undefined;
+			const { signed, signup, recoveryKey } = await accountAuthenticate(mode, details, prepared);
+			if (mode === "register") {
+				if (!validAccountRecoveryKey(signup?.signup) || !Number.isFinite(signup.expiresAt)) throw new Error("invalid-credential");
+				emailFlow.signup = { token: signup.signup, expiresAt: signup.expiresAt, recoveryKey };
+				emailFlow.passkey = null;
+				return "";
+			}
+			return acceptAccountSession(signed, recoveryKey);
+		}
+
+		async function acceptAccountSession(signed, recoveryKey, { avatar: chosenAvatar, shareDiagnostics } = {}) {
+			if (typeof signed?.account !== "string" || typeof signed.token !== "string" || !Number.isFinite(signed.expiresAt) ||
+				!validAccountRecoveryKey(recoveryKey)) throw new Error("invalid-credential");
+			await accountSyncLock(async (lease) => {
+				const current = await GM.getValue(ACCOUNT_SYNC_KEY, null);
+				const prior = hasAccountSyncSession(current) && current.account === signed.account ? current : {};
+				const owner = await accountDataOwner(current);
+				await lease.commit(() => GM.setValue(ACCOUNT_DATA_OWNER_KEY, owner || signed.account));
+				if (validAccountAvatar(chosenAvatar)) {
+					await lease.commit(() => GM.setValue(ACCOUNT_AVATAR_PREFIX + signed.account, chosenAvatar));
+				}
+				if (typeof shareDiagnostics === "boolean") {
+					await lease.commit(() => GM.setValue(ACCOUNT_DIAGNOSTICS_PREFIX + signed.account, shareDiagnostics ? Date.now() : 0));
+				}
+				await lease.commit(() => GM.setValue(ACCOUNT_SYNC_KEY, {
+					revision: 0, base: null, ...prior, ...signed, protocol: ACCOUNT_SYNC_PROTOCOL, recoveryKey,
+				}));
+			});
+			expired = false;
+			conflict = null;
+			closeEmail();
+			await refreshProfile(signed, true);
+			queueAccountEditSync();
+			return "";
+		}
+
+		function prepareEmailChangePasskey(token) {
+			const prepared = { token, expiresAt: Date.now() + 4 * 60_000 };
+			emailPasskey = prepared;
+			prepared.request = accountRequest("/email/options", { method: "POST", token }).then((challenge) => {
+				prepared.challenge = challenge;
+				prepared.expiresAt = challenge?.expiresAt ?? prepared.expiresAt;
+				return challenge;
+			}, (error) => {
+				prepared.error = error;
+				return null;
+			}).finally(() => {
+				prepared.request = null;
+				if (emailPasskey === prepared) paint();
+			});
+			return prepared;
+		}
+
+		async function confirmEmailChange({ token, challenge }, details) {
+			emailPasskey = null;
+			const controller = new AbortController();
+			emailPrompt = controller;
+			try {
+				const { ceremony, options } = challenge;
+				const { body } = await accountPasskeyProof({ ceremony, options: { ...options, allowCredentials: [] } }, false, {
+					controller, mediation: "required",
+				});
+				emailPrompt = null;
+				sendingEmailChangeCode = true;
+				paint();
+				return await accountRequest("/email/start", { method: "POST", token, body: { ...body, ...details } });
+			} finally {
+				emailPrompt = null;
+				sendingEmailChangeCode = false;
+			}
+		}
+
+		async function sendEmailCode(prepared) {
+			const email = emailFlow.address || emailInput.value.trim();
+			if (!validAccountEmail(email)) throw new Error("invalid-email");
+			const { mode } = emailFlow;
+			const body = { email, codeFormat: "numeric" };
+			let sent;
+			try {
+				sent = mode === "email"
+					? await confirmEmailChange(prepared, body)
+					: await accountRequest("/email/register/start", { method: "POST", body });
+			} catch (error) {
+				if (error.status === 429 && emailFlow?.address) setResendPolicy(error, emailFlow.remainingResends);
+				throw error;
+			}
+			setResendPolicy(sent, emailFlow.remainingResends - (emailFlow.address ? 1 : 0));
+			emailFlow.address = email;
+			emailFlow.verificationId = sent?.verificationId;
+			emailCode.value = "";
+			const numeric = Boolean(sent?.verificationId);
+			emailCode.inputMode = numeric ? "numeric" : "text";
+			emailCode.maxLength = numeric ? 6 : 64;
+			if (numeric) emailCode.pattern = "[0-9]{6}";
+			else emailCode.removeAttribute("pattern");
+			return "";
+		}
+
+		function setResendPolicy(policy, fallbackRemaining) {
+			const wait = (Number.isFinite(policy?.retryAfter) ? Math.max(1, policy.retryAfter) : 60) * 1000;
+			emailFlow.remainingResends = policy?.remainingResends ?? fallbackRemaining;
+			emailFlow.resendAt = Date.now() + wait;
+			window.clearTimeout(resendTimer);
+			resendTimer = window.setTimeout(() => {
+				hideSourceHelpTip(shadow);
+				paint();
+			}, wait);
+		}
+
+		async function verifyEmailCode() {
+			const { mode, address: email, verificationId } = emailFlow;
+			const body = { email, verificationId, code: emailCode.value.trim() };
+			if (mode !== "email") {
+				const challenge = await accountRequest("/register/options", { method: "POST", body: { ...body, flow: "continue" } });
+				const next = challenge.mode ?? "register";
+				if (next !== "register" && next !== "login") throw new Error("invalid-credential");
+				prepareEmailPasskey(next, challenge);
+				if (next !== "login" || !panel.getClientRects().length) return "";
+				try {
+					return await finishEmailPasskey();
+				} catch (error) {
+					if (error.message === "passkey-cancelled") return "";
+					if (emailFlow?.passkey) statusArea = "passkey-login";
+					throw error;
+				}
+			}
+			const { account, token } = state;
+			const verified = await accountRequest("/email/verify", { method: "POST", token, body });
+			if (typeof verified?.email !== "string") throw new Error("invalid-email-code");
+			profile = { ...profile, account, email: verified.email };
+			signalPasskeyEmail(profile);
+			openEmail("email");
+			if (validAccountRecoveryKey(state.recoveryKey)) queueAccountEditSync();
+			showToast("Email updated.", { kind: "system" });
+			return "";
+		}
+
+		function prepareEmailPasskey(mode, challenge) {
+			emailFlow.passkey = { mode, challenge, expires: challenge.expiresAt ?? Date.now() + 4 * 60_000 };
+			if (mode === "register") {
+				emailFlow.avatar ||= DEFAULT_ACCOUNT_AVATAR;
+				for (const input of signupInputs) input.checked = emailFlow.avatar[input.dataset.birbOption] === input.value;
+			}
+			emailCode.value = "";
+		}
+
+		async function recoverEmailPasskey() {
+			const passkey = emailFlow?.passkey;
+			if (passkey?.mode !== "login") return;
+			const recoveryKey = key.value.trim();
+			try {
+				const syncKeyVerifier = await accountSyncKeyVerifier(recoveryKey);
+				const challenge = await accountRequest("/recover/options", {
+					method: "POST", body: { signInCeremony: passkey.challenge.ceremony, syncKeyVerifier },
+				});
+				emailFlow.recoveryKey = recoveryKey;
+				emailFlow.recovering = false;
+				key.value = "";
+				prepareEmailPasskey("recover", challenge);
+				return "";
+			} catch (error) {
+				if (error.message === "expired-ceremony") {
+					emailFlow.passkey = null;
+					emailFlow.recovering = false;
+					statusArea = "code";
+				}
+				throw error;
+			}
+		}
+
+		async function finishEmailPasskey() {
+			const passkey = emailFlow?.passkey;
+			if (!passkey) return;
+			try {
+				if (Date.now() >= passkey.expires) throw Object.assign(new Error("expired-ceremony"), { status: 401 });
+				return await authenticate(passkey.mode, passkey.challenge);
+			} catch (error) {
+				if (error.status && emailFlow?.passkey === passkey) {
+					emailFlow.passkey = null;
+					emailCode.value = "";
+					statusArea = "code";
+				}
+				throw error;
+			}
+		}
+
+		async function sync(preference = "", trigger = "manual") {
+			const startedAt = Date.now();
+			let outcome;
+			syncing = true;
+			paint();
+			try {
+				const result = await syncAccount(preference, conflict, trigger);
+				outcome = result?.conflicts ? "conflict" : result?.recovery ? "unavailable" : result?.revision ? "ok" : undefined;
+				conflict = result?.conflicts || result?.recovery ? result : null;
+				if (result?.conflicts) statusArea = "conflict";
+				if (result?.revision) {
+					const held = await load(ACCOUNT_SYNC_KEY, null);
+					await refreshProfile(held, trigger !== "edit");
+				}
+				if (result?.restored) showToast("Previous version restored.", { kind: "system" });
+				return preference && result?.conflicts ? "The changes were updated. Choose again." : "";
+			} catch (error) {
+				outcome = error.name === "TimeoutError" ? "timeout" : ["session-expired", "sign-in-required"].includes(error.message) ? "sign-in" : "unavailable";
+				if (error.message === "snapshot-restore-changed") {
+					conflict = null;
+					statusArea = "sync";
+				}
+				throw error;
+			} finally {
+				syncing = false;
+				if (outcome) void reportDiagnostics("account-sync", "", outcome, startedAt);
+			}
+		}
+
+		const action = (id, handler, working = "", area) => {
+			find(id).onclick = (event) => {
+				if (event.isTrusted && !find(id).disabled) run(handler, working, area);
+			};
+		};
+		function requestVerificationCode() {
+			if (busy || !emailFlow) return;
+			const enteringEmail = emailFlow.mode === "register" && !emailFlow.address;
+			const resending = Boolean(emailFlow?.address);
+			const area = enteringEmail ? "entry" : resending ? "resend" : "send-code";
+			let sending;
+			if (emailFlow.mode === "email") {
+				if (accountAction !== "manage" || !state?.token) return;
+				const prepared = emailPasskey;
+				if (prepared?.token !== state.token || !prepared.challenge || Date.now() >= prepared.expiresAt) {
+					run(async () => {
+						const next = prepareEmailChangePasskey(state.token);
+						if (!await next.request) throw next.error || new Error("account-unavailable");
+						return resending ? "Select Send another code again to open the passkey prompt."
+							: "Select Update again to open the passkey prompt.";
+					}, "", area, "Couldn’t start passkey confirmation. Try again.");
+					return;
+				}
+				// Start the browser prompt during the gesture, before painting the busy controls.
+				sending = sendEmailCode(prepared);
+			}
+			hideSourceHelpTip(shadow);
+			run(async () => {
+				try {
+					return await (sending ?? sendEmailCode());
+				} catch (error) {
+					if (enteringEmail) closeEmail();
+					throw error;
+				}
+			}, "", area, "Couldn’t send a verification code. Try again.").then(() => {
+				if (accountAction === "manage" && state?.token && !emailPasskey) {
+					prepareEmailChangePasskey(state.token);
+					paint();
+				}
+				if (emailCode.getClientRects().length) emailCode.focus({ preventScroll: true });
+				else if (enteringEmail && !emailFlow) entryEmail.focus({ preventScroll: true });
+			});
+		}
+		find("entry").onsubmit = (event) => {
+			event.preventDefault();
+			if (!event.isTrusted || entryEmail.disabled || !validateEmailField(entryEmail, "entry")) return;
+			openEmail("register", entryEmail.value.trim());
+			requestVerificationCode();
+		};
+		function paintEditedField(...areas) {
+			if (areas.includes(statusArea) && status.hasAttribute("data-error")) status.textContent = "";
+			paint();
+		}
+		function validateEmailField(field, area) {
+			if (validAccountEmail(field.value)) return true;
+			statusArea = area;
+			status.textContent = friendlyAccountError(new Error("invalid-email"));
+			status.setAttribute("data-error", "");
+			paint();
+			return false;
+		}
+		for (const [field, area] of [[entryEmail, "entry"], [emailInput, "email"]]) {
+			const areas = field === emailInput ? [area, "send-code"] : [area];
+			field.addEventListener("input", () => paintEditedField(...areas));
+			field.addEventListener("change", () => paintEditedField(...areas));
+			field.addEventListener("blur", () => {
+				if (!field.disabled && field.value.trim()) validateEmailField(field, area);
+			});
+		}
+		entryEmail.addEventListener("keydown", (event) => {
+			if (event.isTrusted && event.key === "Enter" && !event.isComposing && !entryEmail.disabled &&
+				!validateEmailField(entryEmail, "entry")) event.preventDefault();
+		});
+		function updateEmail(event) {
+			if (event.isTrusted && emailFlow?.mode === "email" && !emailFlow.address && !emailInput.disabled &&
+				emailInput.value.trim() && validateEmailField(emailInput, "email") &&
+				!find("send-code").disabled) requestVerificationCode();
+		}
+		find("manage-email").onsubmit = (event) => {
+			event.preventDefault();
+			updateEmail(event);
+		};
+		find("send-code").onclick = updateEmail;
+		emailInput.addEventListener("keydown", (event) => {
+			if (event.key !== "Enter" || event.isComposing) return;
+			event.preventDefault();
+			updateEmail(event);
+		});
+		function backFromEmail() {
+			closeEmail();
+			status.textContent = "";
+			paint();
+			entryEmail.focus({ preventScroll: true });
+		}
+		for (const button of panel.querySelectorAll("[data-account-email-back]")) button.onclick = backFromEmail;
+		emailCode.addEventListener("input", () => paintEditedField("code"));
+		emailCode.addEventListener("change", paint);
+		find("resend-code").onclick = (event) => { if (event.isTrusted && !find("resend-code").disabled) requestVerificationCode(); };
+		function submitVerificationCode(event) {
+			if (!event.isTrusted || find("verify-code").disabled) return;
+			run(verifyEmailCode, "", "code").then(() => {
+				if (emailFlow?.passkey) find("passkey-" + emailFlow.passkey.mode + "-submit").focus({ preventScroll: true });
+				else if (accountAction === "manage" && !emailFlow?.address) find("manage-heading").focus({ preventScroll: true });
+			});
+		}
+		find("verify-code").onclick = submitVerificationCode;
+		emailCode.addEventListener("keydown", (event) => {
+			if (event.key === "Enter" && !event.isComposing) submitVerificationCode(event);
+		});
+		function focusAccountSetup() {
+			if (shownScreen === find("key-setup")) find("key-heading").focus({ preventScroll: true });
+			else if (shownScreen === find("signup-diagnostics")) find("diagnostics-heading").focus({ preventScroll: true });
+			else if (shownScreen === signupEditor) signupInputs.find((input) => input.checked)?.focus({ preventScroll: true });
+		}
+		for (const mode of Object.keys(ACCOUNT_PASSKEY_ACTIONS)) {
+			find(`passkey-${mode}-submit`).onclick = (event) => {
+				if (event.isTrusted) run(finishEmailPasskey, "", "passkey-" + mode).then(focusAccountSetup);
+			};
+		}
+		find("recover-passkey").onclick = (event) => {
+			if (!event.isTrusted || busy || emailFlow?.passkey?.mode !== "login") return;
+			emailFlow.recovering = true;
+			status.textContent = "";
+			paint();
+			key.focus({ preventScroll: true });
+		};
+		action("recovery-continue", recoverEmailPasskey, "", "recovery-key");
+		find("login").onclick = (event) => {
+			if (event.isTrusted) run(() => authenticate("login"), "", "login").then(focusAccountSetup);
+		};
+		action("import-continue", async () => {
+			const { account, token } = state;
+			const confirmedOwner = localDataOwner;
+			await accountSyncLock(async (lease) => {
+				const held = await GM.getValue(ACCOUNT_SYNC_KEY, null);
+				if (held?.token !== token || held?.account !== account || (await accountDataOwner(held)) !== confirmedOwner) {
+					throw new Error("account-unavailable");
+				}
+				if ((await GM.getValue(ACCOUNT_CHECKPOINT_KEY, null))?.account === account) {
+					await lease.commit(() => forget(ACCOUNT_CHECKPOINT_KEY));
+				}
+				await lease.commit(() => GM.setValue(ACCOUNT_DATA_OWNER_KEY, account));
+			});
+			queueAccountEditSync();
+		}, "", "import");
+		action("sync-now", () => sync());
+		action("restore-snapshot", () => sync("", "restore"), "", "snapshot-restore");
+		action("keep-local", () => sync("local"), "", "conflict");
+		action("keep-remote", () => sync("remote"), "", "conflict");
+		function openAccountAction(next) {
+			const wasOpen = accountAction === next;
+			closeAccountAction();
+			if (!wasOpen) accountAction = next;
+			status.textContent = "";
+			if (accountAction === "manage") {
+				openEmail("email");
+				void updateDiagnosticSharing();
+				if (emailAvailable) prepareEmailChangePasskey(state.token);
+			}
+			paint();
+			if (accountAction === "avatar") avatarInputs.find((input) => input.checked)?.focus({ preventScroll: true });
+			if (accountAction === "manage") find("manage-heading").focus({ preventScroll: true });
+			if (accountAction === "delete") {
+				statusArea = "delete";
+				status.textContent = "";
+				prepareAccountDeletion();
+				find("delete-cancel").focus();
+			}
+		}
+		for (const [button, target] of [["avatar-edit", "avatar"], ["manage", "manage"]]) {
+			find(button).onclick = (event) => { if (event.isTrusted) openAccountAction(target); };
+		}
+		function closeAndFocus(opener) {
+			closeAccountAction();
+			status.textContent = "";
+			paint();
+			find(opener).focus({ preventScroll: true });
+			if (pendingEdit && !editTimer) queueAccountEditSync();
+		}
+		find("avatar-cancel").onclick = () => closeAndFocus("avatar-edit");
+		find("manage-back").onclick = () => {
+			if (!emailFlow?.address) return closeAndFocus("manage");
+			openEmail("email", emailFlow.address);
+			paint();
+			emailInput.focus({ preventScroll: true });
+		};
+		async function swapDeleteControls(open) {
+			if (deleteFade) return;
+			if (!open) deletePrompt?.abort();
+			const outgoing = find(open ? "actions" : "delete-confirm");
+			const incoming = find(open ? "delete-confirm" : "actions");
+			const animate = !prefersReducedMotion() && typeof outgoing.animate === "function";
+			if (animate) {
+				outgoing.inert = true;
+				const animation = outgoing.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 100, fill: "forwards" });
+				const fade = { element: outgoing, animation };
+				deleteFade = fade;
+				await animation.finished.catch(() => {});
+				if (deleteFade !== fade) return;
+			}
+			if (open) openAccountAction("delete");
+			else closeAndFocus("delete");
+			if (animate) incoming.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 150 });
+		}
+		for (const [id, open] of [["delete", true], ["delete-cancel", false]]) {
+			find(id).onclick = (event) => { if (event.isTrusted && !find(id).disabled) swapDeleteControls(open); };
+		}
+		avatarEditor.addEventListener("change", (event) => {
+			const input = event.target;
+			if (!event.isTrusted || busy || accountAction !== "avatar" || !state?.account || !avatarInputs.includes(input) || !input.checked) return;
+			const selected = { ...(validAccountAvatar(avatar) ? avatar : DEFAULT_ACCOUNT_AVATAR), [input.dataset.birbOption]: input.value };
+			if (!validAccountAvatar(selected)) return;
+			const key = ACCOUNT_AVATAR_PREFIX + state.account;
+			avatar = selected;
+			run(() => save(key, selected), "", "avatar", "Couldn’t save your birb. Try again.");
+		});
+		signupEditor.addEventListener("change", (event) => {
+			const input = event.target;
+			if (!emailFlow?.signup || !signupInputs.includes(input) || !input.checked) return;
+			emailFlow.avatar = { ...(emailFlow.avatar || DEFAULT_ACCOUNT_AVATAR), [input.dataset.birbOption]: input.value };
+			paint();
+		});
+		function signupRecoveryKey() {
+			return emailFlow?.signup?.recoveryKey || state?.recoveryKey || "";
+		}
+		function moveSignup(event, screen, shareDiagnostics) {
+			if (!event.isTrusted || !emailFlow?.signup || busy) return;
+			emailFlow.signup.screen = screen;
+			if (typeof shareDiagnostics === "boolean") emailFlow.signup.shareDiagnostics = shareDiagnostics;
+			status.textContent = "";
+			paint();
+			focusAccountSetup();
+		}
+		find("signup-birb-next").onclick = (event) => moveSignup(event, "signup-diagnostics");
+		find("diagnostics-back").onclick = (event) => moveSignup(event, "signup-birb");
+		find("diagnostics-share").onclick = (event) => moveSignup(event, "key-setup", true);
+		find("diagnostics-decline").onclick = (event) => moveSignup(event, "key-setup", false);
+		find("key-back").onclick = (event) => moveSignup(event, "signup-diagnostics");
+		action("key-done", async () => {
+			const signup = emailFlow?.signup;
+			if (signup) {
+				try {
+					if (Date.now() >= signup.expiresAt) throw new Error("signup-expired");
+					const signed = await accountRequest("/register/complete", { method: "POST", body: { signup: signup.token } });
+					return acceptAccountSession(signed, signup.recoveryKey, { avatar: emailFlow.avatar, shareDiagnostics: signup.shareDiagnostics });
+				} catch (error) {
+					if (error.message === "signup-expired" || error.message === "email-in-use") {
+						closeEmail();
+						statusArea = "entry";
+					}
+					throw error;
+				}
+			}
+			await accountSyncLock(async (lease) => {
+				const held = await GM.getValue(ACCOUNT_SYNC_KEY, null);
+				if (held?.token === state?.token) await lease.commit(() => GM.setValue(ACCOUNT_SYNC_KEY, { ...held, keyBackupPending: false }));
+			});
+			queueAccountEditSync();
+		}, "", "key");
+		action("key-save", () => {
+			const page = window.open("", "_blank");
+			if (!page) throw new Error("recovery-save-blocked");
+			page.opener = null;
+			const printDoc = page.document;
+			printDoc.title = "Backchannel recovery key";
+			printDoc.body.style.cssText = "font:16px/1.5 system-ui,sans-serif;margin:32px";
+			const heading = printDoc.createElement("h1");
+			heading.textContent = printDoc.title;
+			const value = printDoc.createElement("code");
+			value.textContent = signupRecoveryKey();
+			value.style.cssText = "font-size:18px;overflow-wrap:anywhere";
+			const hint = printDoc.createElement("p");
+			hint.textContent = ACCOUNT_RECOVERY_KEY_HINT;
+			printDoc.body.append(heading, value, hint);
+			page.addEventListener("afterprint", () => page.close(), { once: true });
+			page.print();
+			return "";
+		}, "", "key-action");
+		async function signOut() {
+			await accountSyncLock(async (lease) => {
+				const held = await GM.getValue(ACCOUNT_SYNC_KEY, null);
+				const owner = await accountDataOwner(held);
+				if (owner) await lease.commit(() => GM.setValue(ACCOUNT_DATA_OWNER_KEY, owner));
+				if (hasAccountSyncSession(held) && held.base && held.account === owner) {
+					const checkpoint = { account: held.account, revision: held.revision, ciphertext: await accountSeal(held.base, held, held.revision) };
+					await lease.commit(() => GM.setValue(ACCOUNT_CHECKPOINT_KEY, checkpoint));
+				}
+				if (held?.token) await accountRequest("/session", { method: "DELETE", token: held.token }).catch(() => {});
+				await lease.commit(() => forget(ACCOUNT_SYNC_KEY));
+			});
+			conflict = null;
+			expired = false;
+			profile = null;
+			closeEmail();
+			closeAccountAction();
+			showToast("Signed out.", { kind: "system" });
+			return "";
+		}
+		action("logout", signOut, "", "logout");
+		action("import-sign-out", signOut, "", "import");
+		panel.addEventListener("account-section-hidden", () => {
+			accountAvailabilityPending = false;
+			finishSlide(stage);
+			finishSlide(manageStage);
+			closeAccountAction();
+			paint();
+		});
+		key.addEventListener("input", () => paintEditedField("recovery-key"));
+		async function prepareAccountDeletion() {
+			const preparation = { token: state.token, expires: Date.now() + 4 * 60_000, challenge: null };
+			deletePreparation = preparation;
+			paint();
+			try {
+				preparation.challenge = await accountRequest("/delete/options", { method: "POST", token: preparation.token });
+			} catch (error) {
+				if (deletePreparation !== preparation) return;
+				deletePreparation = null;
+				if (error.message === "sign-in-required") expired = true;
+				status.textContent = friendlyAccountError(error);
+				status.setAttribute("data-error", "");
+			}
+			if (accountAction === "delete") paint();
+		}
+
+		find("delete-final").onclick = (event) => {
+			if (!event.isTrusted || find("delete-final").disabled) return;
+			const { account, token } = state;
+			const preparation = deletePreparation;
+			if (!preparation?.challenge || preparation.token !== token || Date.now() >= preparation.expires) {
+				prepareAccountDeletion();
+				return;
+			}
+			deletePreparation = null;
+			run(async () => {
+				const controller = new AbortController();
+				deletePrompt = controller;
+				paint();
+				let body;
+				try {
+					const { ceremony, options } = preparation.challenge;
+					({ body } = await accountPasskeyProof({ ceremony, options: { ...options, allowCredentials: [] } }, false, { controller }));
+				} catch (error) {
+					if (accountAction !== "delete" && controller.signal.aborted) return "";
+					throw error;
+				} finally {
+					deletePrompt = null;
+				}
+				status.textContent = "Deleting account…";
+				paint();
+				await accountRequest("", { method: "DELETE", token, body });
+				signalRemovedAccountPasskey(body.credential.id, account);
+				await accountSyncLock(async (lease) => {
+					const held = await GM.getValue(ACCOUNT_SYNC_KEY, null);
+					if (held?.account === account) {
+						const owner = await accountDataOwner(held);
+						await lease.commit(() => GM.setValue(ACCOUNT_DATA_OWNER_KEY, owner));
+						await lease.commit(() => forget(ACCOUNT_SYNC_KEY));
+					}
+					if ((await GM.getValue(ACCOUNT_CHECKPOINT_KEY, null))?.account === account) await lease.commit(() => forget(ACCOUNT_CHECKPOINT_KEY));
+					await lease.commit(() => forget(ACCOUNT_AVATAR_PREFIX + account));
+					await lease.commit(() => forget(ACCOUNT_DIAGNOSTICS_PREFIX + account));
+				});
+				conflict = null;
+				profile = null;
+				avatar = null;
+				state = null;
+				entryEmail.value = "";
+				closeEmail();
+				closeAccountAction();
+				status.textContent = "";
+				paint();
+			}, "Confirming deletion…", "delete").then(() => {
+				if (accountAction === "delete" && !expired && !deletePreparation && !deleteFade && state?.token === token) prepareAccountDeletion();
+			});
+		};
+
+		function showAccount() {
+			closeAccountAction();
+			paint();
+			accountAvailabilityPending = busy;
+			if (busy) return;
+			return run(async () => {
+				if (!accountPasskeysSupported()) return "This browser doesn’t support account sync.";
+				const capabilities = await accountRequest("/status").catch(() => null);
+				available = capabilities?.available === true;
+				emailAvailable = capabilities?.emailAvailable === true;
+				if (!available) return "Account sync is unavailable right now.";
+				const held = await GM.getValue(ACCOUNT_SYNC_KEY, null);
+				if (hasAccountSyncSession(held)) {
+					if (expired || held.expiresAt <= Date.now()) return "Your session expired. Sign in again to sync.";
+					await refreshProfile(held, true);
+				}
+				return "";
+			}, "", "availability");
+		}
+
+		const canSyncEdits = () => !document.hidden && !busy && !conflict && !expired && !editTimer && accountAction !== "delete";
+		async function syncPendingEdits() {
+			if (!canSyncEdits()) return;
+			const held = await load(ACCOUNT_SYNC_KEY, null);
+			if (!hasAccountSyncSession(held) || held.keyBackupPending || held.expiresAt <= Date.now()) return;
+			if (emailAvailable && profile?.account === held.account && profile.email === null) return;
+			if ((await accountDataOwner(held)) !== held.account) {
+				pendingEdit = false;
+				return;
+			}
+			const hasEdits = await accountHasPendingEdits(held);
+			if (!canSyncEdits()) return;
+			pendingEdit = false;
+			if (hasEdits) return run(() => sync("", "edit"));
+		}
+
+		queueAccountEditSync = () => {
+			pendingEdit = true;
+			clearTimeout(editTimer);
+			editTimer = window.setTimeout(() => { editTimer = 0; syncPendingEdits().catch(console.error); }, 500);
+		};
+		refreshLocalAccount().then(() => {
+			if (!busy) paint();
+			if (state?.token && !state.keyBackupPending && validAccountRecoveryKey(state.recoveryKey)) queueAccountEditSync();
+		});
+		const resumeEdits = () => syncPendingEdits().catch(console.error);
+		document.addEventListener("visibilitychange", resumeEdits);
+		window.addEventListener("focus", resumeEdits);
+		return showAccount;
+	}
+
 	function settingsModalHTML() {
 		return `
 <div id="app-settings-modal" class="app-settings-modal" hidden>
@@ -36629,24 +41569,35 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <div class="app-settings-top"><span id="app-settings-title" class="app-settings-title">Settings</span><span class="app-settings-top-spacer"></span><button id="app-settings-close" class="app-head-icon" type="button" aria-label="Close settings" title="Close">${APP_CLOSE_ICON}</button></div>
 <div class="app-settings-body">
 <nav class="app-settings-nav" aria-label="Settings sections">
+<button type="button" id="account-nav-tab" class="app-settings-tab app-account-tab" data-settings-section="account" aria-label="Account"><span id="account-nav-avatar" class="app-account-avatar account-default-avatar" aria-hidden="true"></span><span class="app-account-tab-text"><span id="account-nav-title" class="app-account-tab-title">Account</span><span id="account-nav-status" class="app-account-tab-subtitle">Sign in to Backchannel</span></span></button>
 <button type="button" class="app-settings-tab" data-settings-section="general"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M2.5 5h6.6M12.9 5h.6M2.5 11h.6M6.9 11h6.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="5" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5" cy="11" r="1.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>General</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="appearance"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.2a5.8 5.8 0 1 0 0 11.6c.9 0 1.4-.6 1.4-1.3 0-.7-.5-1-.5-1.6 0-.7.6-1.2 1.3-1.2h1.4a2.2 2.2 0 0 0 2.2-2.2C13.8 4.5 11.2 2.2 8 2.2Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="5.2" cy="7.6" r=".95" fill="currentColor"/><circle cx="7.4" cy="5.1" r=".95" fill="currentColor"/><circle cx="10.5" cy="5.6" r=".95" fill="currentColor"/></svg><span>Appearance</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sources"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M8 2.6 13.8 5.6 8 8.6 2.2 5.6Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.2 8.4 8 11.4l5.8-3M2.2 11.1 8 14.1l5.8-3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sources</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="sidebar"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="2" y="3.3" width="12" height="9.4" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9.8 3.6v8.8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Sidebar</span></button>
 <button type="button" class="app-settings-tab" data-settings-section="shortcuts"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><rect x="1.8" y="3.6" width="12.4" height="8.8" rx="2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4.7 6.7h.01M8 6.7h.01M11.3 6.7h.01M5.2 9.6h5.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Shortcuts</span></button>
+<div class="settings-credits"><a href="${escapeHTML(REPO_URL)}/issues" target="_blank" rel="noopener noreferrer">Report an issue</a></div>
 </nav>
-<div id="app-settings-content" class="app-settings-content" tabindex="-1" role="group" aria-labelledby="app-settings-heading"><div id="app-settings-heading" class="app-settings-heading">General</div></div>
+<div id="app-settings-content" class="app-settings-content" tabindex="-1" role="group" aria-labelledby="app-settings-heading"><div id="app-settings-heading" class="app-settings-heading">General</div>
+${accountSettingsHTML()}
+${settingsPanelHTML()}
+</div>
 </div>
 </div>
 </div>
 `;
 	}
 
+	function appChinHTML() {
+		return `<footer id="app-chin">
+<a id="app-chin-brand" href="https://triglavis.com/" target="_blank" rel="noopener noreferrer" aria-label="Triglavis" title="Triglavis"><svg viewBox="48 48 200 207" width="12" height="12" aria-hidden="true" focusable="false"><path d="M68 163C84.5685 163 98 176.431 98 193V249.643C98 252.601 95.6012 255 92.6426 255C67.9872 255 48.0001 235.013 48 210.357V172C48 167.029 52.0294 163 57 163H68ZM140.209 226.651C144.697 222.82 151.303 222.82 155.791 226.651L170.438 239.155C176.8 244.586 172.96 255 164.596 255H131.404C123.04 255 119.2 244.586 125.562 239.155L140.209 226.651ZM239 163C243.971 163 248 167.029 248 172V210.357C248 235.013 228.013 255 203.357 255C200.399 255 198 252.601 198 249.643V193C198 176.431 211.431 163 228 163H239ZM201.571 48C227.213 48 248 68.7869 248 94.4287C248 97.5056 245.506 99.9999 242.429 100H217C192.147 100 172 120.147 172 145V204.506C172 206.533 169.549 207.549 168.115 206.115C157.006 195.006 138.994 195.006 127.885 206.115C126.451 207.549 124 206.533 124 204.506V145C124 120.147 103.853 100 79 100H53.5713C50.4944 99.9999 48.0001 97.5056 48 94.4287C48 68.7869 68.7869 48 94.4287 48H201.571Z" fill="currentColor"/></svg></a>
+<div id="app-chin-actions" role="group" aria-label="Article controls"></div>
+</footer>`;
+	}
+
 	function appShellOpenHTML() {
 		return `<div id="app" data-stage="list">
 <div id="app-tip" class="app-tip" role="tooltip" hidden></div>
 <section id="app-onboarding" class="app-onboarding" aria-label="Welcome" hidden></section>
-<div id="app-settings-arrow" class="app-settings-arrow" hidden></div>
 <div id="app-view-arrow" class="app-drop-arrow" aria-hidden="true" hidden></div>
 <div id="app-view-menu" class="app-view-menu" role="dialog" aria-label="Style settings" hidden>
 <div class="app-settings-heading">Style</div>
@@ -36662,6 +41613,10 @@ ${readerMenuHTML()}
 <button id="app-zoom-in" type="button" class="stepper-button" aria-label="Bigger text">+</button>
 </div>
 </div>
+<div class="settings-field app-view-original">
+<div class="appearance-row-label">Page not displaying correctly?</div>
+<div class="appearance-row-hint"><a id="app-article-open" target="_blank" rel="noopener noreferrer" aria-label="Open the original page" title="Open the original page" hidden>Open the original page</a></div>
+</div>
 </div>
 <button id="app-search" class="app-stack-button" type="button" aria-label="Search the list" aria-expanded="false" aria-controls="app-search-bar" hidden>${APP_ICON('<circle cx="7" cy="7" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.2 10.2 13.5 13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>')}</button>
 <div id="app-search-page" class="app-search-page" role="dialog" aria-label="Search Backchannel" hidden><div class="app-search-head"><input id="app-search-input" class="app-search-input" type="search" placeholder="Search Backchannel" autocomplete="off" autocorrect="off" spellcheck="false" aria-label="Search Backchannel"><button id="app-search-close" class="app-search-close" type="button">Cancel</button></div><div id="app-search-results" class="app-search-results"></div></div>
@@ -36674,11 +41629,11 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div id="app-rail-sources"></div>
 <div class="rail-spacer"></div>
 <div id="app-rail-foot-rule" class="rail-rule" aria-hidden="true"></div>
-<button id="settings-toggle" class="rail-button" type="button" data-tip="Settings" aria-label="Open Backchannel settings" aria-expanded="false" aria-controls="settings-panel"><span class="rail-icon">${APP_SETTINGS_ICON}</span><span class="rail-label" aria-hidden="true">Settings</span></button>
+<button id="settings-toggle" class="rail-button" type="button" data-tip="Settings" aria-label="Open Backchannel settings" aria-expanded="false" aria-controls="app-settings-modal" aria-haspopup="dialog"><span class="rail-icon">${APP_SETTINGS_ICON}</span><span class="rail-label" aria-hidden="true">Settings</span></button>
 </nav>
 <button id="app-bar-back" class="app-stack-button" type="button" aria-label="Back to the articles" data-glyph="down" hidden>${APP_ICON('<path d="M2.2 5.1a1 1 0 0 1 1.4-.1L8 9l4.4-4a1 1 0 0 1 1.3 1.5l-5 4.6a1 1 0 0 1-1.4 0l-5-4.6a1 1 0 0 1-.1-1.4z"/>')}</button>
 <div id="app-row-menu" class="dropdown app-row-menu" role="menu" aria-label="This article" hidden></div>
-<div id="app-bar" class="app-bar" hidden><button id="app-bar-view" class="app-stack-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Style settings" title="Style settings" hidden><span class="app-view-glyph"><span class="app-view-big">A</span><span class="app-view-small">a</span></span></button><button id="app-bar-open" class="app-stack-button" type="button" aria-label="Open the original page" hidden>${APP_ICON('<path d="M9 2h5v5h-1.7V4.9L7.7 9.5 6.5 8.3l4.6-4.6H9z"/><path d="M3.5 4H7v1.7H4.7v5.6h5.6V9H12v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-pressed="false" aria-label="Save" hidden>${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-like" class="app-stack-button" type="button" aria-pressed="false" aria-label="Like" hidden>${APP_ICON('<path d="M2 7.2h2.6V14H2.5a.5.5 0 0 1-.5-.5z"/><path d="M5.8 14V6.7l2.5-4.4a1.2 1.2 0 0 1 2.2.9L10 6h3a1.4 1.4 0 0 1 1.37 1.7l-1 4.7A2 2 0 0 1 11.4 14z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
+<div id="app-bar" class="app-bar" hidden><button id="app-bar-view" class="app-stack-button" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Style settings" title="Style settings" hidden><span class="app-view-glyph"><span class="app-view-big">A</span><span class="app-view-small">a</span></span></button><button id="app-bar-open" class="app-stack-button" type="button" aria-label="Open the original page" hidden>${APP_ICON('<path d="M9 2h5v5h-1.7V4.9L7.7 9.5 6.5 8.3l4.6-4.6H9z"/><path d="M3.5 4H7v1.7H4.7v5.6h5.6V9H12v3.5a.5.5 0 0 1-.5.5h-8a.5.5 0 0 1-.5-.5v-8a.5.5 0 0 1 .5-.5z"/>')}</button><button id="app-bar-save" class="app-stack-button" type="button" aria-pressed="false" aria-label="Save" hidden>${APP_ICON('<path d="M3.5 1.5h9a.5.5 0 0 1 .5.5v12.3a.4.4 0 0 1-.64.32L8 11.2l-4.36 3.42A.4.4 0 0 1 3 14.3V2a.5.5 0 0 1 .5-.5z"/>')}</button><span id="app-mobile-votes" hidden></span><button id="app-bar-like" class="app-stack-button" type="button" aria-pressed="false" aria-label="Like" hidden>${APP_ICON('<path d="M2 7.2h2.6V14H2.5a.5.5 0 0 1-.5-.5z"/><path d="M5.8 14V6.7l2.5-4.4a1.2 1.2 0 0 1 2.2.9L10 6h3a1.4 1.4 0 0 1 1.37 1.7l-1 4.7A2 2 0 0 1 11.4 14z"/>')}</button><button id="app-bar-discussion" class="app-stack-button" type="button" aria-pressed="false" aria-label="Discussion">${APP_ICON('<path d="M2.5 2h11a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1H6.2L3 14.4a.4.4 0 0 1-.66-.3V11.5h.16a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1z"/>')}<span class="rail-badge"></span></button></div>
 <section id="app-list" aria-label="Articles">
 <div class="app-pane-head"><span id="app-list-title"></span><span class="app-pane-actions app-pane-action"><button id="app-mark-read" class="app-head-icon" type="button" aria-label="Mark all as read" title="Mark all as read">${APP_MARK_READ_ICON}</button><button id="app-list-sync" class="app-head-icon" type="button" aria-label="Sync" title="Sync"><span class="app-sync-glyph">${APP_SYNC_ICON}</span></button></span></div>
 <div id="app-list-pull" class="app-list-pull" aria-hidden="true"></div>
@@ -36687,12 +41642,11 @@ ${APP_VIEWS.map((view) => appRailButtonHTML(view.id, view.label, view.icon)).joi
 <div id="app-list-body" class="reader-list"></div>
 <div id="app-list-resize" class="app-list-resize" aria-hidden="true"></div>
 </section>
-${settingsPanelHTML()}
 ${settingsModalHTML()}
 <div class="toast-viewport">${TOAST_HTML}</div>
 <div id="app-reading">
 <section id="app-article" aria-label="Article">
-<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="${escapeHTML(appShortcutTip("front-pages"))}">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Style settings" title="Style settings" hidden><span class="app-view-big">A</span><span class="app-view-small">a</span></button><a id="app-article-open" class="app-head-icon app-article-disc" target="_blank" rel="noopener" aria-label="Open the original page" title="Open the original page" hidden>${APP_OPEN_ICON}</a></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="${escapeHTML(appShortcutTip("discussion"))}" disabled>${APP_DISCUSSION_TOGGLE_ICON}</button></div>
+<div class="app-pane-head"><button id="app-toggle-list" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Front Pages" title="${escapeHTML(appShortcutTip("front-pages"))}">${APP_LIST_TOGGLE_ICON}</button><span class="app-pane-middle"><span id="app-article-actions" class="app-article-actions" hidden></span><button id="app-view-toggle" class="app-head-icon app-article-disc app-view-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="app-view-menu" aria-label="Style settings" title="Style settings" hidden>${APP_ICON(APP_CONTROL_PATHS.style)}</button></span><button id="app-toggle-discussion" class="app-pane-toggle app-head-icon app-article-disc app-wide-only" type="button" aria-pressed="true" aria-label="Discussion" title="${escapeHTML(appShortcutTip("discussion"))}" disabled>${APP_DISCUSSION_TOGGLE_ICON}<span class="rail-badge"></span></button></div>
 <div id="app-article-body" class="app-article-body" data-mode="empty"><div class="app-article-note">Pick an article to read it here, with what people said about it beside it.</div></div>
 <div id="app-next" class="app-next" hidden><span class="app-next-label">Read next</span><button id="app-next-link" class="app-next-link" type="button"><span class="app-next-title"></span><span class="app-next-meta"></span></button></div>
 </section>
@@ -36719,6 +41673,7 @@ ${settingsModalHTML()}
 			railFilled: null,
 			revealed: "",
 			panesHidden: { list: false, discussion: false },
+			listPreview: false,
 			scrolls: { list: 0, article: 0, discussion: 0 },
 			openTotal: 0,
 			moving: false,
@@ -36745,6 +41700,7 @@ ${settingsModalHTML()}
 		sidebarUI = ui;
 		sidebarHasDiscussion = false;
 		appState = createAppState(ui);
+		paintAppDiscussionTheme();
 
 		document.documentElement.setAttribute("data-backchannel-installed", "1");
 
@@ -36765,31 +41721,15 @@ ${settingsModalHTML()}
 
 		ui.headerSubtitle = null;
 
-		const dock = shadow.querySelector("#compose-dock");
-		const commentToggle = shadow.querySelector("#comment-toggle");
-
-		if (dock) {
-			shadow.querySelector("#panel").appendChild(dock);
-		}
-
-		if (commentToggle) {
-			commentToggle.innerHTML = APP_COMMENT_ICON;
-			commentToggle.classList.add("app-head-icon");
-			commentToggle.addEventListener("click", () => {
-				requestAnimationFrame(() => {
-					const panel = shadow.querySelector("#panel").getBoundingClientRect();
-					const box = commentToggle.getBoundingClientRect();
-
-					dock?.style.setProperty("--arrow-right", `${Math.round(panel.right - 8 - 6 - (box.left + box.width / 2))}px`);
-				});
-			});
-		}
+		const composeBar = shadow.getElementById("app-discussion-compose");
+		const app = shadow.getElementById("app");
+		new ResizeObserver(() => app.style.setProperty("--app-compose-height", `${composeBar.offsetHeight}px`)).observe(composeBar);
 
 		shadow.querySelector("#app-rail").addEventListener("click", (event) => {
 			const button = event.target?.closest?.("[data-app-view]");
 
 			if (button && !button.disabled) {
-				chooseAppView(button.dataset.appView);
+				chooseAppView(button.dataset.appView, false, event);
 			}
 		});
 
@@ -36863,6 +41803,14 @@ ${settingsModalHTML()}
 
 		const paneHidden = appState.panesHidden;
 		const paneSlides = {};
+		const stopPaneSlide = (pane) => {
+			const animations = paneSlides[pane];
+			delete paneSlides[pane];
+			for (const animation of animations || []) animation.cancel();
+		};
+		let listPreviewTimer = 0;
+		let listPreviewTrigger = null;
+		let listPreviewKeyboard = false;
 		const paneCaret = { list: null, discussion: null };
 		const dropPaneCaret = () => {
 			paneCaret.list = null;
@@ -36897,87 +41845,88 @@ ${settingsModalHTML()}
 		};
 
 		const settleAppList = () => {
-			const { column } = appListPlacement({ layout: appLayout(), hidden: paneHidden.list });
+			const { column } = appListPlacement({ layout: appLayout(), hidden: paneHidden.list && !appState.listPreview });
 
-			clearTimeout(paneSlides.list);
+			stopPaneSlide("list");
 			appRoot.classList.remove("list-moving", "list-out");
 			openListColumn(column);
 			appRoot.classList.toggle("list-hidden", !column);
 			paintAppListToggle();
 		};
 
-		const setPaneHidden = (pane, hidden, remember = true, keyed = false) => {
-			if (remember && paneHidden[pane] === hidden) {
-				return;
-			}
+		const settleAppDiscussion = () => {
+			stopPaneSlide("discussion");
+			appRoot.classList.remove("discussion-moving", "discussion-out");
+			appRoot.classList.toggle("discussion-hidden", paneHidden.discussion);
+		};
 
+		const setPaneHidden = (pane, hidden, remember = true, keyed = false, preview = false) => {
 			const list = pane === "list";
+			const wasPreview = list && appState.listPreview;
+			const pinningPreview = wasPreview && !preview && !hidden;
+
+			if (!preview && remember && paneHidden[pane] === hidden && !wasPreview) return;
+
 			const element = shadow.querySelector(list ? "#app-list" : "#panel");
+			const hiddenClass = `${pane}-hidden`;
+			const moving = `${pane}-moving`;
+			const out = `${pane}-out`;
+			const interrupted = Boolean(paneSlides[pane]);
+			const wasHidden = appRoot.classList.contains(hiddenClass);
+			const before = element.getBoundingClientRect();
+			const columns = getComputedStyle(appRoot).gridTemplateColumns;
+			const margin = appIsStacked() ? "marginBottom" : "marginRight";
+			const previous = list ? getComputedStyle(element).transform : getComputedStyle(element)[margin];
 			const caret = paneCaret[pane];
 
-			if (!hidden) {
-				paneCaret[pane] = null;
-			} else if (keyed) {
+			if (list) {
+				clearTimeout(listPreviewTimer);
+				appState.listPreview = preview && !hidden;
+			}
+
+			if (!hidden) paneCaret[pane] = null;
+			else if (keyed) {
 				paneCaret[pane] = appCaretIn(element);
 				paneCaret[pane]?.field.blur();
 			}
 
-			if (list && hidden) {
-				setAppSearchOpen(false);
-			}
-
-			const hiddenClass = `${pane}-hidden`;
-			const moving = `${pane}-moving`;
-			const out = `${pane}-out`;
-			const openColumn = (open) => {
-				if (list) {
-					openListColumn(open);
-				}
-			};
-
-			paneHidden[pane] = hidden;
+			if (list && hidden) setAppSearchOpen(false);
+			if (!preview) paneHidden[pane] = hidden;
 			paintPaneToggles();
-			clearTimeout(paneSlides[pane]);
-			appRoot.classList.remove(moving, out);
 
-			if (list && (!remember || prefersReducedMotion() || appLayout() !== "wide")) {
-				settleAppList();
-			} else if (!remember || prefersReducedMotion()) {
-				appRoot.classList.toggle(hiddenClass, hidden);
-			} else if (hidden) {
-				element.style.setProperty("--pane-width", `${Math.round(element.getBoundingClientRect().width)}px`);
-				appRoot.classList.add(moving);
-				openColumn(false);
-				element.getBoundingClientRect();
-				appRoot.classList.add(out);
-				paneSlides[pane] = setTimeout(() => {
-					appRoot.classList.add(hiddenClass);
-					appRoot.classList.remove(moving, out);
-				}, 240);
-			} else {
-				const width = list ? parseFloat(lastListWidth) : parseFloat(element.style.width);
+			if (!pinningPreview) {
+				stopPaneSlide(pane);
+				appRoot.classList.remove(moving, out);
 
-				element.style.setProperty("--pane-width", `${Math.round(width || (list ? 300 : 420))}px`);
-				appRoot.classList.remove(hiddenClass);
-				appRoot.classList.add(moving, out);
-				element.getBoundingClientRect();
-				appRoot.classList.remove(out);
-				paneSlides[pane] = setTimeout(() => {
-					openColumn(true);
-					appRoot.classList.remove(moving);
-				}, 240);
+				if (!remember || prefersReducedMotion() || appIsPhone()) {
+					if (list) settleAppList();
+					else settleAppDiscussion();
+				} else {
+					appRoot.classList.toggle(hiddenClass, hidden);
+					if (list) openListColumn(!hidden);
+					const target = element.getBoundingClientRect();
+					const size = list || !appIsStacked() ? (hidden ? before.width : target.width) : (hidden ? before.height : target.height);
+					const targetColumns = getComputedStyle(appRoot).gridTemplateColumns;
+					element.style.setProperty(list ? "--pane-width" : "--pane-height", `${size}px`);
+					appRoot.classList.add(moving);
+					appRoot.classList.toggle(out, hidden);
+
+					const timing = { duration: 240, easing: "cubic-bezier(.4,0,.2,1)", fill: "both" };
+					const animations = list
+						? [appRoot.animate([{ gridTemplateColumns: columns }, { gridTemplateColumns: targetColumns }], timing),
+							element.animate([{ transform: interrupted ? previous : wasHidden ? `translateX(${-size}px)` : "none" }, { transform: hidden ? `translateX(${-size}px)` : "none" }], timing)]
+						: [element.animate([{ [margin]: interrupted ? previous : wasHidden ? `${-size}px` : "0px" }, { [margin]: hidden ? `${-size}px` : "0px" }], timing)];
+					paneSlides[pane] = animations;
+					Promise.all(animations.map((animation) => animation.finished)).then(() => {
+						if (paneSlides[pane] !== animations) return;
+						if (list) settleAppList();
+						else settleAppDiscussion();
+					}).catch(() => {});
+				}
 			}
 
-			if (remember) {
-				save(STORAGE.appPanes, {
-					list: !paneHidden.list,
-					discussion: !paneHidden.discussion,
-				}).catch(console.error);
-			}
-
-			if (keyed && !hidden && caret) {
-				appCaretBack(caret);
-			}
+			if (remember && !preview) save(STORAGE.appPanes, { list: !paneHidden.list, discussion: !paneHidden.discussion }).catch(console.error);
+			if (keyed && !hidden && caret) appCaretBack(caret);
 		};
 
 		const zoomOut = shadow.querySelector("#app-zoom-out");
@@ -37038,13 +41987,7 @@ ${settingsModalHTML()}
 				chooseReaderLook(button.dataset.readerPage ? "page" : "font", button.dataset.readerPage || button.dataset.readerFont);
 			}
 		});
-		Promise.all([load(STORAGE.readerPage, "auto"), load(STORAGE.readerFont, "charter")])
-			.then(([page, font]) => {
-				readerLook = { page: Object.hasOwn(READER_PAGE_NAMES, page) ? page : "auto", font: Object.hasOwn(READER_FONT_NAMES, font) ? font : "charter" };
-				paintReaderLook();
-				paintReaderMenu();
-			})
-			.catch(console.error);
+		loadReaderLook().catch(console.error);
 		viewMenu.addEventListener("keydown", (event) => {
 			if (event.key === "Escape") {
 				setAppViewMenuOpen(false);
@@ -37084,6 +42027,41 @@ ${settingsModalHTML()}
 				setPaneHidden("list", false);
 			}
 		};
+		const listHeld = () => {
+			const panel = shadow.querySelector("#app-list");
+			const menu = shadow.querySelector("#app-row-menu");
+
+			return panel.matches(":hover") || panel.contains(shadow.activeElement) || (!menu.hidden && (menu.dataset.row || menu.dataset.heading)) || listPreviewTrigger?.matches(":hover") || (listPreviewKeyboard && shadow.activeElement === listPreviewTrigger);
+		};
+		const closeListPreview = (force = false) => {
+			clearTimeout(listPreviewTimer);
+			if (!appState.listPreview || (!force && listHeld())) return;
+			setPaneHidden("list", true, true, false, true);
+		};
+		const scheduleListPreviewClose = () => {
+			clearTimeout(listPreviewTimer);
+			if (!appState.listPreview) return;
+			listPreviewTimer = setTimeout(() => closeListPreview(), appRoot.classList.contains("list-moving") ? 320 : 160);
+		};
+		appState.previewList = (event = null) => {
+			if (appIsPhone() || !paneHidden.list) return false;
+			listPreviewTrigger = event?.target?.closest?.("[data-app-view]") || null;
+			listPreviewKeyboard = event?.detail === 0;
+			if (!appState.listPreview) setPaneHidden("list", false, true, false, true);
+			scheduleListPreviewClose();
+			return true;
+		};
+		shadow.querySelector("#app-list").addEventListener("pointerenter", () => clearTimeout(listPreviewTimer));
+		shadow.querySelector("#app-list").addEventListener("pointerleave", scheduleListPreviewClose);
+		shadow.querySelector("#app-rail").addEventListener("pointerout", scheduleListPreviewClose);
+		shadow.addEventListener("focusin", scheduleListPreviewClose);
+		shadow.addEventListener("focusout", () => queueMicrotask(scheduleListPreviewClose));
+		window.addEventListener("blur", () => closeListPreview(true));
+		window.addEventListener("resize", () => {
+			if (appState.listPreview) closeListPreview(true);
+			if (appRoot.classList.contains("list-moving")) settleAppList();
+			if (appRoot.classList.contains("discussion-moving")) settleAppDiscussion();
+		});
 		appState.togglePane = (pane, keyed = false) => setPaneHidden(pane, !paneHidden[pane], true, keyed);
 		appState.showDiscussion = () => setPaneHidden("discussion", false);
 		listToggle.onclick = () => appState.togglePane("list");
@@ -37313,39 +42291,21 @@ ${settingsModalHTML()}
 		const syncButton = shadow.querySelector("#app-list-sync");
 
 		const syncList = async () => {
-			const button = syncButton;
-
-			if (button.classList.contains("is-syncing")) {
-				return;
-			}
-
-			button.classList.add("is-syncing");
-			button.setAttribute("aria-busy", "true");
-			paintAppDiscussionSync();
-			showToast("Syncing…", { kind: "system", persist: true, loading: true });
-
-			try {
-				const runs = await runSync((releaseRead) => syncReaderViews(releaseRead), { feedOnly: !appState?.open });
-				for (const run of runs) {
-					if (run.status === "rejected") {
-						console.error(run.reason);
-					}
-				}
-			} finally {
-				if (shadow.getElementById("toast")?.textContent === "Syncing…") showToast("");
-				await settleSyncSpin(button);
-				button.classList.remove("is-syncing");
-				button.removeAttribute("aria-busy");
-				paintAppDiscussionSync();
+			const runs = await runSync((releaseRead) => syncReaderViews(releaseRead), { feedOnly: !appState?.open });
+			for (const run of runs || []) {
+				if (run.status === "rejected") console.error(run.reason);
 			}
 		};
 
 		syncButton.onclick = () => syncList().catch(console.error);
 		shadow.querySelector("#app-discussion-sync-empty").onclick = () => syncButton.click();
 
-		shadow.querySelector("#app-article-open").onclick = () => {
+		const original = shadow.querySelector("#app-article-open");
+		original.onclick = () => {
 			rememberAppArrival(appState?.open?.url).catch(console.error);
+			setAppViewMenuOpen(false);
 		};
+		original.onauxclick = (event) => { if (event.button === 1) original.onclick(); };
 
 		shadow.querySelector("#app-bar-back").onclick = () => setAppStage("list");
 		shadow.querySelector("#app-bar-discussion").onclick = () => {
@@ -37370,7 +42330,7 @@ ${settingsModalHTML()}
 		shadow.addEventListener("click", closeRowMenuOutside, true);
 		shadow.querySelector("#app-bar-open").onclick = () => shadow.querySelector("#app-article-open").click();
 		shadow.querySelector("#app-bar-save").onclick = () => shadow.querySelector('#app-article-actions [data-item-action="save"]')?.click();
-		shadow.querySelector("#app-bar-like").onclick = () => shadow.querySelector("#app-article-actions .app-head-votes:not(.hidden) .app-head-thumb-up")?.click();
+		shadow.querySelector("#app-bar-like").onclick = () => appMobileVote(shadow)?.click();
 		shadow.querySelector("#app-next-link").onclick = () => {
 			const next = appNextRow();
 
@@ -37378,7 +42338,10 @@ ${settingsModalHTML()}
 				openAppStory(next.story, { row: next }).catch(console.error);
 			}
 		};
-		new MutationObserver(() => paintAppBarActions()).observe(shadow.querySelector(".app-pane-middle"), { attributes: true, childList: true, characterData: true, subtree: true });
+		const articleControls = new MutationObserver(() => paintAppBarActions());
+		for (const selector of [".app-pane-middle", "#app-mobile-votes"]) {
+			articleControls.observe(shadow.querySelector(selector), { attributes: true, childList: true, characterData: true, subtree: true });
+		}
 		const searchButton = shadow.querySelector("#app-search");
 		const searchBar = shadow.querySelector("#app-search-page");
 		const searchInput = shadow.querySelector("#app-search-input");
@@ -37475,14 +42438,8 @@ ${settingsModalHTML()}
 
 		rail.addEventListener("focusout", hideAppTip);
 
-		window.addEventListener("resize", () => {
-			const panel = shadow.querySelector("#settings-panel");
-
-			if (panel && !panel.classList.contains("hidden")) {
-				placeAppSettings(true);
-			}
-		});
 		const section = shadow.querySelector("#app-rail-sources");
+		wireAppRailOrder(section);
 
 		section.addEventListener("scroll", () => {
 			const focused = shadow.activeElement;
@@ -37525,32 +42482,36 @@ ${settingsModalHTML()}
 		rail.addEventListener("scroll", hideAppTip);
 		rail.addEventListener("click", hideAppTip);
 
-		wireSettingsModal(shadow);
+		const openSettingsHash = () => {
+			if (location.hash === "#privacy") openAppSettingsSection("general", "#settings-privacy");
+			if (location.hash === "#account-sync") openAppSettingsSection("account");
+		};
+		window.addEventListener("hashchange", openSettingsHash);
+		openSettingsHash();
 		document.addEventListener("keydown", onAppShortcut, true);
 		document.addEventListener("keydown", onAppKey);
 		window.addEventListener("keydown", noteAppKeysBehind, true);
 		window.addEventListener("message", onAppMessage);
 	}
 
-	function wireSettingsModal(shadow) {
+	function wireSettingsModal(shadow, settingsControls) {
 		const modal = shadow.querySelector("#app-settings-modal");
 		const content = shadow.querySelector("#app-settings-content");
 		const panel = shadow.querySelector("#settings-panel");
 		const gear = shadow.querySelector("#settings-toggle");
 
-		if (!modal || !content || !panel || !gear) {
-			return;
-		}
-
-		const toggleDropdown = gear.onclick;
+		const updateDiagnosticSharing = wireDiagnosticSharing(shadow);
+		const showAccount = wireAccountSettings(shadow, updateDiagnosticSharing);
+		const account = shadow.getElementById("settings-account-sync");
+		const groups = [...panel.querySelectorAll("[data-app-section]")];
 		const tabs = [...modal.querySelectorAll("[data-settings-section]")];
-		const nav = modal.querySelector(".app-settings-nav");
 		const dialog = modal.querySelector(".app-settings-dialog");
-		const credits = panel.querySelector(".settings-credits");
+		const credits = modal.querySelector(".settings-credits");
 		const report = credits?.querySelector('a[href$="/issues"]');
 		const close = shadow.querySelector("#app-settings-close");
 		const app = shadow.querySelector("#app");
-		const behind = app ? ["#app-rail", "#app-list", "#app-reading"].map((selector) => shadow.querySelector(selector)).filter(Boolean) : [];
+		const behind = (app ? ["#app-rail", "#app-list", "#app-reading", "#app-chin"] : ["#panel"])
+			.map((selector) => shadow.querySelector(selector));
 
 		const holdBehind = (held) => {
 			for (const element of behind) {
@@ -37560,9 +42521,13 @@ ${settingsModalHTML()}
 
 		const tabStops = () => {
 			const stops = [];
+			const focusable = "a[href], button, input, select, textarea, [tabindex]";
+			const candidates = [...modal.querySelectorAll(focusable + ", slot")].flatMap((element) => element.localName === "slot"
+				? element.assignedElements({ flatten: true }).filter((control) => control.matches(focusable)) : [element]);
 
-			for (const element of modal.querySelectorAll("a[href], button, input, select, textarea, [tabindex]")) {
-				if (element.disabled || element.tabIndex < 0 || !element.getClientRects().length || getComputedStyle(element).visibility === "hidden") {
+			for (const element of candidates) {
+				if (element.disabled || element.tabIndex < 0 || element.closest("[inert]") || element.assignedSlot?.closest("[inert]") ||
+					!element.getClientRects().length || getComputedStyle(element).visibility === "hidden") {
 					continue;
 				}
 
@@ -37584,25 +42549,7 @@ ${settingsModalHTML()}
 			report.title = "Report an issue";
 		}
 
-		for (const group of panel.querySelectorAll(".settings-pane-primary > .settings-group")) {
-			if (group.querySelector(".settings-link-button")) {
-				group.dataset.appSection = "links";
-			} else if (group.querySelector("#setting-auto-open-sidebar")) {
-				group.dataset.appSection = "sidebar";
-			} else if (group.querySelector(".button-designer")) {
-				group.dataset.appSection = "appearance";
-			} else {
-				group.dataset.appSection = "general";
-			}
-		}
-
-		content.append(panel);
-
-		if (credits) {
-			nav?.append(credits);
-		}
-
-		const helpIn = (event) => event.target?.closest?.(".source-help") || null;
+		const helpIn = (event) => event.target?.closest?.(".source-help, .settings-tooltip-anchor[data-tip]") || null;
 
 		shadow.addEventListener("scroll", () => hideSourceHelpTip(shadow), true);
 		content.addEventListener("pointerover", (event) => {
@@ -37639,11 +42586,13 @@ ${settingsModalHTML()}
 
 		const showSection = (section, target = "") => {
 			hideSourceHelpTip(shadow);
-			const tab = tabs.find((each) => each.dataset.settingsSection === section) || tabs[0];
-			const panes = panel.querySelector(".settings-panes");
-
-			modal.dataset.section = tab.dataset.settingsSection;
-			shadow.querySelector("#app-settings-heading").textContent = tab.textContent.trim();
+			openSelects.get(shadow)?.();
+			const tab = tabs.find((each) => each.dataset.settingsSection === section) || tabs.find((each) => each.dataset.settingsSection === "general");
+			section = tab.dataset.settingsSection;
+			modal.dataset.section = section;
+			for (const group of groups) group.hidden = group.dataset.appSection !== section;
+			settingsControls.show(section);
+			shadow.querySelector("#app-settings-heading").textContent = tab.dataset.settingsSection === "account" ? "Account" : tab.textContent.trim();
 
 			for (const each of tabs) {
 				if (each === tab) {
@@ -37653,17 +42602,12 @@ ${settingsModalHTML()}
 				}
 			}
 
-			const paneLink = panel.querySelector(`.settings-link-button[data-pane="${tab.dataset.settingsSection}"]`);
-
-			if (paneLink) {
-				paneLink.click();
-			} else if (panes?.classList.contains("is-secondary")) {
-				shadow.querySelector("#settings-crumb-root")?.click();
-			}
-
 			content.scrollTop = 0;
 
-			if (tab.dataset.settingsSection === "general") {
+			if (section === "account") showAccount();
+			else account.dispatchEvent(new Event("account-section-hidden"));
+
+			if (section === "general") {
 				panel.dispatchEvent(new Event("general-shown"));
 			}
 
@@ -37672,54 +42616,37 @@ ${settingsModalHTML()}
 			if (place) {
 				content.scrollTop += place.getBoundingClientRect().top - content.getBoundingClientRect().top - parseFloat(getComputedStyle(content).paddingTop);
 			}
+			return tab;
 		};
 
-		const setOpen = (open) => {
+		const setOpen = (open, section = "general", target = "") => {
 			hideSourceHelpTip(shadow);
 			if (open === !modal.hidden) {
 				return;
 			}
 
+			gear.classList.toggle("is-open", open);
+			gear.setAttribute("aria-expanded", String(open));
+			modal.hidden = !open;
+			holdBehind(open);
+			hideAppTip();
+
 			if (open) {
-				content.append(panel);
-
-				if (credits) {
-					if (appIsPhone()) {
-						credits.hidden = true;
-
-						if (report) {
-							modal.querySelector("#app-settings-title").after(report);
-						}
-					} else {
-						credits.hidden = false;
-
-						if (report && report.parentElement !== credits) {
-							credits.prepend(report);
-						}
-
-						nav?.append(credits);
-					}
+				if (report) {
+					const phone = appIsPhone();
+					credits.hidden = phone;
+					if (phone) modal.querySelector("#app-settings-title").after(report);
+					else credits.prepend(report);
 				}
-
-				modal.hidden = false;
-				holdBehind(true);
-
-				if (panel.classList.contains("hidden")) {
-					toggleDropdown?.(new Event("click"));
-				}
-
-				showSection("general");
-				tabs[0].focus({ preventScroll: true });
+				settingsControls.open();
+				account.dispatchEvent(new Event("account-settings-shown"));
+				showSection(section, target).focus({ preventScroll: true });
 				return;
 			}
 
-			modal.hidden = true;
-			holdBehind(false);
-			hideAppTip();
-
-			if (!panel.classList.contains("hidden")) {
-				toggleDropdown?.(new Event("click"));
-			}
+			openSelects.get(shadow)?.();
+			account.dispatchEvent(new Event("account-section-hidden"));
+			settingsControls.close();
 
 			if (!returnAppSettingsCaret()) {
 				gear.focus({ preventScroll: true });
@@ -37738,12 +42665,13 @@ ${settingsModalHTML()}
 			tab.onclick = () => showSection(tab.dataset.settingsSection);
 		}
 
-		shadow.querySelector("#app-settings-close").onclick = () => setOpen(false);
+		close.onclick = () => setOpen(false);
 		openAppSettingsSection = (section, target) => {
-			setOpen(true);
-			showSection(section, target);
+			if (modal.hidden) setOpen(true, section, target);
+			else showSection(section, target).focus({ preventScroll: true });
 		};
-		closeAppSettings = () => setOpen(false);
+		const closeModal = () => setOpen(false);
+		closeAppSettings = closeModal;
 
 		modal.addEventListener("click", (event) => {
 			event.stopPropagation();
@@ -37759,12 +42687,12 @@ ${settingsModalHTML()}
 				setOpen(false);
 			}
 
-			if (event.key !== "Tab" || !app) {
+			if (event.key !== "Tab") {
 				return;
 			}
 
 			const stops = tabStops();
-			const active = shadow.activeElement;
+			const active = shadow.activeElement || document.activeElement;
 			const edge = event.shiftKey ? stops[0] : stops.at(-1);
 
 			if (edge && (active === edge || (event.shiftKey && active === dialog) || (active?.type === "radio" && edge.type === "radio" && active.name === edge.name))) {
@@ -37773,25 +42701,25 @@ ${settingsModalHTML()}
 			}
 		});
 
-		new MutationObserver(() => {
-			if (!modal.hidden && panel.classList.contains("hidden")) {
-				modal.hidden = true;
-				holdBehind(false);
-				returnAppSettingsCaret();
-				loadAppShortcuts().catch(console.error);
-			}
-		}).observe(panel, { attributes: true, attributeFilter: ["class"] });
+		return closeModal;
 	}
 
 	async function refreshAppSources() {
 		const state = appState;
-		const settings = await loadSettings();
+		const railOrderRevision = state.railOrderRevision || 0;
+		const [settings, railOrder] = await Promise.all([
+			loadSettings(),
+			appRailOrderSave.catch(console.error).then(() => load(STORAGE.appRailOrder, [])),
+		]);
 
 		state.sourceIds = frontPageSourceIds(settings);
 
 		const feeds = frontPageFeeds(settings, state.sourceIds, enabledSourceIds(settings, registeredSourceIds()));
 
 		state.topicIds = frontPageTopicIds(settings).filter((id) => feeds.some((feed) => feed.topic === id));
+		if (railOrderRevision === (state.railOrderRevision || 0)) {
+			state.railOrder = Array.isArray(railOrder) ? railOrder.filter((view) => typeof view === "string") : [];
+		}
 		state.noSources = !enabledSourceIds(settings, registeredSourceIds()).length;
 		renderAppRailSources();
 
@@ -37834,6 +42762,146 @@ ${settingsModalHTML()}
 		};
 	}
 
+	let appRailOrderSave = Promise.resolve();
+
+	function saveAppRailOrder(section) {
+		const visible = [...section.querySelectorAll(".rail-button")].map((button) => button.dataset.appView);
+		const remaining = [...visible];
+		const order = [...new Set([...(appState.railOrder || []), ...visible])].map((view) => visible.includes(view) ? remaining.shift() : view);
+
+		appState.railOrder = order;
+		appState.railOrderRevision = (appState.railOrderRevision || 0) + 1;
+		const tags = appState.ui.shadow.querySelector("#app-list-tags");
+		const chips = new Map([...tags.children].map((chip) => [chip.dataset.appView, chip]));
+
+		for (const view of visible) {
+			if (chips.has(view)) tags.append(chips.get(view));
+		}
+		appRailOrderSave = appRailOrderSave.catch(console.error).then(() => save(STORAGE.appRailOrder, order));
+		appRailOrderSave.catch(console.error);
+	}
+
+	function wireAppRailOrder(section) {
+		let press = null;
+		let frame = 0;
+		let suppressClick = false;
+		const buttons = () => [...section.querySelectorAll(".rail-button")];
+		const finish = (commit) => {
+			if (commit) place();
+			const drag = press;
+
+			press = null;
+			clearTimeout(drag?.hold);
+			cancelAnimationFrame(frame);
+			section.classList.remove("is-reordering");
+
+			if (!drag?.active) return;
+			drag.button.classList.remove("is-dragging");
+			if (section.hasPointerCapture(drag.id)) section.releasePointerCapture(drag.id);
+			suppressClick = true;
+
+			if (commit) saveAppRailOrder(section);
+			else section.append(...drag.before);
+			drag.button.focus({ preventScroll: true });
+			hideAppTip();
+		};
+		const place = (scroll = false) => {
+			if (!press?.active) return;
+			const rect = section.getBoundingClientRect();
+
+			if (press.x >= rect.left - 16 && press.x <= rect.right + 16) {
+				const speed = press.y < rect.top + 24 ? -6 : press.y > rect.bottom - 24 ? 6 : 0;
+
+				if (scroll) section.scrollTop += speed;
+				const next = buttons().find((button) => button !== press.button && press.y < button.getBoundingClientRect().top + button.offsetHeight / 2);
+
+				if (press.button.nextElementSibling !== (next || null)) section.insertBefore(press.button, next || null);
+			}
+		};
+		const move = () => {
+			if (!press?.active) return;
+			place(true);
+			frame = requestAnimationFrame(move);
+		};
+
+		section._cancelReorder = () => finish(false);
+		window.addEventListener("pointerdown", () => { suppressClick = false; }, true);
+		section.addEventListener("pointerdown", (event) => {
+			const button = event.target.closest(".rail-button");
+
+			if (!button || button.disabled || !event.isPrimary || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+			press = { button, id: event.pointerId, startX: event.clientX, startY: event.clientY, before: buttons(), ready: event.pointerType !== "touch" };
+			if (!press.ready) {
+				const touch = press;
+
+				touch.hold = window.setTimeout(() => { if (press === touch) touch.ready = true; }, 300);
+			}
+		});
+		section.addEventListener("touchmove", (event) => {
+			if (press?.ready) event.preventDefault();
+		}, { passive: false });
+		section.addEventListener("contextmenu", (event) => {
+			if (press?.ready) event.preventDefault();
+		});
+		window.addEventListener("pointermove", (event) => {
+			if (!press || event.pointerId !== press.id) return;
+			press.x = event.clientX;
+			press.y = event.clientY;
+
+			if (!press.active && press.ready && Math.hypot(press.x - press.startX, press.y - press.startY) >= 6) {
+				press.active = true;
+				section.setPointerCapture(press.id);
+				section.classList.add("is-reordering");
+				press.button.classList.add("is-dragging");
+				hideAppTip();
+				move();
+			}
+			if (press.active) {
+				event.preventDefault();
+				place();
+			}
+		}, { passive: false });
+		window.addEventListener("pointerup", (event) => {
+			if (press?.id !== event.pointerId) return;
+			press.x = event.clientX;
+			press.y = event.clientY;
+			finish(true);
+		});
+		window.addEventListener("pointercancel", (event) => { if (press?.id === event.pointerId) finish(false); });
+		section.addEventListener("lostpointercapture", (event) => {
+			if (event.target === section && event.pointerId === press?.id) finish(false);
+		});
+		window.addEventListener("blur", () => finish(false));
+		window.addEventListener("keydown", (event) => {
+			if (event.key !== "Escape" || !press?.active) return;
+			event.preventDefault();
+			event.stopPropagation();
+			finish(false);
+		}, true);
+		section.addEventListener("dragstart", (event) => event.preventDefault());
+		section.addEventListener("click", (event) => {
+			if (!suppressClick || event.detail === 0) return;
+			event.preventDefault();
+			event.stopImmediatePropagation();
+		}, true);
+		section.addEventListener("keydown", (event) => {
+			const button = event.target.closest(".rail-button");
+
+			if (!button || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+			event.preventDefault();
+			event.stopPropagation();
+			const adjacent = event.key === "ArrowUp" ? button.previousElementSibling : button.nextElementSibling;
+
+			if (!adjacent) return;
+			if (event.key === "ArrowUp") section.insertBefore(button, adjacent);
+			else section.insertBefore(adjacent, button);
+			button.focus({ preventScroll: true });
+			button.scrollIntoView({ block: "nearest" });
+			saveAppRailOrder(section);
+			hideAppTip();
+		});
+	}
+
 	function paintAppRailFit() {
 		const shadow = appState?.ui.shadow;
 		const section = shadow?.querySelector("#app-rail-sources");
@@ -37867,21 +42935,24 @@ ${settingsModalHTML()}
 		const state = appState;
 		const holder = state.ui.shadow.querySelector("#app-rail-sources");
 		const { topics: topicFilters, sources: sourceFilters } = appRailFilters();
-		const topics = topicFilters.map((filter) => appRailButtonHTML(filter.view, filter.label, filter.mark));
-		const sources = sourceFilters.map((filter) => appRailButtonHTML(filter.view, filter.label, filter.mark));
+		const filters = [...topicFilters, ...sourceFilters];
+		const order = [...new Set([...(state.railOrder || []), ...filters.map((filter) => filter.view)])];
 
-		state.ui.shadow.querySelector("#app-list-tags").innerHTML = [...topicFilters, ...sourceFilters]
+		filters.sort((a, b) => order.indexOf(a.view) - order.indexOf(b.view));
+		holder._cancelReorder?.();
+
+		state.ui.shadow.querySelector("#app-list-tags").innerHTML = filters
 			.map(
 				(filter) =>
 					`<button type="button" class="front-page-topic" data-app-view="${escapeHTML(filter.view)}" aria-pressed="false">${filter.mark}<span>${escapeHTML(filter.label)}</span></button>`,
 			)
 			.join("");
 
-		holder.innerHTML = [
-			...topics,
-			...(topics.length && sources.length ? ['<div class="rail-rule" aria-hidden="true"></div>'] : []),
-			...sources,
-		].join("");
+		holder.innerHTML = filters.map((filter) => appRailButtonHTML(filter.view, filter.label, filter.mark)).join("");
+
+		for (const button of holder.querySelectorAll(".rail-button")) {
+			button.setAttribute("aria-description", "Drag to reorder, or press Alt and the Up or Down arrow key.");
+		}
 
 		state.ui.shadow.querySelector("#app-rail-rule").hidden = !state.sourceIds.length && !(state.topicIds || []).length;
 
@@ -37998,14 +43069,19 @@ ${settingsModalHTML()}
 
 		closeAppRowMenu();
 		menu.setAttribute("aria-label", "This article");
+		const url = row.querySelector(".browse-title-link").href;
 		showAppMenu(
 			menu,
 			button,
-			openAppRowMenuButtons(row).map((link) => {
-				const label = link.textContent.trim();
+			[
+				...openAppRowMenuButtons(row).map((link) => {
+					const label = link.textContent.trim();
 
-				return { label: label.charAt(0).toUpperCase() + label.slice(1), run: () => link.click() };
-			}),
+					return { label: label.charAt(0).toUpperCase() + label.slice(1), run: () => link.click() };
+				}),
+				{ rule: true },
+				{ label: "Open the original page", href: url, run: () => rememberAppArrival(url).catch(console.error) },
+			],
 		);
 		menu.dataset.row = row.dataset.storyId || "";
 		button.setAttribute("aria-expanded", "true");
@@ -38041,7 +43117,7 @@ ${settingsModalHTML()}
 
 	function showAppMenu(menu, button, items, { start = false } = {}) {
 		menu.replaceChildren(
-			...items.map(({ label, run, rule = false }) => {
+			...items.map(({ label, run, href, rule = false }) => {
 				if (rule) {
 					const divider = document.createElement("div");
 
@@ -38051,17 +43127,24 @@ ${settingsModalHTML()}
 					return divider;
 				}
 
-				const item = document.createElement("button");
+				const item = document.createElement(href ? "a" : "button");
 
-				item.type = "button";
+				if (href) {
+					item.href = href;
+					item.target = "_blank";
+					item.rel = "noopener noreferrer";
+				} else {
+					item.type = "button";
+				}
 				item.className = "dropdown-item app-row-item";
 				item.setAttribute("role", "menuitem");
 				item.textContent = label;
 				item.onclick = (event) => {
 					event.stopPropagation();
 					closeAppRowMenu();
-					run();
+					run?.();
 				};
+				if (href) item.onauxclick = (event) => { if (event.button === 1) item.onclick(event); };
 
 				return item;
 			}),
@@ -38076,6 +43159,25 @@ ${settingsModalHTML()}
 		menu.style.left = `${Math.round(Math.max(8, Math.min(start ? box.left : box.right - width, window.innerWidth - width - 8)))}px`;
 		menu.style.top = `${Math.round(below ? box.bottom + 6 : Math.max(8, box.top - 6 - height))}px`;
 		menu.style.bottom = "auto";
+		const controls = [...menu.querySelectorAll('[role="menuitem"]')];
+		controls[0]?.focus({ preventScroll: true });
+		menu.onkeydown = (event) => {
+			const index = controls.indexOf(menu.getRootNode().activeElement);
+			if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+				event.preventDefault();
+				event.stopPropagation();
+				const next = event.key === "Home" ? 0 : event.key === "End" ? controls.length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + controls.length) % controls.length;
+				controls[next]?.focus({ preventScroll: true });
+			} else if (event.key === "Escape") {
+				event.preventDefault();
+				event.stopPropagation();
+				closeAppRowMenu();
+				button.focus({ preventScroll: true });
+			} else if (event.key === "Tab") {
+				closeAppRowMenu();
+				button.focus({ preventScroll: true });
+			}
+		};
 	}
 
 	function closeAppRowMenu() {
@@ -38192,22 +43294,19 @@ ${settingsModalHTML()}
 		return true;
 	}
 
-	function chooseAppView(view, fromSearch = false) {
+	function chooseAppView(view, fromSearch = false, railEvent = null) {
 		const state = appState;
 
 		if (!state) {
 			return;
 		}
 
-		const searching = fromSearch || !state.ui.shadow.querySelector("#app-search-page").hidden;
-
 		setAppSearchOpen(false);
 
-		if (searching && !appIsPhone()) {
-			state.revealList?.();
-		}
+		const preview = !appIsPhone() && state.previewList?.(fromSearch ? null : railEvent);
 
 		if (view === state.view) {
+			if (preview) renderAppList().catch(console.error);
 			return;
 		}
 
@@ -38261,58 +43360,6 @@ ${settingsModalHTML()}
 		return clamped;
 	}
 
-	function placeAppSettings(open) {
-		const shadow = appState?.ui.shadow;
-		const panel = shadow?.querySelector("#settings-panel");
-		const toggle = shadow?.querySelector("#settings-toggle");
-		const arrow = shadow?.querySelector("#app-settings-arrow");
-
-		if (!panel || !toggle || !arrow) {
-			return;
-		}
-
-		hideAppTip();
-		arrow.hidden = !open;
-
-		if (panel.closest("#app-settings-modal")) {
-			arrow.hidden = true;
-			return;
-		}
-
-		if (!open) {
-			return;
-		}
-
-		const box = toggle.getBoundingClientRect();
-		const phone = appIsPhone();
-		const width = panel.offsetWidth || 240;
-
-		if (phone) {
-			const left = Math.min(
-				Math.max(8, box.left + box.width / 2 - width / 2),
-				window.innerWidth - width - 8,
-			);
-
-			panel.style.left = `${Math.round(left)}px`;
-			panel.style.top = "auto";
-			panel.style.bottom = `${Math.round(window.innerHeight - box.top + 10)}px`;
-			panel.style.maxHeight = `${Math.round(box.top - 24)}px`;
-			arrow.style.left = `${Math.round(box.left + box.width / 2 - 6)}px`;
-			arrow.style.top = `${Math.round(box.top - 16)}px`;
-		} else {
-			const bottom = Math.max(8, window.innerHeight - box.bottom - 6);
-
-			panel.style.left = `${Math.round(box.right + 12)}px`;
-			panel.style.top = "auto";
-			panel.style.bottom = `${Math.round(bottom)}px`;
-			panel.style.maxHeight = `${Math.round(window.innerHeight - bottom - 16)}px`;
-			arrow.style.left = `${Math.round(box.right + 6)}px`;
-			arrow.style.top = `${Math.round(box.top + box.height / 2 - 6)}px`;
-		}
-
-		arrow.classList.toggle("is-down", phone);
-	}
-
 	function hideAppTip() {
 		const tip = appState?.ui.shadow.querySelector("#app-tip");
 
@@ -38326,7 +43373,7 @@ ${settingsModalHTML()}
 	}
 
 	function appUsesFloatingControls() {
-		return appIsStacked() || appIsPhone();
+		return appIsPhone();
 	}
 
 	function revealAppDiscussion() {
@@ -38369,7 +43416,7 @@ ${settingsModalHTML()}
 			return;
 		}
 
-		const { shown } = appListPlacement({ layout: appLayout(), hidden: appState.panesHidden.list });
+		const { shown } = appListPlacement({ layout: appLayout(), hidden: appState.panesHidden.list && !appState.listPreview });
 
 		toggle.setAttribute("aria-pressed", shown ? "true" : "false");
 	}
@@ -38564,6 +43611,12 @@ ${settingsModalHTML()}
 		target.addEventListener("touchend", (event) => end(event.changedTouches[0]?.clientY ?? -1), { passive: true });
 	}
 
+	function appMobileVote(shadow) {
+		const holder = shadow.getElementById("app-mobile-votes");
+		if (holder.querySelector(".vote-button-down.vote-button-active")) return null;
+		return holder.querySelector(".vote-button:is(.vote-button-up, .vote-button-neutral)");
+	}
+
 	function paintAppBarActions() {
 		const shadow = appState?.ui.shadow;
 		const save = shadow?.querySelector("#app-bar-save");
@@ -38573,7 +43626,7 @@ ${settingsModalHTML()}
 		}
 
 		const headSave = shadow.querySelector('#app-article-actions [data-item-action="save"]');
-		const vote = shadow.querySelector("#app-article-actions .app-head-votes:not(.hidden) .app-head-thumb-up");
+		const vote = appMobileVote(shadow);
 		const like = shadow.querySelector("#app-bar-like");
 		const saved = headSave?.textContent.trim() === "unsave";
 
@@ -38581,7 +43634,7 @@ ${settingsModalHTML()}
 		save.setAttribute("aria-pressed", String(saved));
 		save.setAttribute("aria-label", saved ? "Unsave" : "Save");
 		like.hidden = !vote;
-		like.setAttribute("aria-pressed", vote?.getAttribute("aria-pressed") || "false");
+		like.setAttribute("aria-pressed", String(Boolean(vote?.classList.contains("vote-button-active"))));
 		like.setAttribute("aria-label", vote?.title || "Like");
 		shadow.querySelector("#app-bar-open").hidden = shadow.querySelector("#app-article-open").hidden;
 		shadow.querySelector("#app-bar-view").hidden = shadow.querySelector("#app-view-toggle").hidden || (appIsPhone() && shadow.querySelector("#app-article-body")?.dataset.mode !== "reader");
@@ -38672,6 +43725,25 @@ ${settingsModalHTML()}
 		const home = shadow.querySelector(appIsStacked() ? "#app-article" : "#app");
 		const listToggle = shadow.querySelector("#app-toggle-list");
 		const listHome = shadow.querySelector("#app-article > .app-pane-head");
+		const middle = shadow.querySelector(".app-pane-middle");
+		const discussionToggle = shadow.querySelector("#app-toggle-discussion");
+		const chinActions = shadow.querySelector("#app-chin-actions");
+		const view = shadow.querySelector("#app-view-toggle");
+
+		if (appIsPhone()) {
+			if (discussionToggle.parentElement !== listHome) listHome.append(discussionToggle);
+			if (middle.parentElement !== listHome) {
+				listHome.insertBefore(middle, discussionToggle);
+				middle.append(view);
+			}
+		} else {
+			if (middle.parentElement !== chinActions) {
+				chinActions.prepend(middle);
+				middle.prepend(view);
+			}
+			if (discussionToggle.parentElement !== chinActions) chinActions.append(discussionToggle);
+		}
+		document.querySelector(".chin")?.setAttribute("aria-hidden", String(!appIsPhone()));
 
 		if (listToggle.parentElement !== listHome) {
 			listHome.insertBefore(listToggle, listHome.firstChild);
@@ -38681,7 +43753,7 @@ ${settingsModalHTML()}
 			home.insertBefore(bar, home.id === "app" ? shadow.querySelector("#app-list") : null);
 		}
 
-		bar.hidden = appIsStacked() ? !shadow.querySelector("#app").classList.contains("has-story") : stage === "list";
+		bar.hidden = !appIsPhone() || stage === "list";
 		shadow.querySelector("#app-bar-back").hidden = stage === "list";
 		shadow.querySelector("#app-search").hidden = stage !== "list";
 
@@ -38690,13 +43762,16 @@ ${settingsModalHTML()}
 		}
 
 		discussion.setAttribute("aria-pressed", String(appIsPhone() ? stage === "discussion" : !appState.panesHidden.discussion));
-		discussion.querySelector(".rail-badge").textContent = total ? compactCount(total) : "";
+		for (const toggle of [discussion, discussionToggle]) {
+			toggle.querySelector(".rail-badge").textContent = total ? compactCount(total) : "";
+		}
 		paintAppBarActions();
 		paintAppNext();
 		const rail = shadow.querySelector("#app-rail");
 
 		shadow.querySelector("#app").style.setProperty("--app-rail-height", `${rail.offsetHeight}px`);
 		shadow.querySelector("#app").style.setProperty("--app-rail-width", `${rail.offsetWidth}px`);
+		scheduleFrontPageRefresh();
 	}
 
 	function setAppSearchOpen(open) {
@@ -38718,13 +43793,14 @@ ${settingsModalHTML()}
 		}
 
 		if (show && !appIsPhone()) {
-			appState.revealList?.();
+			appState.previewList?.();
 		}
 
 		page.hidden = !show;
 		button.setAttribute("aria-expanded", String(show));
 		shadow.querySelector("#app").toggleAttribute("data-searching", show);
 		paintAppRail();
+		scheduleFrontPageRefresh();
 
 		if (show) {
 			input.value = "";
@@ -39406,17 +44482,19 @@ ${note ? appShortcutNoteHTML(note) : ""}
 		for (const field of panel?.querySelectorAll(".settings-field, .appearance-row, .settings-group label") || []) {
 			const label = (field.matches("label") ? field.textContent : field.querySelector(".settings-field-label, .appearance-row-label, label")?.textContent || "").trim().split("\n")[0].trim();
 			const owner = field.closest("[data-app-section]");
-			const section = ["appearance", "sidebar"].includes(owner?.dataset.appSection) ? owner.dataset.appSection : "general";
+			const section = owner?.dataset.appSection || "general";
 
-			if (label && label.length < 80 && !seen.has(label) && !field.closest("#app-view-menu") && !field.closest('[data-pane="shortcuts"]')) {
+			if (label && label.length < 80 && !seen.has(label) && !field.closest("#app-view-menu") && section !== "shortcuts") {
 				seen.add(label);
-				entries.push({ group: "Settings", title: label, note: { general: "General", appearance: "Appearance", sidebar: "Sidebar" }[section], keys: `${label} settings`, run: () => openSettings(section) });
+				entries.push({ group: "Settings", title: label, note: { general: "General", appearance: "Appearance", sidebar: "Sidebar", sources: "Sources" }[section], keys: `${label} settings`, run: () => openSettings(section) });
 			}
 		}
 
 		entries.push({ group: "Settings", title: "Sources", note: "Where comments come from", keys: "sources reddit hacker news bluesky lobsters mastodon lemmy settings", run: () => openSettings("sources") });
+		entries.push({ group: "Settings", title: "Account", note: "Sync settings, Collection, and reading queue", keys: "account sync devices sign in", run: () => openSettings("account") });
 		entries.push({ group: "Settings", title: "Disabled sites", note: "Sidebar", keys: "disabled sites blocked hidden manage settings sidebar", run: () => openSettings("sidebar", "#settings-blocked-section") });
 		entries.push({ group: "Settings", title: "Hidden links", note: "Sources", keys: "hidden links blocked disabled manage settings sources", run: () => openSettings("sources", "#settings-hidden-section") });
+		entries.push({ group: "Settings", title: "Privacy", note: "General", keys: "privacy policy personal data settings", run: () => openSettings("general", "#settings-privacy") });
 
 		return entries;
 	}
@@ -39686,12 +44764,6 @@ ${frontPageChooserHTML()}
 			return;
 		}
 
-		const control = state.ui.shadow.querySelector("#comment-toggle");
-
-		if (control) {
-			control.hidden = true;
-		}
-
 		if (panel.childElementCount) {
 			panel.hidden = false;
 			return;
@@ -39724,7 +44796,7 @@ ${frontPageChooserHTML()}
 		panel.hidden = false;
 	}
 
-	async function renderAppList({ force = false } = {}) {
+	async function renderAppList({ force = false, automatic = false } = {}) {
 		const state = appState;
 		const ui = state.ui;
 		const list = ui.shadow.querySelector("#app-list-body");
@@ -39752,73 +44824,83 @@ ${frontPageChooserHTML()}
 				renderBrowseSkeleton(list, "Loading Front Pages…");
 			}
 
-			const [{ rows: allRows, feedStates = [] }, hiddenKeys, queued, seen] = await Promise.all([
-				loadFrontPages({ force }),
+			const metadata = () => Promise.all([
 				loadHiddenStoryKeys(),
 				loadQueue(),
 				load(STORAGE.seen, {}),
 			]);
+			let paintRevision = 0;
+			const paint = async ({ rows: allRows, feedStates = [], pending = false }) => {
+				const revision = ++paintRevision;
+				const [hiddenKeys, queued, seen] = await metadata();
 
-			if (request !== state.listSeq) {
-				return;
-			}
+				if (request !== state.listSeq || revision !== paintRevision) {
+					return;
+				}
 
-			outcome = { feedStates };
-			state.rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
-			state.rowsByURL = new Map(
-				state.rows.map((row) => [normalizeURL(row.story.url) || row.story.url, row]),
-			);
-			state.seen = seen || {};
-
-			const shown = view === "unread" && state.open
-				? state.rows.filter((row) => rowIsUnread(row, state.seen) || (normalizeURL(row.story.url) || row.story.url) === state.open.key)
-				: appViewRows(state.rows, view, state.seen);
-			const failureText = frontPageFailureText(feedStates, view);
-			const queuedKeys = new Set(queued.map(queueKey));
-
-			while (list._hnewherePointer) {
-				await list._hnewherePointer.done;
-				if (request !== state.listSeq) return;
-			}
-			list.replaceChildren();
-
-			if (!shown.length) {
-				renderAppListMessage(
-					failureText || (!allRows.length
-						? feedStates.length && feedStates.every((feed) => feed.status === "ok") ? "Nothing here right now." : "Could not load Front Pages."
-						: view === "unread"
-							? "All caught up."
-							: "Nothing here right now."),
+				outcome = { feedStates };
+				state.rows = allRows.filter((row) => !isStoryHidden(row.story, hiddenKeys));
+				state.rowsByURL = new Map(
+					state.rows.map((row) => [normalizeURL(row.story.url) || row.story.url, row]),
 				);
-			} else if (failureText) {
-				const notice = document.createElement("div");
+				state.seen = seen || {};
 
-				notice.className = "browse-feed-status";
-				notice.setAttribute("role", "status");
-				notice.textContent = failureText;
-				list.append(notice);
-			}
+				const shown = view === "unread" && state.open
+					? state.rows.filter((row) => rowIsUnread(row, state.seen) || (normalizeURL(row.story.url) || row.story.url) === state.open.key)
+					: appViewRows(state.rows, view, state.seen);
+				const failureText = frontPageFailureText(feedStates, view);
+				const unavailable = feedStates.length > 0 && feedStates.every((feed) => feed.status !== "ok" && feed.status !== "window");
+				const queuedKeys = new Set(queued.map(queueKey));
 
-			for (const row of shown) {
-				const unread = rowIsUnread(row, state.seen);
-				const element = renderBrowseRow(row.story, list, 0, {
-					also: row.also,
-					queuedKeys,
-					hideable: true,
-					reload: () => renderAppList(),
-					unreadDot: unread,
-				});
+				while (list._hnewherePointer) {
+					await list._hnewherePointer.done;
+					if (request !== state.listSeq || revision !== paintRevision) return;
+				}
+				list.replaceChildren();
 
-				element.classList.toggle("is-unread", unread);
-			}
+				if (!shown.length) {
+					renderAppListMessage(
+						pending ? "Loading Front Pages…" : failureText || (!allRows.length
+							? unavailable ? "Could not load Front Pages." : "Nothing here right now."
+							: view === "unread"
+								? "All caught up."
+								: "Nothing here right now."),
+					);
+				} else if (failureText) {
+					const notice = document.createElement("div");
 
-			const cardSettings = await loadSettings();
+					notice.className = "browse-feed-status";
+					notice.setAttribute("role", "status");
+					notice.textContent = failureText;
+					list.append(notice);
+				}
 
-			if (cardSettings.frontPageMode === undefined && request === state.listSeq) {
-				list.prepend(frontPageCardElement(cardSettings, () => refreshFrontPageConsumers()));
-			}
+				for (const row of shown) {
+					const unread = rowIsUnread(row, state.seen);
+					const element = renderBrowseRow(row.story, list, 0, {
+						also: row.also,
+						queuedKeys,
+						hideable: true,
+						reload: () => renderAppList(),
+						unreadDot: unread,
+					});
 
-			refreshSaveControls().catch(console.error);
+					element.classList.toggle("is-unread", unread);
+				}
+
+				const cardSettings = await loadSettings();
+
+				if (request !== state.listSeq || revision !== paintRevision) return;
+				if (cardSettings.frontPageMode === undefined) {
+					list.prepend(frontPageCardElement(cardSettings, () => refreshFrontPageConsumers()));
+				}
+
+				refreshSaveControls().catch(console.error);
+				decorateAppRows(list);
+				await paintAppCounts();
+			};
+			const snapshot = await loadFrontPages({ force, automatic, onUpdate: paint });
+			await paint(snapshot);
 		}
 
 		if (request !== state.listSeq) {
@@ -39828,6 +44910,7 @@ ${frontPageChooserHTML()}
 		state.listView = view;
 		decorateAppRows(list);
 		await paintAppCounts();
+		scheduleFrontPageRefresh();
 		return request === state.listSeq ? outcome : undefined;
 	}
 
@@ -40037,14 +45120,13 @@ ${frontPageChooserHTML()}
 
 		closeAppRowMenu();
 
-		if (appIsPhone() && state.open?.key === key && state.article && !focus) {
-			setAppStage("article");
-			return;
+		if (!focus && state.open?.key === key && renderedFor === key && state.ui.body.querySelector(".top-level-comments")) {
+			if (appIsPhone()) setAppStage("article");
+			return runSync((releaseRead) => syncDiscussions(state.ui, renderedDiscussions, releaseRead));
 		}
 
-		if (!focus && state.open?.key === key && renderedFor === key && state.ui.body.querySelector(".top-level-comments")) return;
-
 		const opened = { url, key, row: entry };
+		if (state.open?.key && state.open.key !== key) cancelDiscussionOperations(state.open.key);
 
 		if (appIsPhone() && state.ui.shadow.querySelector("#app").dataset.stage === "list" && !state.moving) {
 			state.listGeometry = new Map([...state.ui.shadow.querySelectorAll("#app-list-body .app-row")].map((element) => {
@@ -40142,8 +45224,10 @@ ${frontPageChooserHTML()}
 		}
 		appState.ui.shadow.querySelector("#panel > .discussion-progress-strip")?.remove();
 
-		const waiting = discussionSkeleton();
-		closeComposeDock(appState.ui.shadow);
+		const waiting = discussionLoading();
+		const bar = appState.ui.shadow.getElementById("app-discussion-compose");
+		flushComposerDrafts(bar).catch(console.error);
+		bar.replaceChildren();
 		body.replaceChildren(waiting);
 		const progress = startDiscussionProgress(appState.ui);
 		if (progress) {
@@ -40151,15 +45235,18 @@ ${frontPageChooserHTML()}
 			progress.querySelector(".discussion-progress-label").textContent = "Checking sources…";
 		}
 		renderedDiscussions = [];
+		renderedComments = [];
 		renderedFor = "";
+		activeCommentFilter = null;
+		preFilterPosition = null;
+		liveDiscussions.clear();
+		transitionCommentList(resetFilterBanner, { animate: false });
 		sidebarGeneration++;
 		appState.discussionSync = null;
 		const emptySync = appState.ui.shadow.querySelector("#app-discussion-sync-empty");
 		if (emptySync) emptySync.hidden = true;
 		appState.ui.shadow.querySelector("#app-discussion-meta")?.replaceChildren();
 		appState.ui.shadow.querySelector("#app-discussion-sort")?.replaceChildren();
-		const control = appState.ui.shadow.querySelector("#comment-toggle");
-		if (control) control.hidden = true;
 	}
 
 	async function prepareAppDiscussion(row, opened) {
@@ -40190,8 +45277,6 @@ ${frontPageChooserHTML()}
 		ui.body.insertBefore(header, waiting);
 		mountFilterBanner(header, ui);
 		for (const control of ui.shadow.querySelectorAll("#app-discussion-sort select, #app-discussion-sort button")) control.disabled = true;
-		const control = ui.shadow.querySelector("#comment-toggle");
-		if (control) { control.hidden = false; control.disabled = true; }
 		const settings = await loadSettings();
 		if (appState !== state || state.open !== opened || waiting.parentElement !== ui.body) return;
 		const composer = mountComposeBox(ui, stories, settings, waiting, null, { anticipateReplies: true });
@@ -40201,7 +45286,6 @@ ${frontPageChooserHTML()}
 			composer._hnewhereProvisionalURL = opened.url;
 		}
 		setComposeLoading(composer, true);
-		if (control) control.disabled = false;
 	}
 
 	function appRowThreads(row, settings) {
@@ -40216,8 +45300,33 @@ ${frontPageChooserHTML()}
 		);
 	}
 
-	async function recoverAppRowThreads(threads, found) {
-		const missing = threads.filter(
+	function knownDiscussionFromFeed(story) {
+		if (story.source === "reddit") return redditDiscussionFromFeed(story);
+		let article;
+		try { article = new URL(story.url); } catch { return null; }
+		if (!["http:", "https:"].includes(article.protocol) || article.username || article.password) return null;
+		const id = String(story.id || "");
+		const direct = story.source === "hn" || story.source === "lemmy" ? /^\d+$/.test(id) : story.source === "lobsters" && /^[a-z0-9]+$/i.test(id);
+		const bsky = story.source === "bsky" && /^at:\/\/[^/?#]+\/app\.bsky\.feed\.post\/[a-z0-9_-]+$/i.test(id);
+		if (!direct && !bsky) return null;
+		const discussionId = bsky ? normalizeURL(article.href) : id;
+		return {
+			source: story.source, id: discussionId, key: sourceKey(story.source, discussionId), title: story.title || "", author: story.by || "",
+			score: Number(story.score) || 0, commentCount: Number(story.descendants) || 0, createdAt: Number(story.time) || 0,
+			permalink: direct ? threadAddress(story.source, id) : null, articleURL: article.href,
+			label: sourceShortLabel(story), collective: Boolean(bsky), rootKeys: bsky ? [bskyKeyFromURI(id)] : [], rootTimes: [],
+		};
+	}
+
+	async function recoverAppRowThreads(threads, found, attempts = new Map(), onPartial = null, operation = null) {
+		const groups = new Map();
+		for (const story of threads) {
+			if (!story?.id || typeof getSource(story.source)?.recover !== "function") continue;
+			const key = JSON.stringify([story.source, String(story.id), normalizeURL(story.url)]);
+			const previous = groups.get(key);
+			if (!previous || story.source === "reddit" && !redditDiscussionFromFeed(previous) && redditDiscussionFromFeed(story)) groups.set(key, story);
+		}
+		const missing = [...groups.values()].filter(
 			(story) =>
 				!found.some(
 					(discussion) =>
@@ -40225,25 +45334,36 @@ ${frontPageChooserHTML()}
 						(discussion.collective || String(discussion.id) === String(story.id)),
 				),
 		);
+		const completed = new Map();
 		const lists = await Promise.all(
-			missing.map((story) =>
-				getSource(story.source)
-					.recover(story)
-					.catch((error) => {
-						console.error("Backchannel " + story.source + " thread failed:", error);
-						return [];
-					}),
-			),
+			missing.map((story) => {
+				const fallback = () => {
+					const known = knownDiscussionFromFeed(story);
+					return known ? [known] : [];
+				};
+				const key = JSON.stringify([story.source, String(story.id), normalizeURL(story.url)]);
+				if (!attempts.has(key)) attempts.set(key, sourceReadJob(story.source, "recover", key,
+					() => getSource(story.source).recover(story, { fallback: false }), { timeout: RECOVER_CEILING_MS, operation }));
+				return attempts.get(key).then((result) => {
+					const rows = (result.status === "ok" ? result.value || [] : fallback()).filter((row) => !story.url || normalizeURL(row.articleURL) === normalizeURL(story.url));
+					completed.set(key, rows);
+					onPartial?.([...completed.values()].flat());
+					return rows;
+				});
+			}),
 		);
 
 		return lists.flat();
 	}
 
-	async function openAppDiscussion(row, { focus = "", previousSeen = appState?.openSeen || {}, onThreadsLoaded = null, force = false } = {}) {
+	async function openAppDiscussion(row, { focus = "", previousSeen = appState?.openSeen || {}, onThreadsLoaded = null, force = true } = {}) {
 		const state = appState;
 		const ui = state.ui;
 		const url = state.open?.url;
 		const generation = ++sidebarGeneration;
+		const opened = state.open;
+		const current = () => appState === state && state.open === opened;
+		const operation = beginSyncOperation("discussion");
 
 		clearArticleAnnotations();
 		stopObservingNewComments();
@@ -40261,22 +45381,26 @@ ${frontPageChooserHTML()}
 		try {
 			const settings = await loadSettings();
 			const threads = appRowThreads(row, settings);
-			const found = await discoverAll(pageAddresses(), settings, { force });
-			const recovered = await recoverAppRowThreads(threads, found);
-			const loaded = await resolveDiscussions(dedupeDiscussions([...found, ...recovered]));
+			if (!current()) return;
+			if (force) forgetSyncedItems([...(discussionViewCache.get(openPageKey()) || []), ...threads.filter((story) => story.source === "hn").map(hnDiscussion)]);
+			const stream = createDiscussionStream(ui, { onThreadsLoaded, settings, refresh: force, operation });
+			const found = await discoverAll(pageAddresses(), settings, { force, known: threads, saved: discussionViewCache.get(openPageKey()) || [], onPartial: stream.offer, operation });
+			const loaded = await resolveDiscussions(found);
 
-			if (generation !== sidebarGeneration) {
+			if (!current() || !stream.current()) {
 				return;
 			}
 
 			if (!loaded.length) {
+				await stream.finish([]);
 				sidebarHasDiscussion = false;
 				renderedDiscussions = [];
+				state.discussionSync = null;
 				state.openTotal = 0;
 				ui.shadow.querySelector("#app-discussion-meta")?.replaceChildren();
 				ui.shadow.querySelector("#app-discussion-sort")?.replaceChildren();
 				paintAppChrome();
-				renderNoDiscussion(ui, threads.length ? "Couldn't load what people said about this article." : "");
+				renderNoDiscussion(ui, operation.outcome() !== "ok" ? "Couldn't check the sources for this article. Try Sync again." : threads.length ? "Couldn't load what people said about this article." : "");
 				const emptySync = ui.shadow.querySelector("#app-discussion-sync-empty");
 				if (emptySync) emptySync.hidden = false;
 				paintAppDiscussionSync();
@@ -40286,15 +45410,14 @@ ${frontPageChooserHTML()}
 			if (focus && url) {
 				await rememberPendingFocus(url, focus);
 			}
-			if (onThreadsLoaded && redditReadBatch?.connected) forgetThreads(loaded.filter((story) => story.source === "reddit"));
-
 			setSidebarStage(ui, "comments");
-			await renderDiscussions(loaded, ui, { onThreadsLoaded });
+			await stream.finish(loaded);
 			await refreshArticleAnnotations();
 		} catch (error) {
 			console.error(error);
 		} finally {
-			if (generation === sidebarGeneration) {
+			operation.finish();
+			if (current()) {
 				const progress = ui.shadow.querySelector('#panel > .discussion-progress-strip[data-phase="discovery"]');
 				finishDiscussionProgress(progress);
 				clearSidebarStage(ui);
@@ -40307,7 +45430,8 @@ ${frontPageChooserHTML()}
 			return;
 		}
 
-		const row = appState?.open?.row;
+		const key = normalizeURL(url) || url;
+		const row = appState?.rowsByURL.get(key) || (appState?.open?.key === key ? appState.open.row : null);
 		const hn = [row?.story, ...(row?.also || [])].filter(
 			(story) => story?.source === "hn" && story.id,
 		);
@@ -40324,6 +45448,7 @@ ${frontPageChooserHTML()}
 	function paintAppArticleActions() {
 		const state = appState;
 		const holder = state?.ui.shadow.querySelector("#app-article-actions");
+		const mobileVotes = state?.ui.shadow.getElementById("app-mobile-votes");
 		const story = state?.open?.row?.story;
 
 		if (!holder) {
@@ -40334,12 +45459,13 @@ ${frontPageChooserHTML()}
 
 		if (!story?.url) {
 			holder.replaceChildren();
+			mobileVotes.replaceChildren();
 			return;
 		}
 
 		const votes =
 			story.id && getSource(story.source)?.capabilities.vote
-				? `<span class="vote-controls app-head-votes hidden" data-hn-vote-source="${escapeHTML(String(story.source || "hn"))}" data-hn-vote-story-id="${escapeHTML(String(story.id))}" data-hn-vote-item-id="${escapeHTML(String(story.id))}"></span>`
+				? `<span class="vote-controls hidden" data-hn-vote-source="${escapeHTML(String(story.source || "hn"))}" data-hn-vote-story-id="${escapeHTML(String(story.id))}" data-hn-vote-item-id="${escapeHTML(String(story.id))}"></span>`
 				: "";
 		const saveControl = story.id
 			? `${saveButtonHTML({
@@ -40359,11 +45485,11 @@ ${frontPageChooserHTML()}
 					kind: "discussion",
 				});
 
-		holder.innerHTML = `<span class="app-head-group app-head-reading">${votes}${saveControl}</span>`;
+		holder.innerHTML = `<span class="app-head-group app-head-reading">${saveControl}</span>`;
 		holder.querySelector('[data-item-action="save"]')?.classList.add("app-head-icon", "app-article-disc");
 
 		const titleActions = () => {
-			for (const button of holder.querySelectorAll("button:not(.vote-button)")) {
+			for (const button of holder.querySelectorAll("button")) {
 				const label = button.textContent.trim();
 
 				button.title = APP_HEAD_TITLES[label] || label;
@@ -40377,7 +45503,8 @@ ${frontPageChooserHTML()}
 
 		titleActions();
 
-		const voteSlot = holder.querySelector(".app-head-votes");
+		mobileVotes.innerHTML = votes;
+		const voteSlot = mobileVotes.querySelector(".vote-controls");
 
 		if (voteSlot) {
 			const cached = voteLinkCache.get(String(story.id));
@@ -40419,6 +45546,7 @@ ${frontPageChooserHTML()}
 
 		if (show) {
 			paintReaderMenu();
+			[...menu.querySelectorAll("button, input, a")].find((element) => !element.disabled && element.getClientRects().length)?.focus({ preventScroll: true });
 		}
 	}
 
@@ -40435,11 +45563,11 @@ ${frontPageChooserHTML()}
 		menu.style.maxHeight = "";
 
 		const box = toggle.getBoundingClientRect();
-		const room = pane.getBoundingClientRect();
+		const room = (toggle.closest("#app-chin") ? shadow.querySelector("#app") : pane).getBoundingClientRect();
 		const width = menu.offsetWidth;
 		const fitsAbove = box.top - 9 - menu.offsetHeight >= 8;
 		const fitsBelow = box.bottom + 9 + menu.offsetHeight <= window.innerHeight - 8;
-		const above = toggle.id === "app-bar-view" && (fitsAbove || (!fitsBelow && box.top > window.innerHeight - box.bottom));
+		const above = fitsAbove || (!fitsBelow && box.top > window.innerHeight - box.bottom);
 
 		menu.style.maxHeight = `${Math.floor(above ? box.top - 17 : window.innerHeight - box.bottom - 17)}px`;
 
@@ -40497,6 +45625,7 @@ ${frontPageChooserHTML()}
 			body?.replaceChildren();
 			body?.style.removeProperty("--app-frame-height");
 			body?.style.removeProperty("--app-frame-fit");
+			paintAppDiscussionTheme();
 		}
 	}
 
@@ -40724,38 +45853,23 @@ ${frontPageChooserHTML()}
 	}
 
 	function requestPage(url) {
-		return new Promise((resolve) => {
-			const failure = { ok: false, status: 0, finalUrl: url, headers: "", contentType: "", text: "" };
-
-			try {
-				GM.xmlHttpRequest({
-					method: "GET",
-					url,
-					timeout: 15000,
-					anonymous: true,
-					headers: { Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8" },
-					onload: (response) => {
-						const headers = response.responseHeaders || "";
-						const contentType = parseResponseHeaders(headers).get("content-type") || "";
-
-						resolve({
-							ok: response.status >= 200 && response.status < 400,
-							status: response.status,
-							finalUrl: response.finalUrl || url,
-							headers,
-							contentType,
-							text:
-								!contentType || /html|xml|text\/plain/i.test(contentType)
-									? String(response.responseText || "")
-									: "",
-						});
-					},
-					onerror: () => resolve(failure),
-					ontimeout: () => resolve(failure),
-				});
-			} catch {
-				resolve(failure);
-			}
+		return requestResource({
+			method: "GET",
+			url,
+			anonymous: true,
+			headers: { Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8" },
+		}).then((response) => {
+			if (!response) return { ok: false, status: 0, finalUrl: url, headers: "", contentType: "", text: "" };
+			const headers = response.responseHeaders || "";
+			const contentType = parseResponseHeaders(headers).get("content-type") || "";
+			return {
+				ok: response.status >= 200 && response.status < 400,
+				status: response.status,
+				finalUrl: response.finalUrl || url,
+				headers,
+				contentType,
+				text: !contentType || /html|xml|text\/plain/i.test(contentType) ? String(response.responseText || "") : "",
+			};
 		});
 	}
 
@@ -40809,6 +45923,7 @@ ${frontPageChooserHTML()}
 			if (mode === "frame-agent") {
 				refreshArticleAnnotations().catch(console.error);
 			}
+			paintAppDiscussionTheme();
 
 			return;
 		}
@@ -40827,6 +45942,7 @@ ${frontPageChooserHTML()}
 		} else {
 			showAppCard(article);
 		}
+		paintAppDiscussionTheme();
 	}
 
 	function showAppImage(article) {
@@ -40966,6 +46082,13 @@ ${frontPageChooserHTML()}
 		placeAppViewMenu();
 	}
 
+	async function loadReaderLook() {
+		const [page, font] = await Promise.all([load(STORAGE.readerPage, "auto"), load(STORAGE.readerFont, "charter")]);
+		readerLook = { page: Object.hasOwn(READER_PAGE_NAMES, page) ? page : "auto", font: Object.hasOwn(READER_FONT_NAMES, font) ? font : "charter" };
+		paintReaderLook();
+		paintReaderMenu();
+	}
+
 	function chooseReaderLook(kind, value) {
 		if (kind === "page" && Object.hasOwn(READER_PAGE_NAMES, value)) {
 			readerLook.page = value;
@@ -40997,6 +46120,7 @@ ${frontPageChooserHTML()}
 
 		host.style.setProperty("--reader-face", READER_FONTS[face] || READER_FONTS.charter);
 		appReaderElement()?.setAttribute("data-face", face);
+		if (host === appState?.ui.shadow.host) paintAppDiscussionTheme();
 	}
 
 	function readerDateText(value) {
@@ -41289,33 +46413,45 @@ ${frontPageChooserHTML()}
 		const read = card.querySelector(".app-card-read");
 		const host = hostLabel(article.url);
 		const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+		const created = Date.now();
+		let poll = null;
+		let ended = false;
+		const request = { id, nonce: id, kind: "article-read", url: article.url, key: readOutKey(article.url), until: created + APP_READ_OUT_MS, expires: created + APP_READ_OUT_MS };
+		const cleanup = () => {
+			ended = true;
+			return save(BRIDGE_PAYLOAD_PREFIX + id, { ...request, ts: created, done: true }).then(() => finishManagedReadHelper(id));
+		};
 		const stop = (text) => {
 			clearInterval(poll);
 			read.disabled = false;
 			note.textContent = text;
+			cleanup().catch(() => {});
 		};
 		let busy = false;
 
 		read.disabled = true;
-		note.textContent = `Scraping ${host} in a new tab\u2026`;
+		note.textContent = `Scraping ${host}\u2026`;
 
-		const saving = save(STORAGE.readOut, {
-			id,
-			url: article.url,
-			key: readOutKey(article.url),
-			until: Date.now() + APP_READ_OUT_MS,
-		});
+		const saving = Promise.all([save(STORAGE.readOut, request), stageBridgePayload(id, request), indexBridgePayload(id)]);
 
-		window.open(article.url, "_blank", "noopener");
+		const helperURL = new URL(article.url);
+		helperURL.hash = new URLSearchParams({ backchannel_read_out: "1", nonce: id });
+		if (typeof GM.openInTab === "function") {
+			Promise.resolve().then(() => GM.openInTab(helperURL.href, true)).then((tab) => {
+				rememberReadHelperTab(id, "article", tab, created);
+				if (ended || article.dead || article.mode !== "card") cleanup().catch(() => {});
+			}, () => save(STORAGE.readOut, { id, failed: true }).catch(() => {}));
+		} else rememberReadHelperTab(id, "article", window.open(helperURL.href, "_blank", "noopener"), created);
 		await saving;
 
-		const poll = setInterval(async () => {
+		poll = setInterval(async () => {
 			if (busy) {
 				return;
 			}
 
 			if (article.dead || article.mode !== "card") {
 				clearInterval(poll);
+				cleanup().catch(() => {});
 				return;
 			}
 
@@ -41344,6 +46480,7 @@ ${frontPageChooserHTML()}
 			}
 
 			clearInterval(poll);
+			cleanup().catch(() => {});
 			article.reader = reader;
 			applyAppArticleMode(article, "reader");
 		}, 400);
@@ -41380,10 +46517,14 @@ ${frontPageChooserHTML()}
 	}
 
 	async function answerReadOut() {
+		const marker = parseBridgeHash("backchannel_read_out");
+		if (!marker || window.top !== window) return;
+		const stage = await readBridgePayload(marker.nonce);
+		const authorized = stage?.kind === "article-read" && stage.nonce === marker.nonce && stage.id === marker.nonce && Number.isFinite(stage.until) && Number.isFinite(stage.ts) && stage.until >= stage.ts && stage.until - stage.ts <= APP_READ_OUT_MS && readOutMatches(stage, location.href, canonicalHint());
 		const wanted = async () => {
 			const record = await load(STORAGE.readOut, null);
 
-			if (!record || record.article || record.failed || !(Date.now() < record.until)) {
+			if (!record || record.id !== marker.nonce || record.article || record.failed || !(Date.now() < record.until)) {
 				return null;
 			}
 
@@ -41396,63 +46537,75 @@ ${frontPageChooserHTML()}
 			request = await wanted();
 		}
 
+		if (!request && authorized) request = stage;
 		if (!request) {
 			return;
 		}
 
 		await documentReady();
+		const stopTitle = startReadHelperTitle(hostLabel(request.url), () => false, () => parseBridgeHash("backchannel_read_out")?.nonce === request.id && readOutMatches(request, location.href, canonicalHint()), { nonce: request.id, kind: "article" });
+		await stopTitle.helper.ready;
+		try {
+			if (authorized && (stage.done || Date.now() >= stage.until)) return;
 
-		let reader = null;
-		let last = -1;
+			let reader = null;
+			let last = -1;
 
-		while (Date.now() < request.until) {
-			const current = await wanted();
+			while (Date.now() < request.until) {
+				const current = await wanted();
 
-			if (!current || current.id !== request.id) {
+				if (!current || current.id !== request.id) {
+					return;
+				}
+
+				const found = readerFromFresh(() => {
+					const copy = document.cloneNode(true);
+					copy.title = stopTitle.sourceTitle();
+
+					for (const own of copy.querySelectorAll(`${OWN_SURFACE_SELECTOR},#hn-collapse-button,#hn-submit-button,#${BUTTON_PENDING_ID},#backchannel-read-helper-banner`)) {
+						own.remove();
+					}
+
+					return copy;
+				}, location.href);
+				const chars = found?.chars || 0;
+
+				if (chars >= READER_MIN_CHARS && chars === last && document.readyState === "complete") {
+					reader = found;
+					break;
+				}
+
+				last = chars;
+				await new Promise((resolve) => setTimeout(resolve, 500));
+			}
+
+			if (!reader) {
+				await save(STORAGE.readOut, { ...request, failed: true });
 				return;
 			}
 
-			const found = readerFromFresh(() => {
-				const copy = document.cloneNode(true);
-
-				for (const own of copy.querySelectorAll(`${OWN_SURFACE_SELECTOR},#hn-collapse-button,#hn-submit-button,#${BUTTON_PENDING_ID}`)) {
-					own.remove();
-				}
-
-				return copy;
-			}, location.href);
-			const chars = found?.chars || 0;
-
-			if (chars >= READER_MIN_CHARS && chars === last && document.readyState === "complete") {
-				reader = found;
-				break;
+			await save(STORAGE.readOut, {
+				...request,
+				article: {
+					title: reader.title,
+					byline: reader.byline,
+					html: reader.content.innerHTML,
+					chars: reader.chars,
+					authors: reader.authors,
+					published: reader.published,
+					modified: reader.modified,
+					dek: reader.dek,
+					metaLines: reader.metaLines,
+					avatar: reader.avatar,
+				},
+			});
+		} finally {
+			stopTitle();
+			if (stopTitle.helper.current()) {
+				try { if (typeof GM.closeTab === "function") await Promise.race([GM.closeTab(), new Promise((resolve) => setTimeout(resolve, READ_HELPER_CLOSE_MS))]); } catch {}
+				if (stopTitle.helper.current()) try { window.close(); } catch {}
 			}
-
-			last = chars;
-			await new Promise((resolve) => setTimeout(resolve, 500));
 		}
-
-		if (!reader) {
-			await save(STORAGE.readOut, { ...request, failed: true });
-			return;
-		}
-
-		await save(STORAGE.readOut, {
-			...request,
-			article: {
-				title: reader.title,
-				byline: reader.byline,
-				html: reader.content.innerHTML,
-				chars: reader.chars,
-				authors: reader.authors,
-				published: reader.published,
-				modified: reader.modified,
-				dek: reader.dek,
-				metaLines: reader.metaLines,
-				avatar: reader.avatar,
-			},
-		});
-		window.close();
 	}
 
 	function postToFrame(message) {
@@ -41480,6 +46633,7 @@ ${frontPageChooserHTML()}
 		noteAppPreview(article.url, data.preview);
 
 		if (data.look) {
+			article.look = data.look;
 			rememberLook(article.url, data.look).catch(console.error);
 		}
 
@@ -41856,7 +47010,7 @@ ${frontPageChooserHTML()}
 						openAppSearch();
 					},
 		"front-pages": () => appShortcutPane("list", "#app-toggle-list"),
-		discussion: () => appIsPhone() ? appShortcutPress("#app-bar-discussion") : appShortcutPane("discussion", appIsStacked() ? "#app-bar-discussion" : "#app-toggle-discussion"),
+		discussion: () => appIsPhone() ? appShortcutPress("#app-bar-discussion") : appShortcutPane("discussion", "#app-toggle-discussion"),
 		sidebar: () => null,
 		settings: () => appShortcutSettings(),
 		shortcuts: () => appShortcutSettings("shortcuts"),
@@ -41872,7 +47026,7 @@ ${frontPageChooserHTML()}
 		"open-original": () => {
 			const url = appState.open?.url;
 
-			return url && appShortcutControl(appUsesFloatingControls() ? "#app-bar-open" : "#app-article-open")
+			return url && appShortcutControl(appUsesFloatingControls() ? "#app-bar-open" : "#app-view-toggle")
 				? () => {
 						rememberAppArrival(url).catch(console.error);
 						window.open(url, "_blank", "noopener");
@@ -43238,6 +48392,8 @@ ${frontPageChooserHTML()}
 
 	// Adapted from Defuddle 0.19.5, https://github.com/kepano/defuddle
 	// Copyright (c) 2025 Steph Ango (@kepano)
+	// Octicons, https://github.com/primer/octicons
+	// Copyright (c) 2026 GitHub Inc.
 	//
 	// Permission is hereby granted, free of charge, to any person obtaining a copy
 	// of this software and associated documentation files (the "Software"), to deal
@@ -45785,6 +50941,8 @@ ${frontPageChooserHTML()}
 	// -------------------------
 
 	async function init() {
+		if (await dispatchReadHelperCleanup()) return;
+		if (await dispatchXSearchWindow()) return;
 		if (await dispatchRedditReadWindow()) return;
 		redditReadNoticeAccepted = Boolean(await load(REDDIT_READ_NOTICE_KEY, false));
 		await seedSources();
@@ -45839,6 +50997,7 @@ ${frontPageChooserHTML()}
 	let arrivedAddress = "";
 
 	async function runPagePass({ arrival = true } = {}) {
+		for (const operation of [...syncOperations.values()]) if (operation.kind === "discussion" && operation.target !== openPageKey()) operation.cancel();
 		if (appState) {
 			return;
 		}
@@ -45915,7 +51074,26 @@ ${frontPageChooserHTML()}
 			await forget(STORAGE.last);
 		}
 
-		const found = await discoverAll(pageAddresses(), settings);
+		let earlyOpening = null;
+		let viewStream = null;
+		let partialRows = [];
+		let finishDiscovery;
+		const discoveryResult = new Promise((resolve) => { finishDiscovery = resolve; });
+		const earlyPage = pageAddress();
+		const autoOpen = shouldAutoOpenSidebar(settings, siteState, arrivedFromClick || arrivedFromEnabledSource(arrivedFromSourceId, enabledSourceIds(settings, registeredSourceIds())));
+		const found = await discoverAll(pageAddresses(), settings, { force: true, onPartial: (rows) => {
+			partialRows = rows;
+			if (viewStream) viewStream.offer(rows);
+			else if (!earlyOpening && rows.length && autoOpen && sameURL(earlyPage, pageAddress())) {
+				settleButtonToDiscussion(pendingButton);
+				earlyOpening = openSidebar(rows, { remember: false, arrival, discoveryResult, onStream: (stream) => { viewStream = stream; stream.offer(partialRows); } });
+			}
+		} }).then((rows) => { finishDiscovery(rows); return rows; }, (error) => { finishDiscovery([]); throw error; });
+		if (earlyOpening) {
+			await earlyOpening;
+			scheduleCollectedChecks(settings);
+			return;
+		}
 
 		scheduleCollectedChecks(settings);
 

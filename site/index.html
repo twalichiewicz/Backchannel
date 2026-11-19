@@ -989,15 +989,16 @@
     <div class="privacy-scroll" role="region" aria-label="Privacy policy" tabindex="-1">
       <div class="privacy-body">
         <h2>Privacy</h2>
-        <p class="privacy-meta">Triglavis LLC &middot; backchnnl.app &middot; Last updated 18 October 2026</p>
+        <p class="privacy-meta">Triglavis LLC &middot; backchnnl.app &middot; Last updated 19 November 2026</p>
 
         <h3>What this site collects</h3>
-        <p>Nothing. There are no cookies, no analytics, no tracking pixels and no third-party scripts on this page. <strong>Cloudflare</strong> hosts it and, like any host, receives each request for it.</p>
+        <p>The promotional page uses no cookies, analytics, tracking pixels or third-party scripts. <strong>Cloudflare</strong> hosts Backchannel, handles network requests, and records operational logs.</p>
 
         <h3>What the script does</h3>
-        <p>Backchannel has no server, no analytics and no telemetry. Nothing you read, write or save with it is sent to Triglavis.</p>
+        <p>Account sync and diagnostic sharing are optional.</p>
         <ul>
-          <li>Your settings, queue, Collection, votes, notes, hidden sites and the comments you have seen stay in your userscript manager's storage, on your device.</li>
+          <li>Your settings, queue, Collection, votes, notes, hidden sites and the comments you have seen are saved in your userscript manager on this device.</li>
+          <li>If you set up Account sync, Backchannel uploads an encrypted copy of your settings, reading queue, saved items and notes to Cloudflare. The service stores your passkey's public credential, session records, and browser and platform labels for linked devices. Backchannel stores your verified recovery email, uses it to label new passkeys, and sends verification and recovery codes through Cloudflare. Your recovery key stays on your devices.</li>
           <li>To find discussions, it asks each source you have turned on about the page you are on. Most are told its address; Lobsters and Mastodon's search are told only its domain. A link you open in the reader from Mastodon's front page is looked up on mastodon.social by its address. A source you have turned off is asked nothing.</li>
           <li>It checks the pages in your Collection for new discussion, each at most once an hour, by sending their addresses to Hacker News, Bluesky's link index and, when Reddit answers through its archive, that archive. A page with new discussion is then looked up like the page you are on. Choose Unwatch on a page to stop.</li>
           <li><strong>Reddit</strong>, <strong>Wikipedia</strong> and <strong>Hacker News</strong> can tell who you are. Signed in to one, its requests can arrive as your account. Signed out, Reddit and Wikipedia still send a device identifier.</li>
@@ -1007,8 +1008,13 @@
         </ul>
         <p>Every host the script can contact, and exactly what each is told, is listed in <a href="https://github.com/twalichiewicz/Backchannel/blob/main/SECURITY.md">SECURITY.md</a>.</p>
 
+        <h3>Optional diagnostics</h3>
+        <p>If you choose to share diagnostics, Reader sends reliability reports to help us find slow or failed refreshes, discussion loads, and Account syncs. Each report contains the Backchannel version, operation, outcome, approximate duration, and the source name when relevant. Reports exclude account and device identifiers, email addresses, article URLs, searches, notes, and comment content. Cloudflare handles these requests and records operational logs. It retains the diagnostic reports for three months.</p>
+
         <h3>Your choices</h3>
-        <p>Turn any source off in Settings, or hide Backchannel on any site. Removing the script, or clearing your userscript manager's data, deletes everything it stored.</p>
+        <p>Diagnostic sharing starts off. Your choice is included in encrypted Account sync and takes effect on each device when it syncs. In Reader, you can change your choice in Settings → Account → Manage account → Privacy. Reports are sent only while signed in with sharing enabled.</p>
+        <p>Signing out or deleting an account leaves your reading data in this browser profile. If you sign in to a different account in the same profile, Backchannel asks before syncing that data. Use separate browser profiles to keep reading data separate.</p>
+        <p>Turn any source off in Settings, or hide Backchannel on any site. Removing the script or clearing your userscript manager's data removes the local copy. Delete account in Settings → Account removes the active account and synced data. Cloudflare database backups may retain earlier copies for up to 30 days.</p>
 
         <h3>Changes</h3>
         <p>This policy changes in the open, alongside the code, and the date above moves with it. Questions go to <a href="https://github.com/twalichiewicz/Backchannel/issues">GitHub issues</a>.</p>

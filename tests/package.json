@@ -4,10 +4,13 @@
   "type": "module",
   "scripts": {
     "test": "node --test runner.test.mjs && node run.mjs && node comment-capture/run.mjs",
+    "test:account": "node --test --test-concurrency=1 account/*.test.mjs",
     "test:capture": "node comment-capture/run.mjs",
     "test:slow": "node --test runner.test.mjs && node run.mjs --all && node comment-capture/run.mjs"
   },
   "devDependencies": {
+    "esbuild": "0.28.2",
+    "miniflare": "5.20261117.0-beta",
     "playwright": "^1.62.1"
   }
 }

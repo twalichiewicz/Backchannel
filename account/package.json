@@ -1,0 +1,7 @@
+{
+  "name": "backchannel-account",
+  "private": true,
+  "dependencies": {
+    "@simplewebauthn/server": "14.1.0"
+  }
+}
