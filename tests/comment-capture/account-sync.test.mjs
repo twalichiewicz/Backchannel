@@ -226,25 +226,33 @@ test('Account sync uploads a private snapshot and another local profile can appl
     assert.deepEqual(await profileLayout(), header);
     assert.equal(await firstPanel.getByRole('button',{name:'Sync now',exact:true}).isVisible(),false);
     const manage = firstPanel.locator('#account-manage-page');
-    const currentEmail = manage.getByLabel('Current email',{exact:true});
-    const address = manage.getByLabel('New email address',{exact:true});
-    await currentEmail.waitFor();
-    assert.equal(await currentEmail.inputValue(),'birb@example.com');
-    assert.equal(await currentEmail.isEditable(),false);
+    const address = manage.getByLabel('Email address',{exact:true});
+    await address.waitFor({timeout:4000});
+    assert.equal(await manage.locator('input[type="email"]').count(),1);
+    assert.equal(await address.getAttribute('placeholder'),'birb@example.com');
+    assert.equal(await address.isEditable(),true);
     assert.equal(await address.inputValue(),'');
-    const updateEmail = manage.getByRole('button',{name:'Update email',exact:true});
-    assert(await updateEmail.isDisabled());
+    const emptyWidth = (await address.boundingBox()).width;
+    const updateEmail = manage.getByRole('button',{name:'Update',exact:true});
+    assert.equal(await updateEmail.isVisible(),false);
     const emailHint = manage.locator('#account-email-hint');
     assert.equal(await emailHint.isVisible(),false);
-    await address.fill('birb@example.com');
+    await address.fill('n');
+    await updateEmail.waitFor();
     assert(await updateEmail.isDisabled());
     assert.equal(await emailHint.isVisible(),false);
+    await address.fill('birb@example.com');
+    await updateEmail.waitFor({state:'hidden'});
     await address.fill('');
+    await address.fill('draft-birb@example.com');
+    await updateEmail.waitFor();
+    await manage.locator('#account-email-update').evaluate(async node => {
+      await Promise.all(node.getAnimations().map(animation => animation.finished));
+    });
     const sizing = await manage.evaluate(section => {
       const root = section.getRootNode();
       const rect = id => root.getElementById(id).getBoundingClientRect();
-      const current = rect('account-current-email');
-      const next = rect('account-email-input');
+      const address = rect('account-email-input');
       const button = rect('account-send-code');
       const privacy = rect('account-manage-privacy');
       const sharing = rect('account-share-diagnostics');
@@ -256,10 +264,12 @@ test('Account sync uploads a private snapshot and another local profile can appl
         return {fontSize,fontWeight,lineHeight};
       };
       return {
-        heights:[current.height,next.height,button.height],
+        heights:[address.height,button.height],
         expectedHeight:parseFloat(getComputedStyle(root.getElementById('settings-update-check')).height),
-        widths:[current.width,next.width,button.width],
-        stacked:current.bottom <= next.top && next.bottom <= button.top,
+        width:address.width,
+        gap:button.left-address.right,
+        aligned:Math.abs(button.top-address.top) < .5,
+        labelWeight:getComputedStyle(section.querySelector('.settings-field-label')).fontWeight,
         heading:headingStyle(root.getElementById('account-manage-heading')),
         referenceHeading:headingStyle(root.querySelector('#account-devices-section h3')),
         sharingWidth:sharing.width,
@@ -270,8 +280,8 @@ test('Account sync uploads a private snapshot and another local profile can appl
       };
     });
     assert(sizing.heights.every(height => Math.abs(height - sizing.expectedHeight) < 0.5));
-    assert(sizing.widths.every(width => Math.abs(width - sizing.widths[0]) < 0.5));
-    assert(sizing.stacked);
+    assert(sizing.width < emptyWidth && sizing.gap >= 6 && sizing.gap <= 10 && sizing.aligned,JSON.stringify(sizing));
+    assert.equal(sizing.labelWeight,'400');
     assert.deepEqual(sizing.heading,sizing.referenceHeading);
     assert(Math.abs(sizing.sharingWidth - sizing.sharingHeight) < 0.5);
     assert(sizing.sharingFillsRow);
@@ -280,7 +290,6 @@ test('Account sync uploads a private snapshot and another local profile can appl
     await first.page.evaluate(() => {
       Object.defineProperty(Object.getPrototypeOf(navigator.credentials), 'get', {value: async () => ({toJSON: () => ({id:'fixture-passkey'})})});
     });
-    await address.fill('draft-birb@example.com');
     await emailHint.waitFor();
     assert.match(await emailHint.textContent(),/confirm your identity with your passkey/);
     await updateEmail.click();
@@ -298,15 +307,15 @@ test('Account sync uploads a private snapshot and another local profile can appl
     await codeField.fill('123456');
     assert(await manage.getByRole('heading',{name:'Manage account'}).isVisible());
     assert.equal(remote.email,'birb@example.com');
-    assert.equal(await currentEmail.inputValue(),'birb@example.com');
+    assert.equal(await address.getAttribute('placeholder'),'birb@example.com');
     await manage.getByRole('button',{name:'Verify email',exact:true}).click();
     await first.page.locator('#toast.is-showing').filter({hasText:'Email updated.'}).waitFor();
     await codeField.waitFor({state:'hidden'});
-    assert.equal(await currentEmail.inputValue(),'new-birb@example.com');
+    assert.equal(await address.getAttribute('placeholder'),'new-birb@example.com');
     assert.equal(await address.inputValue(),'');
     assert.equal(await emailHint.isVisible(),false);
     assert.equal(await codeField.isVisible(),false);
-    assert(await updateEmail.isDisabled());
+    assert.equal(await updateEmail.isVisible(),false);
     assert.deepEqual(await profileLayout(), header);
     await firstPanel.getByRole('button',{name:'Back',exact:true}).click();
     assert.equal(await firstPanel.getByLabel('Recovery key', {exact:true}).isVisible(), false, 'a keyed device does not see the unlock input');
@@ -614,7 +623,7 @@ test('phone Account controls match Settings typography and show passkey progress
   } finally { await app.browser.close(); }
 });
 
-test('email updates confirm the passkey before sending a code and anchor request errors to Update email', {timeout:20000}, async () => {
+test('email updates confirm the passkey before sending a code and anchor request errors to Update', {timeout:20000}, async () => {
   const app = await launchApp({sharedStore:true, values:{[storage]:{...session, base:{}}}});
   try {
     await app.page.clock.install();
@@ -630,15 +639,14 @@ test('email updates confirm the passkey before sending a code and anchor request
     assert.deepEqual(await app.page.evaluate(() => window.passkeyDetails), [passkeyDetails(remote.email)]);
     await panel.getByRole('button',{name:'Manage account',exact:true}).click();
     const manage = panel.locator('#account-manage-page');
-    const current = manage.getByLabel('Current email',{exact:true});
-    await current.waitFor();
-    assert(await current.isDisabled());
-    const address = manage.getByLabel('New email address',{exact:true});
-    const update = manage.getByRole('button',{name:'Update email',exact:true});
+    const address = manage.getByLabel('Email address',{exact:true});
+    await address.waitFor();
+    assert.equal(await address.getAttribute('placeholder'),'birb@example.com');
+    const update = manage.getByRole('button',{name:'Update',exact:true});
     assert(await waitFor(() => mock.requests.includes('/account/email/options')));
     await app.page.evaluate(() => {
       const button = document.querySelector('[data-hnewhere-app]').shadowRoot.getElementById('account-send-code');
-      if (!button) throw new Error('Update email button is missing');
+      if (!button) throw new Error('Update button is missing');
       window.emailPrompts = [];
       window.emailSlides = [];
       const animate = Element.prototype.animate;
@@ -697,7 +705,7 @@ test('email updates confirm the passkey before sending a code and anchor request
     assert(await waitFor(async () => !(await update.isDisabled())));
     await app.page.clock.fastForward(5 * 60_000);
     await address.press('Enter');
-    await manage.getByRole('status').filter({hasText:'Select Update email again to open the passkey prompt'}).waitFor();
+    await manage.getByRole('status').filter({hasText:'Select Update again to open the passkey prompt'}).waitFor();
     assert.equal(await app.page.evaluate(() => window.emailPrompts.length),1);
     await address.press('Enter');
     assert(await waitFor(() => app.page.evaluate(() => window.emailPrompts.length === 2)));
@@ -723,7 +731,7 @@ test('email updates confirm the passkey before sending a code and anchor request
     sending.resolve();
     const code = app.page.getByLabel('Verification code',{exact:true});
     await code.waitFor();
-    await current.waitFor({state:'hidden'});
+    await address.waitFor({state:'hidden'});
     assert.equal(await address.isVisible(),false);
     assert.equal(await update.isVisible(),false);
     assert.deepEqual(await headingLayout(),headingPosition);
@@ -739,7 +747,8 @@ test('email updates confirm the passkey before sending a code and anchor request
     await confirmation.and(app.page.locator('.is-showing')).waitFor();
     assert.equal(await confirmation.getAttribute('data-kind'),'system');
     await code.waitFor({state:'hidden'});
-    assert.equal(await current.inputValue(),'new-birb+nest@sub.example.com');
+    assert.equal(await address.getAttribute('placeholder'),'new-birb+nest@sub.example.com');
+    assert.equal(await address.inputValue(),'');
     assert.deepEqual(await app.page.evaluate(() => window.emailSlides), [
       {id:'account-manage-email',transforms:['translateX(0)','translateX(-100%)']},
       {id:'account-manage-code',transforms:['translateX(100%)','translateX(0)']},

@@ -34743,7 +34743,7 @@ ${Object.keys(ACCOUNT_BIRB_PRESETS.shape).map((shape, index) => `[data-birb-shap
 	gap:8px;
 }
 
-#account-entry-email, #account-current-email, #account-email-input, #account-key {
+#account-entry-email, #account-email-input, #account-key {
 	display:block;
 	width:100%;
 }
@@ -34859,17 +34859,67 @@ ${Object.keys(ACCOUNT_BIRB_PRESETS.shape).map((shape, index) => `[data-birb-shap
 	margin-top:8px;
 }
 
-#settings-account-sync #account-manage-email .account-field,
+#account-manage-email .settings-field-label {
+	display:block;
+}
+
 #account-email-hint {
 	margin:0;
 }
 
-#settings-account-sync #account-current-email:disabled {
-	background:var(--surface);
-	border-color:var(--surface-divider);
+#account-email-input::placeholder {
 	color:var(--muted);
-	-webkit-text-fill-color:currentColor;
 	opacity:1;
+}
+
+.account-email-row {
+	display:flex;
+	align-items:flex-start;
+}
+
+.account-email-row > :first-child {
+	flex:1;
+	min-width:0;
+}
+
+#account-email-update {
+	display:grid;
+	grid-template-columns:0fr;
+	opacity:0;
+	visibility:hidden;
+	transition:grid-template-columns .22s ease, margin-inline-start .22s ease, opacity .18s ease, visibility 0s .22s;
+}
+
+#account-email-update:not([inert]) {
+	grid-template-columns:1fr;
+	margin-inline-start:8px;
+	opacity:1;
+	visibility:visible;
+	transition-delay:0s;
+}
+
+#account-email-update > div {
+	min-width:0;
+	overflow:hidden;
+}
+
+#account-send-code {
+	min-width:64px;
+	white-space:nowrap;
+}
+
+#account-send-code:focus-visible {
+	outline-offset:-3px;
+}
+
+#account-status-send-code {
+	contain:inline-size;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	#account-email-update {
+		transition:none;
+	}
 }
 
 #account-avatar-editor .account-section-heading + fieldset {
@@ -40118,7 +40168,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	const ACCOUNT_FLOW_ACTIONS = [
 		["login", "login", "Sign in with passkey", "Signing in…"],
 		["entry", "continue", "Continue", "Sending verification code…"],
-		["send-code", "send-code", "Update email", "Sending verification code…"],
+		["send-code", "send-code", "Update", "Sending verification code…"],
 		["resend", "resend-code", "Send another code", "Sending verification code…"],
 		["code", "verify-code", "Verify email", "Verifying email…"],
 		["recovery-key", "recovery-continue", "Continue", "Checking recovery key…"],
@@ -40222,15 +40272,19 @@ ${accountBackButton("account-manage-back")}
 <h3 class="account-row-label" id="account-manage-heading" tabindex="-1">Manage account</h3>
 <div id="account-manage-stage">
 <form id="account-manage-email" data-account-step="0" tabindex="-1">
-<div class="account-field">
-<label class="account-row-label" for="account-current-email">Current email</label>
-<input id="account-current-email" class="settings-form-control" type="email" autocomplete="off" placeholder="No email on file" disabled>
+<div class="settings-field">
+<label class="settings-field-label" for="account-email-input">Email address</label>
+<div class="account-email-row">
+<div>
+<input id="account-email-input" class="settings-form-control" type="email" autocomplete="email" maxlength="254" placeholder="No email on file" aria-describedby="account-status-email" required>
+<div id="account-status-email"></div>
 </div>
-<div class="account-field">
-<label class="account-row-label" for="account-email-input">New email address</label>
-<div><input id="account-email-input" class="settings-form-control" type="email" autocomplete="email" maxlength="254" aria-describedby="account-status-email" required><div id="account-status-email"></div></div>
+<div id="account-email-update" inert><div>
+<button type="button" id="account-send-code" class="settings-button settings-button--primary settings-button--wide" aria-describedby="account-status-send-code" disabled><span class="settings-control-label">Update</span></button>
+<div id="account-status-send-code"></div>
+</div></div>
 </div>
-<div><button type="button" id="account-send-code" class="settings-button settings-button--primary settings-button--wide" aria-describedby="account-status-send-code"><span class="settings-control-label">Update email</span></button><div id="account-status-send-code"></div></div>
+</div>
 <p id="account-email-hint" class="appearance-row-hint" hidden>You’ll be asked to confirm your identity with your passkey before we send a code to your new email address.</p>
 </form>
 <div id="account-manage-code" data-account-step="1" tabindex="-1" hidden></div>
@@ -40610,7 +40664,7 @@ ${accountBackButton("account-manage-back")}
 			find("create-unavailable").hidden = !available || emailAvailable;
 			find("profile-name").textContent = signingUp ? "Create your account" : "Backchannel Account";
 			find("email-value").textContent = signedIn && !backingUp ? email || "" : ACCOUNT_SIGN_IN_HINT;
-			find("current-email").value = email || "";
+			emailInput.placeholder = email || "No email on file";
 			find("avatar-edit").hidden = !signedIn || backingUp;
 			const last = find("last-sync");
 			last.querySelector("span").hidden = writeAccountTime(last.querySelector("time"), state?.lastSync);
@@ -40629,10 +40683,11 @@ ${accountBackButton("account-manage-back")}
 			emailInput.disabled = busy || !available || !emailAvailable;
 			const sendCode = find("send-code");
 			const newEmail = emailInput.value.trim().toLowerCase();
-			const emailChanged = validAccountEmail(newEmail) && newEmail !== email?.toLowerCase();
-			sendCode.hidden = !emailAvailable;
-			sendCode.disabled = emailInput.disabled || preparingEmailPasskey || !emailChanged;
-			const showEmailHint = available && emailAvailable && emailChanged;
+			const hasNewEmail = Boolean(newEmail) && newEmail !== email?.toLowerCase();
+			const showUpdate = available && emailAvailable && hasNewEmail;
+			const showEmailHint = showUpdate && validAccountEmail(newEmail);
+			find("email-update").inert = !showUpdate;
+			sendCode.disabled = emailInput.disabled || preparingEmailPasskey || !showEmailHint;
 			find("email-hint").hidden = !showEmailHint;
 			const emailHint = showEmailHint ? " account-email-hint" : "";
 			emailInput.setAttribute("aria-describedby", "account-status-email" + emailHint);
@@ -41069,7 +41124,7 @@ ${accountBackButton("account-manage-back")}
 						const next = prepareEmailChangePasskey(state.token);
 						if (!await next.request) throw next.error || new Error("account-unavailable");
 						return resending ? "Select Send another code again to open the passkey prompt."
-							: "Select Update email again to open the passkey prompt.";
+							: "Select Update again to open the passkey prompt.";
 					}, "", area, "Couldn’t start passkey confirmation. Try again.");
 					return;
 				}
@@ -41125,8 +41180,8 @@ ${accountBackButton("account-manage-back")}
 		});
 		function updateEmail(event) {
 			if (event.isTrusted && emailFlow?.mode === "email" && !emailFlow.address && !emailInput.disabled &&
-				validateEmailField(emailInput, "email") &&
-				!find("send-code").disabled && !find("send-code").hidden) requestVerificationCode();
+				emailInput.value.trim() && validateEmailField(emailInput, "email") &&
+				!find("send-code").disabled) requestVerificationCode();
 		}
 		find("manage-email").onsubmit = (event) => {
 			event.preventDefault();

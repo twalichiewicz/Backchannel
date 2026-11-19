@@ -186,7 +186,7 @@ for (const fixture of cases.slice(0, 2).concat(cases.at(-1))) {
       await account.waitFor();
       assert.equal(await tab.getAttribute('aria-current'), 'page');
       assert.equal(await modal.locator('#app-settings-heading').innerText(), 'Account');
-      assert.match(await account.innerText(), /settings, Collection, and reading queue.*across devices/i);
+      assert(await account.getByText('Sync your reading experience across all your devices.',{exact:true}).isVisible());
       assert.equal(await modal.locator('#setting-source-refresh').isVisible(), false);
       await modal.getByRole('button', {name: 'General', exact: true}).click();
       await modal.locator('#settings-cache-clear').waitFor();
