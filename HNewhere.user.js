@@ -35237,13 +35237,17 @@ ${Object.keys(ACCOUNT_BIRB_PRESETS.shape).map((shape, index) => `[data-birb-shap
 	border-top:1px solid var(--surface-divider);
 }
 
-#settings-account-sync :is(summary, a) {
+#settings-account-sync a {
 	cursor:pointer;
 	color:var(--surface-text);
 }
 
-#account-conflict-list {
-	overflow-wrap:anywhere;
+#account-conflict {
+	margin:var(--account-section-gap) 0 0;
+}
+
+#account-conflict .appearance-row-label {
+	margin:0;
 }
 
 #account-status:empty {
@@ -40341,10 +40345,9 @@ ${accountBackButton("account-manage-back")}
 <div><h3 class="account-row-label">Sync</h3><p id="account-last-sync" class="appearance-row-hint">Last synced <time hidden></time><span>Never</span></p></div>
 <div class="account-sync-control"><button type="button" id="account-sync-now" class="settings-button" aria-describedby="account-status-sync"><span class="settings-control-label">Sync now</span></button><div id="account-status-sync" class="account-chin-anchor"></div></div>
 </div>
-<div id="account-conflict" class="account-inner-section" hidden>
-<p id="account-conflict-summary" class="appearance-row-label"></p>
-<details><summary>Conflicting changes</summary><ul id="account-conflict-list"></ul></details>
-<div class="account-actions"><button type="button" id="account-keep-local" class="settings-button">Keep this device’s changes</button><button type="button" id="account-keep-remote" class="settings-button">Keep account changes</button></div>
+<div id="account-conflict" class="settings-notice" role="group" aria-labelledby="account-conflict-summary" hidden>
+<p id="account-conflict-summary" class="appearance-row-label">Some changes on this device conflict with changes in your account. Which should Backchannel keep?</p>
+<div class="account-actions"><button type="button" id="account-keep-local" class="settings-button" aria-describedby="account-status-conflict">Keep this device’s changes</button><button type="button" id="account-keep-remote" class="settings-button" aria-describedby="account-status-conflict">Keep account changes</button></div>
 <div id="account-status-conflict"></div>
 </div>
 <div id="account-snapshot-restore" class="account-inner-section" hidden>
@@ -40415,16 +40418,6 @@ ${accountBackButton("account-manage-back")}
 			"snapshot-restore-changed": "The account changed. Select Sync now to check the latest version.",
 			"sync-busy": "Another sync or local edit is in progress. Try Sync now again.",
 		}[error.message] || fallback || "Account sync couldn’t finish. Try again shortly.";
-	}
-
-	function accountConflictLabel({ path, local, remote }) {
-		const change = local === "deleted" ? "removed on this device" : remote === "deleted" ? "removed on the other device" : "changed on both devices";
-		if (path[0] === "settings" || path[0] === "preferences") {
-			const label = path[1] === "sources" && path[2] ? getSource(path[2])?.label || path[2] : path[1].replace(/([a-z])([A-Z])/g, "$1 $2");
-			return label.charAt(0).toUpperCase() + label.slice(1) + " · " + change;
-		}
-		const kind = { saved: "Saved item", folders: "Collection entry", notes: "Note" }[path[1]] || "Collection";
-		return kind + " · " + path[2].slice(0, 90) + " · " + change;
 	}
 
 	function accountDeviceName() {
@@ -40758,17 +40751,6 @@ ${accountBackButton("account-manage-back")}
 			find("delete-cancel").disabled = busy && !deletePrompt;
 			find("snapshot-restore").hidden = !conflict?.recovery;
 			find("conflict").hidden = !conflict?.conflicts;
-			if (conflict?.conflicts) {
-				const conflicts = conflict.conflicts;
-				find("conflict-summary").textContent = conflicts.length === 1
-					? "Both devices changed the same item. Choose which change to keep."
-					: `Both devices changed ${conflicts.length} of the same items. Choose which changes to keep.`;
-				find("conflict-list").replaceChildren(...conflicts.slice(0, 20).map((entry) => {
-					const item = document.createElement("li");
-					item.textContent = accountConflictLabel(entry);
-					return item;
-				}));
-			}
 			if (enrolling || verifyingEmailChange) {
 				const codeContent = find("code-content");
 				const codeHost = find(verifyingEmailChange ? "manage-code" : "code-screen");
@@ -41139,7 +41121,7 @@ ${accountBackButton("account-manage-back")}
 					await refreshProfile(held, trigger !== "edit");
 				}
 				if (result?.restored) showToast("Previous version restored.", { kind: "system" });
-				return result?.conflicts ? "Review the conflicting changes before syncing." : "";
+				return preference && result?.conflicts ? "The changes were updated. Choose again." : "";
 			} catch (error) {
 				outcome = error.name === "TimeoutError" ? "timeout" : ["session-expired", "sign-in-required"].includes(error.message) ? "sign-in" : "unavailable";
 				if (error.message === "snapshot-restore-changed") {
@@ -41300,8 +41282,8 @@ ${accountBackButton("account-manage-back")}
 		}, "", "import");
 		action("sync-now", () => sync());
 		action("restore-snapshot", () => sync("", "restore"), "", "snapshot-restore");
-		action("keep-local", () => sync("local"), "Syncing…", "conflict");
-		action("keep-remote", () => sync("remote"), "Syncing…", "conflict");
+		action("keep-local", () => sync("local"), "", "conflict");
+		action("keep-remote", () => sync("remote"), "", "conflict");
 		function openAccountAction(next) {
 			const wasOpen = accountAction === next;
 			closeAccountAction();
@@ -41545,7 +41527,7 @@ ${accountBackButton("account-manage-back")}
 					if (expired || held.expiresAt <= Date.now()) return "Your session expired. Sign in again to sync.";
 					await refreshProfile(held, true);
 				}
-				return conflict?.conflicts ? "Review the conflicting changes before syncing." : "";
+				return "";
 			}, "", "availability");
 		}
 

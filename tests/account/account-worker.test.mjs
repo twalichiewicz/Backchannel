@@ -1053,6 +1053,8 @@ test('Reader settings verify account email, connect two devices, resolve edits, 
   assert(await waitFor(() => phone.panel.locator('#account-device-list li').count().then(count => count === 2)));
   assert.equal(await phone.panel.locator('#account-device-list li').filter({hasText:'This device'}).count(),1);
   await phone.panel.locator('#account-last-sync time[datetime]').waitFor();
+  const conflict = phone.panel.locator('#account-conflict');
+  assert.equal(await conflict.isVisible(),false);
 
   first.store.set('HNewhere:settings', {...first.store.get('HNewhere:settings'), theme:'light'});
   first.store.set(notesKey,{version:1,notes:[{...note,text:'Edited on the first device',edited:20}]});
@@ -1061,11 +1063,26 @@ test('Reader settings verify account email, connect two devices, resolve edits, 
   await first.syncButton('Sync now');
   await first.revision(2);
   await phone.syncButton('Sync now');
-  await phone.status.filter({hasText:'conflicting changes'}).waitFor();
+  await conflict.waitFor();
+  assert.equal(await conflict.locator('details, ul').count(),0);
+  assert(await conflict.getByText('Some changes on this device conflict with changes in your account. Which should Backchannel keep?',{exact:true}).isVisible());
+  assert(await conflict.getByRole('button',{name:'Keep this device’s changes',exact:true}).isVisible());
+  assert(await conflict.getByRole('button',{name:'Keep account changes',exact:true}).isVisible());
+  assert.deepEqual(await conflict.evaluate(element => {
+    const section = element.closest('section');
+    const style = getComputedStyle(element);
+    return {
+      inSync:section.querySelector('h3').textContent === 'Sync',
+      outlined:parseFloat(style.borderTopWidth) > 0 && parseFloat(style.borderTopLeftRadius) > 0,
+      fits:element.scrollWidth <= element.clientWidth + 1,
+    };
+  }),{inSync:true, outlined:true, fits:true});
+  assert.equal(await phone.panel.locator('#account-status').textContent(),'');
   assert.equal(phone.store.get('HNewhere:settings').theme,'auto');
   assert.equal((await db.prepare('SELECT revision FROM snapshots').first()).revision,2);
   await phone.syncButton('Keep account changes');
   await phone.revision(3);
+  await conflict.waitFor({state:'hidden'});
   assert.equal(phone.store.get('HNewhere:settings').theme,'light');
   assert.deepEqual(phone.store.get(notesKey).notes.map(n=>n.text),['Edited on the first device','Added on the phone']);
 
