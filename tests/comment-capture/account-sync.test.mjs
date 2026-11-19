@@ -37,9 +37,10 @@ async function settings(app, url = appURL, {recordPasskeyDetails = false, before
   return app.page.locator('#settings-account-sync');
 }
 
-test('Reader source diagnostics require a signed-in account and device consent', {timeout:20000}, async () => {
+test('Reader source diagnostics require a signed-in account with sharing enabled', {timeout:20000}, async () => {
   const app = await launchApp({sharedStore:true, settings:{sources:{hn:true},frontPageMode:'sources',updateCheck:false,sourceRefreshMinutes:0}});
   const reports = [];
+  const diagnosticsKey = 'HNewhere:account_diagnostics:' + account;
   try {
     app.page.setDefaultTimeout(4000);
     const remote = {revision:0, ciphertext:null, capabilities:{emailAvailable:true}, email:'birb@example.com'};
@@ -70,17 +71,17 @@ test('Reader source diagnostics require a signed-in account and device consent',
     await app.page.locator('#settings-privacy').waitFor();
     assert.equal(await app.page.locator('#settings-privacy').getByRole('checkbox',{name:'Share diagnostics',exact:true,includeHidden:true}).count(),0);
     await app.page.locator('#app-settings-close').click();
-    app.store.set('HNewhere:share_diagnostics',Date.now()-1000);
+    app.store.set(diagnosticsKey,Date.now()-1000);
     await syncFrontPage();
     assert.deepEqual(reports,[],'saved consent from a signed-out device does not send reports');
-    app.store.delete('HNewhere:share_diagnostics');
+    app.store.delete(diagnosticsKey);
     app.store.set(storage,{...session,base:{}});
     await openPrivacy();
     assert.equal(await reportCheckbox.isChecked(),false);
     assert.equal(await reportCheckbox.getAttribute('aria-describedby'),'account-diagnostics-hint');
     assert.equal(await app.page.locator('#account-diagnostics-hint').textContent(),'Help improve Backchannel by sharing anonymized usage data.');
     await reportCheckbox.check();
-    assert(await waitFor(() => app.store.get('HNewhere:share_diagnostics') > 0));
+    assert(await waitFor(() => app.store.get(diagnosticsKey) > 0));
     await app.page.locator('#app-settings-close').click();
     await syncFrontPage();
     assert(await waitFor(() => reports.some(({body}) => body.operation === 'feed' && body.source === 'hn')));
@@ -88,7 +89,7 @@ test('Reader source diagnostics require a signed-in account and device consent',
 
     await openPrivacy();
     await reportCheckbox.uncheck();
-    assert(await waitFor(() => app.store.get('HNewhere:share_diagnostics') === 0));
+    assert(await waitFor(() => app.store.get(diagnosticsKey) === 0));
     const count = reports.length;
     await app.page.reload();
     await app.page.locator('#app-list-body .browse-title-link').first().waitFor();
@@ -105,6 +106,7 @@ function mockAccount(app, remote) {
     requests.push(path);
     if (path === '/account/status') return route.fulfill({json: {available: !remote.offline, ...remote.capabilities}});
     if (remote.offline) return route.abort('failed');
+    if (path === '/account/diagnostics') return route.fulfill({status: 204});
     assert.equal(request.headers().authorization, 'Bearer test-session');
     if (path === '/account/email') return route.fulfill({json: {email: remote.email || null}});
     if (path === '/account/email/options') return route.fulfill({json:{
@@ -159,6 +161,34 @@ function mockAccount(app, remote) {
   });
   return {start, requests};
 }
+
+test('diagnostics consent follows the signed-in account across devices', {timeout: 24000}, async () => {
+  const remote = {revision:0, ciphertext:null, email:'birb@example.com', capabilities:{emailAvailable:true}};
+  const first = await launchApp({sharedStore:true, values:{[storage]:session, 'HNewhere:share_diagnostics':Date.now()-1000}});
+  const second = await launchApp({sharedStore:true, values:{[storage]:session}, viewport:{width:390,height:844}, hasTouch:true});
+  const managePrivacy = async app => {
+    const panel = await settings(app);
+    await panel.getByRole('button',{name:'Manage account',exact:true}).click();
+    return panel.getByRole('checkbox',{name:'Share diagnostics',exact:true});
+  };
+  try {
+    await Promise.all([mockAccount(first,remote).start,mockAccount(second,remote).start]);
+    const firstChoice = await managePrivacy(first);
+    assert(await waitFor(() => first.store.get(storage)?.revision === 1));
+    assert.equal(await firstChoice.isChecked(),false,'alpha consent was limited to the old device');
+    await firstChoice.check();
+    assert(await waitFor(() => first.store.get(storage)?.revision === 2));
+    const secondChoice = await managePrivacy(second);
+    assert(await waitFor(() => secondChoice.isChecked()),'the second device receives consent');
+    await secondChoice.uncheck();
+    assert(await waitFor(() => second.store.get(storage)?.revision === 3));
+    await first.page.locator('#account-manage-back').click();
+    await first.page.getByRole('button',{name:'Sync now',exact:true}).click();
+    assert(await waitFor(() => first.store.get(storage)?.revision === 3));
+    await first.page.getByRole('button',{name:'Manage account',exact:true}).click();
+    assert.equal(await firstChoice.isChecked(),false,'turning sharing off syncs too');
+  } finally { await Promise.all([first.browser.close(),second.browser.close()]); }
+});
 
 test('importing a different library preserves the account’s existing reading queue', {timeout: 20000}, async () => {
   const remote = {revision:0, ciphertext:null, email:'birb@example.com'};

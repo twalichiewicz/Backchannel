@@ -40,8 +40,9 @@ use to detect updates, so every release bumps it.
   cannot be read, while keeping local edits.
 - Optional diagnostics report source and Account sync reliability while signed
   in. Sharing starts off and can be changed during signup or in Settings →
-  Account → Manage account → Privacy. The Reader and site privacy policy
-  describe what the reports contain.
+  Account → Manage account → Privacy. The sharing choice syncs with encrypted
+  Account preferences. The Reader and site privacy policy describe what the
+  reports contain.
 - Reader Discussion has a bottom bar for writing comments and keeping notes.
   The Sources menu can show several discussions at once, with checkboxes for
   each source group and for all sources.

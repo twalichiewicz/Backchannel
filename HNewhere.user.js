@@ -205,7 +205,6 @@
 		collapsed: "HNewhere:collapsed_comments",
 		seen: "HNewhere:seen_comments",
 		settings: "HNewhere:settings",
-		diagnostics: "HNewhere:share_diagnostics",
 		state: "HNewhere:sidebar_state",
 		votes: "HNewhere:votes",
 		blocked: "HNewhere:blocked_sites",
@@ -553,7 +552,9 @@
 
 	async function writeLocalValue(key, value, write) {
 		const account = accountPortableStoreKey(key) ? await load(ACCOUNT_SYNC_KEY, null) : null;
-		if (!hasAccountSyncSession(account) || (key.startsWith(ACCOUNT_AVATAR_PREFIX) && key !== ACCOUNT_AVATAR_PREFIX + account.account)) return write();
+		if (!hasAccountSyncSession(account)) return write();
+		const scope = accountScopedPreference(key);
+		if (scope && key !== scope + account.account) return write();
 		const changed = await withSharedStorageLock("account-storage", async (lease) => {
 			const before = await GM.getValue(key, null);
 			const changed = !accountValuesEqual(accountEditValue(key, before), accountEditValue(key, value));
@@ -22242,19 +22243,24 @@ ${
 	function wireDiagnosticSharing(shadow) {
 		const input = shadow.getElementById("account-share-diagnostics");
 		let updating = false;
+		let shownAccount = null;
 		const updateSharing = async (enabled) => {
 			if (updating || !input) return;
 			updating = true;
 			input.disabled = true;
-			if (typeof enabled === "boolean") {
+			const session = await load(ACCOUNT_SYNC_KEY, null);
+			const account = hasAccountSyncSession(session) && session.expiresAt > Date.now() ? session.account : null;
+			const key = account && ACCOUNT_DIAGNOSTICS_PREFIX + account;
+			if (key && account === shownAccount && typeof enabled === "boolean") {
 				try {
-					await save(STORAGE.diagnostics, enabled ? Date.now() : 0);
+					await save(key, enabled ? Date.now() : 0);
 				} catch {
 					showToast("Couldn’t save your diagnostics preference.", { kind: "system" });
 				}
 			}
-			input.checked = Boolean(await load(STORAGE.diagnostics, 0));
-			input.disabled = false;
+			input.checked = Boolean(key && diagnosticConsentEnabled(await load(key, 0)));
+			input.disabled = !key;
+			shownAccount = account;
 			updating = false;
 		};
 		input?.addEventListener("change", (event) => {
@@ -22289,7 +22295,7 @@ ${
         <p>If you choose to share diagnostics, Reader sends reliability reports to help us find slow or failed refreshes, discussion loads, and Account syncs. Each report contains the Backchannel version, operation, outcome, approximate duration, and the source name when relevant. Reports exclude account and device identifiers, email addresses, article URLs, searches, notes, and comment content. Cloudflare handles these requests and records operational logs. It retains the diagnostic reports for three months.</p>
 
         <h3>Your choices</h3>
-        <p>Diagnostic sharing starts off and applies to the device where you turn it on. In Reader, you can change your choice in Settings → Account → Manage account → Privacy. Reports are sent only while signed in with sharing enabled.</p>
+        <p>Diagnostic sharing starts off. Your choice is included in encrypted Account sync and takes effect on each device when it syncs. In Reader, you can change your choice in Settings → Account → Manage account → Privacy. Reports are sent only while signed in with sharing enabled.</p>
         <p>Signing out or deleting an account leaves your reading data in this browser profile. If you sign in to a different account in the same profile, Backchannel asks before syncing that data. Use separate browser profiles to keep reading data separate.</p>
         <p>Turn any source off in Settings, or hide Backchannel on any site. Removing the script or clearing your userscript manager's data removes the local copy. Delete account in Settings → Account removes the active account and synced data. Cloudflare database backups may retain earlier copies for up to 30 days.</p>
 
@@ -39486,6 +39492,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	const ACCOUNT_DATA_OWNER_KEY = "HNewhere:account_data_owner";
 	const ACCOUNT_DEVICE_KEY = "HNewhere:account_device";
 	const ACCOUNT_AVATAR_PREFIX = "HNewhere:account_avatar:";
+	const ACCOUNT_DIAGNOSTICS_PREFIX = "HNewhere:account_diagnostics:";
 	const ACCOUNT_PREFERENCES = {
 		blockedSites: STORAGE.blocked,
 		railOrder: STORAGE.appRailOrder,
@@ -39513,8 +39520,12 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		return (await GM.getValue(ACCOUNT_CHECKPOINT_KEY, null))?.account || session?.account || null;
 	}
 
+	function accountScopedPreference(key) {
+		return [ACCOUNT_AVATAR_PREFIX, ACCOUNT_DIAGNOSTICS_PREFIX].find((prefix) => key.startsWith(prefix));
+	}
+
 	function accountSettingsStoreKey(key) {
-		return ACCOUNT_SETTING_STORE_KEYS.has(key) || key.startsWith(ACCOUNT_AVATAR_PREFIX);
+		return ACCOUNT_SETTING_STORE_KEYS.has(key) || Boolean(accountScopedPreference(key));
 	}
 
 	function accountPortableStoreKey(key) {
@@ -39522,7 +39533,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	}
 
 	function accountPreferenceKeys(account) {
-		return { ...ACCOUNT_PREFERENCES, avatar: ACCOUNT_AVATAR_PREFIX + account };
+		return { ...ACCOUNT_PREFERENCES, avatar: ACCOUNT_AVATAR_PREFIX + account, shareDiagnostics: ACCOUNT_DIAGNOSTICS_PREFIX + account };
 	}
 
 	function accountQueueRecords(value) {
@@ -39569,6 +39580,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 
 	function accountPreferenceShape(name, value) {
 		if (name === "avatar") return validAccountAvatar(value);
+		if (name === "shareDiagnostics") return typeof value === "boolean";
 		if (name === "readerFont" || name === "readerPage") return typeof value === "string";
 		if (name === "shortcuts") return accountObject(value);
 		return Array.isArray(value) && value.every((item) => typeof item === "string");
@@ -39607,7 +39619,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		return {
 			version: 1,
 			settings: accountSettingsShape(input.settings),
-			preferences: Object.fromEntries(Object.entries(accountFields(input.preferences, [...Object.keys(ACCOUNT_PREFERENCES), "avatar"])).filter(([name, value]) => accountPreferenceShape(name, value))),
+			preferences: Object.fromEntries(Object.entries(accountFields(input.preferences, [...Object.keys(ACCOUNT_PREFERENCES), "avatar", "shareDiagnostics"])).filter(([name, value]) => accountPreferenceShape(name, value))),
 			collection: {
 				saved: entries(collection.saved, ACCOUNT_SAVED_FIELDS), folders: entries(collection.folders, ACCOUNT_FOLDER_FIELDS), notes,
 				...(collection.queue !== undefined && { queue: accountQueueRecords(collection.queue) }),
@@ -39619,7 +39631,10 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		const get = (key, fallback) => GM.getValue(key, fallback);
 		const [settings, saved, folders, index, queue, preferences] = await Promise.all([
 			get(STORAGE.settings, {}), get(STORAGE.saved, []), get(STORAGE.collected, []), get(NOTES_INDEX_KEY, []), get(STORAGE.queue, []),
-			Promise.all(Object.entries(accountPreferenceKeys(account)).map(async ([name, key]) => [name, await get(key, undefined)])),
+			Promise.all(Object.entries(accountPreferenceKeys(account)).map(async ([name, key]) => {
+				const value = await get(key, undefined);
+				return [name, name === "shareDiagnostics" && value !== undefined ? diagnosticConsentEnabled(value) : value];
+			})),
 		]);
 		const notes = await Promise.all((Array.isArray(index) ? index : []).filter(accountNoteKey).map(async (entry) => {
 			const stored = await get(entry.key, null);
@@ -39639,7 +39654,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		const prefs = next.preferences;
 		for (const [name, key] of Object.entries(accountPreferenceKeys(account))) {
 			if (accountValuesEqual(previous.preferences[name], prefs[name])) continue;
-			if (Object.hasOwn(prefs, name)) await write(key, prefs[name]);
+			if (Object.hasOwn(prefs, name)) await write(key, name === "shareDiagnostics" ? (prefs[name] ? Date.now() : 0) : prefs[name]);
 			else await lease.commit(() => removeStoredValue(key));
 		}
 		if (!accountValuesEqual(previous.settings, next.settings)) {
@@ -39774,15 +39789,19 @@ ${SETTINGS_MODAL_PHONE_CSS}
 	const diagnosticNextSend = new Map();
 	const diagnosticDurationBuckets = [250, 1000, 3000, 10000, 30000, 120000];
 
+	function diagnosticConsentEnabled(value) {
+		return Number.isSafeInteger(value) && value > 0;
+	}
+
 	async function reportDiagnostics(operation, source, outcome, startedAt, finishedAt = Date.now()) {
 		if (!onStartPage() || window.top !== window.self || (source && !getSource(source))) return;
 		const key = `${operation}:${source}:${outcome}`;
 		if (Date.now() < (diagnosticNextSend.get(key) ?? 0)) return;
-		const consent = await load(STORAGE.diagnostics, 0);
-		if (!Number.isSafeInteger(consent) || consent <= 0 || startedAt < consent) return;
 		const account = await load(ACCOUNT_SYNC_KEY, null);
 		const now = Date.now();
 		if (!hasAccountSyncSession(account) || account.keyBackupPending || !(account.expiresAt > now) || now < (diagnosticNextSend.get(key) ?? 0)) return;
+		const consent = await load(ACCOUNT_DIAGNOSTICS_PREFIX + account.account, 0);
+		if (!diagnosticConsentEnabled(consent) || startedAt < consent) return;
 		if ((await accountDataOwner(account).catch(() => null)) !== account.account) return;
 		diagnosticNextSend.set(key, now + 60_000);
 		const elapsed = finishedAt - startedAt;
@@ -40258,6 +40277,7 @@ ${accountPasskeyButton("recover")}
 <section id="account-signup-diagnostics" class="account-section account-flow" data-account-step="6" tabindex="-1" aria-labelledby="account-diagnostics-heading" hidden>
 ${accountStepHeading("Help improve Backchannel", { backId: "account-diagnostics-back", headingId: "account-diagnostics-heading" })}
 <p class="appearance-row-hint">You can help improve Backchannel by sharing anonymized diagnostics. These details help us develop new features and improve functionality for everyone. You can change your choice any time in Settings → Account → Manage account → Privacy</p>
+<p class="appearance-row-hint">This choice applies to devices synced with your account.</p>
 <div class="account-actions account-step-actions">
 <button type="button" id="account-diagnostics-share" class="settings-button settings-button--wide">Share diagnostics</button>
 <button type="button" id="account-diagnostics-decline" class="settings-button settings-button--wide">Don’t share</button>
@@ -40590,6 +40610,7 @@ ${accountBackButton("account-manage-back")}
 			state = hasAccountSyncSession(saved) ? saved : null;
 			localDataOwner = state ? await accountDataOwner(state).catch(() => null) : null;
 			avatar = state?.account ? await load(ACCOUNT_AVATAR_PREFIX + state.account, null) : null;
+			if (accountAction === "manage") void updateDiagnosticSharing();
 			accountLoaded = true;
 		}
 
@@ -40938,11 +40959,13 @@ ${accountBackButton("account-manage-back")}
 				if (validAccountAvatar(chosenAvatar)) {
 					await lease.commit(() => GM.setValue(ACCOUNT_AVATAR_PREFIX + signed.account, chosenAvatar));
 				}
+				if (typeof shareDiagnostics === "boolean") {
+					await lease.commit(() => GM.setValue(ACCOUNT_DIAGNOSTICS_PREFIX + signed.account, shareDiagnostics ? Date.now() : 0));
+				}
 				await lease.commit(() => GM.setValue(ACCOUNT_SYNC_KEY, {
 					revision: 0, base: null, ...prior, ...signed, protocol: ACCOUNT_SYNC_PROTOCOL, recoveryKey,
 				}));
 			});
-			if (typeof shareDiagnostics === "boolean") await save(STORAGE.diagnostics, shareDiagnostics ? Date.now() : 0).catch(console.error);
 			expired = false;
 			conflict = null;
 			closeEmail();
@@ -41490,6 +41513,7 @@ ${accountBackButton("account-manage-back")}
 					}
 					if ((await GM.getValue(ACCOUNT_CHECKPOINT_KEY, null))?.account === account) await lease.commit(() => forget(ACCOUNT_CHECKPOINT_KEY));
 					await lease.commit(() => forget(ACCOUNT_AVATAR_PREFIX + account));
+					await lease.commit(() => forget(ACCOUNT_DIAGNOSTICS_PREFIX + account));
 				});
 				conflict = null;
 				profile = null;

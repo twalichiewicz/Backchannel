@@ -115,8 +115,8 @@ button. If you lose access to your passkey, enter your email on the signed-out
 screen. After verifying the code, choose **Can’t use your passkey?** and
 enter your saved recovery key to replace it and restore sync.
 
-Diagnostic sharing starts off and runs only while signed in. You can change it
-for this device in **Settings → Account → Manage account → Privacy**.
+Diagnostic sharing starts off and runs only while signed in. Your choice syncs
+with your account. Change it in **Settings → Account → Manage account → Privacy**.
 Reports include reliability outcomes and approximate timings for sync and
 discussion requests. The [privacy policy](https://backchnnl.app/#privacy)
 lists the report fields and how long Cloudflare keeps them.

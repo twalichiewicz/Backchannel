@@ -194,10 +194,12 @@ Worth stating plainly, because the permissions are broad by necessity:
   describes the requests made while you browse and look up discussions.
 - **Diagnostic sharing starts off.** You can opt in during Account signup or
   in Reader under Settings → Account → Manage account → Privacy. The choice
-  stays on this device. Reports are sent only while signed in.
+  is part of the encrypted account snapshot and takes effect on each device
+  when it syncs. Reports are sent only while signed in with sharing enabled.
   Reports contain an operation, outcome, duration bucket, Backchannel version,
   and source name where relevant. Cloudflare Workers Analytics Engine retains
-  these reports for three months. Turning sharing off stops future reports.
+  these reports for three months. Turning sharing off stops future reports
+  on this device immediately and on other devices when they sync.
   [Analytics Engine retention](https://developers.cloudflare.com/analytics/analytics-engine/limits/#data-retention)
 
 ## Design decisions that limit the blast radius

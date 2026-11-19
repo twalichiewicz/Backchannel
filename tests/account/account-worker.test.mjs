@@ -922,7 +922,7 @@ test('Reader settings verify account email, connect two devices, resolve edits, 
   const diagnosticsHeading = first.panel.getByRole('heading',{name:'Help improve Backchannel',exact:true});
   await checkSignupStep('signup-diagnostics','Help improve Backchannel');
   assert(await first.panel.getByText('You can help improve Backchannel by sharing anonymized diagnostics. These details help us develop new features and improve functionality for everyone. You can change your choice any time in Settings → Account → Manage account → Privacy',{exact:true}).isVisible());
-  assert.equal(first.store.get('HNewhere:share_diagnostics'),undefined);
+  assert(![...first.store.keys()].some(key => key.startsWith('HNewhere:account_diagnostics:')));
   await first.syncButton('Don’t share');
   await checkSignupStep('key-setup','Save your recovery key');
   await first.syncButton('Back');
@@ -935,7 +935,7 @@ test('Reader settings verify account email, connect two devices, resolve edits, 
   assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM accounts').first('count'),0);
   assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM account_signups').first('count'),1);
   assert.equal(await db.prepare('SELECT COUNT(*) AS count FROM snapshots').first('count'),0);
-  assert.equal(first.store.get('HNewhere:share_diagnostics'),undefined);
+  assert(![...first.store.keys()].some(key => key.startsWith('HNewhere:account_diagnostics:')));
   assert.deepEqual(diagnostics,[]);
   const recovery = await first.panel.locator('#account-recovery-code').innerText();
   assert.match(recovery,/^[A-Za-z0-9_-]{43}$/);
@@ -964,18 +964,12 @@ test('Reader settings verify account email, connect two devices, resolve edits, 
   await managePrivacy.waitFor({timeout:3000});
   const manageSharing = managePrivacy.getByRole('checkbox',{name:'Share diagnostics',exact:true});
   assert(await waitFor(() => manageSharing.isChecked()));
-  await manageSharing.uncheck();
-  assert(await waitFor(() => first.store.get('HNewhere:share_diagnostics') === 0));
   await first.page.locator('[data-settings-section="general"]').click();
   const shareDiagnostics = first.page.locator('#settings-privacy').getByRole('checkbox',{name:'Share diagnostics',exact:true});
   assert.equal(await shareDiagnostics.count(),0);
   await first.page.getByRole('button',{name:'Account',exact:true}).click();
   await first.syncButton('Manage account');
-  assert.equal(await manageSharing.isChecked(),false);
-  await manageSharing.check();
-  assert(await waitFor(() => first.store.get('HNewhere:share_diagnostics') > 0));
-  await manageSharing.uncheck();
-  assert(await waitFor(() => first.store.get('HNewhere:share_diagnostics') === 0));
+  assert(await waitFor(() => manageSharing.isChecked()));
   await first.syncButton('Back');
   await first.panel.locator('#account-email-value').filter({hasText:'reader@example.test'}).waitFor();
   assert.equal(await first.panel.locator('#account-profile-avatar').getAttribute('data-birb-shape'),'long-bill');
@@ -1050,6 +1044,8 @@ test('Reader settings verify account email, connect two devices, resolve edits, 
   await phone.panel.locator('#account-signed-in').waitFor({timeout:3000});
   assert.equal(await phone.key.isVisible(), false);
   await phone.revision(1);
+  const diagnosticsKey = 'HNewhere:account_diagnostics:' + phone.store.get(sessionKey).account;
+  assert(phone.store.get(diagnosticsKey) > 0, 'signup consent arrives with the encrypted account settings');
   assert.equal(phone.store.get('HNewhere:settings').theme,'dark');
   assert.equal(phone.store.get(notesKey).notes[0].exact, note.exact);
   await phone.panel.getByRole('button',{name:'Sync now',exact:true}).waitFor();
@@ -1147,6 +1143,7 @@ test('Reader settings verify account email, connect two devices, resolve edits, 
   assert.equal(await navAvatar.getAttribute('data-birb-shape'),null);
   assert(await navAvatar.evaluate(node=>getComputedStyle(node).backgroundImage.startsWith('url(')));
   assert.equal(phone.store.has(avatarKey),false);
+  assert.equal(phone.store.has(diagnosticsKey),false);
   assert.equal((await db.prepare('SELECT COUNT(*) AS count FROM snapshots').first()).count,0);
   assert.deepEqual(phone.store.get(notesKey).notes,restoredNotes);
   await phone.page.evaluate(() => {
