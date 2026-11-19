@@ -124,14 +124,16 @@ test("the bird loader reports completed discussions while slower sources are pen
     }));
     assert(timing[0][0] < timing[1][0] && timing[1][0] < timing[2][0], 'the birds take turns');
     assert(timing.every(([, bird, bubble]) => bird === 'infinite' && bubble === 'infinite'), 'birds and their bubbles keep cycling while loading');
-    const motion = await birds.evaluateAll(elements => {
+    const motion = await birds.evaluateAll(async elements => {
       const stage = elements[0].parentElement;
       const center = element => {
         const {x, y, width, height} = element.getBoundingClientRect();
         return [x + width / 2, y + height / 2];
       };
       const animations = stage.getAnimations({ subtree: true });
-      const originalTimes = animations.map(animation => animation.currentTime);
+      const playback = animations.map(animation => ({time:animation.currentTime, state:animation.playState}));
+      animations.forEach(animation => animation.pause());
+      await Promise.all(animations.map(animation => animation.ready));
       const { delay, duration } = elements[0].getAnimations()[0].effect.getTiming();
       const sample = (bird, time) => {
         bird.getAnimations({ subtree: true }).forEach(animation => animation.currentTime = time);
@@ -161,7 +163,10 @@ test("the bird loader reports completed discussions while slower sources are pen
       }));
       const handoffTime = delay + duration * .19;
       const handoff = elements.slice(0, 2).map(bird => sample(bird, handoffTime).opacity);
-      animations.forEach((animation, index) => animation.currentTime = originalTimes[index]);
+      animations.forEach((animation, index) => {
+        animation.currentTime = playback[index].time;
+        if (playback[index].state === 'running') animation.play();
+      });
       return { center: center(stage), container: center(stage.closest('#comments')), entering, speaking, exiting, handoff, mouthMatchesBubble };
     });
     assert(motion.center.every((coordinate, i) => Math.abs(coordinate - motion.container[i]) < 1), 'the rotor is centered in the discussion viewport');
@@ -177,7 +182,10 @@ test("the bird loader reports completed discussions while slower sources are pen
       assert(entering.bubbleScale < speaking.bubbleScale, 'the bubble grows out of the beak');
     }
     assert(motion.mouthMatchesBubble, 'the beak is open whenever the bubble is visible');
-    assert(motion.speaking.every(({at, opacity, bubble, open}) => opacity > .99 && bubble > .99 && open && at.every((coordinate, i) => Math.abs(coordinate - motion.center[i]) < 1)), 'every bird talks at peak opacity on center stage');
+    for (const {at, opacity, bubble, open} of motion.speaking) {
+      const offset = at.map((coordinate, i) => coordinate - motion.center[i]);
+      assert(opacity > .99 && bubble > .99 && open && offset.every(distance => Math.abs(distance) < 1), `each bird talks at peak opacity on center stage: ${JSON.stringify({offset, opacity, bubble, open})}`);
+    }
     assert(motion.handoff.every(opacity => opacity > 0 && opacity < 1), 'the next bird fades in while the previous one fades out');
     const art = await birds.evaluateAll(async elements => {
       const sources = elements.slice(0, 3).flatMap(bird => {

@@ -575,6 +575,23 @@ test('phone Account controls match Settings typography and show passkey progress
     assert.equal(await app.page.locator('#account-nav-status').isVisible(),false);
     const signIn = panel.locator('#account-login');
     await signIn.waitFor();
+    const entry = await signIn.evaluate(button => {
+      const root = button.getRootNode();
+      const content = root.getElementById('app-settings-content');
+      const stage = root.getElementById('account-stage');
+      const actions = root.getElementById('account-sign-in-actions').getBoundingClientRect();
+      const bottom = content.getBoundingClientRect().bottom - parseFloat(getComputedStyle(content).paddingBottom);
+      return {
+        topGap:actions.top - stage.getBoundingClientRect().top - parseFloat(getComputedStyle(stage).borderTopWidth),
+        bottomGap:bottom - actions.bottom,
+        email:root.getElementById('account-entry-email').getBoundingClientRect().height,
+        button:button.getBoundingClientRect().height,
+        standard:parseFloat(getComputedStyle(root.getElementById('settings-update-check')).height),
+      };
+    });
+    assert(entry.topGap > 12 && Math.abs(entry.topGap - entry.bottomGap) < 1, JSON.stringify(entry));
+    assert(Math.abs(entry.button - entry.standard) < .5 && Math.abs(entry.email - entry.button) < .5, JSON.stringify(entry));
+    assert.equal(await panel.locator('#account-email-value').textContent(),'Sync your reading experience across all your devices.');
     const mismatches = await signIn.evaluate(control => {
       const root = control.getRootNode();
       const size = getComputedStyle(root.getElementById('settings-cache-clear')).fontSize;

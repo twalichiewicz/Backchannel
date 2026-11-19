@@ -852,6 +852,27 @@ test('Reader settings verify account email, connect two devices, resolve edits, 
   };
 
   const first = await ready();
+  const checkSignupStep = async (id, name) => {
+    const step = first.panel.locator('#account-' + id);
+    await step.getByRole('heading', {name,exact:true}).waitFor();
+    const geometry = await step.evaluate(section => {
+      const back = section.querySelector('.account-back');
+      const heading = section.querySelector('h3').getBoundingClientRect();
+      const arrow = back.getBoundingClientRect();
+      return {
+        text:back.textContent.trim(),
+        radius:parseFloat(getComputedStyle(back).borderTopLeftRadius),
+        circle:Math.abs(arrow.width - arrow.height) < .5,
+        gap:heading.left - arrow.right,
+        alignment:Math.abs(heading.y + heading.height / 2 - arrow.y - arrow.height / 2),
+        heights:[...section.querySelectorAll('.settings-button--wide')].map(button => button.getBoundingClientRect().height),
+        standard:parseFloat(getComputedStyle(section.getRootNode().getElementById('settings-update-check')).height),
+      };
+    });
+    assert.equal(geometry.text,'');
+    assert(geometry.circle && geometry.radius > 10 && geometry.gap >= 0 && geometry.gap <= 10 && geometry.alignment < 1, JSON.stringify(geometry));
+    assert(geometry.heights.length && geometry.heights.every(height => Math.abs(height - geometry.standard) < .5), JSON.stringify(geometry));
+  };
   await first.page.evaluate(() => {
     const get = navigator.credentials.get.bind(navigator.credentials);
     navigator.credentials.get = async options => {
@@ -878,28 +899,31 @@ test('Reader settings verify account email, connect two devices, resolve edits, 
   assert.match(code, /^[0-9]{6}$/);
   assert.match(mail[0].html, /Backchannel/);
   assert(mail[0].html.includes(code));
+  await checkSignupStep('code-screen','Check your email');
   await first.page.getByLabel('Verification code', {exact:true}).fill(code);
   await first.syncButton('Verify email');
   const verifying = first.panel.getByRole('button',{name:'Verifying email…',exact:true});
   await verifying.waitFor();
   assert.equal(await verifying.locator('span').evaluate(el => getComputedStyle(el).animationName),'settings-update-glimmer');
-  await first.panel.getByRole('heading', {name:'Create a passkey'}).waitFor();
+  await checkSignupStep('passkey-register','Create a passkey');
+  assert(await first.panel.getByText('Create and confirm a passkey to secure your account.',{exact:true}).isVisible());
   assert.equal(await first.panel.getByRole('heading',{name:'Create your birb'}).isVisible(), false);
   await first.syncButton('Create passkey');
   const creating = first.panel.getByRole('button',{name:'Creating passkey…',exact:true});
   await creating.waitFor();
   assert.equal(await creating.locator('span').evaluate(el => getComputedStyle(el).animationName),'settings-update-glimmer');
-  await first.panel.getByRole('heading', {name:'Create your birb'}).waitFor();
+  await checkSignupStep('signup-birb','Create your birb');
   assert(await first.panel.locator('#account-profile-avatar').getAttribute('data-birb-shape'));
   await first.panel.getByRole('radio', {name:'Long bill',exact:true}).check();
   await first.panel.getByRole('radio', {name:'Plum',exact:true}).check();
   await first.panel.getByRole('radio', {name:'Lilac',exact:true}).check();
   await first.syncButton('Continue');
   const diagnosticsHeading = first.panel.getByRole('heading',{name:'Help improve Backchannel',exact:true});
-  await diagnosticsHeading.waitFor();
+  await checkSignupStep('signup-diagnostics','Help improve Backchannel');
+  assert(await first.panel.getByText('You can help improve Backchannel by sharing anonymized diagnostics. These details help us develop new features and improve functionality for everyone. You can change your choice any time in Settings → Account → Manage account → Privacy',{exact:true}).isVisible());
   assert.equal(first.store.get('HNewhere:share_diagnostics'),undefined);
   await first.syncButton('Don’t share');
-  await first.panel.getByRole('heading', {name:'Save your recovery key'}).waitFor();
+  await checkSignupStep('key-setup','Save your recovery key');
   await first.syncButton('Back');
   await diagnosticsHeading.waitFor();
   await first.syncButton('Share diagnostics');
@@ -914,15 +938,21 @@ test('Reader settings verify account email, connect two devices, resolve edits, 
   assert.deepEqual(diagnostics,[]);
   const recovery = await first.panel.locator('#account-recovery-code').innerText();
   assert.match(recovery,/^[A-Za-z0-9_-]{43}$/);
-  assert.equal(await first.panel.getByRole('button',{name:'Print',exact:true}).evaluate(el => getComputedStyle(el).textDecorationStyle),'dotted');
+  const recoveryStep = first.panel.locator('#account-key-setup');
+  assert.equal(await recoveryStep.getByRole('button',{name:'Copy',exact:true}).count(),0);
+  assert(await recoveryStep.getByText('Keep this key somewhere safe. It unlocks your account if you lose access to your passkey.',{exact:true}).isVisible());
+  const recoverySave = recoveryStep.getByRole('button',{name:'Save',exact:true});
+  assert(await recoverySave.evaluate(button => {
+    const key = button.getRootNode().getElementById('account-recovery-code');
+    const code = key.getBoundingClientRect(), save = button.getBoundingClientRect();
+    return Math.abs(code.right - save.right) < 1 && save.top >= code.bottom && parseFloat(getComputedStyle(key).paddingTop) < 14;
+  }));
+  assert.equal(await recoverySave.evaluate(el => getComputedStyle(el).textDecorationStyle),'dotted');
   await first.page.evaluate(() => {
-    Object.defineProperty(navigator.clipboard, 'writeText', {value: async value => { window.copiedKey = value; }});
     const printDocument = document.implementation.createHTMLDocument();
     window.open = () => ({document:printDocument, addEventListener() {}, print() { window.printedKey = printDocument.querySelector('code').textContent; }});
   });
-  await first.syncButton('Copy');
-  assert.equal(await first.page.evaluate(() => window.copiedKey),recovery);
-  await first.syncButton('Print');
+  await recoverySave.click();
   assert.equal(await first.page.evaluate(() => window.printedKey),recovery);
   await first.syncButton('Finish sign up');
   await first.revision(1);

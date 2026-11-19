@@ -20471,12 +20471,14 @@ header button svg {
 }
 
 .settings-button--wide {
+	box-sizing:border-box;
 	width:100%;
+	padding-block:4px;
 }
 
 .settings-button--wide,
 .settings-form-control {
-	min-height:32px;
+	min-height:26px;
 }
 
 .settings-button--primary {
@@ -34641,6 +34643,9 @@ ${Object.keys(ACCOUNT_BIRB_PRESETS.shape).map((shape, index) => `[data-birb-shap
 
 #settings-account-sync {
 	--account-section-gap:12px;
+	display:flex;
+	flex-direction:column;
+	min-height:100%;
 }
 
 #settings-account-sync .account-section {
@@ -34664,7 +34669,7 @@ ${Object.keys(ACCOUNT_BIRB_PRESETS.shape).map((shape, index) => `[data-birb-shap
 	line-height:1.3;
 }
 
-#settings-account-sync .account-section-heading + .appearance-row-hint {
+#settings-account-sync :is(.account-section-heading, .account-step-heading) + .appearance-row-hint {
 	margin-top:4px;
 }
 
@@ -34690,6 +34695,9 @@ ${Object.keys(ACCOUNT_BIRB_PRESETS.shape).map((shape, index) => `[data-birb-shap
 
 #account-stage {
 	border-top:1px solid var(--surface-divider);
+	display:flex;
+	flex:1 0 auto;
+	flex-direction:column;
 }
 
 :is(#account-stage, #account-manage-stage).is-sliding {
@@ -34712,6 +34720,17 @@ ${Object.keys(ACCOUNT_BIRB_PRESETS.shape).map((shape, index) => `[data-birb-shap
 
 #account-stage > .account-flow {
 	padding-inline:max(0px, calc((100% - 310px) / 2));
+}
+
+#account-signed-out:not([hidden]) {
+	display:flex;
+	flex:1 0 auto;
+	flex-direction:column;
+	justify-content:center;
+}
+
+#account-stage > #account-signed-out.is-outgoing {
+	bottom:0;
 }
 
 #account-sign-in-actions {
@@ -34752,6 +34771,31 @@ ${Object.keys(ACCOUNT_BIRB_PRESETS.shape).map((shape, index) => `[data-birb-shap
 	background:transparent;
 	color:var(--surface-text);
 	padding-inline:0;
+}
+
+.account-step-heading {
+	display:flex;
+	align-items:center;
+	gap:8px;
+}
+
+#settings-account-sync .account-step-heading .account-back:not([hidden]) {
+	display:inline-grid;
+	place-items:center;
+	flex:0 0 26px;
+	box-sizing:border-box;
+	width:26px;
+	height:26px;
+	margin:0;
+	padding:0;
+	border-radius:50%;
+	border-color:var(--button-border);
+	background:var(--button-bg);
+}
+
+.account-step-heading .account-back svg {
+	width:14px;
+	height:14px;
 }
 
 #account-sign-in-divider {
@@ -34807,13 +34851,8 @@ ${Object.keys(ACCOUNT_BIRB_PRESETS.shape).map((shape, index) => `[data-birb-shap
 	margin-top:var(--account-section-gap);
 }
 
-#account-manage-stage :is(.settings-form-control, .settings-button--wide),
 #account-manage-code #account-code-field ::slotted(input) {
 	min-height:26px;
-}
-
-#account-manage-stage .settings-button--wide {
-	padding-block:4px;
 }
 
 #account-manage-privacy .settings-option {
@@ -35004,8 +35043,8 @@ ${Object.keys(ACCOUNT_BIRB_PRESETS.shape).map((shape, index) => `[data-birb-shap
 #account-recovery-code {
 	display:block;
 	box-sizing:border-box;
-	margin:12px 0 4px;
-	padding:14px;
+	margin:8px 0 4px;
+	padding:8px 12px;
 	border:1px solid var(--surface-divider);
 	border-radius:8px;
 	background:var(--button-bg);
@@ -35016,10 +35055,9 @@ ${Object.keys(ACCOUNT_BIRB_PRESETS.shape).map((shape, index) => `[data-birb-shap
 }
 
 .account-key-links {
-	display:flex;
-	align-items:center;
-	gap:10px;
-	margin-bottom:16px;
+	display:grid;
+	justify-items:end;
+	margin-bottom:12px;
 }
 
 .account-key-links button,
@@ -40059,9 +40097,17 @@ ${SETTINGS_MODAL_PHONE_CSS}
 		return accountBirbOptions("shape", "Shape", group) + accountBirbOptions("color", "Birb color", group) + accountBirbOptions("background", "Background", group);
 	}
 
-	function accountBackButton(id) {
-		return `<button type="button" ${id ? `id="${id}"` : "data-account-email-back"} class="settings-button account-back" aria-label="Back">&#8592; Back</button>`;
+	function accountBackButton(id, iconOnly = false) {
+		const label = iconOnly ? APP_ICON('<path d="M13 8H3m4.5-4.5L3 8l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>') : "&#8592; Back";
+		return `<button type="button" ${id ? `id="${id}"` : "data-account-email-back"} class="settings-button account-back" aria-label="Back">${label}</button>`;
 	}
+
+	function accountStepHeading(title, { backId, headingId } = {}) {
+		return `<div class="account-step-heading">${accountBackButton(backId, true)}<h3 class="account-section-heading"${headingId ? ` id="${headingId}" tabindex="-1"` : ""}>${title}</h3></div>`;
+	}
+
+	const ACCOUNT_SIGN_IN_HINT = "Sync your reading experience across all your devices.";
+	const ACCOUNT_RECOVERY_KEY_HINT = "Keep this key somewhere safe. It unlocks your account if you lose access to your passkey.";
 
 	const ACCOUNT_PASSKEY_ACTIONS = {
 		register: ["Create passkey", "Creating passkey…"],
@@ -40093,7 +40139,7 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <button type="button" id="account-avatar-edit" aria-label="Edit birb" aria-expanded="false" aria-controls="account-avatar-editor" class="settings-button" hidden><span class="account-avatar-edit-label" aria-hidden="true">Edit</span></button>
 </div>
 <h3 id="account-profile-name" class="account-profile-title">Backchannel Account</h3>
-<p id="account-email-value" class="appearance-row-hint">Sync your settings, Collection, and reading queue across devices.</p>
+<p id="account-email-value" class="appearance-row-hint">${ACCOUNT_SIGN_IN_HINT}</p>
 </section>
 <div id="account-stage">
 <section id="account-signed-out" class="account-section account-flow" data-account-step="0" tabindex="-1" hidden>
@@ -40109,9 +40155,8 @@ ${SETTINGS_MODAL_PHONE_CSS}
 <div id="account-status-signed-out"></div>
 </section>
 <section id="account-code-screen" class="account-section account-flow" data-account-step="3" tabindex="-1" hidden>
-${accountBackButton()}
+${accountStepHeading("Check your email")}
 <div id="account-code-content">
-<h3 id="account-code-heading" class="account-section-heading">Check your email</h3>
 <p id="account-code-hint" class="appearance-row-hint"></p>
 <div id="account-code-field" class="account-field"><span>Verification code</span><div><slot name="account-verification-code"></slot><div id="account-status-code"></div></div></div>
 <div class="account-actions account-step-actions">
@@ -40121,21 +40166,18 @@ ${accountBackButton()}
 </div>
 </section>
 <section id="account-passkey-register" class="account-section account-flow" data-account-step="4" tabindex="-1" hidden>
-${accountBackButton()}
-<h3 class="account-section-heading">Create a passkey</h3>
-<p class="appearance-row-hint">Create and confirm a passkey to unlock sync on your devices.</p>
+${accountStepHeading("Create a passkey")}
+<p class="appearance-row-hint">Create and confirm a passkey to secure your account.</p>
 ${accountPasskeyButton("register")}
 </section>
 <section id="account-signup-birb" class="account-section account-flow account-birb-editor" data-account-step="5" tabindex="-1" hidden>
-${accountBackButton()}
-<h3 class="account-section-heading">Create your birb</h3>
+${accountStepHeading("Create your birb")}
 <p class="appearance-row-hint">Choose a shape and colors for your account avatar.</p>
 ${accountBirbPicker("signup-birb")}
 <button type="button" id="account-signup-birb-next" class="settings-button settings-button--primary settings-button--wide">Continue</button>
 </section>
 <section id="account-passkey-login" class="account-section account-flow" data-account-step="4" tabindex="-1" hidden>
-${accountBackButton()}
-<h3 class="account-section-heading">Sign in</h3>
+${accountStepHeading("Sign in")}
 <p id="account-login-hint" class="appearance-row-hint"></p>
 <div class="account-actions account-step-actions">
 <div>${accountPasskeyButton("login")}</div>
@@ -40143,34 +40185,29 @@ ${accountBackButton()}
 </div>
 </section>
 <section id="account-recovery-key" class="account-section account-flow" data-account-step="5" tabindex="-1" hidden>
-${accountBackButton()}
-<h3 class="account-section-heading">Recover your account</h3>
+${accountStepHeading("Recover your account")}
 <p class="appearance-row-hint">Enter your recovery key to keep your synced data when you replace your passkey.</p>
 <div class="account-field"><label for="account-key">Recovery key</label><div><input id="account-key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="128" aria-describedby="account-status-recovery-key"><div id="account-status-recovery-key"></div></div></div>
 <button type="button" id="account-recovery-continue" class="settings-button settings-button--primary settings-button--wide"><span class="settings-control-label">Continue</span></button>
 </section>
 <section id="account-passkey-recover" class="account-section account-flow" data-account-step="5" tabindex="-1" hidden>
-${accountBackButton()}
-<h3 class="account-section-heading">Replace your passkey</h3>
+${accountStepHeading("Replace your passkey")}
 <p class="appearance-row-hint">Replacing your passkey signs out your other devices.</p>
 ${accountPasskeyButton("recover")}
 </section>
 <section id="account-signup-diagnostics" class="account-section account-flow" data-account-step="6" tabindex="-1" aria-labelledby="account-diagnostics-heading" hidden>
-${accountBackButton("account-diagnostics-back")}
-<h3 id="account-diagnostics-heading" class="account-section-heading" tabindex="-1">Help improve Backchannel</h3>
-<p class="appearance-row-hint">You can help improve Backchannel by sharing diagnostics about how well syncing and discussions work. Reports include the Backchannel version, results, approximate timings, and source names. They exclude your account details and what you read.</p>
+${accountStepHeading("Help improve Backchannel", { backId: "account-diagnostics-back", headingId: "account-diagnostics-heading" })}
+<p class="appearance-row-hint">You can help improve Backchannel by sharing anonymized diagnostics. These details help us develop new features and improve functionality for everyone. You can change your choice any time in Settings → Account → Manage account → Privacy</p>
 <div class="account-actions account-step-actions">
 <button type="button" id="account-diagnostics-share" class="settings-button settings-button--wide">Share diagnostics</button>
 <button type="button" id="account-diagnostics-decline" class="settings-button settings-button--wide">Don’t share</button>
 </div>
-<p class="appearance-row-hint">You can change your choice anytime in Settings → Account → Manage account → Privacy.</p>
 </section>
 <section id="account-key-setup" class="account-section account-flow" data-account-step="7" tabindex="-1" aria-labelledby="account-key-heading" hidden>
-${accountBackButton("account-key-back")}
-<h3 id="account-key-heading" class="account-section-heading" tabindex="-1">Save your recovery key</h3>
-<p class="appearance-row-hint">Keep this key somewhere safe. It unlocks your synced data if you lose access to your passkey.</p>
+${accountStepHeading("Save your recovery key", { backId: "account-key-back", headingId: "account-key-heading" })}
+<p class="appearance-row-hint">${ACCOUNT_RECOVERY_KEY_HINT}</p>
 <code id="account-recovery-code"></code>
-<div class="account-key-links"><button type="button" id="account-key-copy">Copy</button><button type="button" id="account-key-print">Print</button><div id="account-status-key-action"></div></div>
+<div class="account-key-links"><button type="button" id="account-key-save" aria-describedby="account-status-key-action">Save</button><div id="account-status-key-action"></div></div>
 <button type="button" id="account-key-done" class="settings-button settings-button--primary settings-button--wide"><span class="settings-control-label">Finish sign up</span></button>
 <div id="account-status-key"></div>
 </section>
@@ -40266,8 +40303,7 @@ ${accountBackButton("account-manage-back")}
 			"passkey-sync-unavailable": "This passkey couldn’t unlock sync. Try again with the passkey you set up for Backchannel.",
 			"retry-sign-in": "Sign-in could not finish. Try again.",
 			"signup-expired": "This sign-up expired. Verify your email to start again.",
-			"recovery-copy-failed": "Select the key to copy it manually.",
-			"recovery-print-blocked": "Allow pop-ups to print your recovery key.",
+			"recovery-save-blocked": "Allow pop-ups to save your recovery key.",
 			"invalid-email": "Enter a valid email address.",
 			"invalid-email-code": "This verification code is incorrect or expired. Request a new code.",
 			"invalid-origin": "Backchannel couldn’t verify this page. Reload Reader and try again.",
@@ -40340,7 +40376,7 @@ ${accountBackButton("account-manage-back")}
 	function wireAccountSettings(shadow, updateDiagnosticSharing) {
 		const panel = shadow.getElementById("settings-account-sync");
 		if (!onStartPage() || window.top !== window.self) {
-			panel.innerHTML = `<p class="settings-section-hint">Sync your settings, Collection, and reading queue across devices.</p><a href="${START_PAGE_ORIGIN}/#account-sync" target="_blank" rel="noopener noreferrer">Open Reader</a>`;
+			panel.innerHTML = `<p class="settings-section-hint">${ACCOUNT_SIGN_IN_HINT}</p><a href="${START_PAGE_ORIGIN}/#account-sync" target="_blank" rel="noopener noreferrer">Open Reader</a>`;
 			return () => {};
 		}
 
@@ -40573,7 +40609,7 @@ ${accountBackButton("account-manage-back")}
 			find("sign-in-actions").hidden = !available;
 			find("create-unavailable").hidden = !available || emailAvailable;
 			find("profile-name").textContent = signingUp ? "Create your account" : "Backchannel Account";
-			find("email-value").textContent = signedIn && !backingUp ? email || "" : "Sync your settings, Collection, and reading queue across devices.";
+			find("email-value").textContent = signedIn && !backingUp ? email || "" : ACCOUNT_SIGN_IN_HINT;
 			find("current-email").value = email || "";
 			find("avatar-edit").hidden = !signedIn || backingUp;
 			const last = find("last-sync");
@@ -40616,7 +40652,7 @@ ${accountBackButton("account-manage-back")}
 			find("recovery-continue").disabled = busy || !available || !validAccountRecoveryKey(key.value.trim());
 			find("sync-now").disabled = busy || !available || !signedIn || backingUp || needsEmail || Boolean(conflict?.conflicts);
 			find("restore-snapshot").disabled = busy || !available || !signedIn || !conflict?.recovery;
-			for (const id of ["logout", "manage", "manage-back", "key-done", "key-copy", "key-print", "avatar-cancel"]) find(id).disabled = busy;
+			for (const id of ["logout", "manage", "manage-back", "key-done", "key-save", "avatar-cancel"]) find(id).disabled = busy;
 			find("avatar-edit").disabled = busy || !signedIn;
 			for (const id of ["delete", "delete-final", "keep-local", "keep-remote"]) find(id).disabled = busy || !available || !signedIn;
 			find("delete-final").disabled ||= Boolean(deletePreparation && !deletePreparation.challenge);
@@ -40638,7 +40674,6 @@ ${accountBackButton("account-manage-back")}
 				const codeContent = find("code-content");
 				const codeHost = find(verifyingEmailChange ? "manage-code" : "code-screen");
 				if (codeContent.parentNode !== codeHost) codeHost.append(codeContent);
-				find("code-heading").hidden = verifyingEmailChange;
 				const { address } = emailFlow;
 				find("code-hint").textContent = address ? "Enter the code sent to " + address + "." : "";
 				find("login-hint").textContent = address ? "Sign in with the passkey for " + address + "." : "";
@@ -41259,17 +41294,9 @@ ${accountBackButton("account-manage-back")}
 			});
 			queueAccountEditSync();
 		}, "", "key");
-		action("key-copy", async () => {
-			try {
-				await copyText(signupRecoveryKey());
-				return "Copied.";
-			} catch {
-				throw new Error("recovery-copy-failed");
-			}
-		}, "", "key-action");
-		action("key-print", () => {
+		action("key-save", () => {
 			const page = window.open("", "_blank");
-			if (!page) throw new Error("recovery-print-blocked");
+			if (!page) throw new Error("recovery-save-blocked");
 			page.opener = null;
 			const printDoc = page.document;
 			printDoc.title = "Backchannel recovery key";
@@ -41280,7 +41307,7 @@ ${accountBackButton("account-manage-back")}
 			value.textContent = signupRecoveryKey();
 			value.style.cssText = "font-size:18px;overflow-wrap:anywhere";
 			const hint = printDoc.createElement("p");
-			hint.textContent = "Keep this key somewhere safe. It unlocks your synced Backchannel data.";
+			hint.textContent = ACCOUNT_RECOVERY_KEY_HINT;
 			printDoc.body.append(heading, value, hint);
 			page.addEventListener("afterprint", () => page.close(), { once: true });
 			page.print();
